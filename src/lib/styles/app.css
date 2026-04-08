@@ -1,0 +1,18 @@
+@import "tailwindcss";
+@import "../../../../anomalica-brand/css/tokens.css";
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  font-family: var(--font-content);
+  background: var(--color-surface);
+  color: var(--color-on-surface);
+  line-height: 1.6;
+}
+
+.font-ui {
+  font-family: var(--font-ui);
+}
