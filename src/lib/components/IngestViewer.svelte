@@ -66,10 +66,9 @@
   let singleColumn = $derived(isWeb && !localSourceFile);
 
   // PDF page sync
-  let currentPdfPage = $state(1);
   let pdfIframe: HTMLIFrameElement | undefined = $state();
 
-  /** Replace file_page YAML blocks with visible, observable page markers. */
+  /** Replace file_page YAML blocks with visible, clickable page markers. */
   function preprocessPageMarkers(body: string): string {
     return body.replace(
       /\n---\nfile_page:\s*(\d+)\n---\n/g,
@@ -79,21 +78,12 @@
 
   function navigatePdfToPage(page: number) {
     if (!pdfIframe || !localSourceUrl) return;
-    currentPdfPage = page;
-    // Update the iframe hash to navigate to the page
-    try {
-      pdfIframe.contentWindow?.location.replace(localSourceUrl + "#page=" + page);
-    } catch {
-      // Cross-origin fallback: reset src
-      pdfIframe.src = localSourceUrl + "#page=" + page;
-    }
+    // The browser PDF viewer only reads #page on initial load,
+    // so we need to reload the iframe with the new fragment
+    pdfIframe.src = localSourceUrl + "#page=" + page;
   }
 
-  function setupPageObserverAction(container: HTMLElement) {
-    // Svelte use: action - called when the element mounts
-    const cleanup = setupPageObserver(container);
-
-    // Click handler for explicit page navigation
+  function setupPageClickHandler(container: HTMLElement) {
     function handleClick(e: Event) {
       const marker = (e.target as HTMLElement).closest(".page-marker");
       if (marker) {
@@ -102,33 +92,7 @@
       }
     }
     container.addEventListener("click", handleClick);
-
-    return {
-      destroy: () => {
-        cleanup?.();
-        container.removeEventListener("click", handleClick);
-      },
-    };
-  }
-
-  function setupPageObserver(container: HTMLElement) {
-    const markers = container.querySelectorAll(".page-marker[data-file-page]");
-    if (markers.length === 0) return;
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          if (entry.isIntersecting) {
-            const page = parseInt((entry.target as HTMLElement).dataset.filePage ?? "1", 10);
-            if (page !== currentPdfPage) navigatePdfToPage(page);
-          }
-        }
-      },
-      { root: container, rootMargin: "-20% 0px -60% 0px" },
-    );
-
-    for (const m of markers) observer.observe(m);
-    return () => observer.disconnect();
+    return { destroy: () => container.removeEventListener("click", handleClick) };
   }
 
   function youtubeId(url: string | undefined): string | null {
@@ -829,7 +793,7 @@
             text-on-surface prose-headings:text-on-surface prose-a:text-primary
             prose-img:rounded prose-img:max-w-full prose-hr:border-border
             prose-p:leading-relaxed prose-li:leading-relaxed"
-          use:setupPageObserverAction
+          use:setupPageClickHandler
         >
           {@html marked.parse(processedBody)}
         </div>
