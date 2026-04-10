@@ -3,6 +3,12 @@ node_modules
 # Build output
 dist
 
+# Python
+__pycache__
+
+# Playwright MCP artifacts
+.playwright-mcp
+
 # OS
 .DS_Store
 Thumbs.db
