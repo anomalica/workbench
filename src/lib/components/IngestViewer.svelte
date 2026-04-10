@@ -53,9 +53,19 @@
   // File drop state (for dropping source files onto the left panel)
   let dragging = $state(false);
   let localSourceFile = $state<File | null>(sourceFile);
-  let localSourceUrl = $derived(localSourceFile ? URL.createObjectURL(localSourceFile) : null);
-
+  let localSourceUrl = $state<string | null>(null);
   let loadingFile = $state(false);
+
+  // Create/revoke blob URL when file changes
+  $effect(() => {
+    if (localSourceFile) {
+      const url = URL.createObjectURL(localSourceFile);
+      localSourceUrl = url;
+      return () => URL.revokeObjectURL(url);
+    } else {
+      localSourceUrl = null;
+    }
+  });
 
   function handleFileDrop(e: DragEvent) {
     e.preventDefault();
@@ -63,7 +73,11 @@
     const file = e.dataTransfer?.files[0];
     if (file) {
       loadingFile = true;
-      localSourceFile = file;
+      // Use requestAnimationFrame to let the spinner render before
+      // the browser starts processing the file
+      requestAnimationFrame(() => {
+        localSourceFile = file;
+      });
     }
   }
 
@@ -72,16 +86,11 @@
 
   // PDF page sync
   let pdfPage = $state(1);
-  let pdfBlobUrl = $state<string | null>(null);
-  let pdfSrc = $derived(pdfBlobUrl ? `${pdfBlobUrl}#toolbar=0&navpanes=0&page=${pdfPage}` : null);
-
-  // Create initial blob URL when file is available
-  $effect(() => {
-    if (localSourceFile && isPdf) {
-      if (pdfBlobUrl) URL.revokeObjectURL(pdfBlobUrl);
-      pdfBlobUrl = URL.createObjectURL(localSourceFile);
-    }
-  });
+  let pdfSrc = $derived(
+    localSourceUrl && isPdf
+      ? `${localSourceUrl}#toolbar=0&navpanes=0&page=${pdfPage}`
+      : null,
+  );
 
   /** Replace file_page YAML blocks with visible, clickable page markers. */
   function preprocessPageMarkers(body: string): string {
@@ -95,12 +104,13 @@
 
   function navigatePdfToPage(page: number) {
     if (!localSourceFile || page === pdfPage) return;
-    // Debounce: wait 300ms so rapid scrolling past multiple page
-    // markers doesn't trigger repeated full PDF reloads
+    // Debounce so rapid scrolling past multiple markers doesn't
+    // trigger repeated full PDF reloads
     if (pdfNavTimer) clearTimeout(pdfNavTimer);
     pdfNavTimer = setTimeout(() => {
-      if (pdfBlobUrl) URL.revokeObjectURL(pdfBlobUrl);
-      pdfBlobUrl = URL.createObjectURL(localSourceFile!);
+      // Create a fresh blob URL to force iframe reload at the new page
+      if (localSourceUrl) URL.revokeObjectURL(localSourceUrl);
+      localSourceUrl = URL.createObjectURL(localSourceFile!);
       pdfPage = page;
     }, 300);
   }
