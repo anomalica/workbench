@@ -47,12 +47,23 @@
   let showMetadata = $state(false);
 
   // Source
-  let sourceUrl = $derived(sourceFile ? URL.createObjectURL(sourceFile) : null);
   let isPdf = $derived(ingest.frontmatter.source_type === "pdf");
   let isWeb = $derived(ingest.frontmatter.source_type === "web");
 
+  // File drop state (for dropping source files onto the left panel)
+  let dragging = $state(false);
+  let localSourceFile = $state<File | null>(sourceFile);
+  let localSourceUrl = $derived(localSourceFile ? URL.createObjectURL(localSourceFile) : null);
+
+  function handleFileDrop(e: DragEvent) {
+    e.preventDefault();
+    dragging = false;
+    const file = e.dataTransfer?.files[0];
+    if (file) localSourceFile = file;
+  }
+
   // Web ingests without a source file don't need a separate left panel
-  let singleColumn = $derived(isWeb && !sourceFile);
+  let singleColumn = $derived(isWeb && !localSourceFile);
 
   function youtubeId(url: string | undefined): string | null {
     if (!url) return null;
@@ -379,7 +390,9 @@
   });
 </script>
 
-<div class="flex flex-col h-full">
+<div class="flex flex-col h-full"
+  ondragover={(e) => e.preventDefault()}
+  ondrop={(e) => e.preventDefault()}>
   <!-- Title bar -->
   <div class="px-4 py-3 border-b border-border bg-surface-alt flex items-start justify-between gap-4">
     <div class="flex-1 min-w-0">
@@ -409,13 +422,13 @@
           <span class="text-xs font-ui font-medium text-on-surface-secondary uppercase">Original</span>
         </div>
 
-        {#if sourceUrl && isPdf}
-          <iframe src="{sourceUrl}#toolbar=0" class="flex-1 w-full" title="Source PDF"></iframe>
+        {#if localSourceUrl && isPdf}
+          <iframe src="{localSourceUrl}#toolbar=0" class="flex-1 w-full" title="Source PDF"></iframe>
         {:else}
           <div class="flex-none">
-            {#if sourceUrl}
+            {#if localSourceUrl}
               <div class="p-4">
-                <video controls src={sourceUrl} class="w-full rounded">
+                <video controls src={localSourceUrl} class="w-full rounded">
                   <track kind="captions" />
                 </video>
               </div>
@@ -432,8 +445,14 @@
                 </a>
               </div>
             {:else}
-              <div class="p-4 text-sm text-on-surface-muted">
-                No source file provided. Drop a matching file to view the original alongside the ingest.
+              <div
+                class="p-4 text-sm text-center flex-1 flex items-center justify-center transition-colors
+                  {dragging ? 'bg-primary-container/20 text-primary' : 'text-on-surface-muted'}"
+                ondragover={(e) => { e.preventDefault(); dragging = true; }}
+                ondragleave={() => { dragging = false; }}
+                ondrop={handleFileDrop}
+              >
+                <p>{dragging ? "Drop file here" : "Drop a source file here to view it alongside the ingest"}</p>
               </div>
             {/if}
           </div>
