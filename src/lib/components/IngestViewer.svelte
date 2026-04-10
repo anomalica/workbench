@@ -7,6 +7,7 @@
   import SpeakerManager from "./SpeakerManager.svelte";
   import SegmentActions from "./SegmentActions.svelte";
   import SplitEditor from "./SplitEditor.svelte";
+  import PdfViewer from "./PdfViewer.svelte";
   import DiffViewer from "./DiffViewer.svelte";
   import { marked } from "marked";
 
@@ -81,7 +82,8 @@
     pdfPage = page;
   }
 
-  function setupPageClickHandler(container: HTMLElement) {
+  function setupPageSync(container: HTMLElement) {
+    // Click: explicit page navigation
     function handleClick(e: Event) {
       const marker = (e.target as HTMLElement).closest(".page-marker");
       if (marker) {
@@ -90,7 +92,31 @@
       }
     }
     container.addEventListener("click", handleClick);
-    return { destroy: () => container.removeEventListener("click", handleClick) };
+
+    // Scroll: auto-sync as user reads through the ingest
+    const markers = container.querySelectorAll(".page-marker[data-file-page]");
+    let observer: IntersectionObserver | null = null;
+    if (markers.length > 0 && isPdf && localSourceFile) {
+      observer = new IntersectionObserver(
+        (entries) => {
+          for (const entry of entries) {
+            if (entry.isIntersecting) {
+              const page = parseInt((entry.target as HTMLElement).dataset.filePage ?? "1", 10);
+              navigatePdfToPage(page);
+            }
+          }
+        },
+        { root: container, rootMargin: "-10% 0px -70% 0px" },
+      );
+      for (const m of markers) observer.observe(m);
+    }
+
+    return {
+      destroy: () => {
+        container.removeEventListener("click", handleClick);
+        observer?.disconnect();
+      },
+    };
   }
 
   function youtubeId(url: string | undefined): string | null {
@@ -450,10 +476,8 @@
           <span class="text-xs font-ui font-medium text-on-surface-secondary uppercase">Original</span>
         </div>
 
-        {#if localSourceUrl && isPdf}
-          {#key pdfPage}
-            <iframe src="{localSourceUrl}#page={pdfPage}" class="flex-1 w-full" title="Source PDF"></iframe>
-          {/key}
+        {#if localSourceFile && isPdf}
+          <PdfViewer file={localSourceFile} page={pdfPage} />
         {:else if localSourceUrl}
           <div class="flex-none p-4">
             <video controls src={localSourceUrl} class="w-full rounded">
@@ -793,7 +817,7 @@
             text-on-surface prose-headings:text-on-surface prose-a:text-primary
             prose-img:rounded prose-img:max-w-full prose-hr:border-border
             prose-p:leading-relaxed prose-li:leading-relaxed"
-          use:setupPageClickHandler
+          use:setupPageSync
         >
           {@html marked.parse(processedBody)}
         </div>
