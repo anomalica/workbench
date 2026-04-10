@@ -709,9 +709,11 @@
         </div>
 
       {:else}
-        <div class="flex-1 overflow-auto p-4 prose prose-sm max-w-none
+        <div class="flex-1 overflow-auto px-8 py-6 prose
+          {singleColumn ? 'mx-auto' : 'max-w-none'}
           text-on-surface prose-headings:text-on-surface prose-a:text-primary
-          prose-img:rounded prose-img:max-w-full prose-hr:border-border">
+          prose-img:rounded prose-img:max-w-full prose-hr:border-border
+          prose-p:leading-relaxed prose-li:leading-relaxed">
           {@html marked.parse(currentBody())}
         </div>
       {/if}
