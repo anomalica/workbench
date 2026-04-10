@@ -48,6 +48,9 @@
   let isPdf = $derived(ingest.frontmatter.source_type === "pdf");
   let isWeb = $derived(ingest.frontmatter.source_type === "web");
 
+  // Web ingests without a source file don't need a separate left panel
+  let singleColumn = $derived(isWeb && !sourceFile);
+
   function youtubeId(url: string | undefined): string | null {
     if (!url) return null;
     const match = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
@@ -450,52 +453,46 @@
   </div>
 
   <div class="flex-1 flex min-h-0">
-    <!-- Left panel -->
-    <div class="w-1/2 border-r border-border flex flex-col min-h-0">
-      <div class="px-3 py-2 bg-surface-alt border-b border-border flex-none">
-        <span class="text-xs font-ui font-medium text-on-surface-secondary uppercase">Original</span>
-      </div>
-
-      {#if sourceUrl && isPdf}
-        <!-- PDF fills the whole panel -->
-        <iframe src="{sourceUrl}#toolbar=0" class="flex-1 w-full" title="Source PDF"></iframe>
-      {:else}
-        <!-- Source area: stays at top, doesn't scroll -->
-        <div class="flex-none">
-          {#if sourceUrl}
-            <div class="p-4">
-              <video controls src={sourceUrl} class="w-full rounded">
-                <track kind="captions" />
-              </video>
-            </div>
-          {:else if ytId}
-            <div class="p-4">
-              <div id="yt-player" class="w-full aspect-video rounded"></div>
-              <a
-                href={ingest.frontmatter.source_url}
-                target="_blank"
-                rel="noopener"
-                class="text-xs text-on-surface-muted hover:text-primary mt-2 inline-block break-all"
-              >
-                {ingest.frontmatter.source_url}
-              </a>
-            </div>
-          {:else if isWeb && ingest.frontmatter.source_url}
-            <div class="p-4 text-sm text-on-surface-secondary">
-              <p>Web source:</p>
-              <a href={ingest.frontmatter.source_url} target="_blank" rel="noopener"
-                class="text-primary hover:underline break-all">{ingest.frontmatter.source_url}</a>
-            </div>
-          {:else}
-            <div class="p-4 text-sm text-on-surface-muted">
-              No source file provided. Drop a matching file to view the original alongside the ingest.
-            </div>
-          {/if}
+    {#if singleColumn}
+      <!-- Single-column layout for web ingests -->
+    {:else}
+      <!-- Left panel -->
+      <div class="w-1/2 border-r border-border flex flex-col min-h-0">
+        <div class="px-3 py-2 bg-surface-alt border-b border-border flex-none">
+          <span class="text-xs font-ui font-medium text-on-surface-secondary uppercase">Original</span>
         </div>
 
-        {#if hasTranscript}
-          <!-- Speakers: scrollable -->
-          <div class="flex-1 overflow-auto border-t border-border min-h-0">
+        {#if sourceUrl && isPdf}
+          <iframe src="{sourceUrl}#toolbar=0" class="flex-1 w-full" title="Source PDF"></iframe>
+        {:else}
+          <div class="flex-none">
+            {#if sourceUrl}
+              <div class="p-4">
+                <video controls src={sourceUrl} class="w-full rounded">
+                  <track kind="captions" />
+                </video>
+              </div>
+            {:else if ytId}
+              <div class="p-4">
+                <div id="yt-player" class="w-full aspect-video rounded"></div>
+                <a
+                  href={ingest.frontmatter.source_url}
+                  target="_blank"
+                  rel="noopener"
+                  class="text-xs text-on-surface-muted hover:text-primary mt-2 inline-block break-all"
+                >
+                  {ingest.frontmatter.source_url}
+                </a>
+              </div>
+            {:else}
+              <div class="p-4 text-sm text-on-surface-muted">
+                No source file provided. Drop a matching file to view the original alongside the ingest.
+              </div>
+            {/if}
+          </div>
+
+          {#if hasTranscript}
+            <div class="flex-1 overflow-auto border-t border-border min-h-0">
             <details open class="group">
               <summary class="px-4 py-2 bg-surface-alt cursor-pointer flex items-center gap-2 select-none sticky top-0 z-10">
                 <svg class="w-3 h-3 text-on-surface-muted transition-transform group-open:rotate-90" fill="currentColor" viewBox="0 0 20 20">
@@ -519,10 +516,25 @@
         {/if}
       {/if}
     </div>
+    {/if}
 
-    <!-- Right panel -->
-    <div class="w-1/2 flex flex-col">
-      <!-- Right panel header with controls -->
+    <!-- Right panel (or full-width for web ingests) -->
+    <div class="{singleColumn ? 'w-full' : 'w-1/2'} flex flex-col">
+      <!-- Source URL bar for single-column web ingests -->
+      {#if singleColumn && ingest.frontmatter.source_url}
+        <div class="px-4 py-2 bg-surface-alt border-b border-border flex items-center gap-2 flex-none">
+          <span class="text-xs font-ui font-medium text-on-surface-secondary uppercase flex-none">Source</span>
+          <a
+            href={ingest.frontmatter.source_url}
+            target="_blank"
+            rel="noopener"
+            class="text-xs text-primary hover:underline truncate"
+          >
+            {ingest.frontmatter.source_url}
+          </a>
+        </div>
+      {/if}
+      <!-- Panel header with controls -->
       <div class="px-3 py-2 bg-surface-alt border-b border-border flex items-center gap-2">
         <span class="text-xs font-ui font-medium text-on-surface-secondary uppercase">
           {view === "diff" ? "Changes" : view === "raw" ? "Raw markdown" : "Ingest"}
