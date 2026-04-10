@@ -65,8 +65,8 @@
   // Web ingests without a source file don't need a separate left panel
   let singleColumn = $derived(isWeb && !localSourceFile);
 
-  // PDF page sync
-  let pdfIframe: HTMLIFrameElement | undefined = $state();
+  // PDF page sync: changing pdfPage forces the iframe to recreate via {#key}
+  let pdfPage = $state(1);
 
   /** Replace file_page YAML blocks with visible, clickable page markers. */
   function preprocessPageMarkers(body: string): string {
@@ -77,10 +77,8 @@
   }
 
   function navigatePdfToPage(page: number) {
-    if (!pdfIframe || !localSourceUrl) return;
-    // The browser PDF viewer only reads #page on initial load,
-    // so we need to reload the iframe with the new fragment
-    pdfIframe.src = localSourceUrl + "#page=" + page;
+    if (!localSourceUrl || page === pdfPage) return;
+    pdfPage = page;
   }
 
   function setupPageClickHandler(container: HTMLElement) {
@@ -453,7 +451,9 @@
         </div>
 
         {#if localSourceUrl && isPdf}
-          <iframe bind:this={pdfIframe} src="{localSourceUrl}#page=1" class="flex-1 w-full" title="Source PDF"></iframe>
+          {#key pdfPage}
+            <iframe src="{localSourceUrl}#page={pdfPage}" class="flex-1 w-full" title="Source PDF"></iframe>
+          {/key}
         {:else if localSourceUrl}
           <div class="flex-none p-4">
             <video controls src={localSourceUrl} class="w-full rounded">
