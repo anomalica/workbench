@@ -97,6 +97,14 @@ export class DocumentStore {
 
   // --- High-level edit operations ---
 
+  /** Replace the body (everything after the frontmatter) while preserving
+   *  the frontmatter exactly as-is. */
+  editBody(newBody: string) {
+    const [fm] = splitFrontmatter(this.current);
+    const result = fm + newBody;
+    if (result !== this.current) this.pushEdit(result);
+  }
+
   renameSpeaker(oldId: string, newName: string) {
     // Replace `speaker: oldId` with `speaker: newName` in YAML blocks
     const pattern = new RegExp(`^(speaker:\\s*)${escapeRegex(oldId)}\\s*$`, "gm");

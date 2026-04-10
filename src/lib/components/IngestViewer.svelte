@@ -41,7 +41,10 @@
   let hasTranscript = $derived(segments.length > 0 && segments[0].speaker !== "");
 
   // View mode
-  let view = $state<"ingest" | "diff" | "raw">("ingest");
+  let view = $state<"ingest" | "edit" | "diff" | "raw">("ingest");
+
+  // Metadata parsed from frontmatter (read-only display)
+  let showMetadata = $state(false);
 
   // Source
   let sourceUrl = $derived(sourceFile ? URL.createObjectURL(sourceFile) : null);
@@ -420,7 +423,7 @@
 
       <div class="w-px h-5 bg-border mx-1"></div>
 
-      {#each [["ingest", "Ingest", "View formatted transcript"], ["diff", "Diff", "View changes from original"], ["raw", "Raw", "View raw markdown"]] as [id, label, tip]}
+      {#each [["ingest", "Ingest", "View formatted content"], ["edit", "Edit", "Edit content as markdown"], ["diff", "Diff", "View changes from original"], ["raw", "Raw", "View raw markdown (read-only)"]] as [id, label, tip]}
         <button
           onclick={() => { view = id as typeof view; }}
           class="text-xs font-ui font-medium px-2 py-1 rounded transition-colors cursor-pointer
@@ -537,8 +540,17 @@
       <!-- Panel header with controls -->
       <div class="px-4 py-2 bg-surface-alt border-b border-border flex items-center gap-2">
         <span class="text-xs font-ui font-medium text-on-surface-secondary uppercase">
-          {view === "diff" ? "Changes" : view === "raw" ? "Raw markdown" : "Ingest"}
+          {view === "edit" ? "Edit" : view === "diff" ? "Changes" : view === "raw" ? "Raw markdown" : "Ingest"}
         </span>
+
+        <button
+          onclick={() => { showMetadata = !showMetadata; }}
+          class="text-xs font-ui px-1.5 py-0.5 rounded cursor-pointer transition-colors
+            {showMetadata ? 'bg-primary/10 text-primary' : 'text-on-surface-muted hover:text-on-surface hover:bg-surface'}"
+          title="Toggle metadata"
+        >
+          Meta
+        </button>
 
         {#if view === "ingest" && hasTranscript}
           <div class="ml-auto flex items-center gap-1">
@@ -611,9 +623,34 @@
         {/if}
       </div>
 
+      <!-- Metadata panel (collapsible, shown in any view) -->
+      {#if showMetadata}
+        <div class="border-b border-border bg-surface-alt/50 px-4 py-3 flex-none">
+          <div class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs max-w-lg">
+            {#each Object.entries(ingest.frontmatter) as [key, value]}
+              {#if value && key !== "speakers"}
+                <span class="font-ui font-medium text-on-surface-muted text-right">{key}</span>
+                <span class="text-on-surface font-mono break-all">{value}</span>
+              {/if}
+            {/each}
+          </div>
+        </div>
+      {/if}
+
       {#if view === "diff"}
         <div class="flex-1 overflow-auto">
           <DiffViewer original={doc.original} modified={doc.current} />
+        </div>
+
+      {:else if view === "edit"}
+        <div class="flex-1 flex flex-col min-h-0">
+          <textarea
+            value={currentBody()}
+            oninput={(e) => doc.editBody((e.target as HTMLTextAreaElement).value)}
+            class="flex-1 w-full resize-none bg-surface text-sm text-on-surface leading-relaxed
+              p-4 font-mono outline-none border-none"
+            spellcheck="false"
+          ></textarea>
         </div>
 
       {:else if view === "raw"}
