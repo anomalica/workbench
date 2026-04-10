@@ -50,19 +50,15 @@
 
 <div class="h-screen flex flex-col">
   <header class="bg-teal-950/95 backdrop-blur-sm px-6 py-2 font-ui flex items-center gap-3 flex-none">
-    {#if selectedIngest}
-      <button
-        onclick={goBack}
-        class="text-bone/60 hover:text-bone transition-colors cursor-pointer mr-1"
-        title="Back to list"
-      >
-        <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />
-        </svg>
-      </button>
-    {/if}
-    <img src="/logo-darkmode.svg" alt="Anomalica" class="h-4" />
-    <span class="text-bone/60 text-sm leading-none mt-auto">Workbench</span>
+    <a
+      href="/"
+      onclick={(e) => { e.preventDefault(); goBack(); }}
+      class="flex items-center gap-3 {selectedIngest ? 'cursor-pointer hover:opacity-80' : ''} transition-opacity"
+      title={selectedIngest ? 'Back to ingest list' : ''}
+    >
+      <img src="/logo-darkmode.svg" alt="Anomalica" class="h-4" />
+      <span class="text-bone/60 text-sm leading-none mt-auto">Workbench</span>
+    </a>
   </header>
 
   <main class="flex-1 flex flex-col min-h-0">
