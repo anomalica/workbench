@@ -86,12 +86,18 @@
     );
   }
 
+  let pdfNavTimer: ReturnType<typeof setTimeout> | null = null;
+
   function navigatePdfToPage(page: number) {
     if (!localSourceFile || page === pdfPage) return;
-    // Revoke old URL and create fresh one to force iframe reload
-    if (pdfBlobUrl) URL.revokeObjectURL(pdfBlobUrl);
-    pdfBlobUrl = URL.createObjectURL(localSourceFile);
-    pdfPage = page;
+    // Debounce: wait 300ms so rapid scrolling past multiple page
+    // markers doesn't trigger repeated full PDF reloads
+    if (pdfNavTimer) clearTimeout(pdfNavTimer);
+    pdfNavTimer = setTimeout(() => {
+      if (pdfBlobUrl) URL.revokeObjectURL(pdfBlobUrl);
+      pdfBlobUrl = URL.createObjectURL(localSourceFile!);
+      pdfPage = page;
+    }, 300);
   }
 
   // Prose container ref for page sync
