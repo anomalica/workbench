@@ -55,11 +55,16 @@
   let localSourceFile = $state<File | null>(sourceFile);
   let localSourceUrl = $derived(localSourceFile ? URL.createObjectURL(localSourceFile) : null);
 
+  let loadingFile = $state(false);
+
   function handleFileDrop(e: DragEvent) {
     e.preventDefault();
     dragging = false;
     const file = e.dataTransfer?.files[0];
-    if (file) localSourceFile = file;
+    if (file) {
+      loadingFile = true;
+      localSourceFile = file;
+    }
   }
 
   // Web ingests without a source file don't need a separate left panel
@@ -513,7 +518,23 @@
         </div>
 
         {#if pdfSrc && isPdf}
-          <iframe src={pdfSrc} class="flex-1 w-full border-none" title="Source PDF"></iframe>
+          {#if loadingFile}
+            <div class="flex-1 flex items-center justify-center text-on-surface-muted">
+              <div class="text-center">
+                <svg class="w-6 h-6 mx-auto mb-2 animate-spin text-primary" fill="none" viewBox="0 0 24 24">
+                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                </svg>
+                <p class="text-xs font-ui">Loading PDF...</p>
+              </div>
+            </div>
+          {/if}
+          <iframe
+            src={pdfSrc}
+            class="flex-1 w-full border-none {loadingFile ? 'hidden' : ''}"
+            title="Source PDF"
+            onload={() => { loadingFile = false; }}
+          ></iframe>
         {:else if localSourceUrl}
           <div class="flex-none p-4">
             <video controls src={localSourceUrl} class="w-full rounded">
