@@ -92,11 +92,12 @@
       : null,
   );
 
-  /** Replace file_page YAML blocks with visible, clickable page markers. */
+  /** Replace file_page YAML blocks with visible, clickable page markers.
+   *  The block may contain other fields like printed_page alongside file_page. */
   function preprocessPageMarkers(body: string): string {
     return body.replace(
-      /\n---\nfile_page:\s*(\d+)\n---\n/g,
-      '\n<div class="page-marker" data-file-page="$1"><span class="page-label">Page $1</span></div>\n',
+      /\n---\n((?:.*\n)*?file_page:\s*(\d+)\n(?:.*\n)*?)---\n/g,
+      '\n<div class="page-marker" data-file-page="$2"><span class="page-label">Page $2</span></div>\n',
     );
   }
 
