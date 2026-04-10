@@ -86,9 +86,11 @@
 
   // PDF page sync
   let pdfPage = $state(1);
+  // Initial src includes page=1. Subsequent page changes are handled
+  // by navigatePdfToPage changing the hash in-place (no reload).
   let pdfSrc = $derived(
     localSourceUrl && isPdf
-      ? `${localSourceUrl}#toolbar=0&navpanes=0&page=${pdfPage}`
+      ? `${localSourceUrl}#toolbar=0&navpanes=0&page=1`
       : null,
   );
 
@@ -100,19 +102,29 @@
     );
   }
 
+  let pdfIframe: HTMLIFrameElement | undefined = $state();
   let pdfNavTimer: ReturnType<typeof setTimeout> | null = null;
 
   function navigatePdfToPage(page: number) {
     if (!localSourceFile || page === pdfPage) return;
-    // Debounce so rapid scrolling past multiple markers doesn't
-    // trigger repeated full PDF reloads
     if (pdfNavTimer) clearTimeout(pdfNavTimer);
     pdfNavTimer = setTimeout(() => {
-      // Create a fresh blob URL to force iframe reload at the new page
+      pdfPage = page;
+      // Navigate within the already-loaded PDF by changing the hash
+      // directly. Same-origin blob URLs allow contentWindow access.
+      if (pdfIframe?.contentWindow) {
+        try {
+          pdfIframe.contentWindow.location.hash =
+            `#toolbar=0&navpanes=0&page=${page}`;
+          return;
+        } catch {
+          // Fall through to full reload
+        }
+      }
+      // Fallback: recreate URL to force reload
       if (localSourceUrl) URL.revokeObjectURL(localSourceUrl);
       localSourceUrl = URL.createObjectURL(localSourceFile!);
-      pdfPage = page;
-    }, 300);
+    }, 200);
   }
 
   // Prose container ref for page sync
@@ -540,6 +552,7 @@
             </div>
           {/if}
           <iframe
+            bind:this={pdfIframe}
             src={pdfSrc}
             class="flex-1 w-full border-none {loadingFile ? 'hidden' : ''}"
             title="Source PDF"
