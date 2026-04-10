@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { IngestDetail } from "$lib/api";
+  import { saveIngest } from "$lib/api";
   import { DocumentStore } from "$lib/document.svelte";
   import { parseTranscript, secondsToTime, speakerColour } from "$lib/transcript";
   import type { Segment } from "$lib/transcript";
@@ -73,6 +74,23 @@
 
   // Split editing mode
   let splittingIndex = $state<number | null>(null);
+
+  // Save state
+  let saving = $state(false);
+  let saveError = $state<string | null>(null);
+
+  async function handleSave() {
+    saving = true;
+    saveError = null;
+    const ok = await saveIngest(ingest.content_hash, doc.current);
+    saving = false;
+    if (ok) {
+      doc.discard();
+      doc.load(doc.current, ingest.content_hash);
+    } else {
+      saveError = "Failed to save";
+    }
+  }
 
   // Derived: visible segments after filters
   let visibleSegments = $derived(
@@ -285,7 +303,10 @@
   // Keyboard shortcuts
   function handleKeydown(e: KeyboardEvent) {
     if (e.target instanceof HTMLInputElement) return;
-    if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey) {
+    if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+      e.preventDefault();
+      if (doc.dirty) handleSave();
+    } else if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey) {
       e.preventDefault();
       doc.undo();
     } else if ((e.ctrlKey || e.metaKey) && (e.key === "y" || (e.key === "z" && e.shiftKey))) {
@@ -408,6 +429,14 @@
 
       {#if doc.dirty}
         <div class="w-px h-5 bg-border mx-1"></div>
+        <button
+          onclick={handleSave}
+          disabled={saving}
+          class="text-xs font-ui font-medium px-2 py-1 rounded cursor-pointer bg-primary text-on-primary hover:bg-primary-hover"
+          title="Save changes to file (Ctrl+S)"
+        >
+          {saving ? "Saving..." : "Save"}
+        </button>
         <button
           onclick={() => doc.discard()}
           class="text-xs font-ui text-error px-2 py-1 rounded cursor-pointer hover:bg-error-container/30"
@@ -643,7 +672,7 @@
                     onstartsplit={() => { splittingIndex = segment.index; }}
                   />
                 {:else}
-                  <div class="flex items-center gap-2 mb-1">
+                  <div class="flex items-center gap-2 mb-1 h-6">
                     <span
                       class="w-2 h-2 rounded-full flex-none"
                       style="background-color: {speakerColour(segment.speaker)}"
@@ -653,12 +682,6 @@
                     {#if segment.irrelevant}
                       <span class="text-xs text-on-surface-muted italic">irrelevant</span>
                     {/if}
-                    <!-- Reserve space for action icons so layout doesn't shift -->
-                    <div class="ml-auto flex items-center gap-0.5 invisible" aria-hidden="true">
-                      <span class="p-0.5 w-4.5 h-4.5"></span>
-                      <span class="p-0.5 w-4.5 h-4.5"></span>
-                      <span class="p-0.5 w-4.5 h-4.5"></span>
-                    </div>
                   </div>
                 {/if}
 

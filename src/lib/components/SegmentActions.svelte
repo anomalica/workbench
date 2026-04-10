@@ -46,7 +46,7 @@
 </script>
 
 <!-- Header row: same layout as the static version, but interactive -->
-<div class="flex items-center gap-2 mb-1">
+<div class="flex items-center gap-2 mb-1 h-6">
   <span
     class="w-2 h-2 rounded-full flex-none"
     style="background-color: {speakerColour(segment.speaker)}"

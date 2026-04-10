@@ -26,11 +26,19 @@ export async function fetchIngest(hash: string): Promise<IngestDetail> {
   return res.json();
 }
 
-/** Check whether an ingest exists for a given full hash. Returns the
- * ingest summary if found, null otherwise. Used by the file drop
- * zone to match a dropped file against known ingests. */
+/** Check whether an ingest exists for a given full hash. */
 export async function ingestExists(fullHash: string): Promise<boolean> {
   const res = await fetch(`/api/ingests/${fullHash}`);
+  return res.ok;
+}
+
+/** Save modified markdown content for an ingest. */
+export async function saveIngest(fullHash: string, content: string): Promise<boolean> {
+  const res = await fetch(`/api/ingests/${fullHash}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content }),
+  });
   return res.ok;
 }
 

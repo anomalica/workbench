@@ -60,6 +60,10 @@ class IngestSource(ABC):
     def get_ingest(self, full_hash: str) -> dict | None:
         """Return the full ingest for a given hash, or None if absent."""
 
+    @abstractmethod
+    def save_ingest(self, full_hash: str, content: str) -> bool:
+        """Write the modified markdown content back. Returns True on success."""
+
 
 def normalise_hash(value: str | None) -> str | None:
     """Strip the optional `sha256:` prefix and validate the hex string."""
@@ -134,6 +138,15 @@ class LocalIngestSource(IngestSource):
             "body": body,
         }
 
+    def save_ingest(self, full_hash: str, content: str) -> bool:
+        entry = self._scan().get(full_hash)
+        if entry is None:
+            return False
+        md_path, _ = entry
+        with open(md_path, "w") as f:
+            f.write(content)
+        return True
+
 
 class GitHubIngestSource(IngestSource):
     """Fetches ingests from a private GitHub repository via the API.
@@ -150,6 +163,9 @@ class GitHubIngestSource(IngestSource):
         raise NotImplementedError("GitHubIngestSource is not yet implemented")
 
     def get_ingest(self, full_hash: str) -> dict | None:
+        raise NotImplementedError("GitHubIngestSource is not yet implemented")
+
+    def save_ingest(self, full_hash: str, content: str) -> bool:
         raise NotImplementedError("GitHubIngestSource is not yet implemented")
 
 
@@ -195,3 +211,21 @@ def get_ingest(full_hash: str) -> JSONResponse:
         raise HTTPException(status_code=404, detail="Not found")
 
     return JSONResponse(ingest)
+
+
+@app.put("/api/ingests/{full_hash}")
+def save_ingest(full_hash: str, body: dict) -> JSONResponse:
+    """Save modified markdown content for an ingest.
+
+    Expects {"content": "..."} with the full markdown including frontmatter.
+    """
+    if not FULL_HASH_PATTERN.match(full_hash):
+        raise HTTPException(status_code=404, detail="Not found")
+
+    content = body.get("content")
+    if not content or not isinstance(content, str):
+        raise HTTPException(status_code=400, detail="Missing content")
+
+    if source.save_ingest(full_hash, content):
+        return JSONResponse({"saved": True})
+    raise HTTPException(status_code=404, detail="Not found")
