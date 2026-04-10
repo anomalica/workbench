@@ -43,6 +43,32 @@
   // View mode
   let view = $state<"ingest" | "edit" | "diff" | "raw">("ingest");
 
+  // Scroll sync between views: save fraction on scroll, restore on view switch
+  let scrollFraction = 0;
+
+  function handleContentScroll(e: Event) {
+    const el = e.currentTarget as HTMLElement;
+    const max = el.scrollHeight - el.clientHeight;
+    if (max > 0) scrollFraction = el.scrollTop / max;
+  }
+
+  function restoreScroll() {
+    requestAnimationFrame(() => {
+      const el = document.querySelector("[data-scroll-sync]") as HTMLElement;
+      if (el) {
+        const max = el.scrollHeight - el.clientHeight;
+        el.scrollTop = scrollFraction * max;
+      }
+    });
+  }
+
+  // Restore scroll position whenever the view tab changes
+  $effect(() => {
+    // Touch `view` to subscribe to changes
+    void view;
+    restoreScroll();
+  });
+
   // Metadata parsed from frontmatter (read-only display)
   let showMetadata = $state(false);
 
@@ -769,15 +795,17 @@
       {/if}
 
       {#if view === "diff"}
-        <div class="flex-1 overflow-auto">
+        <div class="flex-1 overflow-auto" data-scroll-sync onscroll={handleContentScroll}>
           <DiffViewer original={doc.original} modified={doc.current} />
         </div>
 
       {:else if view === "edit"}
         <div class="flex-1 flex flex-col min-h-0">
           <textarea
+            data-scroll-sync
             value={currentBody()}
             oninput={(e) => doc.editBody((e.target as HTMLTextAreaElement).value)}
+            onscroll={handleContentScroll}
             class="flex-1 w-full resize-none bg-surface text-sm text-on-surface leading-relaxed
               p-4 font-mono outline-none border-none"
             spellcheck="false"
@@ -785,7 +813,7 @@
         </div>
 
       {:else if view === "raw"}
-        <div class="flex-1 overflow-auto p-4">
+        <div class="flex-1 overflow-auto p-4" data-scroll-sync onscroll={handleContentScroll}>
           <pre class="text-xs font-mono text-on-surface whitespace-pre-wrap break-words">{doc.current}</pre>
         </div>
 
@@ -805,7 +833,7 @@
             >clear</button>
           </div>
         {/if}
-        <div class="flex-1 overflow-auto">
+        <div class="flex-1 overflow-auto" data-scroll-sync onscroll={handleContentScroll}>
           {#each visibleSegments as segment, vi}
             {@const isSelected = selected.has(segment.index)}
             {#if splittingIndex === segment.index}
@@ -880,6 +908,8 @@
         {@const processedBody = isPdf ? preprocessPageMarkers(currentBody()) : currentBody()}
         <div
           bind:this={proseContainer}
+          data-scroll-sync
+          onscroll={handleContentScroll}
           class="flex-1 overflow-auto px-8 py-6 prose
             {singleColumn ? 'mx-auto' : 'max-w-none'}
             text-on-surface prose-headings:text-on-surface prose-a:text-primary
