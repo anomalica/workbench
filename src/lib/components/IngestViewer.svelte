@@ -421,19 +421,6 @@
         </svg>
       </button>
 
-      <div class="w-px h-5 bg-border mx-1"></div>
-
-      {#each [["ingest", "Ingest", "View formatted content"], ["edit", "Edit", "Edit content as markdown"], ["diff", "Diff", "View changes from original"], ["raw", "Raw", "View raw markdown (read-only)"]] as [id, label, tip]}
-        <button
-          onclick={() => { view = id as typeof view; }}
-          class="text-xs font-ui font-medium px-2 py-1 rounded transition-colors cursor-pointer
-            {view === id ? 'bg-primary text-on-primary' : 'text-on-surface-secondary hover:bg-surface-alt'}"
-          title={tip}
-        >
-          {label}
-        </button>
-      {/each}
-
       {#if doc.dirty}
         <div class="w-px h-5 bg-border mx-1"></div>
         <button
@@ -537,15 +524,22 @@
           </a>
         </div>
       {/if}
-      <!-- Panel header with controls -->
-      <div class="px-4 py-2 bg-surface-alt border-b border-border flex items-center gap-2">
-        <span class="text-xs font-ui font-medium text-on-surface-secondary uppercase">
-          {view === "edit" ? "Edit" : view === "diff" ? "Changes" : view === "raw" ? "Raw markdown" : "Ingest"}
-        </span>
+      <!-- Panel header with view tabs and controls -->
+      <div class="px-4 py-2 bg-surface-alt border-b border-border flex items-center gap-1">
+        {#each [["ingest", "Ingest", "View formatted content"], ["edit", "Edit", "Edit content as markdown"], ["diff", "Diff", "View changes from original"], ["raw", "Raw", "View raw markdown (read-only)"]] as [id, label, tip]}
+          <button
+            onclick={() => { view = id as typeof view; }}
+            class="text-xs font-ui font-medium px-2 py-1 rounded transition-colors cursor-pointer
+              {view === id ? 'bg-primary text-on-primary' : 'text-on-surface-secondary hover:bg-surface'}"
+            title={tip}
+          >
+            {label}
+          </button>
+        {/each}
 
         <button
           onclick={() => { showMetadata = !showMetadata; }}
-          class="text-xs font-ui px-1.5 py-0.5 rounded cursor-pointer transition-colors
+          class="text-xs font-ui px-2 py-1 rounded cursor-pointer transition-colors
             {showMetadata ? 'bg-primary/10 text-primary' : 'text-on-surface-muted hover:text-on-surface hover:bg-surface'}"
           title="Toggle metadata"
         >
