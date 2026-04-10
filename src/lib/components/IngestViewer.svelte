@@ -7,7 +7,6 @@
   import SpeakerManager from "./SpeakerManager.svelte";
   import SegmentActions from "./SegmentActions.svelte";
   import SplitEditor from "./SplitEditor.svelte";
-  import PdfViewer from "./PdfViewer.svelte";
   import DiffViewer from "./DiffViewer.svelte";
   import { marked } from "marked";
 
@@ -66,8 +65,18 @@
   // Web ingests without a source file don't need a separate left panel
   let singleColumn = $derived(isWeb && !localSourceFile);
 
-  // PDF page sync: changing pdfPage forces the iframe to recreate via {#key}
+  // PDF page sync
   let pdfPage = $state(1);
+  let pdfBlobUrl = $state<string | null>(null);
+  let pdfSrc = $derived(pdfBlobUrl ? `${pdfBlobUrl}#toolbar=0&navpanes=0&page=${pdfPage}` : null);
+
+  // Create initial blob URL when file is available
+  $effect(() => {
+    if (localSourceFile && isPdf) {
+      if (pdfBlobUrl) URL.revokeObjectURL(pdfBlobUrl);
+      pdfBlobUrl = URL.createObjectURL(localSourceFile);
+    }
+  });
 
   /** Replace file_page YAML blocks with visible, clickable page markers. */
   function preprocessPageMarkers(body: string): string {
@@ -78,46 +87,67 @@
   }
 
   function navigatePdfToPage(page: number) {
-    if (!localSourceUrl || page === pdfPage) return;
+    if (!localSourceFile || page === pdfPage) return;
+    // Revoke old URL and create fresh one to force iframe reload
+    if (pdfBlobUrl) URL.revokeObjectURL(pdfBlobUrl);
+    pdfBlobUrl = URL.createObjectURL(localSourceFile);
     pdfPage = page;
   }
 
-  function setupPageSync(container: HTMLElement) {
-    // Click: explicit page navigation
-    function handleClick(e: Event) {
-      const marker = (e.target as HTMLElement).closest(".page-marker");
-      if (marker) {
-        const page = parseInt((marker as HTMLElement).dataset.filePage ?? "1", 10);
-        navigatePdfToPage(page);
+  // Prose container ref for page sync
+  let proseContainer: HTMLDivElement | undefined = $state();
+
+  // Set up click handler and IntersectionObserver for page markers.
+  // Runs as $effect so it re-initialises when content changes.
+  $effect(() => {
+    if (!proseContainer || !isPdf || !localSourceFile) return;
+
+    // Wait a tick for {@html} to render into the DOM
+    const timer = setTimeout(() => {
+      if (!proseContainer) return;
+      const markers = proseContainer.querySelectorAll(".page-marker[data-file-page]");
+
+      // Click handler
+      function handleClick(e: Event) {
+        const marker = (e.target as HTMLElement).closest(".page-marker");
+        if (marker) {
+          const pg = parseInt((marker as HTMLElement).dataset.filePage ?? "1", 10);
+          navigatePdfToPage(pg);
+        }
       }
-    }
-    container.addEventListener("click", handleClick);
+      proseContainer!.addEventListener("click", handleClick);
 
-    // Scroll: auto-sync as user reads through the ingest
-    const markers = container.querySelectorAll(".page-marker[data-file-page]");
-    let observer: IntersectionObserver | null = null;
-    if (markers.length > 0 && isPdf && localSourceFile) {
-      observer = new IntersectionObserver(
-        (entries) => {
-          for (const entry of entries) {
-            if (entry.isIntersecting) {
-              const page = parseInt((entry.target as HTMLElement).dataset.filePage ?? "1", 10);
-              navigatePdfToPage(page);
+      // Scroll observer
+      let observer: IntersectionObserver | null = null;
+      if (markers.length > 0) {
+        observer = new IntersectionObserver(
+          (entries) => {
+            for (const entry of entries) {
+              if (entry.isIntersecting) {
+                const pg = parseInt((entry.target as HTMLElement).dataset.filePage ?? "1", 10);
+                navigatePdfToPage(pg);
+              }
             }
-          }
-        },
-        { root: container, rootMargin: "-10% 0px -70% 0px" },
-      );
-      for (const m of markers) observer.observe(m);
-    }
+          },
+          { root: proseContainer!, rootMargin: "-10% 0px -70% 0px" },
+        );
+        for (const m of markers) observer.observe(m);
+      }
 
-    return {
-      destroy: () => {
-        container.removeEventListener("click", handleClick);
+      // Cleanup stored for effect teardown
+      cleanupPageSync = () => {
+        proseContainer?.removeEventListener("click", handleClick);
         observer?.disconnect();
-      },
+      };
+    }, 50);
+
+    return () => {
+      clearTimeout(timer);
+      cleanupPageSync?.();
     };
-  }
+  });
+
+  let cleanupPageSync: (() => void) | null = null;
 
   function youtubeId(url: string | undefined): string | null {
     if (!url) return null;
@@ -476,8 +506,8 @@
           <span class="text-xs font-ui font-medium text-on-surface-secondary uppercase">Original</span>
         </div>
 
-        {#if localSourceFile && isPdf}
-          <PdfViewer file={localSourceFile} page={pdfPage} />
+        {#if pdfSrc && isPdf}
+          <iframe src={pdfSrc} class="flex-1 w-full border-none" title="Source PDF"></iframe>
         {:else if localSourceUrl}
           <div class="flex-none p-4">
             <video controls src={localSourceUrl} class="w-full rounded">
@@ -812,12 +842,12 @@
       {:else}
         {@const processedBody = isPdf ? preprocessPageMarkers(currentBody()) : currentBody()}
         <div
+          bind:this={proseContainer}
           class="flex-1 overflow-auto px-8 py-6 prose
             {singleColumn ? 'mx-auto' : 'max-w-none'}
             text-on-surface prose-headings:text-on-surface prose-a:text-primary
             prose-img:rounded prose-img:max-w-full prose-hr:border-border
             prose-p:leading-relaxed prose-li:leading-relaxed"
-          use:setupPageSync
         >
           {@html marked.parse(processedBody)}
         </div>
