@@ -103,6 +103,35 @@ export function secondsToTime(s: number): string {
   return `${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
 }
 
+const SPEAKER_COLOURS = [
+  "#0B6E6E",
+  "#B35A28",
+  "#2D7D46",
+  "#7B4DAA",
+  "#C4543B",
+  "#3B7FC4",
+  "#8B6914",
+  "#C44B8B",
+  "#4A8B6E",
+  "#6E4A8B",
+  "#8B4A6E",
+  "#4A6E8B",
+  "#6E8B4A",
+  "#8B6E4A",
+  "#4A8B8B",
+  "#8B4A4A",
+];
+
+/** Deterministic colour for a speaker name. Uses a simple string hash
+ *  so that renamed speakers get a consistent but distinct colour. */
+export function speakerColour(speaker: string): string {
+  let hash = 0;
+  for (let i = 0; i < speaker.length; i++) {
+    hash = (hash * 31 + speaker.charCodeAt(i)) | 0;
+  }
+  return SPEAKER_COLOURS[Math.abs(hash) % SPEAKER_COLOURS.length];
+}
+
 /** Return the next speaker number not yet used: "Speaker N". */
 export function nextSpeakerName(segments: Segment[]): string {
   let max = 0;

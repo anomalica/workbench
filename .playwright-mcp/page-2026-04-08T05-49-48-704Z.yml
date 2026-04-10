@@ -1,0 +1,114 @@
+- generic [ref=e3]:
+    - banner [ref=e4]:
+        - img "Anomalica" [ref=e5]
+        - generic [ref=e6]: Workbench
+    - main [ref=e7]:
+        - generic [ref=e8]:
+            - generic [ref=e9]:
+                - heading "Review Workbench" [level=1] [ref=e10]
+                - paragraph [ref=e11]: Drop a source file to match it against an ingest, or browse available ingests below.
+            - ? button "Drop a source file here or click to browse The file is hashed locally and matched against known ingests.
+                It is never uploaded." [ref=e12] [cursor=pointer]
+              : - paragraph [ref=e13]: Drop a source file here or click to browse
+                - paragraph [ref=e14]: The file is hashed locally and matched against known ingests. It is never uploaded.
+            - generic [ref=e15]:
+                - heading "Available ingests (16)" [level=2] [ref=e16]
+                - generic [ref=e17]:
+                    - ? 'button "Web 2017-12-16 Glowing Auras and ‘Black Money’: The Pentagon’s Mysterious U.F.O. Program
+                        (Published 2017)" [ref=e18] [cursor=pointer]'
+                      : - generic [ref=e19]:
+                            - generic [ref=e20]: Web
+                            - generic [ref=e21]: 2017-12-16
+                        - paragraph [ref=e22]: "Glowing Auras and ‘Black Money’: The Pentagon’s Mysterious U.F.O. Program
+                            (Published 2017)"
+                    - button "Audio 2021-09-06 The UFO Phenomenon | Full Documentary 2021 | 7NEWS Spotlight" [ref=e23] [cursor=pointer]:
+                        - generic [ref=e24]:
+                            - generic [ref=e25]: Audio
+                            - generic [ref=e26]: 2021-09-06
+                        - paragraph [ref=e27]: The UFO Phenomenon | Full Documentary 2021 | 7NEWS Spotlight
+                    - ? button "Web 2019-06-14 Pentagon Reinforces Mr. Luis Elizondo Had “No Responsibilities” on AATIP; Senator
+                        Harry Reid’s 2009 Memo Changes Nothing - The Black Vault" [ref=e28] [cursor=pointer]
+                      : - generic [ref=e29]:
+                            - generic [ref=e30]: Web
+                            - generic [ref=e31]: 2019-06-14
+                        - paragraph [ref=e32]: Pentagon Reinforces Mr. Luis Elizondo Had “No Responsibilities” on AATIP; Senator
+                            Harry Reid’s 2009 Memo Changes Nothing - The Black Vault
+                    - button "Audio 2021-05-17 Navy pilots describe encounters with UFOs" [ref=e33] [cursor=pointer]:
+                        - generic [ref=e34]:
+                            - generic [ref=e35]: Audio
+                            - generic [ref=e36]: 2021-05-17
+                        - paragraph [ref=e37]: Navy pilots describe encounters with UFOs
+                    - button "PDF 2004-11-14 Nimitz Carrier Strike Group (CSG-11) AAV Incident Report" [ref=e38] [cursor=pointer]:
+                        - generic [ref=e39]:
+                            - generic [ref=e40]: PDF
+                            - generic [ref=e41]: 2004-11-14
+                        - paragraph [ref=e42]: Nimitz Carrier Strike Group (CSG-11) AAV Incident Report
+                    - button "PDF 2023-07-26 David Fravor Statement for the House Oversight Committee" [ref=e43] [cursor=pointer]:
+                        - generic [ref=e44]:
+                            - generic [ref=e45]: PDF
+                            - generic [ref=e46]: 2023-07-26
+                        - paragraph [ref=e47]: David Fravor Statement for the House Oversight Committee
+                    - 'button "PDF 2022-08-17 FOIA Response 18-F-0324: AATIP and Luis Elizondo Documents" [ref=e48] [cursor=pointer]':
+                        - generic [ref=e49]:
+                            - generic [ref=e50]: PDF
+                            - generic [ref=e51]: 2022-08-17
+                        - paragraph [ref=e52]: "FOIA Response 18-F-0324: AATIP and Luis Elizondo Documents"
+                    - ? button "PDF 2024-02-01 Report on the Historical Record of U.S. Government Involvement with Unidentified
+                        Anomalous Phenomena (UAP), Volume I" [ref=e53] [cursor=pointer]
+                      : - generic [ref=e54]:
+                            - generic [ref=e55]: PDF
+                            - generic [ref=e56]: 2024-02-01
+                        - paragraph [ref=e57]: Report on the Historical Record of U.S. Government Involvement with Unidentified
+                            Anomalous Phenomena (UAP), Volume I
+                    - ? button "Web 2025-03-27 Rep. Burlison Welcomes Former U.S. Air Force Officer David Grusch as Special
+                        Advisor" [ref=e58] [cursor=pointer]
+                      : - generic [ref=e59]:
+                            - generic [ref=e60]: Web
+                            - generic [ref=e61]: 2025-03-27
+                        - paragraph [ref=e62]: Rep. Burlison Welcomes Former U.S. Air Force Officer David Grusch as Special
+                            Advisor
+                    - ? button "Web 2023-06-09 Claims that UFO information was inappropriately withheld from Congress deemed
+                        ‘credible,’ ‘urgent’" [ref=e63] [cursor=pointer]
+                      : - generic [ref=e64]:
+                            - generic [ref=e65]: Web
+                            - generic [ref=e66]: 2023-06-09
+                        - paragraph [ref=e67]: Claims that UFO information was inappropriately withheld from Congress deemed
+                            ‘credible,’ ‘urgent’
+                    - ? button "Web 2019-06-01 The Media Loves This UFO Expert Who Says He Worked for an Obscure Pentagon
+                        Program. Did He?" [ref=e68] [cursor=pointer]
+                      : - generic [ref=e69]:
+                            - generic [ref=e70]: Web
+                            - generic [ref=e71]: 2019-06-01
+                        - paragraph [ref=e72]: The Media Loves This UFO Expert Who Says He Worked for an Obscure Pentagon
+                            Program. Did He?
+                    - button "Audio 2026-03-31 asset" [ref=e73] [cursor=pointer]:
+                        - generic [ref=e74]:
+                            - generic [ref=e75]: Audio
+                            - generic [ref=e76]: 2026-03-31
+                        - paragraph [ref=e77]: asset
+                    - ? button "PDF 2024-01-24 Unclassified Summary of Report No. DODIG-2023-109, \\\"Evaluation of the DoD's
+                        Actions Regarding Unidentified Anomalous Phenomena,\\\" August 15, 2023" [ref=e78] [cursor=pointer]
+                      : - generic [ref=e79]:
+                            - generic [ref=e80]: PDF
+                            - generic [ref=e81]: 2024-01-24
+                        - paragraph [ref=e82]: Unclassified Summary of Report No. DODIG-2023-109, \"Evaluation of the DoD's
+                            Actions Regarding Unidentified Anomalous Phenomena,\" August 15, 2023
+                    - ? 'button "PDF 2023-07-26 Unidentified Anomalous Phenomena: Implications on National Security, Public
+                        Safety, and Government Transparency" [ref=e83] [cursor=pointer]'
+                      : - generic [ref=e84]:
+                            - generic [ref=e85]: PDF
+                            - generic [ref=e86]: 2023-07-26
+                        - paragraph [ref=e87]: "Unidentified Anomalous Phenomena: Implications on National Security, Public
+                            Safety, and Government Transparency"
+                    - ? 'button "PDF 2024-11-13 Written Testimony of Luis Elizondo: Unidentified Anomalous Phenomena: Exposing
+                        the Truth" [ref=e88] [cursor=pointer]'
+                      : - generic [ref=e89]:
+                            - generic [ref=e90]: PDF
+                            - generic [ref=e91]: 2024-11-13
+                        - paragraph [ref=e92]: "Written Testimony of Luis Elizondo: Unidentified Anomalous Phenomena: Exposing
+                            the Truth"
+                    - button "Web 2023-06-05 Intelligence Officials Say U.S. Has Retrieved Craft of Non-Human Origin" [ref=e93] [cursor=pointer]:
+                        - generic [ref=e94]:
+                            - generic [ref=e95]: Web
+                            - generic [ref=e96]: 2023-06-05
+                        - paragraph [ref=e97]: Intelligence Officials Say U.S. Has Retrieved Craft of Non-Human Origin

@@ -1,0 +1,38 @@
+[   16047ms] [WARNING] Unrecognized feature: 'web-share'. @ https://www.youtube.com/s/player/8a6e7bc4/www-widgetapi.vflset/www-widgetapi.js:193
+[  890864ms] [WARNING] Unrecognized feature: 'web-share'. @ https://www.youtube.com/s/player/8a6e7bc4/www-widgetapi.vflset/www-widgetapi.js:193
+[ 9015028ms] [WARNING] Unrecognized feature: 'web-share'. @ https://www.youtube.com/s/player/8a6e7bc4/www-widgetapi.vflset/www-widgetapi.js:193
+[ 9580908ms] TypeError: Cannot read properties of undefined (reading 'size')
+
+	in <unknown>
+	in SpeakerManager.svelte
+	in IngestViewer.svelte
+	in App.svelte
+	in undefined
+
+    at http://localhost:5173/src/lib/components/SpeakerManager.svelte?t=1775792616823:135:34
+    at http://localhost:5173/node_modules/.vite/deps/chunk-GZ7M3EAG.js?v=4e2961e7:780:5
+    at update_reaction (http://localhost:5173/node_modules/.vite/deps/chunk-YSPUT2TZ.js?v=4e2961e7:3960:18)
+    at update_effect (http://localhost:5173/node_modules/.vite/deps/chunk-YSPUT2TZ.js?v=4e2961e7:4101:21)
+    at create_effect (http://localhost:5173/node_modules/.vite/deps/chunk-YSPUT2TZ.js?v=4e2961e7:3444:7)
+    at block (http://localhost:5173/node_modules/.vite/deps/chunk-YSPUT2TZ.js?v=4e2961e7:3610:17)
+    at Module.if_block (http://localhost:5173/node_modules/.vite/deps/chunk-GZ7M3EAG.js?v=4e2961e7:778:3)
+    at http://localhost:5173/src/lib/components/SpeakerManager.svelte?t=1775792616823:134:14
+    at Module.add_svelte_meta (http://localhost:5173/node_modules/.vite/deps/chunk-YSPUT2TZ.js?v=4e2961e7:589:12)
+    at SpeakerManager (http://localhost:5173/src/lib/components/SpeakerManager.svelte?t=1775792616823:133:5)
+[ 9597620ms] ReferenceError: filterSpeaker is not defined
+
+	in <unknown>
+	in IngestViewer.svelte
+	in App.svelte
+	in undefined
+
+    at $.add_svelte_meta.componentTag (http://localhost:5173/src/lib/components/IngestViewer.svelte?t=1775792633342:644:8)
+    at Module.add_svelte_meta (http://localhost:5173/node_modules/.vite/deps/chunk-YSPUT2TZ.js?v=4e2961e7:589:12)
+    at consequent_7 (http://localhost:5173/src/lib/components/IngestViewer.svelte?t=1775792633342:639:8)
+    at http://localhost:5173/node_modules/.vite/deps/chunk-GZ7M3EAG.js?v=4e2961e7:631:24
+    at update_reaction (http://localhost:5173/node_modules/.vite/deps/chunk-YSPUT2TZ.js?v=4e2961e7:3960:18)
+    at update_effect (http://localhost:5173/node_modules/.vite/deps/chunk-YSPUT2TZ.js?v=4e2961e7:4101:21)
+    at create_effect (http://localhost:5173/node_modules/.vite/deps/chunk-YSPUT2TZ.js?v=4e2961e7:3444:7)
+    at branch (http://localhost:5173/node_modules/.vite/deps/chunk-YSPUT2TZ.js?v=4e2961e7:3624:10)
+    at BranchManager.ensure (http://localhost:5173/node_modules/.vite/deps/chunk-GZ7M3EAG.js?v=4e2961e7:631:11)
+    at update_branch (http://localhost:5173/node_modules/.vite/deps/chunk-GZ7M3EAG.js?v=4e2961e7:776:14)

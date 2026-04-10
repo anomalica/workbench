@@ -1,0 +1,8 @@
+- generic [ref=e3]:
+    - banner [ref=e4]:
+        - img "Anomalica" [ref=e5]
+        - generic [ref=e6]: Workbench
+    - main [ref=e7]:
+        - generic [ref=e8]:
+            - heading "Review Workbench" [level=1] [ref=e9]
+            - paragraph [ref=e10]: Review and correct ingests and digests. Upload a source file to begin.

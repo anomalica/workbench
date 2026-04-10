@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Segment } from "$lib/transcript";
-  import { nextSpeakerName } from "$lib/transcript";
+  import { nextSpeakerName, speakerColour } from "$lib/transcript";
 
   let {
     segment,
@@ -174,16 +174,3 @@
       class="text-xs font-ui font-medium px-3 py-1 bg-primary text-on-primary rounded cursor-pointer hover:bg-primary-hover">Split</button>
   </div>
 </div>
-
-<script lang="ts" module>
-  const SPEAKER_COLOURS = [
-    "#0B6E6E", "#B35A28", "#2D7D46", "#7B4DAA",
-    "#C4543B", "#3B7FC4", "#8B6914", "#C44B8B",
-    "#4A8B6E", "#6E4A8B",
-  ];
-
-  function speakerColour(speaker: string): string {
-    const num = parseInt(speaker.replace(/\D/g, "") || "0", 10);
-    return SPEAKER_COLOURS[num % SPEAKER_COLOURS.length];
-  }
-</script>
