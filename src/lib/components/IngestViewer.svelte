@@ -420,27 +420,6 @@
           <path stroke-linecap="round" stroke-linejoin="round" d="M21 10H11a5 5 0 00-5 5v2M21 10l-4-4M21 10l-4 4" />
         </svg>
       </button>
-
-      <div class="w-16"></div>
-
-      <button
-        onclick={handleSave}
-        disabled={saving || !doc.dirty}
-        class="text-xs font-ui font-medium px-2 py-1 rounded cursor-pointer transition-colors
-          {doc.dirty ? 'bg-primary text-on-primary hover:bg-primary-hover' : 'bg-on-surface-muted/10 text-on-surface-muted/30 cursor-default'}"
-        title="Save changes to file (Ctrl+S)"
-      >
-        {saving ? "Saving..." : "Save"}
-      </button>
-      <button
-        onclick={() => doc.discard()}
-        disabled={!doc.dirty}
-        class="text-xs font-ui px-2 py-1 rounded cursor-pointer transition-colors
-          {doc.dirty ? 'text-error hover:bg-error-container/30' : 'text-on-surface-muted/30 cursor-default'}"
-        title="Discard all changes and revert to original"
-      >
-        Discard
-      </button>
     </div>
   </div>
 
@@ -548,9 +527,9 @@
           Meta
         </button>
 
-        {#if view === "ingest" && hasTranscript}
-          <div class="ml-auto flex items-center gap-1">
-            <!-- Selection actions -->
+        <div class="ml-auto flex items-center gap-1">
+          <!-- Transcript-specific controls -->
+          {#if view === "ingest" && hasTranscript}
             {#if selected.size > 0}
               <span class="text-xs font-ui text-on-surface-muted px-1">{selected.size} selected</span>
               <button
@@ -615,8 +594,28 @@
                 <span class="text-xs font-ui font-medium tabular-nums">{irrelevantCount}</span>
               </button>
             {/if}
-          </div>
-        {/if}
+          {/if}
+
+          <!-- Save / Discard -->
+          {#if doc.dirty}
+            <div class="w-px h-4 bg-border mx-1"></div>
+            <button
+              onclick={handleSave}
+              disabled={saving}
+              class="text-xs font-ui font-medium px-2 py-1 rounded cursor-pointer bg-primary text-on-primary hover:bg-primary-hover"
+              title="Save changes to file (Ctrl+S)"
+            >
+              {saving ? "Saving..." : "Save"}
+            </button>
+            <button
+              onclick={() => doc.discard()}
+              class="text-xs font-ui text-error px-2 py-1 rounded cursor-pointer hover:bg-error-container/30"
+              title="Discard all changes and revert to original"
+            >
+              Discard
+            </button>
+          {/if}
+        </div>
       </div>
 
       <!-- Metadata panel (collapsible, shown in any view) -->
