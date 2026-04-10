@@ -421,24 +421,26 @@
         </svg>
       </button>
 
-      {#if doc.dirty}
-        <div class="w-px h-5 bg-border mx-1"></div>
-        <button
-          onclick={handleSave}
-          disabled={saving}
-          class="text-xs font-ui font-medium px-2 py-1 rounded cursor-pointer bg-primary text-on-primary hover:bg-primary-hover"
-          title="Save changes to file (Ctrl+S)"
-        >
-          {saving ? "Saving..." : "Save"}
-        </button>
-        <button
-          onclick={() => doc.discard()}
-          class="text-xs font-ui text-error px-2 py-1 rounded cursor-pointer hover:bg-error-container/30"
-          title="Discard all changes and revert to original"
-        >
-          Discard
-        </button>
-      {/if}
+      <div class="w-16"></div>
+
+      <button
+        onclick={handleSave}
+        disabled={saving || !doc.dirty}
+        class="text-xs font-ui font-medium px-2 py-1 rounded cursor-pointer transition-colors
+          {doc.dirty ? 'bg-primary text-on-primary hover:bg-primary-hover' : 'bg-on-surface-muted/10 text-on-surface-muted/30 cursor-default'}"
+        title="Save changes to file (Ctrl+S)"
+      >
+        {saving ? "Saving..." : "Save"}
+      </button>
+      <button
+        onclick={() => doc.discard()}
+        disabled={!doc.dirty}
+        class="text-xs font-ui px-2 py-1 rounded cursor-pointer transition-colors
+          {doc.dirty ? 'text-error hover:bg-error-container/30' : 'text-on-surface-muted/30 cursor-default'}"
+        title="Discard all changes and revert to original"
+      >
+        Discard
+      </button>
     </div>
   </div>
 
