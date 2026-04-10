@@ -109,6 +109,7 @@
               {mergeTarget === id
                 ? 'bg-primary text-on-primary'
                 : 'bg-surface text-on-surface-secondary hover:bg-surface-alt'}"
+            title="Use this name for the merged speaker"
           >
             <span class="w-2 h-2 rounded-full" style="background-color: {speakerColour(id)}"></span>
             {id}

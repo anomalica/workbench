@@ -395,11 +395,12 @@
 
       <div class="w-px h-5 bg-border mx-1"></div>
 
-      {#each [["ingest", "Ingest"], ["diff", "Diff"], ["raw", "Raw"]] as [id, label]}
+      {#each [["ingest", "Ingest", "View formatted transcript"], ["diff", "Diff", "View changes from original"], ["raw", "Raw", "View raw markdown"]] as [id, label, tip]}
         <button
           onclick={() => { view = id as typeof view; }}
           class="text-xs font-ui font-medium px-2 py-1 rounded transition-colors cursor-pointer
             {view === id ? 'bg-primary text-on-primary' : 'text-on-surface-secondary hover:bg-surface-alt'}"
+          title={tip}
         >
           {label}
         </button>
@@ -410,6 +411,7 @@
         <button
           onclick={() => doc.discard()}
           class="text-xs font-ui text-error px-2 py-1 rounded cursor-pointer hover:bg-error-container/30"
+          title="Discard all changes and revert to original"
         >
           Discard
         </button>
@@ -613,14 +615,14 @@
             {:else}
               <div
                 data-segment-index={segment.index}
-                class="px-4 py-3 border-b border-border/50 transition-colors cursor-pointer
+                class="px-4 py-3 border-b transition-colors cursor-pointer
                   {isSelected
-                    ? 'bg-primary-container/40 ring-1 ring-inset ring-primary/20'
+                    ? 'bg-primary-container/30 border-primary/30'
                     : activeSegment === segment.index
-                      ? 'bg-primary-container/20'
+                      ? 'bg-primary-container/15 border-border/50'
                       : segment.irrelevant
-                        ? 'opacity-50 bg-surface-alt/50'
-                        : 'hover:bg-primary-container/10'}"
+                        ? 'opacity-50 bg-surface-alt/50 border-border/50'
+                        : 'border-border/50 hover:bg-primary-container/10'}"
                 role="button"
                 tabindex="0"
                 onclick={(e) => handleSegmentClick(segment, e)}
@@ -649,8 +651,14 @@
                     <span class="text-xs font-ui font-medium text-primary">{segment.speaker}</span>
                     <span class="text-xs text-on-surface-muted font-mono">{formatTime(segment.time)}</span>
                     {#if segment.irrelevant}
-                      <span class="text-xs text-on-surface-muted italic ml-auto">irrelevant</span>
+                      <span class="text-xs text-on-surface-muted italic">irrelevant</span>
                     {/if}
+                    <!-- Reserve space for action icons so layout doesn't shift -->
+                    <div class="ml-auto flex items-center gap-0.5 invisible" aria-hidden="true">
+                      <span class="p-0.5 w-4.5 h-4.5"></span>
+                      <span class="p-0.5 w-4.5 h-4.5"></span>
+                      <span class="p-0.5 w-4.5 h-4.5"></span>
+                    </div>
                   </div>
                 {/if}
 

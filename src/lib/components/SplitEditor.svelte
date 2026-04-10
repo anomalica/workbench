@@ -96,6 +96,7 @@
         <button
           onclick={() => { showAbovePicker = !showAbovePicker; showBelowPicker = false; }}
           class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
+          title="Change speaker for top half"
         >
           {aboveSpeaker}
         </button>
@@ -138,6 +139,7 @@
         <button
           onclick={() => { showBelowPicker = !showBelowPicker; showAbovePicker = false; }}
           class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
+          title="Change speaker for bottom half"
         >
           {belowSpeaker}
         </button>
@@ -169,8 +171,10 @@
   <div class="flex items-center gap-2 px-3 py-2 border-t border-border bg-surface-alt">
     <div class="flex-1"></div>
     <button onclick={oncancel}
-      class="text-xs text-on-surface-muted cursor-pointer hover:text-on-surface px-2 py-1">Cancel</button>
+      class="text-xs text-on-surface-muted cursor-pointer hover:text-on-surface px-2 py-1"
+      title="Cancel split">Cancel</button>
     <button onclick={commitSplit}
-      class="text-xs font-ui font-medium px-3 py-1 bg-primary text-on-primary rounded cursor-pointer hover:bg-primary-hover">Split</button>
+      class="text-xs font-ui font-medium px-3 py-1 bg-primary text-on-primary rounded cursor-pointer hover:bg-primary-hover"
+      title="Confirm split at this position">Split</button>
   </div>
 </div>

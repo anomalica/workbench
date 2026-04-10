@@ -57,6 +57,7 @@
     <button
       onclick={(e) => { e.stopPropagation(); showSpeakerPicker = !showSpeakerPicker; showTimePicker = false; }}
       class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
+      title="Change speaker"
     >
       {segment.speaker}
     </button>
@@ -92,6 +93,7 @@
     <button
       onclick={(e) => { e.stopPropagation(); openTimePicker(); }}
       class="text-xs text-on-surface-muted font-mono cursor-pointer hover:underline"
+      title="Change timestamp"
     >
       {segment.time.replace(/^00:/, "")}
     </button>
