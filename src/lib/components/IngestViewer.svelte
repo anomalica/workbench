@@ -626,7 +626,7 @@
       <!-- Metadata panel (collapsible, shown in any view) -->
       {#if showMetadata}
         <div class="border-b border-border bg-surface-alt/50 px-4 py-3 flex-none">
-          <div class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs max-w-lg">
+          <div class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs">
             {#each Object.entries(ingest.frontmatter) as [key, value]}
               {#if value && key !== "speakers"}
                 <span class="font-ui font-medium text-on-surface-muted text-right">{key}</span>
