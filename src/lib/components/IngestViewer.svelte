@@ -424,41 +424,39 @@
 
         {#if localSourceUrl && isPdf}
           <iframe src="{localSourceUrl}#toolbar=0" class="flex-1 w-full" title="Source PDF"></iframe>
-        {:else}
-          <div class="flex-none">
-            {#if localSourceUrl}
-              <div class="p-4">
-                <video controls src={localSourceUrl} class="w-full rounded">
-                  <track kind="captions" />
-                </video>
-              </div>
-            {:else if ytId}
-              <div class="p-4">
-                <div id="yt-player" class="w-full aspect-video rounded"></div>
-                <a
-                  href={ingest.frontmatter.source_url}
-                  target="_blank"
-                  rel="noopener"
-                  class="text-xs text-on-surface-muted hover:text-primary mt-2 inline-block break-all"
-                >
-                  {ingest.frontmatter.source_url}
-                </a>
-              </div>
-            {:else}
-              <div
-                class="p-4 text-sm text-center flex-1 flex items-center justify-center transition-colors
-                  {dragging ? 'bg-primary-container/20 text-primary' : 'text-on-surface-muted'}"
-                ondragover={(e) => { e.preventDefault(); dragging = true; }}
-                ondragleave={() => { dragging = false; }}
-                ondrop={handleFileDrop}
-              >
-                <p>{dragging ? "Drop file here" : "Drop a source file here to view it alongside the ingest"}</p>
-              </div>
-            {/if}
+        {:else if localSourceUrl}
+          <div class="flex-none p-4">
+            <video controls src={localSourceUrl} class="w-full rounded">
+              <track kind="captions" />
+            </video>
           </div>
+        {:else if ytId}
+          <div class="flex-none p-4">
+            <div id="yt-player" class="w-full aspect-video rounded"></div>
+            <a
+              href={ingest.frontmatter.source_url}
+              target="_blank"
+              rel="noopener"
+              class="text-xs text-on-surface-muted hover:text-primary mt-2 inline-block break-all"
+            >
+              {ingest.frontmatter.source_url}
+            </a>
+          </div>
+        {:else}
+          <!-- Drop target fills all available space -->
+          <div
+            class="flex-1 flex items-center justify-center text-sm text-center transition-colors cursor-default
+              {dragging ? 'bg-primary-container/20 text-primary' : 'text-on-surface-muted'}"
+            ondragover={(e) => { e.preventDefault(); dragging = true; }}
+            ondragleave={() => { dragging = false; }}
+            ondrop={handleFileDrop}
+          >
+            <p class="p-8">{dragging ? "Drop file here" : "Drop a source file here to view alongside the ingest"}</p>
+          </div>
+        {/if}
 
-          {#if hasTranscript}
-            <div class="flex-1 overflow-auto border-t border-border min-h-0">
+        {#if hasTranscript}
+          <div class="flex-1 overflow-auto border-t border-border min-h-0">
             <details open class="group">
               <summary class="px-4 py-2 bg-surface-alt cursor-pointer flex items-center gap-2 select-none sticky top-0 z-10">
                 <svg class="w-3 h-3 text-on-surface-muted transition-transform group-open:rotate-90" fill="currentColor" viewBox="0 0 20 20">
@@ -480,7 +478,6 @@
             </details>
           </div>
         {/if}
-      {/if}
     </div>
     {/if}
 
