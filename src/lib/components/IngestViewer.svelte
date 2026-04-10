@@ -65,6 +65,72 @@
   // Web ingests without a source file don't need a separate left panel
   let singleColumn = $derived(isWeb && !localSourceFile);
 
+  // PDF page sync
+  let currentPdfPage = $state(1);
+  let pdfIframe: HTMLIFrameElement | undefined = $state();
+
+  /** Replace file_page YAML blocks with visible, observable page markers. */
+  function preprocessPageMarkers(body: string): string {
+    return body.replace(
+      /\n---\nfile_page:\s*(\d+)\n---\n/g,
+      '\n<div class="page-marker" data-file-page="$1"><span class="page-label">Page $1</span></div>\n',
+    );
+  }
+
+  function navigatePdfToPage(page: number) {
+    if (!pdfIframe || !localSourceUrl) return;
+    currentPdfPage = page;
+    // Update the iframe hash to navigate to the page
+    try {
+      pdfIframe.contentWindow?.location.replace(localSourceUrl + "#page=" + page);
+    } catch {
+      // Cross-origin fallback: reset src
+      pdfIframe.src = localSourceUrl + "#page=" + page;
+    }
+  }
+
+  function setupPageObserverAction(container: HTMLElement) {
+    // Svelte use: action - called when the element mounts
+    const cleanup = setupPageObserver(container);
+
+    // Click handler for explicit page navigation
+    function handleClick(e: Event) {
+      const marker = (e.target as HTMLElement).closest(".page-marker");
+      if (marker) {
+        const page = parseInt((marker as HTMLElement).dataset.filePage ?? "1", 10);
+        navigatePdfToPage(page);
+      }
+    }
+    container.addEventListener("click", handleClick);
+
+    return {
+      destroy: () => {
+        cleanup?.();
+        container.removeEventListener("click", handleClick);
+      },
+    };
+  }
+
+  function setupPageObserver(container: HTMLElement) {
+    const markers = container.querySelectorAll(".page-marker[data-file-page]");
+    if (markers.length === 0) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            const page = parseInt((entry.target as HTMLElement).dataset.filePage ?? "1", 10);
+            if (page !== currentPdfPage) navigatePdfToPage(page);
+          }
+        }
+      },
+      { root: container, rootMargin: "-20% 0px -60% 0px" },
+    );
+
+    for (const m of markers) observer.observe(m);
+    return () => observer.disconnect();
+  }
+
   function youtubeId(url: string | undefined): string | null {
     if (!url) return null;
     const match = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
@@ -423,7 +489,7 @@
         </div>
 
         {#if localSourceUrl && isPdf}
-          <iframe src="{localSourceUrl}#toolbar=0" class="flex-1 w-full" title="Source PDF"></iframe>
+          <iframe bind:this={pdfIframe} src="{localSourceUrl}#page=1" class="flex-1 w-full" title="Source PDF"></iframe>
         {:else if localSourceUrl}
           <div class="flex-none p-4">
             <video controls src={localSourceUrl} class="w-full rounded">
@@ -756,12 +822,16 @@
         </div>
 
       {:else}
-        <div class="flex-1 overflow-auto px-8 py-6 prose
-          {singleColumn ? 'mx-auto' : 'max-w-none'}
-          text-on-surface prose-headings:text-on-surface prose-a:text-primary
-          prose-img:rounded prose-img:max-w-full prose-hr:border-border
-          prose-p:leading-relaxed prose-li:leading-relaxed">
-          {@html marked.parse(currentBody())}
+        {@const processedBody = isPdf ? preprocessPageMarkers(currentBody()) : currentBody()}
+        <div
+          class="flex-1 overflow-auto px-8 py-6 prose
+            {singleColumn ? 'mx-auto' : 'max-w-none'}
+            text-on-surface prose-headings:text-on-surface prose-a:text-primary
+            prose-img:rounded prose-img:max-w-full prose-hr:border-border
+            prose-p:leading-relaxed prose-li:leading-relaxed"
+          use:setupPageObserverAction
+        >
+          {@html marked.parse(processedBody)}
         </div>
       {/if}
     </div>

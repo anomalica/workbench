@@ -17,3 +17,29 @@ body {
 .font-ui {
   font-family: var(--font-ui);
 }
+
+.page-marker {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 1.5rem 0;
+  cursor: pointer;
+}
+
+.page-marker::before,
+.page-marker::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--color-border);
+}
+
+.page-marker .page-label {
+  font-family: var(--font-ui);
+  font-size: 0.7rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-on-surface-muted);
+  white-space: nowrap;
+}
