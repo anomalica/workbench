@@ -8,6 +8,7 @@
   import SegmentActions from "./SegmentActions.svelte";
   import SplitEditor from "./SplitEditor.svelte";
   import DiffViewer from "./DiffViewer.svelte";
+  import { marked } from "marked";
 
   let {
     ingest,
@@ -696,24 +697,10 @@
         </div>
 
       {:else}
-        <div class="flex-1 overflow-auto p-4 text-sm text-on-surface leading-relaxed">
-          {#each currentBody().split("\n") as line}
-            {#if line.startsWith("---")}
-              <hr class="my-4 border-border" />
-            {:else if line.startsWith("# ")}
-              <h1 class="text-lg font-semibold mt-4 mb-2">{line.slice(2)}</h1>
-            {:else if line.startsWith("## ")}
-              <h2 class="text-base font-semibold mt-3 mb-1">{line.slice(3)}</h2>
-            {:else if line.match(/^file_page:|^printed_page:/)}
-              <div class="text-xs font-ui text-primary bg-primary-container/30 px-2 py-1 rounded mt-3 mb-1">
-                {line}
-              </div>
-            {:else if line.trim() === ""}
-              <br />
-            {:else}
-              <p class="mb-2">{line}</p>
-            {/if}
-          {/each}
+        <div class="flex-1 overflow-auto p-4 prose prose-sm max-w-none
+          text-on-surface prose-headings:text-on-surface prose-a:text-primary
+          prose-img:rounded prose-img:max-w-full prose-hr:border-border">
+          {@html marked.parse(currentBody())}
         </div>
       {/if}
     </div>
