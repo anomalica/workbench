@@ -397,30 +397,6 @@
         {/if}
       </div>
     </div>
-    <div class="flex items-center gap-1 flex-none">
-      <button
-        onclick={() => doc.undo()}
-        disabled={!doc.canUndo}
-        class="p-1.5 rounded transition-colors cursor-pointer
-          {doc.canUndo ? 'text-on-surface-secondary hover:bg-surface hover:text-on-surface' : 'text-on-surface-muted/30 cursor-default'}"
-        title="Undo (Ctrl+Z)"
-      >
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M3 10h10a5 5 0 015 5v2M3 10l4-4M3 10l4 4" />
-        </svg>
-      </button>
-      <button
-        onclick={() => doc.redo()}
-        disabled={!doc.canRedo}
-        class="p-1.5 rounded transition-colors cursor-pointer
-          {doc.canRedo ? 'text-on-surface-secondary hover:bg-surface hover:text-on-surface' : 'text-on-surface-muted/30 cursor-default'}"
-        title="Redo (Ctrl+Shift+Z)"
-      >
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M21 10H11a5 5 0 00-5 5v2M21 10l-4-4M21 10l-4 4" />
-        </svg>
-      </button>
-    </div>
   </div>
 
   <div class="flex-1 flex min-h-0">
@@ -596,25 +572,48 @@
             {/if}
           {/if}
 
-          <!-- Save / Discard -->
-          {#if doc.dirty}
-            <div class="w-px h-4 bg-border mx-1"></div>
-            <button
-              onclick={handleSave}
-              disabled={saving}
-              class="text-xs font-ui font-medium px-2 py-1 rounded cursor-pointer bg-primary text-on-primary hover:bg-primary-hover"
-              title="Save changes to file (Ctrl+S)"
-            >
-              {saving ? "Saving..." : "Save"}
-            </button>
-            <button
-              onclick={() => doc.discard()}
-              class="text-xs font-ui text-error px-2 py-1 rounded cursor-pointer hover:bg-error-container/30"
-              title="Discard all changes and revert to original"
-            >
-              Discard
-            </button>
-          {/if}
+          <!-- Undo / Redo / Save / Discard - always visible, greyed when disabled -->
+          <div class="w-px h-4 bg-border mx-1"></div>
+          <button
+            onclick={() => doc.undo()}
+            disabled={!doc.canUndo}
+            class="p-1 rounded transition-colors cursor-pointer
+              {doc.canUndo ? 'text-on-surface-secondary hover:bg-surface hover:text-on-surface' : 'text-on-surface-muted/30 cursor-default'}"
+            title="Undo (Ctrl+Z)"
+          >
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M3 10h10a5 5 0 015 5v2M3 10l4-4M3 10l4 4" />
+            </svg>
+          </button>
+          <button
+            onclick={() => doc.redo()}
+            disabled={!doc.canRedo}
+            class="p-1 rounded transition-colors cursor-pointer
+              {doc.canRedo ? 'text-on-surface-secondary hover:bg-surface hover:text-on-surface' : 'text-on-surface-muted/30 cursor-default'}"
+            title="Redo (Ctrl+Shift+Z)"
+          >
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M21 10H11a5 5 0 00-5 5v2M21 10l-4-4M21 10l-4 4" />
+            </svg>
+          </button>
+          <button
+            onclick={handleSave}
+            disabled={saving || !doc.dirty}
+            class="text-xs font-ui font-medium px-2 py-1 rounded cursor-pointer transition-colors
+              {doc.dirty ? 'bg-primary text-on-primary hover:bg-primary-hover' : 'text-on-surface-muted/30 cursor-default'}"
+            title="Save changes to file (Ctrl+S)"
+          >
+            {saving ? "Saving..." : "Save"}
+          </button>
+          <button
+            onclick={() => doc.discard()}
+            disabled={!doc.dirty}
+            class="text-xs font-ui px-2 py-1 rounded cursor-pointer transition-colors
+              {doc.dirty ? 'text-error hover:bg-error-container/30' : 'text-on-surface-muted/30 cursor-default'}"
+            title="Discard all changes and revert to original"
+          >
+            Discard
+          </button>
         </div>
       </div>
 
