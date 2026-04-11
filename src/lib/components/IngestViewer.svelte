@@ -749,47 +749,8 @@
         </button>
 
         <div class="ml-auto flex items-center gap-1">
-          <!-- Transcript-specific controls -->
+          <!-- Global show/hide irrelevant toggle -->
           {#if view === "ingest" && hasTranscript}
-            {#if selected.size > 0}
-              <span class="text-xs font-ui text-on-surface-muted px-1">{selected.size} selected</span>
-              <button
-                onclick={toggleSelectedIrrelevance}
-                class="cursor-pointer p-1 rounded transition-colors
-                  {selectedAllIrrelevant()
-                    ? 'text-on-surface-muted hover:bg-success-container/30 hover:text-success'
-                    : 'text-on-surface-secondary hover:bg-error-container/30 hover:text-error'}"
-                title={selectedAllIrrelevant()
-                  ? 'Currently irrelevant - click to mark relevant'
-                  : 'Currently relevant - click to mark irrelevant'}
-              >
-                {#if selectedAllIrrelevant()}
-                  <!-- Eye-off: current state is hidden/irrelevant -->
-                  <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
-                    <line x1="1" y1="1" x2="23" y2="23" />
-                  </svg>
-                {:else}
-                  <!-- Eye: current state is visible/relevant -->
-                  <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                    <circle cx="12" cy="12" r="3" />
-                  </svg>
-                {/if}
-              </button>
-              <button
-                onclick={() => { selected = new Set(); }}
-                class="cursor-pointer p-1 rounded text-on-surface-muted hover:bg-surface hover:text-on-surface transition-colors"
-                title="Clear selection (Esc)"
-              >
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-              <div class="w-px h-5 bg-border mx-1"></div>
-            {/if}
-
-            <!-- Show/hide irrelevant chip -->
             {#if irrelevantCount > 0}
               <button
                 onclick={() => { hideIrrelevant = !hideIrrelevant; }}
@@ -1028,6 +989,9 @@
                     onmergeup={() => doc.mergeSegmentUp(segment.speaker, segment.time)}
                     onmergedown={() => doc.mergeSegmentDown(segment.speaker, segment.time)}
                     onstartsplit={() => { splittingIndex = segment.index; }}
+                    ontoggleirrelevant={() => {
+                      doc.setIrrelevant([{ speaker: segment.speaker, time: segment.time }], !segment.irrelevant);
+                    }}
                   />
                 {:else}
                   <div class="flex items-center gap-2 mb-1 h-6">

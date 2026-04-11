@@ -14,6 +14,7 @@
     onmergeup,
     onmergedown,
     onstartsplit,
+    ontoggleirrelevant,
   }: {
     segment: Segment;
     allSegments: Segment[];
@@ -26,6 +27,7 @@
     onmergeup: () => void;
     onmergedown: () => void;
     onstartsplit: () => void;
+    ontoggleirrelevant: () => void;
   } = $props();
 
   let showSpeakerPicker = $state(false);
@@ -128,12 +130,28 @@
     {/if}
   </div>
 
-  {#if segment.irrelevant}
-    <span class="text-xs text-on-surface-muted italic">irrelevant</span>
-  {/if}
-
   <!-- Action icons at the end of the row -->
   <div class="ml-auto flex items-center gap-0.5">
+    <!-- Irrelevant toggle -->
+    <button onclick={(e) => { e.stopPropagation(); ontoggleirrelevant(); }}
+      class="p-0.5 rounded cursor-pointer transition-colors
+        {segment.irrelevant
+          ? 'text-on-surface-muted hover:text-success'
+          : 'text-on-surface-muted/50 hover:text-error hover:bg-surface-alt'}"
+      title={segment.irrelevant ? 'Mark as relevant' : 'Mark as irrelevant'}>
+      {#if segment.irrelevant}
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+          <line x1="1" y1="1" x2="23" y2="23" />
+        </svg>
+      {:else}
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+          <circle cx="12" cy="12" r="3" />
+        </svg>
+      {/if}
+    </button>
+    <div class="w-px h-3 bg-border/50 mx-0.5"></div>
     {#if !isFirst}
       <button onclick={(e) => { e.stopPropagation(); onmergeup(); }}
         class="p-0.5 rounded cursor-pointer text-on-surface-muted/50 hover:text-on-surface hover:bg-surface-alt transition-colors"
