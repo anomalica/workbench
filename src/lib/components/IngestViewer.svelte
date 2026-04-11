@@ -129,6 +129,22 @@
 
   let pdfNavTimer: ReturnType<typeof setTimeout> | null = null;
 
+  /** Render {{redacted: ~N words}} and {{illegible}} markers as styled
+   *  inline blocks. Each redacted word is shown as a fixed-width bar. */
+  function renderRedactions(html: string): string {
+    return html.replace(
+      /\{\{(redacted|illegible)(?::\s*~(\d+)\s*words?)?\}\}/g,
+      (_, type, count) => {
+        const n = parseInt(count || "1", 10);
+        const bars = Array.from({ length: n }, () =>
+          '<span class="redacted-word"></span>',
+        ).join("");
+        const label = type === "illegible" ? "illegible" : "redacted";
+        return `<span class="redaction" title="${label}: ~${n} word${n > 1 ? "s" : ""}">${bars}</span>`;
+      },
+    );
+  }
+
   function navigatePdfToPage(page: number) {
     if (!localSourceFile || page === pdfPage) return;
     if (pdfNavTimer) clearTimeout(pdfNavTimer);
@@ -906,6 +922,7 @@
 
       {:else}
         {@const processedBody = isPdf ? preprocessPageMarkers(currentBody()) : currentBody()}
+        {@const renderedHtml = renderRedactions(marked.parse(processedBody) as string)}
         <div
           bind:this={proseContainer}
           data-scroll-sync
@@ -916,7 +933,7 @@
             prose-img:rounded prose-img:max-w-full prose-hr:border-border
             prose-p:leading-relaxed prose-li:leading-relaxed"
         >
-          {@html marked.parse(processedBody)}
+          {@html renderedHtml}
         </div>
       {/if}
     </div>
