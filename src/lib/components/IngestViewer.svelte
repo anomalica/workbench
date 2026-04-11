@@ -218,7 +218,7 @@
   // Set up click handler and IntersectionObserver for page markers.
   // Runs as $effect so it re-initialises when content changes.
   $effect(() => {
-    if (!proseContainer || !isPdf || !localSourceFile) return;
+    if (!proseContainer || !isPdf || (!localSourceFile && !localSourceUrl)) return;
 
     // Wait a tick for {@html} to render into the DOM
     const timer = setTimeout(() => {
