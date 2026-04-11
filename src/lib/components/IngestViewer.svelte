@@ -201,49 +201,6 @@
     );
   }
 
-  // Strip/reinsert metadata comment blocks for the rich editor.
-  // The editor only sees prose; metadata is preserved separately.
-  const metadataPattern = /<!-- anomalica\n[\s\S]*?-->\n*/g;
-
-  interface MetadataBlock {
-    text: string;
-    offset: number;  // character offset in the stripped content where this block was
-  }
-
-  function stripMetadata(body: string): { prose: string; blocks: MetadataBlock[] } {
-    const blocks: MetadataBlock[] = [];
-    let strippedOffset = 0;
-    let lastEnd = 0;
-    const stripped: string[] = [];
-
-    for (const match of body.matchAll(metadataPattern)) {
-      const before = body.slice(lastEnd, match.index);
-      stripped.push(before);
-      strippedOffset += before.length;
-      blocks.push({ text: match[0], offset: strippedOffset });
-      lastEnd = match.index! + match[0].length;
-    }
-    stripped.push(body.slice(lastEnd));
-
-    return { prose: stripped.join(""), blocks };
-  }
-
-  function reinsertMetadata(prose: string, blocks: MetadataBlock[]): string {
-    if (blocks.length === 0) return prose;
-    // Insert blocks at their original offsets, clamped to the prose length
-    let result = "";
-    let lastOffset = 0;
-    for (const block of blocks) {
-      const insertAt = Math.min(block.offset, prose.length);
-      result += prose.slice(lastOffset, insertAt) + block.text;
-      lastOffset = insertAt;
-    }
-    result += prose.slice(lastOffset);
-    return result;
-  }
-
-  // Cache the stripped content and metadata blocks together
-  let metadataCache = $derived(() => stripMetadata(currentBody()));
 
   function navigatePdfToPage(page: number) {
     if (!localSourceFile || page === pdfPage) return;
@@ -992,8 +949,8 @@
       {:else if view === "edit"}
         <div class="flex-1 flex flex-col min-h-0">
           <MilkdownEditor
-            value={metadataCache().prose}
-            onchange={(md) => doc.editBody(reinsertMetadata(md, metadataCache().blocks))}
+            value={currentBody()}
+            onchange={(md) => doc.editBody(md)}
           />
         </div>
 
