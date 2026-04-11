@@ -1,3 +1,5 @@
+export type CopyrightStatus = "public_domain" | "open_licence" | "licensed" | "restricted";
+
 export interface IngestSummary {
   content_hash: string;
   public_hash: string;
@@ -5,11 +7,13 @@ export interface IngestSummary {
   date: string;
   source_type: string;
   source_url: string;
+  copyright_status: CopyrightStatus;
 }
 
 export interface IngestDetail {
   content_hash: string;
   public_hash: string;
+  copyright_status: CopyrightStatus;
   frontmatter: Record<string, string>;
   body: string;
 }

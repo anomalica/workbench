@@ -29,21 +29,36 @@ DEFAULT_INGESTS_PATH = Path(__file__).resolve().parents[2] / "anomalica-ingests"
 def parse_frontmatter(text: str) -> tuple[dict, str]:
     """Extract YAML frontmatter and body from a markdown file.
 
-    Deliberately simple - handles the subset of YAML the ingester
-    actually produces (scalar values, no nested structures used as
-    identifiers). Lines starting with two spaces are treated as
-    list items belonging to the previous key and ignored here.
+    Handles top-level scalar fields and one level of nesting (for the
+    copyright block). Nested keys are flattened with dots, e.g.
+    copyright.status becomes a top-level key.
     """
     match = re.match(r"^---\n(.*?)\n---\n(.*)", text, re.DOTALL)
     if not match:
         return {}, text
 
     frontmatter: dict = {}
+    current_parent = ""
     for line in match.group(1).splitlines():
+        # Top-level key with inline value
         if ":" in line and not line.startswith(" "):
             key, _, value = line.partition(":")
             value = value.strip().strip('"').strip("'")
-            frontmatter[key.strip()] = value
+            key = key.strip()
+            if value:
+                frontmatter[key] = value
+                current_parent = ""
+            else:
+                # Block start (e.g. "copyright:" with children below)
+                current_parent = key
+        # Nested key (indented with spaces)
+        elif line.startswith("  ") and ":" in line and current_parent:
+            nested_line = line.strip()
+            if nested_line.startswith("- "):
+                continue  # Skip list items
+            key, _, value = nested_line.partition(":")
+            value = value.strip().strip('"').strip("'")
+            frontmatter[f"{current_parent}.{key.strip()}"] = value
 
     return frontmatter, match.group(2)
 
@@ -116,6 +131,9 @@ class LocalIngestSource(IngestSource):
                     "date": frontmatter.get("date", ""),
                     "source_type": frontmatter.get("source_type", ""),
                     "source_url": frontmatter.get("source_url", ""),
+                    "copyright_status": frontmatter.get(
+                        "copyright.status", "restricted"
+                    ),
                 }
             )
         ingests.sort(key=lambda x: (x.get("date", ""), x.get("title", "")))
@@ -134,6 +152,7 @@ class LocalIngestSource(IngestSource):
         return {
             "content_hash": full_hash,
             "public_hash": full_hash[:PUBLIC_HASH_LENGTH],
+            "copyright_status": frontmatter.get("copyright.status", "restricted"),
             "frontmatter": frontmatter,
             "body": body,
         }

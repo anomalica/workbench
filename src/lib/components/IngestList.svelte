@@ -28,6 +28,13 @@
           {typeLabels[ingest.source_type] ?? ingest.source_type}
         </span>
         <span class="text-xs text-on-surface-muted">{ingest.date}</span>
+        {#if ingest.copyright_status === "public_domain"}
+          <span class="text-xs font-ui text-success">public domain</span>
+        {:else if ingest.copyright_status === "open_licence"}
+          <span class="text-xs font-ui text-success">open licence</span>
+        {:else if ingest.copyright_status === "restricted"}
+          <span class="text-xs font-ui text-on-surface-muted">restricted</span>
+        {/if}
       </div>
       <p class="text-sm text-on-surface mt-0.5 line-clamp-2">{ingest.title}</p>
     </button>

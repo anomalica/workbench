@@ -78,9 +78,18 @@
   let isPdf = $derived(ingest.frontmatter.source_type === "pdf");
   let isWeb = $derived(ingest.frontmatter.source_type === "web");
 
+  // Copyright: public records can show everything freely
+  let isPublic = $derived(
+    ingest.copyright_status === "public_domain" || ingest.copyright_status === "open_licence",
+  );
+  let accessGranted = $state(false);
+
   // File drop state (for dropping source files onto the left panel)
   let dragging = $state(false);
   let localSourceFile = $state<File | null>(sourceFile);
+
+  // Restricted records need hash verification before showing the ingest body
+  let canShowBody = $derived(isPublic || accessGranted || !!localSourceFile);
   let localSourceUrl = $state<string | null>(null);
   let loadingFile = $state(false);
 
@@ -101,6 +110,7 @@
     const file = e.dataTransfer?.files[0];
     if (file) {
       loadingFile = true;
+      accessGranted = true;
       // Use requestAnimationFrame to let the spinner render before
       // the browser starts processing the file
       requestAnimationFrame(() => {
@@ -819,7 +829,30 @@
         </div>
       {/if}
 
-      {#if view === "diff"}
+      {#if !canShowBody}
+        <!-- Restricted content: need hash verification -->
+        <div class="flex-1 flex items-center justify-center p-8">
+          <div class="text-center max-w-md">
+            <div class="text-on-surface-muted mb-3">
+              <svg class="w-10 h-10 mx-auto" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+              </svg>
+            </div>
+            <h3 class="font-ui font-semibold text-on-surface mb-2">Restricted content</h3>
+            <p class="text-sm text-on-surface-secondary mb-4">
+              This record contains copyrighted material. To view the ingested text, drop your own copy of the source file onto the left panel. The file is hashed locally and never uploaded.
+            </p>
+            <p class="text-xs text-on-surface-muted">
+              Copyright status: {ingest.copyright_status}
+              {#if ingest.frontmatter["copyright.holder"]}
+                - {ingest.frontmatter["copyright.holder"]}
+              {/if}
+            </p>
+          </div>
+        </div>
+
+      {:else if view === "diff"}
         <div class="flex-1 overflow-auto" data-scroll-sync onscroll={handleContentScroll}>
           <DiffViewer original={doc.original} modified={doc.current} />
         </div>
