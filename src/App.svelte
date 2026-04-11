@@ -63,7 +63,7 @@
 
   <main class="flex-1 flex flex-col min-h-0">
     {#if selectedIngest}
-      <IngestViewer ingest={selectedIngest} {sourceFile} />
+      <IngestViewer ingest={selectedIngest} {sourceFile} onback={goBack} />
     {:else}
       <div class="flex-1 overflow-auto">
         <div class="max-w-3xl mx-auto w-full p-8 flex flex-col gap-6">
