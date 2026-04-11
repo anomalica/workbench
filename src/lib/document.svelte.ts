@@ -97,6 +97,11 @@ export class DocumentStore {
 
   // --- High-level edit operations ---
 
+  /** Replace the entire document content (frontmatter + body). */
+  editRaw(newContent: string) {
+    if (newContent !== this.current) this.pushEdit(newContent);
+  }
+
   /** Replace the body (everything after the frontmatter) while preserving
    *  the frontmatter exactly as-is. */
   editBody(newBody: string) {

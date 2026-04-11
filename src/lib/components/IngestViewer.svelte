@@ -8,6 +8,7 @@
   import SegmentActions from "./SegmentActions.svelte";
   import SplitEditor from "./SplitEditor.svelte";
   import DiffViewer from "./DiffViewer.svelte";
+  import MilkdownEditor from "./MilkdownEditor.svelte";
   import { marked } from "marked";
 
   let {
@@ -726,7 +727,7 @@
       {/if}
       <!-- Panel header with view tabs and controls -->
       <div class="px-4 py-2 bg-surface-alt border-b border-border flex items-center gap-1">
-        {#each [["ingest", "Ingest", "View formatted content"], ["edit", "Edit", "Edit content as markdown"], ["diff", "Diff", "View changes from original"], ["raw", "Raw", "View raw markdown (read-only)"]] as [id, label, tip]}
+        {#each [["ingest", "Ingest", "Rendered view"], ["edit", "Edit", "Rich markdown editor"], ["raw", "Raw", "Edit raw markdown with frontmatter"], ["diff", "Diff", "View changes from original"]] as [id, label, tip]}
           <button
             onclick={() => { view = id as typeof view; }}
             class="text-xs font-ui font-medium px-2 py-1 rounded transition-colors cursor-pointer
@@ -945,20 +946,23 @@
 
       {:else if view === "edit"}
         <div class="flex-1 flex flex-col min-h-0">
-          <textarea
-            data-scroll-sync
+          <MilkdownEditor
             value={currentBody()}
-            oninput={(e) => doc.editBody((e.target as HTMLTextAreaElement).value)}
-            onscroll={handleContentScroll}
-            class="flex-1 w-full resize-none bg-surface text-sm text-on-surface leading-relaxed
-              p-4 font-mono outline-none border-none"
-            spellcheck="false"
-          ></textarea>
+            onchange={(md) => doc.editBody(md)}
+          />
         </div>
 
       {:else if view === "raw"}
-        <div class="flex-1 overflow-auto p-4" data-scroll-sync onscroll={handleContentScroll}>
-          <pre class="text-xs font-mono text-on-surface whitespace-pre-wrap break-words">{doc.current}</pre>
+        <div class="flex-1 flex flex-col min-h-0">
+          <textarea
+            data-scroll-sync
+            value={doc.current}
+            oninput={(e) => doc.editRaw((e.target as HTMLTextAreaElement).value)}
+            onscroll={handleContentScroll}
+            class="flex-1 w-full resize-none bg-surface text-xs text-on-surface leading-relaxed
+              p-4 font-mono outline-none border-none"
+            spellcheck="false"
+          ></textarea>
         </div>
 
       {:else if hasTranscript}
