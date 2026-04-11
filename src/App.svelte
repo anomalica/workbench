@@ -10,6 +10,23 @@
   let sourceFile = $state<File | null>(null);
   let error = $state<string | null>(null);
   let loading = $state(true);
+  let searchQuery = $state("");
+  let filterType = $state<string>("all");
+
+  let filteredIngests = $derived(
+    ingests.filter((i) => {
+      if (filterType !== "all" && i.source_type !== filterType) return false;
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        return i.title.toLowerCase().includes(q) || i.date.includes(q);
+      }
+      return true;
+    }),
+  );
+
+  let sourceTypes = $derived(
+    [...new Set(ingests.map((i) => i.source_type))].sort(),
+  );
 
   async function loadIngests() {
     try {
@@ -84,34 +101,51 @@
     {#if selectedIngest}
       <IngestViewer ingest={selectedIngest} {sourceFile} onback={goBack} />
     {:else}
-      <div class="flex-1 overflow-auto">
-        <div class="max-w-3xl mx-auto w-full p-8 flex flex-col gap-6">
-          <div>
-            <h1 class="text-2xl font-semibold mb-2">Review Workbench</h1>
-            <p class="text-on-surface-secondary text-sm">
-              Drop a source file to match it against an ingest, or browse available ingests below.
-            </p>
+      <div class="flex-1 flex flex-col min-h-0">
+        <!-- Search and filter bar -->
+        <div class="px-6 py-3 border-b border-border bg-surface-alt flex items-center gap-3 flex-none">
+          <input
+            type="search"
+            placeholder="Search ingests..."
+            bind:value={searchQuery}
+            class="flex-1 max-w-md text-sm bg-surface border border-border rounded px-3 py-1.5
+              text-on-surface outline-none focus:border-primary placeholder:text-on-surface-muted/50"
+          />
+          <div class="flex items-center gap-1">
+            <button
+              onclick={() => { filterType = "all"; }}
+              class="text-xs font-ui px-2 py-1 rounded cursor-pointer transition-colors
+                {filterType === 'all' ? 'bg-primary text-on-primary' : 'text-on-surface-secondary hover:bg-surface'}"
+            >All</button>
+            {#each sourceTypes as type}
+              <button
+                onclick={() => { filterType = type; }}
+                class="text-xs font-ui px-2 py-1 rounded cursor-pointer transition-colors
+                  {filterType === type ? 'bg-primary text-on-primary' : 'text-on-surface-secondary hover:bg-surface'}"
+              >{type.charAt(0).toUpperCase() + type.slice(1)}</button>
+            {/each}
           </div>
+          <span class="text-xs text-on-surface-muted">
+            {filteredIngests.length}{filteredIngests.length !== ingests.length ? ` of ${ingests.length}` : ''} records
+          </span>
+        </div>
 
-          <FileDropZone onmatch={handleMatch} onnomatch={handleNoMatch} />
-
+        <!-- Ingest list -->
+        <div class="flex-1 overflow-auto">
           {#if error}
-            <div class="bg-error-container text-on-error-container px-4 py-3 rounded text-sm">
+            <div class="mx-6 mt-4 bg-error-container text-on-error-container px-4 py-3 rounded text-sm">
               {error}
             </div>
           {/if}
 
           {#if loading}
-            <p class="text-on-surface-muted text-sm">Loading ingests...</p>
-          {:else if ingests.length > 0}
-            <div>
-              <h2 class="font-ui font-medium text-on-surface-secondary text-sm uppercase tracking-wide mb-3">
-                Available ingests ({ingests.length})
-              </h2>
-              <IngestList {ingests} onselect={(hash) => selectIngest(hash)} />
-            </div>
-          {:else if !error}
-            <p class="text-on-surface-muted text-sm">No ingests found.</p>
+            <p class="text-on-surface-muted text-sm p-6">Loading ingests...</p>
+          {:else if filteredIngests.length > 0}
+            <IngestList ingests={filteredIngests} onselect={(hash) => selectIngest(hash)} />
+          {:else if searchQuery || filterType !== "all"}
+            <p class="text-on-surface-muted text-sm p-6">No ingests match your search.</p>
+          {:else}
+            <p class="text-on-surface-muted text-sm p-6">No ingests found.</p>
           {/if}
         </div>
       </div>
