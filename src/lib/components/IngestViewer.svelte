@@ -104,6 +104,29 @@
     }
   });
 
+  // For public records, try to fetch the source file from the backend
+  $effect(() => {
+    if (isPublic && !localSourceFile && !localSourceUrl) {
+      loadingFile = true;
+      fetch(`/api/sources/${ingest.content_hash}`)
+        .then((res) => {
+          if (res.ok) return res.blob();
+          return null;
+        })
+        .then((blob) => {
+          if (blob && blob.size > 0) {
+            const url = URL.createObjectURL(blob);
+            localSourceUrl = url;
+            accessGranted = true;
+          }
+          loadingFile = false;
+        })
+        .catch(() => {
+          loadingFile = false;
+        });
+    }
+  });
+
   function handleFileDrop(e: DragEvent) {
     e.preventDefault();
     dragging = false;
