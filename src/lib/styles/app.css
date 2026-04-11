@@ -19,21 +19,13 @@ body {
 }
 
 .redaction {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.2em;
-  vertical-align: baseline;
-  cursor: help;
-}
-
-.redacted-word {
   display: inline-block;
-  width: 2.5em;
   height: 0.9em;
   background: var(--color-on-surface);
   border-radius: 2px;
   vertical-align: baseline;
   opacity: 0.8;
+  cursor: help;
 }
 
 .page-marker {

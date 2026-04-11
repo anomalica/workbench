@@ -136,11 +136,9 @@
       /\{\{(redacted|illegible)(?::\s*~(\d+)\s*words?)?\}\}/g,
       (_, type, count) => {
         const n = parseInt(count || "1", 10);
-        const bars = Array.from({ length: n }, () =>
-          '<span class="redacted-word"></span>',
-        ).join("");
         const label = type === "illegible" ? "illegible" : "redacted";
-        return `<span class="redaction" title="${label}: ~${n} word${n > 1 ? "s" : ""}">${bars}</span>`;
+        const width = n * 2.5;
+        return `<span class="redaction" title="${label}: ~${n} word${n > 1 ? "s" : ""}" style="width:${width}em"></span>`;
       },
     );
   }
