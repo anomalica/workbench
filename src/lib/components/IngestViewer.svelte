@@ -88,8 +88,11 @@
   let dragging = $state(false);
   let localSourceFile = $state<File | null>(sourceFile);
 
-  // Restricted records need hash verification before showing the ingest body
-  let canShowBody = $derived(isPublic || accessGranted || !!localSourceFile);
+  // Who can see the body:
+  // - public_domain / open_licence: everyone
+  // - web articles: everyone (source is publicly accessible via URL)
+  // - restricted files (PDF, video, audio): need hash verification or file drop
+  let canShowBody = $derived(isPublic || isWeb || accessGranted || !!localSourceFile);
 
   // Hash input for manual verification
   let hashInput = $state("");
