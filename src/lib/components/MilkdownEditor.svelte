@@ -47,7 +47,7 @@
 
 <div
   bind:this={container}
-  class="milkdown-wrapper flex-1 overflow-auto"
+  class="milkdown-wrapper flex-1 overflow-auto border-l-2 border-primary/30 bg-surface-alt/30"
 ></div>
 
 <style>

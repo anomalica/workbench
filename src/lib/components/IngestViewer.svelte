@@ -956,8 +956,8 @@
         <div class="flex-1 flex flex-col min-h-0">
           <textarea
             data-scroll-sync
-            value={doc.current}
-            oninput={(e) => doc.editRaw((e.target as HTMLTextAreaElement).value)}
+            value={currentBody()}
+            oninput={(e) => doc.editBody((e.target as HTMLTextAreaElement).value)}
             onscroll={handleContentScroll}
             class="flex-1 w-full resize-none bg-surface text-xs text-on-surface leading-relaxed
               p-4 font-mono outline-none border-none"
