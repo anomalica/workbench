@@ -26,6 +26,9 @@
       selectedIngest = await fetchIngest(hash);
       sourceFile = file;
       error = null;
+      // Put the public hash in the URL so password managers can associate with it
+      const publicHash = selectedIngest.public_hash;
+      history.pushState(null, "", `/${publicHash}`);
     } catch (e) {
       error = `Failed to load ingest: ${hash}`;
     }
@@ -43,9 +46,25 @@
     selectedIngest = null;
     sourceFile = null;
     error = null;
+    history.pushState(null, "", "/");
   }
 
-  loadIngests();
+  // On load: check URL for a public hash and try to open the matching ingest
+  async function checkUrlHash() {
+    const path = window.location.pathname.slice(1);
+    if (path && /^[a-f0-9]{56}$/.test(path)) {
+      // Find the ingest whose public hash matches
+      await loadIngests();
+      const match = ingests.find((i) => i.public_hash === path);
+      if (match) {
+        selectIngest(match.content_hash);
+        return;
+      }
+    }
+    loadIngests();
+  }
+
+  checkUrlHash();
 </script>
 
 <div class="h-screen flex flex-col">

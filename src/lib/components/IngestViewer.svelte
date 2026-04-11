@@ -90,6 +90,24 @@
 
   // Restricted records need hash verification before showing the ingest body
   let canShowBody = $derived(isPublic || accessGranted || !!localSourceFile);
+
+  // Hash input for manual verification
+  let hashInput = $state("");
+  let hashError = $state<string | null>(null);
+
+  async function verifyHash() {
+    hashError = null;
+    const hash = hashInput.trim().toLowerCase();
+    if (!/^[a-f0-9]{64}$/.test(hash)) {
+      hashError = "Enter a valid 64-character SHA-256 hash";
+      return;
+    }
+    if (hash !== ingest.content_hash) {
+      hashError = "Hash does not match this record";
+      return;
+    }
+    accessGranted = true;
+  }
   let localSourceUrl = $state<string | null>(null);
   let loadingFile = $state(false);
 
@@ -864,9 +882,50 @@
             </div>
             <h3 class="font-ui font-semibold text-on-surface mb-2">Restricted content</h3>
             <p class="text-sm text-on-surface-secondary mb-4">
-              This record contains copyrighted material. To view the ingested text, drop your own copy of the source file onto the left panel. The file is hashed locally and never uploaded.
+              This record contains copyrighted material. Drop your source file onto the left panel, or enter the file's SHA-256 hash below.
             </p>
-            <p class="text-xs text-on-surface-muted">
+
+            <!-- Hash input form - password manager friendly -->
+            <form
+              class="mt-4 text-left"
+              autocomplete="on"
+              onsubmit={(e) => { e.preventDefault(); verifyHash(); }}
+            >
+              <!-- Hidden username field for password manager pairing -->
+              <input
+                type="hidden"
+                name="username"
+                autocomplete="username"
+                value={ingest.public_hash}
+              />
+              <label class="block text-xs font-ui text-on-surface-secondary mb-1" for="hash-input">
+                SHA-256 hash of the source file
+              </label>
+              <div class="flex gap-2">
+                <input
+                  id="hash-input"
+                  type="password"
+                  name="password"
+                  autocomplete="current-password"
+                  bind:value={hashInput}
+                  placeholder="64-character hex hash"
+                  class="flex-1 text-xs font-mono bg-surface border border-border rounded px-3 py-2
+                    text-on-surface outline-none focus:border-primary placeholder:text-on-surface-muted/50"
+                />
+                <button
+                  type="submit"
+                  class="text-xs font-ui font-medium px-4 py-2 rounded cursor-pointer
+                    bg-primary text-on-primary hover:bg-primary-hover"
+                >
+                  Verify
+                </button>
+              </div>
+              {#if hashError}
+                <p class="text-xs text-error mt-2">{hashError}</p>
+              {/if}
+            </form>
+
+            <p class="text-xs text-on-surface-muted mt-4">
               Copyright status: {ingest.copyright_status}
               {#if ingest.frontmatter["copyright.holder"]}
                 - {ingest.frontmatter["copyright.holder"]}
