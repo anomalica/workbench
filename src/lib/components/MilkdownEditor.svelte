@@ -24,7 +24,13 @@
 
     instance.on((listener) => {
       listener.markdownUpdated((_ctx, markdown) => {
-        onchange(markdown);
+        // Milkdown's serializer over-escapes characters that aren't
+        // special in CommonMark. Clean them up to avoid diff noise.
+        const cleaned = markdown
+          .replace(/\\\$/g, "$")
+          .replace(/\\"/g, '"')
+          .replace(/\\'/g, "'");
+        onchange(cleaned);
       });
     });
 
