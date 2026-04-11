@@ -597,16 +597,17 @@
   ondragover={(e) => e.preventDefault()}
   ondrop={(e) => e.preventDefault()}>
   <!-- Title bar -->
-  <div class="px-4 py-3 border-b border-border bg-surface-alt flex items-start gap-3">
+  <div class="px-4 py-3 border-b border-border bg-surface-alt flex items-center gap-3">
     <button
       onclick={onback}
-      class="mt-0.5 p-1 rounded text-on-surface-muted hover:text-on-surface hover:bg-surface transition-colors cursor-pointer flex-none"
+      class="p-2 rounded text-on-surface-muted hover:text-on-surface hover:bg-surface transition-colors cursor-pointer flex-none"
       title="Back to ingest list"
     >
-      <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+      <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />
       </svg>
     </button>
+    <div class="w-px h-8 bg-border flex-none"></div>
     <div class="flex-1 min-w-0">
       <h2 class="font-ui font-semibold text-on-surface truncate">
         {ingest.frontmatter.title ?? "Untitled"}
