@@ -17,40 +17,14 @@ export function parseTimeToSeconds(time: string): number {
 
 export function parseTranscript(body: string): Segment[] {
   const segments: Segment[] = [];
-  const blocks = body.split(/\n---\n/);
+  // Split on annotation blocks: <!-- anomalica ... -->
+  const parts = body.split(/<!--\s*anomalica\n/);
 
-  for (const block of blocks) {
-    const trimmed = block.trim();
-    if (!trimmed) continue;
-
-    const speakerMatch = trimmed.match(/^speaker:\s*(.+)$/m);
-    const timeMatch = trimmed.match(/^time:\s*(.+)$/m);
-
-    if (speakerMatch && timeMatch) {
-      const irrelevantMatch = trimmed.match(/^irrelevant:\s*(.+)$/m);
-      const textStart = trimmed.lastIndexOf("---");
-      const textPart = textStart >= 0 ? trimmed.slice(textStart + 3) : trimmed;
-      const contentLines = textPart
-        .split("\n")
-        .map((l) => l.trim())
-        .filter(
-          (l) =>
-            l &&
-            !l.startsWith("speaker:") &&
-            !l.startsWith("time:") &&
-            !l.startsWith("irrelevant:"),
-        );
-
-      segments.push({
-        speaker: speakerMatch[1].trim(),
-        time: timeMatch[1].trim(),
-        seconds: parseTimeToSeconds(timeMatch[1].trim()),
-        lines: contentLines,
-        irrelevant: irrelevantMatch ? irrelevantMatch[1].trim() === "true" : false,
-        index: segments.length,
-      });
-    } else {
-      const contentLines = trimmed
+  for (const part of parts) {
+    const closingIndex = part.indexOf("-->");
+    if (closingIndex < 0) {
+      // No closing --> means this is plain content (before first annotation)
+      const contentLines = part
         .split("\n")
         .map((l) => l.trim())
         .filter((l) => l);
@@ -64,6 +38,39 @@ export function parseTranscript(body: string): Segment[] {
           index: 0,
         });
       } else if (contentLines.length > 0 && segments.length > 0) {
+        segments[segments.length - 1].lines.push(...contentLines);
+      }
+      continue;
+    }
+
+    const yaml = part.slice(0, closingIndex);
+    const textAfter = part.slice(closingIndex + 3);
+
+    const speakerMatch = yaml.match(/^speaker:\s*(.+)$/m);
+    const timeMatch = yaml.match(/^time:\s*(.+)$/m);
+
+    if (speakerMatch && timeMatch) {
+      const irrelevantMatch = yaml.match(/^irrelevant:\s*(.+)$/m);
+      const contentLines = textAfter
+        .split("\n")
+        .map((l) => l.trim())
+        .filter((l) => l);
+
+      segments.push({
+        speaker: speakerMatch[1].trim(),
+        time: timeMatch[1].trim(),
+        seconds: parseTimeToSeconds(timeMatch[1].trim()),
+        lines: contentLines,
+        irrelevant: irrelevantMatch ? irrelevantMatch[1].trim() === "true" : false,
+        index: segments.length,
+      });
+    } else {
+      // Annotation without speaker/time (e.g. page marker) - append content to previous segment
+      const contentLines = textAfter
+        .split("\n")
+        .map((l) => l.trim())
+        .filter((l) => l);
+      if (contentLines.length > 0 && segments.length > 0) {
         segments[segments.length - 1].lines.push(...contentLines);
       }
     }
@@ -89,7 +96,7 @@ export function serializeTranscript(segments: Segment[]): string {
       let yaml = `speaker: ${seg.speaker}\ntime: ${seg.time}`;
       if (seg.irrelevant) yaml += "\nirrelevant: true";
       const text = seg.lines.join("\n");
-      return `\n---\n${yaml}\n---\n${text}\n`;
+      return `\n<!-- anomalica\n${yaml}\n-->\n${text}\n`;
     })
     .join("");
 }

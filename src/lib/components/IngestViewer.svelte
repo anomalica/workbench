@@ -652,12 +652,6 @@
             title="Source PDF"
             onload={() => { loadingFile = false; }}
           ></iframe>
-        {:else if localSourceUrl}
-          <div class="flex-none p-4">
-            <video controls src={localSourceUrl} class="w-full rounded">
-              <track kind="captions" />
-            </video>
-          </div>
         {:else if ytId}
           <div class="flex-none p-4">
             <div id="yt-player" class="w-full aspect-video rounded"></div>
@@ -669,6 +663,12 @@
             >
               {ingest.frontmatter.source_url}
             </a>
+          </div>
+        {:else if localSourceUrl}
+          <div class="flex-none p-4">
+            <video controls src={localSourceUrl} class="w-full rounded">
+              <track kind="captions" />
+            </video>
           </div>
         {:else}
           <!-- Drop target fills all available space -->
