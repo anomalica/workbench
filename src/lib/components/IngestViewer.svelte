@@ -176,12 +176,11 @@
       : null,
   );
 
-  /** Replace file_page YAML blocks with visible, clickable page markers.
-   *  The block may contain other fields like printed_page alongside file_page. */
+  /** Replace file_page metadata comment blocks with visible, clickable page markers. */
   function preprocessPageMarkers(body: string): string {
     return body.replace(
-      /\n---\n((?:.*\n)*?file_page:\s*(\d+)\n(?:.*\n)*?)---\n/g,
-      '\n<div class="page-marker" data-file-page="$2"><span class="page-label">Page $2</span></div>\n',
+      /<!-- anomalica\n(?:[\s\S]*?)file_page:\s*(\d+)[\s\S]*?-->/g,
+      '<div class="page-marker" data-file-page="$1"><span class="page-label">Page $1</span></div>',
     );
   }
 
