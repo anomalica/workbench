@@ -11,19 +11,21 @@ the full design, particularly the copyright handling section.
 
 from __future__ import annotations
 
+import mimetypes
 import os
 import re
 from abc import ABC, abstractmethod
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 FULL_HASH_LENGTH = 64
 PUBLIC_HASH_LENGTH = 56
 FULL_HASH_PATTERN = re.compile(r"^[a-f0-9]{64}$")
 
 DEFAULT_INGESTS_PATH = Path(__file__).resolve().parents[2] / "anomalica-ingests"
+DEFAULT_SOURCES_PATH = Path(__file__).resolve().parents[2] / "sources"
 
 
 def parse_frontmatter(text: str) -> tuple[dict, str]:
@@ -201,6 +203,7 @@ def build_source() -> IngestSource:
 
 app = FastAPI(title="Anomalica Workbench API")
 source: IngestSource = build_source()
+sources_path = Path(os.environ.get("SOURCES_PATH", str(DEFAULT_SOURCES_PATH)))
 
 
 @app.get("/api/ingests")
@@ -230,6 +233,32 @@ def get_ingest(full_hash: str) -> JSONResponse:
         raise HTTPException(status_code=404, detail="Not found")
 
     return JSONResponse(ingest)
+
+
+@app.get("/api/sources/{full_hash}")
+def get_source(full_hash: str) -> FileResponse:
+    """Serve an original source file by its full SHA-256 hash.
+
+    Returns the original file (PDF, video, audio, etc.) that was ingested.
+    The hash must be the complete 64-character SHA-256. Not-found and
+    malformed-hash responses are indistinguishable by design.
+
+    Currently serves without access checking (development mode). In
+    production this endpoint must verify either hash-based proof of
+    possession or a manual access grant before serving copyrighted
+    originals. See the source-types-and-copyright decision in the
+    meta-repo for the full access model.
+    """
+    if not FULL_HASH_PATTERN.match(full_hash):
+        raise HTTPException(status_code=404, detail="Not found")
+
+    matches = list(sources_path.glob(f"{full_hash}.*"))
+    if not matches:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    file_path = matches[0]
+    media_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
+    return FileResponse(file_path, media_type=media_type)
 
 
 @app.put("/api/ingests/{full_hash}")
