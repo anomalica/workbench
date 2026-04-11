@@ -242,13 +242,8 @@
     return result;
   }
 
-  // Cache the extracted blocks when switching to Edit view
-  let cachedMetadataBlocks = $state<MetadataBlock[]>([]);
-  let strippedProse = $derived(() => {
-    const { prose, blocks } = stripMetadata(currentBody());
-    cachedMetadataBlocks = blocks;
-    return prose;
-  });
+  // Cache the stripped content and metadata blocks together
+  let metadataCache = $derived(() => stripMetadata(currentBody()));
 
   function navigatePdfToPage(page: number) {
     if (!localSourceFile || page === pdfPage) return;
@@ -997,8 +992,8 @@
       {:else if view === "edit"}
         <div class="flex-1 flex flex-col min-h-0">
           <MilkdownEditor
-            value={strippedProse()}
-            onchange={(md) => doc.editBody(reinsertMetadata(md, cachedMetadataBlocks))}
+            value={metadataCache().prose}
+            onchange={(md) => doc.editBody(reinsertMetadata(md, metadataCache().blocks))}
           />
         </div>
 
