@@ -32,6 +32,8 @@
           <span class="text-xs font-ui text-success">public domain</span>
         {:else if ingest.copyright_status === "open_licence"}
           <span class="text-xs font-ui text-success">open licence</span>
+        {:else if ingest.copyright_status === "publicly_accessible"}
+          <span class="text-xs font-ui text-primary">publicly accessible</span>
         {:else if ingest.copyright_status === "restricted"}
           <span class="text-xs font-ui text-on-surface-muted">restricted</span>
         {/if}

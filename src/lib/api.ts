@@ -1,4 +1,9 @@
-export type CopyrightStatus = "public_domain" | "open_licence" | "licensed" | "restricted";
+export type CopyrightStatus =
+  | "public_domain"
+  | "open_licence"
+  | "publicly_accessible"
+  | "licensed"
+  | "restricted";
 
 export interface IngestSummary {
   content_hash: string;

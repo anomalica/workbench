@@ -78,9 +78,11 @@
   let isPdf = $derived(ingest.frontmatter.source_type === "pdf");
   let isWeb = $derived(ingest.frontmatter.source_type === "web");
 
-  // Copyright: public records can show everything freely
+  // Copyright: public/accessible records can show everything freely
   let isPublic = $derived(
-    ingest.copyright_status === "public_domain" || ingest.copyright_status === "open_licence",
+    ingest.copyright_status === "public_domain" ||
+    ingest.copyright_status === "open_licence" ||
+    ingest.copyright_status === "publicly_accessible",
   );
   let accessGranted = $state(false);
 
@@ -89,10 +91,9 @@
   let localSourceFile = $state<File | null>(sourceFile);
 
   // Who can see the body:
-  // - public_domain / open_licence: everyone
-  // - web articles: everyone (source is publicly accessible via URL)
-  // - restricted files (PDF, video, audio): need hash verification or file drop
-  let canShowBody = $derived(isPublic || isWeb || accessGranted || !!localSourceFile);
+  // - public_domain / open_licence / publicly_accessible: everyone
+  // - restricted / licensed: need hash verification or file drop
+  let canShowBody = $derived(isPublic || accessGranted || !!localSourceFile);
 
   // Hash input for manual verification
   let hashInput = $state("");
