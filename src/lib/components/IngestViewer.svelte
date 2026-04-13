@@ -635,6 +635,27 @@
     </div>
   </div>
 
+  <!-- Status bar -->
+  <div class="px-4 py-1.5 border-b border-border flex items-center gap-2 flex-none text-xs font-ui
+    {doc.dirty ? 'bg-warning-container/30 text-on-warning-container' : user ? 'bg-success-container/30 text-on-success-container' : 'bg-surface-alt text-on-surface-muted'}">
+    {#if doc.dirty}
+      <svg class="w-3.5 h-3.5 flex-none" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
+      </svg>
+      <span>You have unsubmitted changes (saved locally)</span>
+    {:else if user}
+      <svg class="w-3.5 h-3.5 flex-none" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+      </svg>
+      <span>Reviewing as {user.name} - all changes submitted</span>
+    {:else}
+      <svg class="w-3.5 h-3.5 flex-none" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" />
+      </svg>
+      <span>View only - <a href="/api/auth/login" class="underline hover:text-on-surface">log in</a> to submit reviews</span>
+    {/if}
+  </div>
+
   <!-- Submit review modal -->
   {#if showSubmitForm}
     <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
