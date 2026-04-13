@@ -170,7 +170,7 @@
         </svg>
       </button>
     {/if}
-    {#if segment.lines.length > 1}
+    {#if segment.lines.join("\n").length > 1}
       <button onclick={(e) => { e.stopPropagation(); onstartsplit(); }}
         class="p-0.5 rounded cursor-pointer text-on-surface-muted/50 hover:text-on-surface hover:bg-surface-alt transition-colors"
         title="Split this segment">
