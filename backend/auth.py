@@ -30,6 +30,10 @@ oauth = OAuth()
 
 GITHUB_CLIENT_ID = os.environ.get("GITHUB_CLIENT_ID", "")
 GITHUB_CLIENT_SECRET = os.environ.get("GITHUB_CLIENT_SECRET", "")
+# In development, the frontend runs on a different port from the backend.
+# The OAuth callback must go through the frontend's proxy so cookies are
+# set on the right origin.
+PUBLIC_URL = os.environ.get("PUBLIC_URL", "http://localhost:5173")
 
 if GITHUB_CLIENT_ID:
     oauth.register(
@@ -73,8 +77,8 @@ def setup_auth(app: Any) -> None:
 async def login(request: Request) -> RedirectResponse:
     """Redirect to GitHub's OAuth authorisation page."""
     if not GITHUB_CLIENT_ID:
-        return RedirectResponse(url="/")
-    redirect_uri = str(request.url_for("auth_callback"))
+        return RedirectResponse(url=PUBLIC_URL)
+    redirect_uri = f"{PUBLIC_URL}/api/auth/callback"
     return await oauth.github.authorize_redirect(request, redirect_uri)
 
 
@@ -104,7 +108,7 @@ async def auth_callback(request: Request) -> RedirectResponse:
         "avatar_url": profile.get("avatar_url", ""),
     }
 
-    return RedirectResponse(url="/")
+    return RedirectResponse(url=PUBLIC_URL)
 
 
 @router.get("/me")
@@ -118,4 +122,4 @@ async def get_current_user(request: Request) -> JSONResponse:
 async def logout(request: Request) -> RedirectResponse:
     """Clear the session and redirect to the home page."""
     request.session.clear()
-    return RedirectResponse(url="/")
+    return RedirectResponse(url=PUBLIC_URL)
