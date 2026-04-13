@@ -17,8 +17,10 @@ import re
 from abc import ABC, abstractmethod
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
+
+from backend.auth import setup_auth
 
 FULL_HASH_LENGTH = 64
 PUBLIC_HASH_LENGTH = 56
@@ -80,6 +82,16 @@ class IngestSource(ABC):
     @abstractmethod
     def save_ingest(self, full_hash: str, content: str) -> bool:
         """Write the modified markdown content back. Returns True on success."""
+
+    @abstractmethod
+    def commit_review(
+        self,
+        full_hash: str,
+        author_name: str,
+        author_email: str,
+        notes: str,
+    ) -> None:
+        """Commit the current state of the file as a review."""
 
 
 def normalise_hash(value: str | None) -> str | None:
@@ -168,6 +180,45 @@ class LocalIngestSource(IngestSource):
             f.write(content)
         return True
 
+    def commit_review(
+        self,
+        full_hash: str,
+        author_name: str,
+        author_email: str,
+        notes: str,
+    ) -> None:
+        import subprocess
+
+        entry = self._scan().get(full_hash)
+        if entry is None:
+            return
+        md_path, frontmatter = entry
+        title = frontmatter.get("title", full_hash[:12])
+
+        message = f"review: {title}"
+        if notes:
+            message += f"\n\n{notes}"
+
+        env = {
+            **os.environ,
+            "GIT_AUTHOR_NAME": author_name,
+            "GIT_AUTHOR_EMAIL": author_email,
+        }
+
+        repo_dir = self.store.parent
+        subprocess.run(
+            ["git", "add", str(md_path.relative_to(repo_dir))],
+            cwd=repo_dir,
+            check=True,
+            env=env,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", message],
+            cwd=repo_dir,
+            check=True,
+            env=env,
+        )
+
 
 class GitHubIngestSource(IngestSource):
     """Fetches ingests from a private GitHub repository via the API.
@@ -189,6 +240,9 @@ class GitHubIngestSource(IngestSource):
     def save_ingest(self, full_hash: str, content: str) -> bool:
         raise NotImplementedError("GitHubIngestSource is not yet implemented")
 
+    def commit_review(self, **kwargs: str) -> None:
+        raise NotImplementedError("GitHubIngestSource is not yet implemented")
+
 
 def build_source() -> IngestSource:
     """Select the ingest source based on environment variables."""
@@ -202,6 +256,9 @@ def build_source() -> IngestSource:
 
 
 app = FastAPI(title="Anomalica Workbench API")
+
+setup_auth(app)
+
 source: IngestSource = build_source()
 sources_path = Path(os.environ.get("SOURCES_PATH", str(DEFAULT_SOURCES_PATH)))
 
@@ -262,11 +319,16 @@ def get_source(full_hash: str) -> FileResponse:
 
 
 @app.put("/api/ingests/{full_hash}")
-def save_ingest(full_hash: str, body: dict) -> JSONResponse:
-    """Save modified markdown content for an ingest.
+def submit_review(full_hash: str, body: dict, request: Request) -> JSONResponse:
+    """Submit a review: save changes and commit with reviewer identity.
 
-    Expects {"content": "..."} with the full markdown including frontmatter.
+    Expects {"content": "...", "notes": "..."}.
+    Requires authentication.
     """
+    user = request.session.get("user")
+    if not user:
+        raise HTTPException(status_code=401, detail="Login required")
+
     if not FULL_HASH_PATTERN.match(full_hash):
         raise HTTPException(status_code=404, detail="Not found")
 
@@ -274,6 +336,17 @@ def save_ingest(full_hash: str, body: dict) -> JSONResponse:
     if not content or not isinstance(content, str):
         raise HTTPException(status_code=400, detail="Missing content")
 
-    if source.save_ingest(full_hash, content):
-        return JSONResponse({"saved": True})
-    raise HTTPException(status_code=404, detail="Not found")
+    notes = body.get("notes", "").strip()
+
+    if not source.save_ingest(full_hash, content):
+        raise HTTPException(status_code=404, detail="Not found")
+
+    # Git commit with reviewer as author
+    source.commit_review(
+        full_hash=full_hash,
+        author_name=user["name"],
+        author_email=user["email"],
+        notes=notes,
+    )
+
+    return JSONResponse({"submitted": True})

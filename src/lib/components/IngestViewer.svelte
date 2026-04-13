@@ -1,6 +1,6 @@
 <script lang="ts">
-  import type { IngestDetail } from "$lib/api";
-  import { saveIngest } from "$lib/api";
+  import type { IngestDetail, User } from "$lib/api";
+  import { submitReview } from "$lib/api";
   import { DocumentStore } from "$lib/document.svelte";
   import { parseTranscript, secondsToTime, speakerColour } from "$lib/transcript";
   import type { Segment } from "$lib/transcript";
@@ -14,10 +14,12 @@
   let {
     ingest,
     sourceFile,
+    user,
     onback,
   }: {
     ingest: IngestDetail;
     sourceFile: File | null;
+    user: User | null;
     onback: () => void;
   } = $props();
 
@@ -296,20 +298,28 @@
   // Split editing mode
   let splittingIndex = $state<number | null>(null);
 
-  // Save state
-  let saving = $state(false);
-  let saveError = $state<string | null>(null);
+  // Submit review state
+  let submitting = $state(false);
+  let submitError = $state<string | null>(null);
+  let showSubmitForm = $state(false);
+  let reviewNotes = $state("");
 
-  async function handleSave() {
-    saving = true;
-    saveError = null;
-    const ok = await saveIngest(ingest.content_hash, doc.current);
-    saving = false;
-    if (ok) {
-      doc.discard();
-      doc.load(doc.current, ingest.content_hash);
+  async function handleSubmit() {
+    if (!user) return;
+    submitting = true;
+    submitError = null;
+    const result = await submitReview(ingest.content_hash, doc.current, reviewNotes);
+    submitting = false;
+    if (result.ok) {
+      showSubmitForm = false;
+      reviewNotes = "";
+      // Set the submitted content as the new baseline without resetting position
+      doc.original = doc.current;
+      doc.past = [];
+      doc.future = [];
+      localStorage.removeItem(doc.storageKey);
     } else {
-      saveError = "Failed to save";
+      submitError = result.error ?? "Failed to submit";
     }
   }
 
@@ -526,7 +536,7 @@
     if (e.target instanceof HTMLInputElement) return;
     if ((e.ctrlKey || e.metaKey) && e.key === "s") {
       e.preventDefault();
-      if (doc.dirty) handleSave();
+      if (doc.dirty && user) showSubmitForm = true;
     } else if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey) {
       e.preventDefault();
       doc.undo();
@@ -624,6 +634,66 @@
       </div>
     </div>
   </div>
+
+  <!-- Submit review modal -->
+  {#if showSubmitForm}
+    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+    <div
+      class="fixed inset-0 bg-ink/50 z-50 flex items-center justify-center p-4"
+      onclick={() => { showSubmitForm = false; }}
+    >
+      <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+      <div
+        class="bg-surface rounded-lg shadow-lg max-w-md w-full p-6"
+        onclick={(e) => e.stopPropagation()}
+      >
+        <h3 class="font-ui font-semibold text-on-surface mb-4">Submit review</h3>
+
+        {#if user}
+          <div class="flex items-center gap-3 mb-4 p-3 bg-surface-alt rounded">
+            {#if user.avatar_url}
+              <img src={user.avatar_url} alt="" class="w-8 h-8 rounded-full" />
+            {/if}
+            <div>
+              <div class="text-sm font-ui font-medium text-on-surface">{user.name}</div>
+              <div class="text-xs text-on-surface-muted">{user.email}</div>
+            </div>
+          </div>
+        {/if}
+
+        <label class="block text-xs font-ui text-on-surface-secondary mb-1" for="review-notes">
+          Notes (optional)
+        </label>
+        <textarea
+          id="review-notes"
+          bind:value={reviewNotes}
+          placeholder="What did you change and why?"
+          rows="3"
+          class="w-full text-sm bg-surface border border-border rounded px-3 py-2
+            text-on-surface outline-none focus:border-primary placeholder:text-on-surface-muted/50 resize-none"
+        ></textarea>
+
+        {#if submitError}
+          <p class="text-xs text-error mt-2">{submitError}</p>
+        {/if}
+
+        <div class="flex items-center gap-2 mt-4">
+          <div class="flex-1"></div>
+          <button
+            onclick={() => { showSubmitForm = false; }}
+            class="text-xs font-ui text-on-surface-muted px-3 py-1.5 rounded cursor-pointer hover:text-on-surface"
+          >Cancel</button>
+          <button
+            onclick={handleSubmit}
+            disabled={submitting}
+            class="text-xs font-ui font-medium px-4 py-1.5 bg-primary text-on-primary rounded cursor-pointer hover:bg-primary-hover"
+          >
+            {submitting ? "Submitting..." : "Submit review"}
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
 
   <div class="flex-1 flex min-h-0">
     {#if singleColumn}
@@ -803,13 +873,13 @@
             </svg>
           </button>
           <button
-            onclick={handleSave}
-            disabled={saving || !doc.dirty}
+            onclick={() => { if (user) showSubmitForm = true; else window.location.href = '/api/auth/login'; }}
+            disabled={submitting || !doc.dirty}
             class="text-xs font-ui font-medium px-2 py-1 rounded cursor-pointer transition-colors
               {doc.dirty ? 'bg-primary text-on-primary hover:bg-primary-hover' : 'text-on-surface-muted/30 cursor-default'}"
-            title="Save changes to file (Ctrl+S)"
+            title={user ? "Submit review (Ctrl+S)" : "Log in to submit"}
           >
-            {saving ? "Saving..." : "Save"}
+            {submitting ? "Submitting..." : user ? "Submit" : "Log in to submit"}
           </button>
           <button
             onclick={() => doc.discard()}

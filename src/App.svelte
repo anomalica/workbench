@@ -1,9 +1,13 @@
 <script lang="ts">
-  import { fetchIngests, fetchIngest } from "$lib/api";
-  import type { IngestSummary, IngestDetail } from "$lib/api";
+  import { fetchIngests, fetchIngest, fetchCurrentUser } from "$lib/api";
+  import type { IngestSummary, IngestDetail, User } from "$lib/api";
   import FileDropZone from "$lib/components/FileDropZone.svelte";
   import IngestList from "$lib/components/IngestList.svelte";
   import IngestViewer from "$lib/components/IngestViewer.svelte";
+
+  let user = $state<User | null>(null);
+
+  fetchCurrentUser().then((u) => { user = u; });
 
   let ingests = $state<IngestSummary[]>([]);
   let selectedIngest = $state<IngestDetail | null>(null);
@@ -95,11 +99,23 @@
       <img src="/logo-darkmode.svg" alt="Anomalica" class="h-4" />
       <span class="text-bone/60 text-sm leading-none mt-auto">Workbench</span>
     </a>
+    <div class="flex-1"></div>
+    {#if user}
+      <div class="flex items-center gap-2">
+        {#if user.avatar_url}
+          <img src={user.avatar_url} alt="" class="w-5 h-5 rounded-full" />
+        {/if}
+        <span class="text-bone/80 text-sm">{user.name}</span>
+        <a href="/api/auth/logout" class="text-bone/40 text-xs hover:text-bone/60 transition-colors">Log out</a>
+      </div>
+    {:else}
+      <a href="/api/auth/login" class="text-bone/60 text-sm hover:text-bone transition-colors">Log in</a>
+    {/if}
   </header>
 
   <main class="flex-1 flex flex-col min-h-0">
     {#if selectedIngest}
-      <IngestViewer ingest={selectedIngest} {sourceFile} onback={goBack} />
+      <IngestViewer ingest={selectedIngest} {sourceFile} {user} onback={goBack} />
     {:else}
       <div class="flex-1 flex flex-col min-h-0">
         <!-- Search and filter bar -->

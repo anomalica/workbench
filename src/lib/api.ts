@@ -41,14 +41,34 @@ export async function ingestExists(fullHash: string): Promise<boolean> {
   return res.ok;
 }
 
-/** Save modified markdown content for an ingest. */
-export async function saveIngest(fullHash: string, content: string): Promise<boolean> {
+/** Submit a review: save changes and commit with reviewer identity. */
+export async function submitReview(
+  fullHash: string,
+  content: string,
+  notes: string,
+): Promise<{ ok: boolean; error?: string }> {
   const res = await fetch(`/api/ingests/${fullHash}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ content }),
+    body: JSON.stringify({ content, notes }),
   });
-  return res.ok;
+  if (res.ok) return { ok: true };
+  const data = await res.json().catch(() => ({}));
+  return { ok: false, error: data.detail || `Error ${res.status}` };
+}
+
+export interface User {
+  name: string;
+  email: string;
+  login: string;
+  avatar_url: string;
+}
+
+export async function fetchCurrentUser(): Promise<User | null> {
+  const res = await fetch("/api/auth/me");
+  if (!res.ok) return null;
+  const data = await res.json();
+  return data.user || null;
 }
 
 export async function hashFile(file: File): Promise<string> {
