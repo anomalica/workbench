@@ -171,11 +171,35 @@
       : null,
   );
 
-  /** Replace file_page metadata comment blocks with visible, clickable page markers. */
-  function preprocessPageMarkers(body: string): string {
+  /** Replace anomalica annotation blocks with visible HTML elements. */
+  function preprocessAnnotations(body: string): string {
     return body.replace(
-      /<!-- anomalica\n(?:[\s\S]*?)file_page:\s*(\d+)[\s\S]*?-->/g,
-      '<div class="page-marker" data-file-page="$1"><span class="page-label">Page $1</span></div>',
+      /<!-- anomalica\n([\s\S]*?)-->/g,
+      (_, content) => {
+        const trimmed = content.trim();
+        // Page marker
+        const pageMatch = trimmed.match(/file_page:\s*(\d+)/);
+        if (pageMatch) {
+          return `<div class="page-marker" data-file-page="${pageMatch[1]}"><span class="page-label">Page ${pageMatch[1]}</span></div>`;
+        }
+        // Image description
+        const imageMatch = trimmed.match(/^image:\s*([\s\S]+)/);
+        if (imageMatch) {
+          const desc = imageMatch[1].trim();
+          return `<div class="annotation annotation-image"><span class="annotation-label">Image</span> ${desc}</div>`;
+        }
+        // Redacted block
+        const redactedMatch = trimmed.match(/^redacted:\s*\n\s*extent:\s*([\s\S]+)/);
+        if (redactedMatch) {
+          const extent = redactedMatch[1].trim();
+          return `<div class="annotation annotation-redacted"><span class="annotation-label">Redacted</span> ${extent}</div>`;
+        }
+        // Unknown annotation - show as generic
+        if (trimmed) {
+          return `<div class="annotation">${trimmed}</div>`;
+        }
+        return "";
+      },
     );
   }
 
@@ -1102,7 +1126,7 @@
         </div>
 
       {:else}
-        {@const processedBody = isPdf ? preprocessPageMarkers(currentBody()) : currentBody()}
+        {@const processedBody = preprocessAnnotations(currentBody())}
         {@const renderedHtml = renderRedactions(marked.parse(processedBody) as string)}
         <div
           bind:this={proseContainer}

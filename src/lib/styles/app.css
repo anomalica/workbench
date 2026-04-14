@@ -28,6 +28,32 @@ body {
   cursor: help;
 }
 
+.annotation {
+  font-family: var(--font-ui);
+  font-size: 0.75rem;
+  color: var(--color-on-surface-muted);
+  background: color-mix(in srgb, var(--color-surface-alt) 50%, transparent);
+  border: 1px solid var(--color-border);
+  border-radius: 0.25rem;
+  padding: 0.5rem 0.75rem;
+  margin: 0.75rem 0;
+}
+
+.annotation-label {
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-right: 0.25rem;
+}
+
+.annotation-image .annotation-label {
+  color: var(--color-primary);
+}
+
+.annotation-redacted .annotation-label {
+  color: var(--color-error);
+}
+
 .page-marker {
   display: flex;
   align-items: center;
