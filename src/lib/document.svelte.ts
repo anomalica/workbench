@@ -153,6 +153,27 @@ export class DocumentStore {
     if (result !== this.current) this.pushEdit(result);
   }
 
+  /** Merge all adjacent segments that have the same speaker. */
+  mergeAdjacentSpeakers() {
+    const [fm, body] = splitFrontmatter(this.current);
+    const segs = parseTranscriptForEdit(body);
+    if (segs.length < 2) return;
+
+    const merged: typeof segs = [segs[0]];
+    for (let i = 1; i < segs.length; i++) {
+      const prev = merged[merged.length - 1];
+      if (segs[i].speaker === prev.speaker) {
+        prev.lines.push(...segs[i].lines);
+      } else {
+        merged.push(segs[i]);
+      }
+    }
+
+    if (merged.length < segs.length) {
+      this.pushEdit(fm + serializeSegs(merged));
+    }
+  }
+
   // --- Structural editing (parse-modify-serialize) ---
 
   /** Change a single segment's speaker field. */

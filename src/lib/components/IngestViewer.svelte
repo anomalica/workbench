@@ -821,7 +821,11 @@
                   <path d="M6 4l8 6-8 6V4z" />
                 </svg>
                 <span class="text-xs font-ui font-medium text-on-surface-secondary uppercase">Speakers</span>
-                <span class="text-xs text-on-surface-muted ml-auto">{visibleSpeakerIds.size}</span>
+                <button
+                  onclick={(e) => { e.stopPropagation(); doc.mergeAdjacentSpeakers(); }}
+                  class="text-xs font-ui text-on-surface-muted hover:text-primary ml-auto cursor-pointer"
+                  title="Merge adjacent segments by the same speaker"
+                >merge adjacent</button>
               </summary>
               <div class="px-3 py-2">
                 <SpeakerManager
