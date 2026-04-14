@@ -329,6 +329,8 @@
     }
     if (best >= 0 && best !== activeSegment) {
       activeSegment = best;
+      // Clear single selection so only the active segment is highlighted
+      if (selected.size === 1) selected = new Set();
       const el = document.querySelector(`[data-segment-index="${best}"]`);
       if (el) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
     }
