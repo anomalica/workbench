@@ -316,9 +316,9 @@
   let splittingIndex = $state<number | null>(null);
 
   // Auto-follow: sync the highlighted segment with video playback.
-  // Only active when not editing (no selection, no split open).
+  // Only paused when multi-selecting or split editing.
   $effect(() => {
-    if (!hasTranscript || selected.size > 0 || splittingIndex !== null) return;
+    if (!hasTranscript || selected.size > 1 || splittingIndex !== null) return;
     if (view !== "ingest") return;
     const t = currentTime;
     // Find the last segment whose time is <= current playback time
