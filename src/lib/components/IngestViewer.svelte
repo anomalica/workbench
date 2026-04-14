@@ -315,6 +315,25 @@
   // Split editing mode
   let splittingIndex = $state<number | null>(null);
 
+  // Auto-follow: sync the highlighted segment with video playback.
+  // Only active when not editing (no selection, no split open).
+  $effect(() => {
+    if (!hasTranscript || selected.size > 0 || splittingIndex !== null) return;
+    if (view !== "ingest") return;
+    const t = currentTime;
+    // Find the last segment whose time is <= current playback time
+    let best = -1;
+    for (const seg of visibleSegments) {
+      if (seg.seconds <= t) best = seg.index;
+      else break;
+    }
+    if (best >= 0 && best !== activeSegment) {
+      activeSegment = best;
+      const el = document.querySelector(`[data-segment-index="${best}"]`);
+      if (el) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  });
+
   // Submit review state
   let submitting = $state(false);
   let submitError = $state<string | null>(null);
