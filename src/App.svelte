@@ -16,16 +16,34 @@
   let loading = $state(true);
   let searchQuery = $state("");
   let filterType = $state<string>("all");
+  let sortBy = $state<"date" | "title" | "type" | "publisher" | "copyright">("date");
+  let sortAsc = $state(false);
 
   let filteredIngests = $derived(
-    ingests.filter((i) => {
-      if (filterType !== "all" && i.source_type !== filterType) return false;
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase();
-        return i.title.toLowerCase().includes(q) || i.date.includes(q);
-      }
-      return true;
-    }),
+    ingests
+      .filter((i) => {
+        if (filterType !== "all" && i.source_type !== filterType) return false;
+        if (searchQuery.trim()) {
+          const q = searchQuery.toLowerCase();
+          return (
+            i.title.toLowerCase().includes(q) ||
+            i.date.includes(q) ||
+            i.publisher.toLowerCase().includes(q)
+          );
+        }
+        return true;
+      })
+      .sort((a, b) => {
+        let va: string;
+        let vb: string;
+        if (sortBy === "date") { va = a.date; vb = b.date; }
+        else if (sortBy === "title") { va = a.title.toLowerCase(); vb = b.title.toLowerCase(); }
+        else if (sortBy === "type") { va = a.source_type; vb = b.source_type; }
+        else if (sortBy === "publisher") { va = a.publisher || "zzz"; vb = b.publisher || "zzz"; }
+        else { va = a.copyright_status; vb = b.copyright_status; }
+        const cmp = va < vb ? -1 : va > vb ? 1 : 0;
+        return sortAsc ? cmp : -cmp;
+      }),
   );
 
   let sourceTypes = $derived(
@@ -157,7 +175,16 @@
           {#if loading}
             <p class="text-on-surface-muted text-sm p-6">Loading ingests...</p>
           {:else if filteredIngests.length > 0}
-            <IngestList ingests={filteredIngests} onselect={(hash) => selectIngest(hash)} />
+            <IngestList
+              ingests={filteredIngests}
+              {sortBy}
+              {sortAsc}
+              onsort={(field) => {
+                if (sortBy === field) { sortAsc = !sortAsc; }
+                else { sortBy = field as typeof sortBy; sortAsc = field === "title"; }
+              }}
+              onselect={(hash) => selectIngest(hash)}
+            />
           {:else if searchQuery || filterType !== "all"}
             <p class="text-on-surface-muted text-sm p-6">No ingests match your search.</p>
           {:else}
