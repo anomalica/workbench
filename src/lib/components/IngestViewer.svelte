@@ -933,7 +933,7 @@
 
       <!-- Metadata panel (collapsible, shown in any view) -->
       {#if showMetadata}
-        <div class="border-b border-border bg-surface-alt/50 px-4 py-3 flex-none overflow-auto max-h-64">
+        <div class="border-b border-border bg-surface-alt/50 px-4 py-3 flex-none">
           <pre class="text-xs font-mono text-on-surface whitespace-pre-wrap">{ingest.raw_frontmatter.replace(/^---\n/, "").replace(/---\n$/, "").trim()}</pre>
         </div>
       {/if}
