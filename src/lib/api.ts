@@ -20,6 +20,7 @@ export interface IngestDetail {
   public_hash: string;
   copyright_status: CopyrightStatus;
   frontmatter: Record<string, string>;
+  raw_frontmatter: string;
   body: string;
 }
 

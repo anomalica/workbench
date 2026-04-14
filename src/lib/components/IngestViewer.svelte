@@ -25,14 +25,7 @@
 
   const doc = new DocumentStore();
 
-  let rawMarkdown = $derived(
-    [
-      "---",
-      ...Object.entries(ingest.frontmatter).map(([k, v]) => `${k}: ${v}`),
-      "---",
-      ingest.body,
-    ].join("\n"),
-  );
+  let rawMarkdown = $derived(ingest.raw_frontmatter + ingest.body);
 
   $effect(() => {
     doc.load(rawMarkdown, ingest.content_hash);

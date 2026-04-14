@@ -30,20 +30,30 @@ DEFAULT_INGESTS_PATH = Path(__file__).resolve().parents[2] / "anomalica-ingests"
 DEFAULT_SOURCES_PATH = Path(__file__).resolve().parents[2] / "sources"
 
 
-def parse_frontmatter(text: str) -> tuple[dict, str]:
+def parse_frontmatter(text: str) -> tuple[dict, str, str]:
     """Extract YAML frontmatter and body from a markdown file.
+
+    Returns (parsed_fields, body, raw_frontmatter_block).
+    The raw_frontmatter_block includes the --- delimiters so it can be
+    written back without loss.
 
     Handles top-level scalar fields and one level of nesting (for the
     copyright block). Nested keys are flattened with dots, e.g.
     copyright.status becomes a top-level key.
     """
-    match = re.match(r"^---\n(.*?)\n---\n(.*)", text, re.DOTALL)
+    match = re.match(r"^(---\n.*?\n---\n)(.*)", text, re.DOTALL)
     if not match:
-        return {}, text
+        return {}, text, ""
+
+    raw_frontmatter = match.group(1)
+    body = match.group(2)
+    fm_content = raw_frontmatter[
+        4 : raw_frontmatter.rindex("---")
+    ]  # strip --- delimiters
 
     frontmatter: dict = {}
     current_parent = ""
-    for line in match.group(1).splitlines():
+    for line in fm_content.splitlines():
         # Top-level key with inline value
         if ":" in line and not line.startswith(" "):
             key, _, value = line.partition(":")
@@ -64,7 +74,7 @@ def parse_frontmatter(text: str) -> tuple[dict, str]:
             value = value.strip().strip('"').strip("'")
             frontmatter[f"{current_parent}.{key.strip()}"] = value
 
-    return frontmatter, match.group(2)
+    return frontmatter, body, raw_frontmatter
 
 
 class IngestSource(ABC):
@@ -125,7 +135,7 @@ class LocalIngestSource(IngestSource):
 
         for md_path in sorted(self.store.glob("*.md")):
             with open(md_path) as f:
-                frontmatter, _ = parse_frontmatter(f.read())
+                frontmatter, _, _ = parse_frontmatter(f.read())
 
             content_hash = normalise_hash(frontmatter.get("content_hash"))
             if not content_hash:
@@ -162,12 +172,13 @@ class LocalIngestSource(IngestSource):
         with open(md_path) as f:
             content = f.read()
 
-        frontmatter, body = parse_frontmatter(content)
+        frontmatter, body, raw_frontmatter = parse_frontmatter(content)
         return {
             "content_hash": full_hash,
             "public_hash": full_hash[:PUBLIC_HASH_LENGTH],
             "copyright_status": frontmatter.get("copyright.status", "restricted"),
             "frontmatter": frontmatter,
+            "raw_frontmatter": raw_frontmatter,
             "body": body,
         }
 
