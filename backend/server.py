@@ -152,7 +152,9 @@ class LocalIngestSource(IngestSource):
                     "content_hash": content_hash,
                     "public_hash": content_hash[:PUBLIC_HASH_LENGTH],
                     "title": frontmatter.get("title", "Untitled"),
-                    "date": frontmatter.get("date", ""),
+                    "date": frontmatter.get(
+                        "date_published", frontmatter.get("date", "")
+                    ),
                     "source_type": frontmatter.get("source_type", ""),
                     "source_url": frontmatter.get("source_url", ""),
                     "copyright_status": frontmatter.get(

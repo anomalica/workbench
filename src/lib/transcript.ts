@@ -15,67 +15,119 @@ export function parseTimeToSeconds(time: string): number {
   return parts[0] ?? 0;
 }
 
+// Matches timestamped lines: "00:01:24.1 Some text here"
+const TIMESTAMPED_LINE = /^(\d{2}:\d{2}:\d{2}(?:\.\d+)?)\s+(.+)$/;
+
+// Matches inline speaker comment: <!-- speaker: Name -->
+const INLINE_SPEAKER = /^<!--\s*speaker:\s*(.+?)\s*-->$/;
+
+/**
+ * Parse a transcript body into segments. Supports two formats:
+ *
+ * New format (sentence-level timestamps):
+ *   <!-- speaker: Lex Fridman -->
+ *   00:00:01.8 First sentence.
+ *   00:00:05.2 Second sentence.
+ *
+ * Old format (block annotations):
+ *   <!--
+ *   speaker: David Fravor
+ *   time: 00:07:17
+ *   -->
+ *   Text content here.
+ */
 export function parseTranscript(body: string): Segment[] {
   const segments: Segment[] = [];
-  // Split on multi-line annotation blocks: <!--\n...\n-->
-  // Single-line annotations (<!-- file_page: 2 -->) are left in the
-  // content and ignored by the speaker parser.
-  const parts = body.split(/<!--\n/);
+  let currentSpeaker = "";
 
-  for (const part of parts) {
-    const closingIndex = part.indexOf("-->");
-    if (closingIndex < 0) {
-      // No closing --> means this is plain content (before first annotation)
-      const contentLines = part
-        .split("\n")
-        .map((l) => l.trim())
-        .filter((l) => l);
-      if (contentLines.length > 0 && segments.length === 0) {
-        segments.push({
-          speaker: "",
-          time: "",
-          seconds: 0,
-          lines: contentLines,
-          irrelevant: false,
-          index: 0,
-        });
-      } else if (contentLines.length > 0 && segments.length > 0) {
-        segments[segments.length - 1].lines.push(...contentLines);
-      }
+  const lines = body.split("\n");
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i].trim();
+
+    // Inline speaker comment: <!-- speaker: Name -->
+    const inlineSpeaker = line.match(INLINE_SPEAKER);
+    if (inlineSpeaker) {
+      currentSpeaker = inlineSpeaker[1].trim();
+      i++;
       continue;
     }
 
-    const yaml = part.slice(0, closingIndex);
-    const textAfter = part.slice(closingIndex + 3);
+    // Multi-line annotation block: <!--\n...\n-->
+    if (line === "<!--") {
+      const blockLines: string[] = [];
+      i++;
+      while (i < lines.length && lines[i].trim() !== "-->") {
+        blockLines.push(lines[i].trim());
+        i++;
+      }
+      i++; // skip -->
 
-    const speakerMatch = yaml.match(/^speaker:\s*(.+)$/m);
-    const timeMatch = yaml.match(/^time:\s*(.+)$/m);
-
-    if (speakerMatch && timeMatch) {
+      const yaml = blockLines.join("\n");
+      const speakerMatch = yaml.match(/^speaker:\s*(.+)$/m);
+      const timeMatch = yaml.match(/^time:\s*(.+)$/m);
       const irrelevantMatch = yaml.match(/^irrelevant:\s*(.+)$/m);
-      const contentLines = textAfter
-        .split("\n")
-        .map((l) => l.trim())
-        .filter((l) => l);
 
+      if (speakerMatch && timeMatch) {
+        // Old-format speaker turn with explicit time
+        currentSpeaker = speakerMatch[1].trim();
+        const time = timeMatch[1].trim();
+
+        // Collect text until the next annotation
+        const textLines: string[] = [];
+        while (
+          i < lines.length &&
+          lines[i].trim() !== "<!--" &&
+          !INLINE_SPEAKER.test(lines[i].trim())
+        ) {
+          const tl = lines[i].trim();
+          if (tl) textLines.push(tl);
+          i++;
+        }
+
+        segments.push({
+          speaker: currentSpeaker,
+          time,
+          seconds: parseTimeToSeconds(time),
+          lines: textLines,
+          irrelevant: irrelevantMatch ? irrelevantMatch[1].trim() === "true" : false,
+          index: segments.length,
+        });
+      }
+      // Other block annotations (redacted, image, etc.) are skipped
+      continue;
+    }
+
+    // Single-line annotation: <!-- file_page: 2 --> etc.
+    if (line.startsWith("<!--") && line.endsWith("-->")) {
+      i++;
+      continue;
+    }
+
+    // Timestamped text line: 00:01:24.1 Some text
+    const tsMatch = line.match(TIMESTAMPED_LINE);
+    if (tsMatch && currentSpeaker) {
+      const time = tsMatch[1];
+      const text = tsMatch[2];
       segments.push({
-        speaker: speakerMatch[1].trim(),
-        time: timeMatch[1].trim(),
-        seconds: parseTimeToSeconds(timeMatch[1].trim()),
-        lines: contentLines,
-        irrelevant: irrelevantMatch ? irrelevantMatch[1].trim() === "true" : false,
+        speaker: currentSpeaker,
+        time,
+        seconds: parseTimeToSeconds(time),
+        lines: [text],
+        irrelevant: false,
         index: segments.length,
       });
-    } else {
-      // Annotation without speaker/time (e.g. page marker) - append content to previous segment
-      const contentLines = textAfter
-        .split("\n")
-        .map((l) => l.trim())
-        .filter((l) => l);
-      if (contentLines.length > 0 && segments.length > 0) {
-        segments[segments.length - 1].lines.push(...contentLines);
-      }
+      i++;
+      continue;
     }
+
+    // Plain text line - append to the last segment
+    if (line && segments.length > 0) {
+      segments[segments.length - 1].lines.push(line);
+    }
+
+    i++;
   }
 
   return segments;
@@ -93,14 +145,27 @@ export function extractSpeakers(segments: Segment[]): Map<string, number> {
 
 /** Serialise segments back to the markdown body format. */
 export function serializeTranscript(segments: Segment[]): string {
-  return segments
-    .map((seg) => {
+  let result = "";
+  let lastSpeaker = "";
+  for (const seg of segments) {
+    if (seg.speaker !== lastSpeaker) {
+      result += `\n<!-- speaker: ${seg.speaker} -->\n`;
+      lastSpeaker = seg.speaker;
+    }
+    // If the time looks like sentence-level (has decimal), use timestamped line format
+    if (seg.time.includes(".")) {
+      for (const line of seg.lines) {
+        result += `${seg.time} ${line}\n`;
+      }
+    } else {
+      // Old format: multi-line block
       let yaml = `speaker: ${seg.speaker}\ntime: ${seg.time}`;
       if (seg.irrelevant) yaml += "\nirrelevant: true";
-      const text = seg.lines.join("\n");
-      return `\n<!--\n${yaml}\n-->\n${text}\n`;
-    })
-    .join("");
+      result += `\n<!--\n${yaml}\n-->\n${seg.lines.join("\n")}\n`;
+      lastSpeaker = ""; // Reset because old format repeats speaker in each block
+    }
+  }
+  return result;
 }
 
 export function secondsToTime(s: number): string {

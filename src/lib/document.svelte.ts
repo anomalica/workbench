@@ -126,103 +126,85 @@ export class DocumentStore {
     this.pushEdit(result);
   }
 
-  /**
-   * Set irrelevant flag on segments identified by speaker+time pairs.
-   * Each entry is { speaker, time } matching a YAML block.
-   */
+  // --- All structural operations use parse-modify-serialize ---
+
+  private editSegments(fn: (segs: Segment[]) => boolean) {
+    const [fm, body] = splitFrontmatter(this.current);
+    const segs = parseTranscriptForEdit(body);
+    if (fn(segs)) {
+      this.pushEdit(fm + serializeSegs(segs));
+    }
+  }
+
+  private findSegment(segs: Segment[], speaker: string, time: string): number {
+    return segs.findIndex((s) => s.speaker === speaker && s.time === time);
+  }
+
   setIrrelevant(targets: { speaker: string; time: string }[], irrelevant: boolean) {
-    let result = this.current;
-    for (const { speaker, time } of targets) {
-      // Match the YAML block for this segment
-      const blockPattern = new RegExp(
-        `(<!--\\n)(speaker:\\s*${escapeRegex(speaker)}\\ntime:\\s*${escapeRegex(time)})(\\nirrelevant:\\s*\\w+)?(\\n-->)`,
-        "g",
-      );
-      if (irrelevant) {
-        // Add or update irrelevant: true
-        result = result.replace(blockPattern, (_, pre, fields, _irr, post) => {
-          return `${pre}${fields}\nirrelevant: true${post}`;
-        });
-      } else {
-        // Remove irrelevant line
-        result = result.replace(blockPattern, (_, pre, fields, _irr, post) => {
-          return `${pre}${fields}${post}`;
-        });
+    this.editSegments((segs) => {
+      let changed = false;
+      for (const { speaker, time } of targets) {
+        const idx = this.findSegment(segs, speaker, time);
+        if (idx >= 0 && segs[idx].irrelevant !== irrelevant) {
+          segs[idx].irrelevant = irrelevant;
+          changed = true;
+        }
       }
-    }
-    if (result !== this.current) this.pushEdit(result);
+      return changed;
+    });
   }
 
-  /** Merge all adjacent segments that have the same speaker. */
   mergeAdjacentSpeakers() {
-    const [fm, body] = splitFrontmatter(this.current);
-    const segs = parseTranscriptForEdit(body);
-    if (segs.length < 2) return;
-
-    const merged: typeof segs = [segs[0]];
-    for (let i = 1; i < segs.length; i++) {
-      const prev = merged[merged.length - 1];
-      if (segs[i].speaker === prev.speaker) {
-        prev.lines.push(...segs[i].lines);
-      } else {
-        merged.push(segs[i]);
+    this.editSegments((segs) => {
+      const original = segs.length;
+      for (let i = segs.length - 1; i > 0; i--) {
+        if (segs[i].speaker === segs[i - 1].speaker) {
+          segs[i - 1].lines.push(...segs[i].lines);
+          segs.splice(i, 1);
+        }
       }
-    }
-
-    if (merged.length < segs.length) {
-      this.pushEdit(fm + serializeSegs(merged));
-    }
+      return segs.length < original;
+    });
   }
 
-  // --- Structural editing (parse-modify-serialize) ---
-
-  /** Change a single segment's speaker field. */
   changeSegmentSpeaker(oldSpeaker: string, time: string, newSpeaker: string) {
-    const pattern = new RegExp(
-      `(<!--\\n)speaker:\\s*${escapeRegex(oldSpeaker)}(\\ntime:\\s*${escapeRegex(time)})`,
-      "g",
-    );
-    const result = this.current.replace(pattern, `$1speaker: ${newSpeaker}$2`);
-    if (result !== this.current) this.pushEdit(result);
+    this.editSegments((segs) => {
+      const idx = this.findSegment(segs, oldSpeaker, time);
+      if (idx < 0) return false;
+      segs[idx].speaker = newSpeaker;
+      return true;
+    });
   }
 
-  /** Change a single segment's timestamp. */
   changeSegmentTime(speaker: string, oldTime: string, newTime: string) {
-    const pattern = new RegExp(
-      `(<!--\\nspeaker:\\s*${escapeRegex(speaker)}\\n)time:\\s*${escapeRegex(oldTime)}`,
-      "g",
-    );
-    const result = this.current.replace(pattern, `$1time: ${newTime}`);
-    if (result !== this.current) this.pushEdit(result);
+    this.editSegments((segs) => {
+      const idx = this.findSegment(segs, speaker, oldTime);
+      if (idx < 0) return false;
+      segs[idx].time = newTime;
+      return true;
+    });
   }
 
-  /** Merge a segment into the one above it. The segment's text is appended
-   *  to the previous segment and this block is removed. */
   mergeSegmentUp(speaker: string, time: string) {
-    const [fm, body] = splitFrontmatter(this.current);
-    const segs = parseTranscriptForEdit(body);
-    const idx = segs.findIndex((s) => s.speaker === speaker && s.time === time);
-    if (idx <= 0) return;
-    segs[idx - 1].lines.push(...segs[idx].lines);
-    segs.splice(idx, 1);
-    this.pushEdit(fm + serializeSegs(segs));
+    this.editSegments((segs) => {
+      const idx = this.findSegment(segs, speaker, time);
+      if (idx <= 0) return false;
+      segs[idx - 1].lines.push(...segs[idx].lines);
+      segs.splice(idx, 1);
+      return true;
+    });
   }
 
-  /** Merge a segment into the one below it. The segment's text is prepended
-   *  to the next segment and this block is removed. */
   mergeSegmentDown(speaker: string, time: string) {
-    const [fm, body] = splitFrontmatter(this.current);
-    const segs = parseTranscriptForEdit(body);
-    const idx = segs.findIndex((s) => s.speaker === speaker && s.time === time);
-    if (idx < 0 || idx >= segs.length - 1) return;
-    segs[idx + 1].lines = [...segs[idx].lines, ...segs[idx + 1].lines];
-    segs.splice(idx, 1);
-    this.pushEdit(fm + serializeSegs(segs));
+    this.editSegments((segs) => {
+      const idx = this.findSegment(segs, speaker, time);
+      if (idx < 0 || idx >= segs.length - 1) return false;
+      segs[idx + 1].lines = [...segs[idx].lines, ...segs[idx + 1].lines];
+      segs.splice(idx, 1);
+      return true;
+    });
   }
 
-  /** Split a segment at a character position within the joined text.
-   *  Text before charPos stays with aboveSpeaker; text from charPos
-   *  onward goes to belowSpeaker. */
   splitSegment(
     speaker: string,
     time: string,
@@ -231,35 +213,32 @@ export class DocumentStore {
     belowSpeaker: string,
     belowTime: string,
   ) {
-    const [fm, body] = splitFrontmatter(this.current);
-    const segs = parseTranscriptForEdit(body);
-    const idx = segs.findIndex((s) => s.speaker === speaker && s.time === time);
-    if (idx < 0) return;
-    const seg = segs[idx];
-    const fullText = seg.lines.join("\n");
-    if (charPos <= 0 || charPos >= fullText.length) return;
+    this.editSegments((segs) => {
+      const idx = this.findSegment(segs, speaker, time);
+      if (idx < 0) return false;
+      const seg = segs[idx];
+      const fullText = seg.lines.join("\n");
+      if (charPos <= 0 || charPos >= fullText.length) return false;
 
-    const beforeText = fullText.slice(0, charPos).trim();
-    const afterText = fullText.slice(charPos).trim();
-    if (!beforeText || !afterText) return;
+      const beforeText = fullText.slice(0, charPos).trim();
+      const afterText = fullText.slice(charPos).trim();
+      if (!beforeText || !afterText) return false;
 
-    const firstLines = beforeText.split("\n").filter((l) => l.trim());
-    const secondLines = afterText.split("\n").filter((l) => l.trim());
-
-    segs.splice(
-      idx,
-      1,
-      { ...seg, speaker: aboveSpeaker, lines: firstLines },
-      {
-        speaker: belowSpeaker,
-        time: belowTime,
-        seconds: 0,
-        lines: secondLines,
-        irrelevant: seg.irrelevant,
-        index: 0,
-      },
-    );
-    this.pushEdit(fm + serializeSegs(segs));
+      segs.splice(
+        idx,
+        1,
+        { ...seg, speaker: aboveSpeaker, lines: beforeText.split("\n").filter((l) => l.trim()) },
+        {
+          speaker: belowSpeaker,
+          time: belowTime,
+          seconds: 0,
+          lines: afterText.split("\n").filter((l) => l.trim()),
+          irrelevant: seg.irrelevant,
+          index: 0,
+        },
+      );
+      return true;
+    });
   }
 }
 
