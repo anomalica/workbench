@@ -12,6 +12,7 @@ export interface IngestSummary {
   date: string;
   source_type: string;
   source_url: string;
+  publisher: string;
   copyright_status: CopyrightStatus;
 }
 

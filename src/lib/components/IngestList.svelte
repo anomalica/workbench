@@ -28,6 +28,9 @@
           {typeLabels[ingest.source_type] ?? ingest.source_type}
         </span>
         <span class="text-xs text-on-surface-muted font-mono w-20 flex-none">{ingest.date}</span>
+        {#if ingest.publisher}
+          <span class="text-xs text-on-surface-secondary flex-none">{ingest.publisher}</span>
+        {/if}
         <p class="text-sm text-on-surface truncate flex-1">{ingest.title}</p>
         {#if ingest.copyright_status === "public_domain"}
           <span class="text-xs font-ui text-success flex-none">public domain</span>

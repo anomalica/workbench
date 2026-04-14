@@ -157,6 +157,7 @@ class LocalIngestSource(IngestSource):
                     ),
                     "source_type": frontmatter.get("source_type", ""),
                     "source_url": frontmatter.get("source_url", ""),
+                    "publisher": frontmatter.get("publisher", ""),
                     "copyright_status": frontmatter.get(
                         "copyright.status", "restricted"
                     ),
