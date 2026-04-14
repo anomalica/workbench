@@ -135,7 +135,7 @@ export class DocumentStore {
     for (const { speaker, time } of targets) {
       // Match the YAML block for this segment
       const blockPattern = new RegExp(
-        `(<!-- anomalica\\n)(speaker:\\s*${escapeRegex(speaker)}\\ntime:\\s*${escapeRegex(time)})(\\nirrelevant:\\s*\\w+)?(\\n-->)`,
+        `(<!--\\n)(speaker:\\s*${escapeRegex(speaker)}\\ntime:\\s*${escapeRegex(time)})(\\nirrelevant:\\s*\\w+)?(\\n-->)`,
         "g",
       );
       if (irrelevant) {
@@ -158,7 +158,7 @@ export class DocumentStore {
   /** Change a single segment's speaker field. */
   changeSegmentSpeaker(oldSpeaker: string, time: string, newSpeaker: string) {
     const pattern = new RegExp(
-      `(<!-- anomalica\\n)speaker:\\s*${escapeRegex(oldSpeaker)}(\\ntime:\\s*${escapeRegex(time)})`,
+      `(<!--\\n)speaker:\\s*${escapeRegex(oldSpeaker)}(\\ntime:\\s*${escapeRegex(time)})`,
       "g",
     );
     const result = this.current.replace(pattern, `$1speaker: ${newSpeaker}$2`);
@@ -168,7 +168,7 @@ export class DocumentStore {
   /** Change a single segment's timestamp. */
   changeSegmentTime(speaker: string, oldTime: string, newTime: string) {
     const pattern = new RegExp(
-      `(<!-- anomalica\\nspeaker:\\s*${escapeRegex(speaker)}\\n)time:\\s*${escapeRegex(oldTime)}`,
+      `(<!--\\nspeaker:\\s*${escapeRegex(speaker)}\\n)time:\\s*${escapeRegex(oldTime)}`,
       "g",
     );
     const result = this.current.replace(pattern, `$1time: ${newTime}`);

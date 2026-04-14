@@ -17,8 +17,10 @@ export function parseTimeToSeconds(time: string): number {
 
 export function parseTranscript(body: string): Segment[] {
   const segments: Segment[] = [];
-  // Split on annotation blocks: <!-- anomalica ... -->
-  const parts = body.split(/<!--\s*anomalica\n/);
+  // Split on multi-line annotation blocks: <!--\n...\n-->
+  // Single-line annotations (<!-- file_page: 2 -->) are left in the
+  // content and ignored by the speaker parser.
+  const parts = body.split(/<!--\n/);
 
   for (const part of parts) {
     const closingIndex = part.indexOf("-->");
@@ -96,7 +98,7 @@ export function serializeTranscript(segments: Segment[]): string {
       let yaml = `speaker: ${seg.speaker}\ntime: ${seg.time}`;
       if (seg.irrelevant) yaml += "\nirrelevant: true";
       const text = seg.lines.join("\n");
-      return `\n<!-- anomalica\n${yaml}\n-->\n${text}\n`;
+      return `\n<!--\n${yaml}\n-->\n${text}\n`;
     })
     .join("");
 }

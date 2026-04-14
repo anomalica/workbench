@@ -171,10 +171,10 @@
       : null,
   );
 
-  /** Replace anomalica annotation blocks with visible HTML elements. */
+  /** Replace annotation comment blocks with visible HTML elements. */
   function preprocessAnnotations(body: string): string {
     return body.replace(
-      /<!-- anomalica\n([\s\S]*?)-->/g,
+      /<!--\s*([\s\S]*?)-->/g,
       (_, content) => {
         const trimmed = content.trim();
         // Page marker
