@@ -1123,9 +1123,7 @@
                 class="px-4 py-3 border-b transition-colors cursor-pointer
                   {isSelected
                     ? 'bg-primary-container/30 border-primary/30'
-                    : activeSegment === segment.index
-                      ? 'bg-primary-container/15 border-border/50'
-                      : 'border-border/50 hover:bg-primary-container/10'}"
+                    : 'border-border/50 hover:bg-primary-container/10'}"
                 style:opacity={segment.irrelevant ? 0.4 : undefined}
                 style:background={segment.irrelevant ? 'var(--color-surface-alt)' : undefined}
                 role="button"
