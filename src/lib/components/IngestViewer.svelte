@@ -571,7 +571,13 @@
 
   // Keyboard shortcuts
   function handleKeydown(e: KeyboardEvent) {
-    if (e.target instanceof HTMLInputElement) return;
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+    if (e.key === " " && ytId && ytPlayer && playerReady) {
+      e.preventDefault();
+      if (ytPlayer.getPlayerState() === 1) ytPlayer.pauseVideo();
+      else ytPlayer.playVideo();
+      return;
+    }
     if ((e.ctrlKey || e.metaKey) && e.key === "s") {
       e.preventDefault();
       if (doc.dirty && user) showSubmitForm = true;
@@ -917,7 +923,7 @@
             onclick={() => doc.undo()}
             disabled={!doc.canUndo}
             class="p-1 rounded transition-colors cursor-pointer
-              {doc.canUndo ? 'text-on-surface-secondary hover:bg-surface hover:text-on-surface' : 'text-on-surface-muted/30 cursor-default'}"
+              {doc.canUndo ? 'text-on-surface-secondary hover:bg-surface hover:text-on-surface' : 'text-on-surface-muted cursor-default'}"
             title="Undo (Ctrl+Z)"
           >
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -928,7 +934,7 @@
             onclick={() => doc.redo()}
             disabled={!doc.canRedo}
             class="p-1 rounded transition-colors cursor-pointer
-              {doc.canRedo ? 'text-on-surface-secondary hover:bg-surface hover:text-on-surface' : 'text-on-surface-muted/30 cursor-default'}"
+              {doc.canRedo ? 'text-on-surface-secondary hover:bg-surface hover:text-on-surface' : 'text-on-surface-muted cursor-default'}"
             title="Redo (Ctrl+Shift+Z)"
           >
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -938,8 +944,10 @@
           <button
             onclick={() => { if (user) showSubmitForm = true; else window.location.href = '/api/auth/login'; }}
             disabled={submitting || !doc.dirty}
-            class="text-xs font-ui font-medium px-2 py-1 rounded cursor-pointer transition-colors
-              {doc.dirty ? 'bg-primary text-on-primary hover:bg-primary-hover' : 'text-on-surface-muted/30 cursor-default'}"
+            class="text-xs font-ui font-medium px-3 py-1 rounded cursor-pointer transition-colors
+              {doc.dirty
+                ? 'bg-primary text-on-primary hover:bg-primary-hover'
+                : 'bg-on-surface-muted/10 text-on-surface-muted cursor-default'}"
             title={user ? "Submit review (Ctrl+S)" : "Log in to submit"}
           >
             {submitting ? "Submitting..." : user ? "Submit" : "Log in to submit"}
@@ -947,8 +955,10 @@
           <button
             onclick={() => doc.discard()}
             disabled={!doc.dirty}
-            class="text-xs font-ui px-2 py-1 rounded cursor-pointer transition-colors
-              {doc.dirty ? 'text-error hover:bg-error-container/30' : 'text-on-surface-muted/30 cursor-default'}"
+            class="text-xs font-ui px-3 py-1 rounded cursor-pointer transition-colors
+              {doc.dirty
+                ? 'text-error hover:bg-error-container/30'
+                : 'text-on-surface-muted cursor-default'}"
             title="Discard all changes and revert to original"
           >
             Discard
