@@ -323,16 +323,11 @@
     if (view !== "ingest") return;
     if (autoFollowPaused) return;
     const t = currentTime;
-    const best = findActiveSegmentForTime(segments, t);
-    // Debug: remove after fixing
-    if (best >= 0) console.log(`[auto-follow] t=${t.toFixed(1)} best=${best} active=${activeSegment} paused=${autoFollowPaused} sel=${[...selected]}`);
+    let best = findActiveSegmentForTime(segments, t);
     if (best >= 0 && best !== activeSegment) {
-      // Check if the current time falls within an irrelevant segment -
-      // if so, seek past it to the next relevant one
-      const currentSeg = segments.find(
-        (s) => s.seconds <= t && segments.findIndex((n) => !n.irrelevant && n.seconds > t) >= 0,
-      );
-      if (currentSeg?.irrelevant) {
+      // If the current time falls within an irrelevant segment, skip to the next relevant one
+      const bestSeg = segments.find((s) => s.index === best);
+      if (bestSeg?.irrelevant) {
         const nextRelevant = segments.find((s) => !s.irrelevant && s.seconds > t);
         if (nextRelevant && ytPlayer && playerReady) {
           ytPlayer.seekTo(nextRelevant.seconds, true);
