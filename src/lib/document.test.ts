@@ -46,6 +46,38 @@ describe("renameSpeaker works with new inline comment format", () => {
   });
 });
 
+describe("renamed speaker can be found by new name", () => {
+  const body = `
+<!-- speaker: Speaker 1 -->
+00:00:01.8 Hello.
+<!-- speaker: Speaker 2 -->
+00:00:05.0 World.
+`;
+
+  it("filtering by new name after rename returns segments", () => {
+    const segs = parseTranscript(body);
+    for (const seg of segs) {
+      if (seg.speaker === "Speaker 1") seg.speaker = "Lex Fridman";
+    }
+    const result = serializeTranscript(segs);
+    const reparsed = parseTranscript(result);
+    const filtered = reparsed.filter((s) => s.speaker === "Lex Fridman");
+    expect(filtered.length).toBe(1);
+    expect(filtered[0].lines).toEqual(["Hello."]);
+  });
+
+  it("filtering by old name after rename returns nothing", () => {
+    const segs = parseTranscript(body);
+    for (const seg of segs) {
+      if (seg.speaker === "Speaker 1") seg.speaker = "Lex Fridman";
+    }
+    const result = serializeTranscript(segs);
+    const reparsed = parseTranscript(result);
+    const filtered = reparsed.filter((s) => s.speaker === "Speaker 1");
+    expect(filtered.length).toBe(0);
+  });
+});
+
 describe("speaker rename via parse-modify-serialize", () => {
   const body = `
 <!-- speaker: Speaker 1 -->
