@@ -1118,8 +1118,9 @@
                     ? 'bg-primary-container/30 border-primary/30'
                     : activeSegment === segment.index
                       ? 'bg-primary-container/15 border-border/50'
-                      : 'border-border/50 hover:bg-primary-container/10'}
-                  {segment.irrelevant ? 'segment-irrelevant' : ''}"
+                      : 'border-border/50 hover:bg-primary-container/10'}"
+                style:opacity={segment.irrelevant ? 0.4 : undefined}
+                style:background={segment.irrelevant ? 'var(--color-surface-alt)' : undefined}
                 role="button"
                 tabindex="0"
                 onclick={(e) => handleSegmentClick(segment, e)}
