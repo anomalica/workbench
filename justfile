@@ -26,3 +26,11 @@ build:
 # Type check
 check:
     npm run check
+
+# Run tests
+test:
+    npm test
+
+# Run tests in watch mode
+test-watch:
+    npm run test:watch
