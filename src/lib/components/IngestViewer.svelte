@@ -317,9 +317,11 @@
 
   // Auto-follow: sync the highlighted segment with video playback.
   // Skips irrelevant segments by seeking past them to the next relevant one.
+  // Pauses briefly after manual seeking so clicks aren't overridden.
   $effect(() => {
     if (!hasTranscript || selected.size > 1 || splittingIndex !== null) return;
     if (view !== "ingest") return;
+    if (Date.now() - lastManualSeek < 1000) return;
     const t = currentTime;
     // Find the last relevant segment whose time is <= current playback time
     let best = -1;
@@ -438,12 +440,13 @@
     });
   }
 
+  // Timestamp of last manual seek - auto-follow pauses briefly after
+  let lastManualSeek = 0;
+
   function seekTo(seconds: number, segIndex: number) {
     activeSegment = segIndex;
+    lastManualSeek = Date.now();
     if (ytPlayer && playerReady) {
-      // seekTo preserves current playback state - if playing, keeps
-      // playing; if paused, stays paused. The allowSeekAhead flag
-      // matters for the initial seek before the video is cued.
       ytPlayer.seekTo(seconds, true);
     }
   }
