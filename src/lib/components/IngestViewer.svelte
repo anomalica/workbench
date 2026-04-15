@@ -1114,18 +1114,12 @@
               <div
                 data-segment-index={segment.index}
                 class="px-4 py-3 border-b transition-colors cursor-pointer
-                  {segment.irrelevant ? 'bg-surface-alt/70 text-on-surface-muted border-border/30' : ''}
                   {isSelected
-                    ? segment.irrelevant
-                      ? 'ring-1 ring-inset ring-on-surface-muted/20'
-                      : 'bg-primary-container/30 border-primary/30'
+                    ? 'bg-primary-container/30 border-primary/30'
                     : activeSegment === segment.index
-                      ? segment.irrelevant
-                        ? ''
-                        : 'bg-primary-container/15 border-border/50'
-                      : segment.irrelevant
-                        ? ''
-                        : 'border-border/50 hover:bg-primary-container/10'}"
+                      ? 'bg-primary-container/15 border-border/50'
+                      : 'border-border/50 hover:bg-primary-container/10'}"
+                style={segment.irrelevant ? 'background: var(--color-surface-alt); color: var(--color-on-surface-muted); opacity: 0.6;' : ''}
                 role="button"
                 tabindex="0"
                 onclick={(e) => handleSegmentClick(segment, e)}
