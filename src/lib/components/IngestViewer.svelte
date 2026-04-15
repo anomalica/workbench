@@ -316,18 +316,32 @@
   let splittingIndex = $state<number | null>(null);
 
   // Auto-follow: sync the highlighted segment with video playback.
-  // Only paused when multi-selecting or split editing.
+  // Skips irrelevant segments by seeking past them to the next relevant one.
   $effect(() => {
     if (!hasTranscript || selected.size > 1 || splittingIndex !== null) return;
     if (view !== "ingest") return;
     const t = currentTime;
-    // Find the last segment whose time is <= current playback time
+    // Find the last relevant segment whose time is <= current playback time
     let best = -1;
-    for (const seg of visibleSegments) {
+    for (const seg of segments) {
+      if (seg.irrelevant) continue;
       if (seg.seconds <= t) best = seg.index;
       else break;
     }
     if (best >= 0 && best !== activeSegment) {
+      // Check if the current time falls within an irrelevant segment -
+      // if so, seek past it to the next relevant one
+      const currentSeg = segments.find(
+        (s) => s.seconds <= t && segments.findIndex((n) => !n.irrelevant && n.seconds > t) >= 0,
+      );
+      if (currentSeg?.irrelevant) {
+        const nextRelevant = segments.find((s) => !s.irrelevant && s.seconds > t);
+        if (nextRelevant && ytPlayer && playerReady) {
+          ytPlayer.seekTo(nextRelevant.seconds, true);
+          best = nextRelevant.index;
+        }
+      }
+
       activeSegment = best;
       selected = new Set([best]);
       lastClicked = best;
@@ -1126,7 +1140,15 @@
                     onmergedown={() => doc.mergeSegmentDown(segment.speaker, segment.time)}
                     onstartsplit={() => { splittingIndex = segment.index; }}
                     ontoggleirrelevant={() => {
-                      doc.setIrrelevant([{ speaker: segment.speaker, time: segment.time }], !segment.irrelevant);
+                      const markingIrrelevant = !segment.irrelevant;
+                      doc.setIrrelevant([{ speaker: segment.speaker, time: segment.time }], markingIrrelevant);
+                      // If marking irrelevant during playback, seek to the next relevant segment
+                      if (markingIrrelevant && ytPlayer && playerReady) {
+                        const nextRelevant = segments.find((s) => !s.irrelevant && s.seconds > segment.seconds && s.index !== segment.index);
+                        if (nextRelevant) {
+                          ytPlayer.seekTo(nextRelevant.seconds, true);
+                        }
+                      }
                     }}
                   />
                 {:else}
