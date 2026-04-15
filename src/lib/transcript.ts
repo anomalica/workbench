@@ -99,6 +99,26 @@ export function parseTranscript(body: string): Segment[] {
       continue;
     }
 
+    // Irrelevant marker: <!-- irrelevant --> before a timestamped line
+    if (line === "<!-- irrelevant -->") {
+      i++;
+      // Look ahead for the timestamped line
+      const nextLine = i < lines.length ? lines[i].trim() : "";
+      const nextTs = nextLine.match(TIMESTAMPED_LINE);
+      if (nextTs && currentSpeaker) {
+        segments.push({
+          speaker: currentSpeaker,
+          time: nextTs[1],
+          seconds: parseTimeToSeconds(nextTs[1]),
+          lines: [nextTs[2]],
+          irrelevant: true,
+          index: segments.length,
+        });
+        i++;
+      }
+      continue;
+    }
+
     // Single-line annotation: <!-- file_page: 2 --> etc.
     if (line.startsWith("<!--") && line.endsWith("-->")) {
       i++;
@@ -154,6 +174,7 @@ export function serializeTranscript(segments: Segment[]): string {
     }
     // If the time looks like sentence-level (has decimal), use timestamped line format
     if (seg.time.includes(".")) {
+      if (seg.irrelevant) result += "<!-- irrelevant -->\n";
       for (const line of seg.lines) {
         result += `${seg.time} ${line}\n`;
       }
