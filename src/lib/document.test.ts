@@ -14,6 +14,38 @@ function roundTrip(
   return serializeTranscript(segs);
 }
 
+describe("renameSpeaker works with new inline comment format", () => {
+  // This tests the same parse-modify-serialize path that
+  // DocumentStore.renameSpeaker now uses.
+  const newFormatBody = `<!-- speaker: Speaker 1 -->
+00:00:01.8 Hello.
+<!-- speaker: Speaker 2 -->
+00:00:05.0 World.
+<!-- speaker: Speaker 1 -->
+00:00:10.0 Goodbye.`;
+
+  it("renames speaker in new inline comment format", () => {
+    const result = roundTrip(newFormatBody, (segs) => {
+      for (const seg of segs) {
+        if (seg.speaker === "Speaker 1") seg.speaker = "Lex Fridman";
+      }
+    });
+    expect(result).toContain("speaker: Lex Fridman");
+    expect(result).not.toContain("Speaker 1");
+  });
+
+  it("merges speakers in new inline comment format", () => {
+    const result = roundTrip(newFormatBody, (segs) => {
+      for (const seg of segs) {
+        if (seg.speaker === "Speaker 2") seg.speaker = "Speaker 1";
+      }
+    });
+    const reparsed = parseTranscript(result);
+    const speakers = [...new Set(reparsed.map((s) => s.speaker))];
+    expect(speakers).toEqual(["Speaker 1"]);
+  });
+});
+
 describe("speaker rename via parse-modify-serialize", () => {
   const body = `
 <!-- speaker: Speaker 1 -->

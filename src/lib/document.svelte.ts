@@ -111,19 +111,29 @@ export class DocumentStore {
   }
 
   renameSpeaker(oldId: string, newName: string) {
-    // Replace `speaker: oldId` with `speaker: newName` in YAML blocks
-    const pattern = new RegExp(`^(speaker:\\s*)${escapeRegex(oldId)}\\s*$`, "gm");
-    const result = this.current.replace(pattern, `$1${newName}`);
-    this.pushEdit(result);
+    this.editSegments((segs) => {
+      let changed = false;
+      for (const seg of segs) {
+        if (seg.speaker === oldId) {
+          seg.speaker = newName;
+          changed = true;
+        }
+      }
+      return changed;
+    });
   }
 
   mergeSpeakers(sourceIds: string[], targetName: string) {
-    let result = this.current;
-    for (const id of sourceIds) {
-      const pattern = new RegExp(`^(speaker:\\s*)${escapeRegex(id)}\\s*$`, "gm");
-      result = result.replace(pattern, `$1${targetName}`);
-    }
-    this.pushEdit(result);
+    this.editSegments((segs) => {
+      let changed = false;
+      for (const seg of segs) {
+        if (sourceIds.includes(seg.speaker) && seg.speaker !== targetName) {
+          seg.speaker = targetName;
+          changed = true;
+        }
+      }
+      return changed;
+    });
   }
 
   // --- All structural operations use parse-modify-serialize ---
