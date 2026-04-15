@@ -2,7 +2,7 @@
   import type { IngestDetail, User } from "$lib/api";
   import { submitReview } from "$lib/api";
   import { DocumentStore } from "$lib/document.svelte";
-  import { parseTranscript, secondsToTime, speakerColour } from "$lib/transcript";
+  import { parseTranscript, secondsToTime, speakerColour, findActiveSegmentForTime } from "$lib/transcript";
   import type { Segment } from "$lib/transcript";
   import SpeakerManager from "./SpeakerManager.svelte";
   import SegmentActions from "./SegmentActions.svelte";
@@ -323,13 +323,9 @@
     if (view !== "ingest") return;
     if (autoFollowPaused) return;
     const t = currentTime;
-    // Find the last relevant segment whose time is <= current playback time
-    let best = -1;
-    for (const seg of segments) {
-      if (seg.irrelevant) continue;
-      if (seg.seconds <= t) best = seg.index;
-      else break;
-    }
+    const best = findActiveSegmentForTime(segments, t);
+    // Debug: remove after fixing
+    if (best >= 0) console.log(`[auto-follow] t=${t.toFixed(1)} best=${best} active=${activeSegment} paused=${autoFollowPaused} sel=${[...selected]}`);
     if (best >= 0 && best !== activeSegment) {
       // Check if the current time falls within an irrelevant segment -
       // if so, seek past it to the next relevant one

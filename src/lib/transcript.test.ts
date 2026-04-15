@@ -6,6 +6,7 @@ import {
   secondsToTime,
   nextSpeakerName,
   speakerColour,
+  findActiveSegmentForTime,
 } from "./transcript";
 
 describe("parseTimeToSeconds", () => {
@@ -305,6 +306,78 @@ describe("round-trip: parse then serialize", () => {
     expect(reparsed[1].irrelevant).toBe(false);
     expect(reparsed[0].lines).toEqual(["Skip this."]);
     expect(reparsed[1].lines).toEqual(["Keep this."]);
+  });
+});
+
+describe("findActiveSegmentForTime", () => {
+  const body = `
+<!-- speaker: Speaker 1 -->
+00:00:01.8 First sentence.
+00:00:07.6 Second sentence.
+
+<!-- speaker: Speaker 2 -->
+00:00:44.4 Third sentence.
+
+<!-- speaker: Speaker 3 -->
+00:00:54.6 Fourth sentence.
+00:00:56.3 Fifth sentence.
+`;
+  const segments = parseTranscript(body);
+
+  it("returns -1 before any segment starts", () => {
+    expect(findActiveSegmentForTime(segments, 0)).toBe(-1);
+  });
+
+  it("returns first segment at its start time", () => {
+    expect(findActiveSegmentForTime(segments, 1.8)).toBe(0);
+  });
+
+  it("stays on first segment between first and second timestamps", () => {
+    expect(findActiveSegmentForTime(segments, 5.0)).toBe(0);
+  });
+
+  it("advances to second segment at its timestamp", () => {
+    expect(findActiveSegmentForTime(segments, 7.6)).toBe(1);
+  });
+
+  it("advances to Speaker 2 segment", () => {
+    expect(findActiveSegmentForTime(segments, 44.4)).toBe(2);
+  });
+
+  it("advances through all segments", () => {
+    expect(findActiveSegmentForTime(segments, 54.6)).toBe(3);
+    expect(findActiveSegmentForTime(segments, 56.3)).toBe(4);
+  });
+
+  it("stays on last segment after its timestamp", () => {
+    expect(findActiveSegmentForTime(segments, 999)).toBe(4);
+  });
+
+  it("skips irrelevant segments", () => {
+    const bodyWithIrrelevant = `
+<!-- speaker: Speaker 1 -->
+<!-- irrelevant -->
+00:00:01.8 Skip this.
+00:00:07.6 Keep this.
+
+<!-- speaker: Speaker 2 -->
+00:00:44.4 Also keep this.
+`;
+    const segs = parseTranscript(bodyWithIrrelevant);
+    // At time 1.8, the first segment is irrelevant - should return -1
+    expect(findActiveSegmentForTime(segs, 1.8)).toBe(-1);
+    // At time 7.6, should land on the second segment (index 1)
+    expect(findActiveSegmentForTime(segs, 7.6)).toBe(1);
+    // At time 44.4, should land on Speaker 2 (index 2)
+    expect(findActiveSegmentForTime(segs, 44.4)).toBe(2);
+  });
+
+  it("each segment has a unique index that advances", () => {
+    // This is the core auto-follow requirement: as time increases,
+    // the returned index must change when crossing segment boundaries
+    const times = [1.8, 7.6, 44.4, 54.6, 56.3];
+    const indices = times.map((t) => findActiveSegmentForTime(segments, t));
+    expect(indices).toEqual([0, 1, 2, 3, 4]);
   });
 });
 

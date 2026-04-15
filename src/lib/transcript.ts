@@ -227,6 +227,19 @@ export function speakerColour(speaker: string): string {
   return SPEAKER_COLOURS[Math.abs(hash) % SPEAKER_COLOURS.length];
 }
 
+/** Find which segment should be active for a given playback time.
+ *  Returns the segment index, or -1 if none match.
+ *  Skips irrelevant segments. */
+export function findActiveSegmentForTime(segments: Segment[], currentTime: number): number {
+  let best = -1;
+  for (const seg of segments) {
+    if (seg.irrelevant) continue;
+    if (seg.seconds <= currentTime) best = seg.index;
+    else break;
+  }
+  return best;
+}
+
 /** Return the next speaker number not yet used: "Speaker N". */
 export function nextSpeakerName(segments: Segment[]): string {
   let max = 0;
