@@ -654,13 +654,16 @@
 
   $effect(() => {
     if (ytId) initYouTubePlayer(ytId);
-    window.addEventListener("keydown", handleKeydown);
     return () => {
       if (timeInterval) clearInterval(timeInterval);
       ytPlayer = null;
       playerReady = false;
-      window.removeEventListener("keydown", handleKeydown);
     };
+  });
+
+  $effect(() => {
+    window.addEventListener("keydown", handleKeydown);
+    return () => window.removeEventListener("keydown", handleKeydown);
   });
 </script>
 
