@@ -321,7 +321,7 @@
   $effect(() => {
     if (!hasTranscript || selected.size > 1 || splittingIndex !== null) return;
     if (view !== "ingest") return;
-    if (Date.now() - lastManualSeek < 1000) return;
+    if (autoFollowPaused) return;
     const t = currentTime;
     // Find the last relevant segment whose time is <= current playback time
     let best = -1;
@@ -347,6 +347,7 @@
       activeSegment = best;
       selected = new Set([best]);
       lastClicked = best;
+      // Don't use seekTo here - that would set lastManualSeek and block us
       const el = document.querySelector(`[data-segment-index="${best}"]`);
       if (el) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
     }
@@ -440,12 +441,15 @@
     });
   }
 
-  // Timestamp of last manual seek - auto-follow pauses briefly after
-  let lastManualSeek = 0;
+  // Brief pause on auto-follow after manual interaction
+  let autoFollowPaused = $state(false);
+  let autoFollowTimer: ReturnType<typeof setTimeout> | null = null;
 
   function seekTo(seconds: number, segIndex: number) {
     activeSegment = segIndex;
-    lastManualSeek = Date.now();
+    autoFollowPaused = true;
+    if (autoFollowTimer) clearTimeout(autoFollowTimer);
+    autoFollowTimer = setTimeout(() => { autoFollowPaused = false; }, 1000);
     if (ytPlayer && playerReady) {
       ytPlayer.seekTo(seconds, true);
     }
