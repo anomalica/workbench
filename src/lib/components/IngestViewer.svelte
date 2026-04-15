@@ -122,9 +122,10 @@
     }
   });
 
-  // For public records, try to fetch the source file from the backend
+  // For public records, try to fetch the source file from the backend.
+  // Skip if there's a YouTube embed (the video is more useful than the extracted audio).
   $effect(() => {
-    if (isPublic && !localSourceFile && !localSourceUrl) {
+    if (isPublic && !localSourceFile && !localSourceUrl && !ytId) {
       loadingFile = true;
       fetch(`/api/sources/${ingest.content_hash}`)
         .then((res) => {
