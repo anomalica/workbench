@@ -1147,6 +1147,7 @@
                     {segment}
                     allSegments={segments}
                     allSpeakers={allSpeakerNames()}
+                  {namedSpeakers}
                     isFirst={vi === 0}
                     isLast={vi === visibleSegments.length - 1}
                     videoTime={currentTime}

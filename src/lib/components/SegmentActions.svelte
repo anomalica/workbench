@@ -1,11 +1,12 @@
 <script lang="ts">
   import type { Segment } from "$lib/transcript";
-  import { secondsToTime, nextSpeakerName, speakerColour } from "$lib/transcript";
+  import { secondsToTime, nextSpeakerName, speakerColour, isDefaultSpeakerName } from "$lib/transcript";
 
   let {
     segment,
     allSegments,
     allSpeakers,
+    namedSpeakers = [],
     isFirst,
     isLast,
     videoTime,
@@ -19,6 +20,7 @@
     segment: Segment;
     allSegments: Segment[];
     allSpeakers: string[];
+    namedSpeakers?: string[];
     isFirst: boolean;
     isLast: boolean;
     videoTime: number;
@@ -64,18 +66,22 @@
       {segment.speaker}
     </button>
     {#if showSpeakerPicker}
+      {@const namedSet = new Set(namedSpeakers)}
+      {@const sortedSpeakers = [
+        ...allSpeakers.filter((s) => !isDefaultSpeakerName(s) && s !== segment.speaker),
+        ...allSpeakers.filter((s) => isDefaultSpeakerName(s) && s !== segment.speaker),
+      ]}
       <div class="absolute left-0 top-full mt-1 z-20 bg-surface-raised border border-border rounded shadow-lg py-1 min-w-40 max-h-48 overflow-auto">
-        {#each allSpeakers as sp}
-          {#if sp !== segment.speaker}
-            <button
-              onclick={(e) => { e.stopPropagation(); onchangespeaker(sp); showSpeakerPicker = false; }}
-              class="block w-full text-left px-3 py-1.5 text-sm font-ui cursor-pointer
-                hover:bg-primary-container/30 text-on-surface"
-            >
-              <span class="inline-block w-2 h-2 rounded-full mr-2 align-middle" style="background-color: {speakerColour(sp)}"></span>
-              {sp}
-            </button>
-          {/if}
+        {#each sortedSpeakers as sp}
+          <button
+            onclick={(e) => { e.stopPropagation(); onchangespeaker(sp); showSpeakerPicker = false; }}
+            class="block w-full text-left px-3 py-1.5 text-sm font-ui cursor-pointer
+              hover:bg-primary-container/30
+              {isDefaultSpeakerName(sp) ? 'text-on-surface-muted' : 'text-on-surface'}"
+          >
+            <span class="inline-block w-2 h-2 rounded-full mr-2 align-middle" style="background-color: {speakerColour(sp)}"></span>
+            {sp}
+          </button>
         {/each}
         <div class="border-t border-border mt-1 pt-1">
           <button
