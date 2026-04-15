@@ -306,7 +306,7 @@
   let selectedSpeakers = $state(new Set<string>());
 
   // Irrelevant visibility
-  let hideIrrelevant = $state(true);
+  let hideIrrelevant = $state(false);
 
   // Segment selection (for the Mark irrelevant action)
   let selected = $state(new Set<number>());
