@@ -28,6 +28,18 @@ body {
   cursor: help;
 }
 
+.segment-irrelevant {
+  background: var(--color-surface-alt) !important;
+  color: var(--color-on-surface-muted) !important;
+  opacity: 0.5;
+}
+
+.segment-irrelevant .text-primary,
+.segment-irrelevant .text-on-surface,
+.segment-irrelevant .font-medium {
+  color: var(--color-on-surface-muted) !important;
+}
+
 .annotation {
   font-family: var(--font-ui);
   font-size: 0.75rem;
