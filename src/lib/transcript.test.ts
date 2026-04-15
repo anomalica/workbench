@@ -7,6 +7,8 @@ import {
   nextSpeakerName,
   speakerColour,
   findActiveSegmentForTime,
+  extractFrontmatterSpeakers,
+  isDefaultSpeakerName,
 } from "./transcript";
 
 describe("parseTimeToSeconds", () => {
@@ -378,6 +380,49 @@ describe("findActiveSegmentForTime", () => {
     const times = [1.8, 7.6, 44.4, 54.6, 56.3];
     const indices = times.map((t) => findActiveSegmentForTime(segments, t));
     expect(indices).toEqual([0, 1, 2, 3, 4]);
+  });
+});
+
+describe("isDefaultSpeakerName", () => {
+  it("recognises Speaker N pattern", () => {
+    expect(isDefaultSpeakerName("Speaker 1")).toBe(true);
+    expect(isDefaultSpeakerName("Speaker 42")).toBe(true);
+  });
+
+  it("rejects named speakers", () => {
+    expect(isDefaultSpeakerName("Lex Fridman")).toBe(false);
+    expect(isDefaultSpeakerName("David Fravor")).toBe(false);
+    expect(isDefaultSpeakerName("")).toBe(false);
+  });
+});
+
+describe("extractFrontmatterSpeakers", () => {
+  it("extracts a simple speakers list", () => {
+    const fm = `---
+title: Test
+speakers:
+  - David Fravor
+  - Lex Fridman
+---
+`;
+    expect(extractFrontmatterSpeakers(fm)).toEqual(["David Fravor", "Lex Fridman"]);
+  });
+
+  it("returns empty array when no speakers field", () => {
+    const fm = `---
+title: Test
+---
+`;
+    expect(extractFrontmatterSpeakers(fm)).toEqual([]);
+  });
+
+  it("handles quoted names", () => {
+    const fm = `---
+speakers:
+  - "Bill O'Reilly"
+---
+`;
+    expect(extractFrontmatterSpeakers(fm)).toEqual(["Bill O'Reilly"]);
   });
 });
 

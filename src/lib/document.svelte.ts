@@ -5,6 +5,8 @@
  * History is tracked for undo/redo. State auto-saves to localStorage.
  */
 
+import yaml from "js-yaml";
+
 const MAX_HISTORY = 200;
 
 export class DocumentStore {
@@ -96,6 +98,26 @@ export class DocumentStore {
   }
 
   // --- High-level edit operations ---
+
+  /** Update the speakers list in the frontmatter.
+   *  Uses js-yaml to parse/serialise the frontmatter properly so we
+   *  don't corrupt other fields. */
+  updateFrontmatterSpeakers(speakers: string[]) {
+    const [rawFm, body] = splitFrontmatter(this.current);
+    // Strip the --- delimiters to get just the YAML content
+    const fmContent = rawFm.replace(/^---\n/, "").replace(/---\n$/, "");
+    const doc = (yaml.load(fmContent) as Record<string, unknown>) ?? {};
+    doc.speakers = speakers.length > 0 ? speakers : undefined;
+    const newFmContent = yaml.dump(doc, {
+      lineWidth: -1,
+      quotingType: '"',
+      forceQuotes: false,
+      sortKeys: false,
+    });
+    const newFm = `---\n${newFmContent}---\n`;
+    const result = newFm + body;
+    if (result !== this.current) this.pushEdit(result);
+  }
 
   /** Replace the entire document content (frontmatter + body). */
   editRaw(newContent: string) {

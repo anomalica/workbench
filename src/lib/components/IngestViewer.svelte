@@ -2,7 +2,7 @@
   import type { IngestDetail, User } from "$lib/api";
   import { submitReview } from "$lib/api";
   import { DocumentStore } from "$lib/document.svelte";
-  import { parseTranscript, secondsToTime, speakerColour, findActiveSegmentForTime } from "$lib/transcript";
+  import { parseTranscript, secondsToTime, speakerColour, findActiveSegmentForTime, extractFrontmatterSpeakers } from "$lib/transcript";
   import type { Segment } from "$lib/transcript";
   import SpeakerManager from "./SpeakerManager.svelte";
   import SegmentActions from "./SegmentActions.svelte";
@@ -398,6 +398,23 @@
     }
     return names;
   });
+
+  // Named speakers from the current document's frontmatter
+  let currentFrontmatter = $derived(() => {
+    const match = doc.current.match(/^(---\n[\s\S]*?\n---\n)/);
+    return match ? match[1] : "";
+  });
+  let namedSpeakers = $derived(extractFrontmatterSpeakers(currentFrontmatter()));
+
+  function addNamedSpeaker(name: string) {
+    if (!namedSpeakers.includes(name)) {
+      doc.updateFrontmatterSpeakers([...namedSpeakers, name]);
+    }
+  }
+
+  function removeNamedSpeaker(name: string) {
+    doc.updateFrontmatterSpeakers(namedSpeakers.filter((n) => n !== name));
+  }
 
   // True if every selected segment is already irrelevant. Used to flip
   // the toggle action: irrelevant -> relevant, otherwise relevant -> irrelevant.
@@ -843,20 +860,19 @@
                   <path d="M6 4l8 6-8 6V4z" />
                 </svg>
                 <span class="text-xs font-ui font-medium text-on-surface-secondary uppercase">Speakers</span>
-                <button
-                  onclick={(e) => { e.stopPropagation(); doc.mergeAdjacentSpeakers(); }}
-                  class="text-xs font-ui text-on-surface-muted hover:text-primary ml-auto cursor-pointer"
-                  title="Merge adjacent segments by the same speaker"
-                >merge adjacent</button>
+                <span class="text-xs text-on-surface-muted ml-auto">{visibleSpeakerIds.size}</span>
               </summary>
               <div class="px-3 py-2">
                 <SpeakerManager
                   {segments}
+                  {namedSpeakers}
                   {selectedSpeakers}
                   onselect={handleSpeakerSelection}
                   onrename={renameSpeaker}
                   onmerge={mergeSpeakers}
                   ontoggleirrelevant={toggleSpeakerIrrelevant}
+                  onaddnamed={addNamedSpeaker}
+                  onremovenamed={removeNamedSpeaker}
                 />
               </div>
             </details>

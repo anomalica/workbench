@@ -240,6 +240,27 @@ export function findActiveSegmentForTime(segments: Segment[], currentTime: numbe
   return best;
 }
 
+/** Extract named speakers from frontmatter YAML.
+ *  Returns an empty array if no speakers field exists. */
+export function extractFrontmatterSpeakers(rawFrontmatter: string): string[] {
+  const match = rawFrontmatter.match(/^speakers:\s*\n((?:\s+-\s+.+\n)*)/m);
+  if (!match) return [];
+  return match[1]
+    .split("\n")
+    .map((l) =>
+      l
+        .replace(/^\s+-\s+/, "")
+        .replace(/^["']|["']$/g, "")
+        .trim(),
+    )
+    .filter((l) => l);
+}
+
+/** Check if a speaker name looks like a default (Speaker N). */
+export function isDefaultSpeakerName(name: string): boolean {
+  return /^Speaker \d+$/i.test(name);
+}
+
 /** Return the next speaker number not yet used: "Speaker N". */
 export function nextSpeakerName(segments: Segment[]): string {
   let max = 0;

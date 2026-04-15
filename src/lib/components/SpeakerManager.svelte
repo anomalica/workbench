@@ -1,36 +1,28 @@
 <script lang="ts">
   import type { Segment } from "$lib/transcript";
-  import { speakerColour } from "$lib/transcript";
+  import { speakerColour, isDefaultSpeakerName } from "$lib/transcript";
 
   let {
     segments,
+    namedSpeakers,
     selectedSpeakers,
     onselect,
     onrename,
     onmerge,
     ontoggleirrelevant,
+    onaddnamed,
+    onremovenamed,
   }: {
     segments: Segment[];
+    namedSpeakers: string[];
     selectedSpeakers: Set<string>;
     onselect: (id: string, e?: MouseEvent) => void;
     onrename: (id: string, name: string) => void;
     onmerge: (sourceIds: string[], targetName: string) => void;
     ontoggleirrelevant: (id: string) => void;
+    onaddnamed: (name: string) => void;
+    onremovenamed: (name: string) => void;
   } = $props();
-
-  let mergeTarget = $state<string | null>(null);
-
-  // Auto-pick the best merge target when selection changes.
-  // Prefers a non-default name ("Luis Elizondo" over "Speaker 6").
-  $effect(() => {
-    if (selectedSpeakers.size >= 2) {
-      const ids = [...selectedSpeakers];
-      const nonDefault = ids.filter((id) => !/^Speaker \d+$/i.test(id));
-      mergeTarget = nonDefault.length > 0 ? nonDefault[0] : ids[0];
-    } else {
-      mergeTarget = null;
-    }
-  });
 
   interface SpeakerRow {
     id: string;
@@ -39,10 +31,8 @@
     allIrrelevant: boolean;
   }
 
-  // Stable order: by first appearance in the transcript. Renaming a
-  // speaker keeps the row in the same position because the renamed
-  // speaker still first appears at the same segment index.
-  let speakers = $derived((): SpeakerRow[] => {
+  // Build speaker rows from segments, sorted by first appearance
+  let speakerRows = $derived((): SpeakerRow[] => {
     const firstSeen = new Map<string, number>();
     const totals = new Map<string, number>();
     const relevants = new Map<string, number>();
@@ -65,6 +55,33 @@
       }));
   });
 
+  // Split into named (non-default names or in the namedSpeakers list) and unnamed
+  let named = $derived(
+    speakerRows().filter((r) => !isDefaultSpeakerName(r.id) || namedSpeakers.includes(r.id)),
+  );
+  let unnamed = $derived(
+    speakerRows().filter((r) => isDefaultSpeakerName(r.id) && !namedSpeakers.includes(r.id)),
+  );
+
+  // Named speakers from frontmatter that don't have segments yet
+  let unassignedNamed = $derived(
+    namedSpeakers.filter((n) => !speakerRows().some((r) => r.id === n)),
+  );
+
+  // New speaker input
+  let newSpeakerName = $state("");
+  let showNewInput = $state(false);
+
+  function addSpeaker() {
+    const name = newSpeakerName.trim();
+    if (name && !namedSpeakers.includes(name)) {
+      onaddnamed(name);
+      newSpeakerName = "";
+      showNewInput = false;
+    }
+  }
+
+  // Editing
   let editingId = $state<string | null>(null);
   let editingValue = $state("");
   let editInputEl: HTMLInputElement | undefined = $state();
@@ -86,46 +103,43 @@
     editingId = null;
   }
 
-  function handleEditKeydown(e: KeyboardEvent) {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      commitEdit();
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      cancelEdit();
-    }
+  // Assign an unnamed speaker to a named one
+  let assigningId = $state<string | null>(null);
+
+  function assignSpeaker(unnamedId: string, namedId: string) {
+    onmerge([unnamedId], namedId);
+    assigningId = null;
   }
 </script>
 
-<div class="space-y-1">
-  {#if selectedSpeakers.size >= 2 && mergeTarget}
-    <div class="sticky top-9 z-10 px-2 py-2 mb-2 bg-primary-container/30 rounded space-y-2">
-      <div class="text-xs font-ui text-on-primary-container">Merge into:</div>
-      <div class="flex flex-wrap gap-1">
-        {#each [...selectedSpeakers] as id}
-          <button
-            onclick={() => { mergeTarget = id; }}
-            class="text-xs font-ui px-2 py-1 rounded cursor-pointer transition-colors inline-flex items-center gap-1
-              {mergeTarget === id
-                ? 'bg-primary text-on-primary'
-                : 'bg-surface text-on-surface-secondary hover:bg-surface-alt'}"
-            title="Use this name for the merged speaker"
-          >
-            <span class="w-2 h-2 rounded-full" style="background-color: {speakerColour(id)}"></span>
-            {id}
-          </button>
-        {/each}
-      </div>
-      <button
-        onclick={() => { if (mergeTarget) onmerge([...selectedSpeakers], mergeTarget); }}
-        class="text-xs font-ui font-medium px-3 py-1 bg-primary text-on-primary rounded cursor-pointer hover:bg-primary-hover w-full"
-      >
-        Merge {selectedSpeakers.size} speakers into {mergeTarget}
+<!-- Named speakers -->
+<div class="mb-3">
+  <div class="flex items-center gap-2 px-2 py-1 mb-1">
+    <span class="text-xs font-ui font-medium text-on-surface-secondary uppercase flex-1">Named</span>
+    <button
+      onclick={() => { showNewInput = !showNewInput; }}
+      class="text-xs font-ui text-primary cursor-pointer hover:underline"
+    >
+      + Add
+    </button>
+  </div>
+
+  {#if showNewInput}
+    <form class="flex items-center gap-2 px-2 py-1 mb-1" onsubmit={(e) => { e.preventDefault(); addSpeaker(); }}>
+      <input
+        type="text"
+        bind:value={newSpeakerName}
+        placeholder="Speaker name"
+        class="flex-1 text-sm font-ui bg-surface border border-border rounded px-2 py-1
+          text-on-surface outline-none focus:border-primary placeholder:text-on-surface-muted/50"
+      />
+      <button type="submit" class="text-xs font-ui font-medium px-2 py-1 bg-primary text-on-primary rounded cursor-pointer hover:bg-primary-hover">
+        Add
       </button>
-    </div>
+    </form>
   {/if}
 
-  {#each speakers() as row}
+  {#each named as row}
     {@const isSelected = selectedSpeakers.has(row.id)}
     <div
       class="group flex items-center gap-2 px-2 py-1.5 rounded text-sm cursor-pointer transition-colors select-none
@@ -136,30 +150,22 @@
       onclick={(e) => { if (editingId !== row.id) onselect(row.id, e); }}
       onkeydown={(e) => { if (editingId !== row.id && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onselect(row.id); } }}
     >
-      <span
-        class="w-3 h-3 rounded-full flex-none"
-        style="background-color: {speakerColour(row.id)}"
-      ></span>
-
+      <span class="w-3 h-3 rounded-full flex-none" style="background-color: {speakerColour(row.id)}"></span>
       {#if editingId === row.id}
         <input
           bind:this={editInputEl}
           type="text"
           bind:value={editingValue}
           onblur={commitEdit}
-          onkeydown={handleEditKeydown}
+          onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitEdit(); } else if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); } }}
           onclick={(e) => e.stopPropagation()}
-          class="flex-1 min-w-0 bg-surface text-sm font-ui text-on-surface
-            outline-none px-1 py-0.5 rounded border border-primary"
+          class="flex-1 min-w-0 bg-surface text-sm font-ui text-on-surface outline-none px-1 py-0.5 rounded border border-primary"
         />
       {:else}
-        <span class="flex-1 min-w-0 text-sm font-ui text-on-surface truncate
-          {row.allIrrelevant ? 'line-through' : ''}">
-          {row.id}
-        </span>
+        <span class="flex-1 min-w-0 text-sm font-ui text-on-surface truncate {row.allIrrelevant ? 'line-through' : ''}">{row.id}</span>
         <button
           onclick={(e) => { e.stopPropagation(); startEdit(row.id); }}
-          class="opacity-0 group-hover:opacity-100 focus:opacity-100 cursor-pointer p-0.5 text-on-surface-muted hover:text-primary transition-opacity"
+          class="opacity-0 group-hover:opacity-100 cursor-pointer p-0.5 text-on-surface-muted hover:text-primary transition-opacity"
           title="Rename"
         >
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -168,37 +174,123 @@
           </svg>
         </button>
       {/if}
-
-      <span class="text-xs text-on-surface-muted flex-none font-mono tabular-nums">
-        {#if row.relevant < row.total && row.relevant > 0}
-          {row.relevant}/{row.total}
-        {:else}
-          {row.total}
-        {/if}
-      </span>
-
+      <span class="text-xs text-on-surface-muted flex-none font-mono tabular-nums">{row.total}</span>
       <button
         onclick={(e) => { e.stopPropagation(); ontoggleirrelevant(row.id); }}
         class="cursor-pointer p-0.5 flex-none transition-colors
-          {row.allIrrelevant
-            ? 'text-on-surface-muted hover:text-success'
-            : 'text-on-surface-muted/40 hover:text-error'}"
-        title={row.allIrrelevant
-          ? 'Currently irrelevant - click to mark relevant'
-          : 'Currently relevant - click to mark irrelevant'}
+          {row.allIrrelevant ? 'text-on-surface-muted hover:text-success' : 'text-on-surface-muted/40 hover:text-error'}"
+        title={row.allIrrelevant ? 'Mark relevant' : 'Mark irrelevant'}
       >
         {#if row.allIrrelevant}
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-            <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
-            <line x1="1" y1="1" x2="23" y2="23" />
+            <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" /><line x1="1" y1="1" x2="23" y2="23" />
           </svg>
         {:else}
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-            <circle cx="12" cy="12" r="3" />
+            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" />
           </svg>
         {/if}
       </button>
     </div>
   {/each}
+
+  <!-- Named speakers not yet assigned to any segments -->
+  {#each unassignedNamed as name}
+    <div class="flex items-center gap-2 px-2 py-1.5 rounded text-sm text-on-surface-muted">
+      <span class="w-3 h-3 rounded-full flex-none" style="background-color: {speakerColour(name)}"></span>
+      <span class="flex-1 text-sm font-ui italic">{name} (no segments)</span>
+      <button
+        onclick={() => onremovenamed(name)}
+        class="text-on-surface-muted/40 hover:text-error cursor-pointer p-0.5"
+        title="Remove"
+      >
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" d="M6 18L18 6M6 6l12 12" />
+        </svg>
+      </button>
+    </div>
+  {/each}
+
+  {#if named.length === 0 && unassignedNamed.length === 0}
+    <p class="text-xs text-on-surface-muted px-2 py-1 italic">No named speakers yet</p>
+  {/if}
 </div>
+
+<!-- Unnamed speakers -->
+{#if unnamed.length > 0}
+  <div>
+    <div class="px-2 py-1 mb-1">
+      <span class="text-xs font-ui font-medium text-on-surface-muted uppercase">Unnamed ({unnamed.length})</span>
+    </div>
+
+    {#each unnamed as row}
+      {@const isSelected = selectedSpeakers.has(row.id)}
+      <div
+        class="group flex items-center gap-2 px-2 py-1.5 rounded text-sm cursor-pointer transition-colors select-none
+          {isSelected ? 'bg-primary-container/30 ring-1 ring-primary/30' : 'hover:bg-surface-alt'}
+          {row.allIrrelevant ? 'opacity-50' : ''}"
+        role="button"
+        tabindex="0"
+        onclick={(e) => { if (assigningId !== row.id) onselect(row.id, e); }}
+        onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onselect(row.id); } }}
+      >
+        <span class="w-3 h-3 rounded-full flex-none" style="background-color: {speakerColour(row.id)}"></span>
+        <span class="flex-1 text-sm font-ui text-on-surface-muted truncate">{row.id}</span>
+
+        <!-- Assign to named speaker -->
+        <div class="relative">
+          <button
+            onclick={(e) => { e.stopPropagation(); assigningId = assigningId === row.id ? null : row.id; }}
+            class="text-xs font-ui text-primary cursor-pointer hover:underline opacity-0 group-hover:opacity-100 transition-opacity"
+            title="Assign to a named speaker"
+          >
+            Assign
+          </button>
+          {#if assigningId === row.id}
+            <div class="absolute right-0 top-full mt-1 z-20 bg-surface-raised border border-border rounded shadow-lg py-1 min-w-40 max-h-48 overflow-auto">
+              {#each namedSpeakers as name}
+                <button
+                  onclick={(e) => { e.stopPropagation(); assignSpeaker(row.id, name); }}
+                  class="block w-full text-left px-3 py-1.5 text-sm font-ui cursor-pointer hover:bg-primary-container/30 text-on-surface"
+                >
+                  <span class="inline-block w-2 h-2 rounded-full mr-2 align-middle" style="background-color: {speakerColour(name)}"></span>
+                  {name}
+                </button>
+              {/each}
+              {#each named.filter((n) => !namedSpeakers.includes(n.id)) as namedRow}
+                <button
+                  onclick={(e) => { e.stopPropagation(); assignSpeaker(row.id, namedRow.id); }}
+                  class="block w-full text-left px-3 py-1.5 text-sm font-ui cursor-pointer hover:bg-primary-container/30 text-on-surface"
+                >
+                  <span class="inline-block w-2 h-2 rounded-full mr-2 align-middle" style="background-color: {speakerColour(namedRow.id)}"></span>
+                  {namedRow.id}
+                </button>
+              {/each}
+              {#if namedSpeakers.length === 0 && named.length === 0}
+                <p class="text-xs text-on-surface-muted px-3 py-1.5 italic">Add named speakers first</p>
+              {/if}
+            </div>
+          {/if}
+        </div>
+
+        <span class="text-xs text-on-surface-muted flex-none font-mono tabular-nums">{row.total}</span>
+        <button
+          onclick={(e) => { e.stopPropagation(); ontoggleirrelevant(row.id); }}
+          class="cursor-pointer p-0.5 flex-none transition-colors
+            {row.allIrrelevant ? 'text-on-surface-muted hover:text-success' : 'text-on-surface-muted/40 hover:text-error'}"
+          title={row.allIrrelevant ? 'Mark relevant' : 'Mark irrelevant'}
+        >
+          {#if row.allIrrelevant}
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" /><line x1="1" y1="1" x2="23" y2="23" />
+            </svg>
+          {:else}
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" />
+            </svg>
+          {/if}
+        </button>
+      </div>
+    {/each}
+  </div>
+{/if}
