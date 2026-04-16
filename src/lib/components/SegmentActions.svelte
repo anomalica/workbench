@@ -66,9 +66,10 @@
       {segment.speaker}
     </button>
     {#if showSpeakerPicker}
-      {@const namedSet = new Set(namedSpeakers)}
+      {@const allSet = new Set(allSpeakers)}
       {@const sortedSpeakers = [
-        ...allSpeakers.filter((s) => !isDefaultSpeakerName(s) && s !== segment.speaker),
+        ...namedSpeakers.filter((s) => s !== segment.speaker),
+        ...allSpeakers.filter((s) => !isDefaultSpeakerName(s) && s !== segment.speaker && !namedSpeakers.includes(s)),
         ...allSpeakers.filter((s) => isDefaultSpeakerName(s) && s !== segment.speaker),
       ]}
       <div class="absolute left-0 top-full mt-1 z-20 bg-surface-raised border border-border rounded shadow-lg py-1 min-w-40 max-h-48 overflow-auto">

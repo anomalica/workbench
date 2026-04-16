@@ -12,6 +12,7 @@
     ontoggleirrelevant,
     onaddnamed,
     onremovenamed,
+    onrenamenamed,
   }: {
     segments: Segment[];
     namedSpeakers: string[];
@@ -22,6 +23,7 @@
     ontoggleirrelevant: (id: string) => void;
     onaddnamed: (name: string) => void;
     onremovenamed: (name: string) => void;
+    onrenamenamed: (oldName: string, newName: string) => void;
   } = $props();
 
   interface SpeakerRow {
@@ -94,7 +96,12 @@
 
   function commitEdit() {
     if (editingId && editingValue.trim() && editingValue.trim() !== editingId) {
-      onrename(editingId, editingValue.trim());
+      const isUnassigned = unassignedNamed.includes(editingId);
+      if (isUnassigned) {
+        onrenamenamed(editingId, editingValue.trim());
+      } else {
+        onrename(editingId, editingValue.trim());
+      }
     }
     editingId = null;
   }
@@ -196,12 +203,40 @@
 
   <!-- Named speakers not yet assigned to any segments -->
   {#each unassignedNamed as name}
-    <div class="flex items-center gap-2 px-2 py-1.5 rounded text-sm text-on-surface-muted">
+    <div class="group flex items-center gap-2 px-2 py-1.5 rounded text-sm cursor-pointer transition-colors select-none hover:bg-surface-alt"
+      role="button"
+      tabindex="0"
+      onclick={(e) => onselect(name, e)}
+      onkeydown={(e) => { if (editingId !== name && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onselect(name); } }}
+    >
       <span class="w-3 h-3 rounded-full flex-none" style="background-color: {speakerColour(name)}"></span>
-      <span class="flex-1 text-sm font-ui italic">{name} (no segments)</span>
+      {#if editingId === name}
+        <input
+          bind:this={editInputEl}
+          type="text"
+          bind:value={editingValue}
+          onblur={commitEdit}
+          onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitEdit(); } else if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); } }}
+          onclick={(e) => e.stopPropagation()}
+          class="flex-1 min-w-0 bg-surface text-sm font-ui text-on-surface outline-none px-1 py-0.5 rounded border border-primary"
+        />
+      {:else}
+        <span class="flex-1 text-sm font-ui text-on-surface-muted truncate">{name}</span>
+        <button
+          onclick={(e) => { e.stopPropagation(); startEdit(name); }}
+          class="opacity-0 group-hover:opacity-100 cursor-pointer p-0.5 text-on-surface-muted hover:text-primary transition-opacity"
+          title="Rename"
+        >
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+            <path stroke-linecap="round" stroke-linejoin="round" d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+          </svg>
+        </button>
+      {/if}
+      <span class="text-xs text-on-surface-muted flex-none font-mono tabular-nums">0</span>
       <button
-        onclick={() => onremovenamed(name)}
-        class="text-on-surface-muted/40 hover:text-error cursor-pointer p-0.5"
+        onclick={(e) => { e.stopPropagation(); onremovenamed(name); }}
+        class="opacity-0 group-hover:opacity-100 text-on-surface-muted/40 hover:text-error cursor-pointer p-0.5 transition-opacity"
         title="Remove"
       >
         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">

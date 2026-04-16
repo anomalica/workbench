@@ -416,6 +416,10 @@
     doc.updateFrontmatterSpeakers(namedSpeakers.filter((n) => n !== name));
   }
 
+  function renameNamedSpeaker(oldName: string, newName: string) {
+    doc.updateFrontmatterSpeakers(namedSpeakers.map((n) => (n === oldName ? newName : n)));
+  }
+
   // True if every selected segment is already irrelevant. Used to flip
   // the toggle action: irrelevant -> relevant, otherwise relevant -> irrelevant.
   let selectedAllIrrelevant = $derived(() => {
@@ -873,6 +877,7 @@
                   ontoggleirrelevant={toggleSpeakerIrrelevant}
                   onaddnamed={addNamedSpeaker}
                   onremovenamed={removeNamedSpeaker}
+                  onrenamenamed={renameNamedSpeaker}
                 />
               </div>
             </details>
