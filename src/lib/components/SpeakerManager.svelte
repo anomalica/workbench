@@ -6,7 +6,9 @@
     segments,
     namedSpeakers,
     selectedSpeakers,
+    filteredSpeakers,
     onselect,
+    onfilter,
     onrename,
     onmerge,
     ontoggleirrelevant,
@@ -17,7 +19,9 @@
     segments: Segment[];
     namedSpeakers: string[];
     selectedSpeakers: Set<string>;
+    filteredSpeakers: Set<string>;
     onselect: (id: string, e?: MouseEvent) => void;
+    onfilter: (id: string) => void;
     onrename: (id: string, name: string) => void;
     onmerge: (sourceIds: string[], targetName: string) => void;
     ontoggleirrelevant: (id: string) => void;
@@ -157,7 +161,7 @@
       onclick={(e) => { if (editingId !== row.id) onselect(row.id, e); }}
       onkeydown={(e) => { if (editingId !== row.id && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onselect(row.id); } }}
     >
-      <span class="w-3 h-3 rounded-full flex-none" style="background-color: {speakerColour(row.id)}"></span>
+      <button onclick={(e) => { e.stopPropagation(); onfilter(row.id); }} class="w-3 h-3 rounded-full flex-none cursor-pointer transition-transform hover:scale-125 {filteredSpeakers.has(row.id) ? 'ring-2 ring-primary' : ''}" style="background-color: {speakerColour(row.id)}" title="Filter transcript to this speaker"></button>
       {#if editingId === row.id}
         <input
           bind:this={editInputEl}
@@ -209,7 +213,7 @@
       onclick={(e) => onselect(name, e)}
       onkeydown={(e) => { if (editingId !== name && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onselect(name); } }}
     >
-      <span class="w-3 h-3 rounded-full flex-none" style="background-color: {speakerColour(name)}"></span>
+      <button onclick={(e) => { e.stopPropagation(); onfilter(name); }} class="w-3 h-3 rounded-full flex-none cursor-pointer transition-transform hover:scale-125 {filteredSpeakers.has(name) ? 'ring-2 ring-primary' : ''}" style="background-color: {speakerColour(name)}" title="Filter transcript to this speaker"></button>
       {#if editingId === name}
         <input
           bind:this={editInputEl}
@@ -269,7 +273,7 @@
         onclick={(e) => { if (assigningId !== row.id) onselect(row.id, e); }}
         onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onselect(row.id); } }}
       >
-        <span class="w-3 h-3 rounded-full flex-none" style="background-color: {speakerColour(row.id)}"></span>
+        <button onclick={(e) => { e.stopPropagation(); onfilter(row.id); }} class="w-3 h-3 rounded-full flex-none cursor-pointer transition-transform hover:scale-125 {filteredSpeakers.has(row.id) ? 'ring-2 ring-primary' : ''}" style="background-color: {speakerColour(row.id)}" title="Filter transcript to this speaker"></button>
         <span class="flex-1 text-sm font-ui text-on-surface-muted truncate">{row.id}</span>
 
         <!-- Assign to named speaker -->

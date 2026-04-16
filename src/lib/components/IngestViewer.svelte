@@ -302,9 +302,10 @@
   let activeSegment = $state(-1);
   let timeInterval: ReturnType<typeof setInterval> | null = null;
 
-  // Speaker selection - drives both transcript filtering and merging.
-  // Empty set means no filter (show all speakers).
+  // Speaker selection - for merging and UI highlight.
   let selectedSpeakers = $state(new Set<string>());
+  // Speaker filter - intentional filter via colour dot click.
+  let filteredSpeakers = $state(new Set<string>());
 
   // Irrelevant visibility
   let hideIrrelevant = $state(false);
@@ -374,7 +375,7 @@
   let visibleSegments = $derived(
     segments
       .filter((s) => !hideIrrelevant || !s.irrelevant)
-      .filter((s) => selectedSpeakers.size === 0 || selectedSpeakers.has(s.speaker)),
+      .filter((s) => filteredSpeakers.size === 0 || filteredSpeakers.has(s.speaker)),
   );
 
   // Derived: speakers visible in current filter mode
@@ -580,8 +581,8 @@
     lastClickedSpeaker = id;
   }
 
-  function clearSpeakerSelection() {
-    selectedSpeakers = new Set();
+  function clearSpeakerFilter() {
+    filteredSpeakers = new Set();
     // Scroll back to the active or last-selected segment
     requestAnimationFrame(() => {
       const idx = selected.size > 0 ? [...selected][0] : activeSegment;
@@ -624,6 +625,7 @@
     } else if (e.key === "Escape") {
       selected = new Set();
       selectedSpeakers = new Set();
+      filteredSpeakers = new Set();
     } else if ((e.ctrlKey || e.metaKey) && e.key === "a" && view === "ingest" && hasTranscript) {
       e.preventDefault();
       selected = new Set(visibleSegments.map((s) => s.index));
@@ -871,7 +873,14 @@
                   {segments}
                   {namedSpeakers}
                   {selectedSpeakers}
+                  {filteredSpeakers}
                   onselect={handleSpeakerSelection}
+                  onfilter={(id) => {
+                    const next = new Set(filteredSpeakers);
+                    if (next.has(id)) next.delete(id);
+                    else next.add(id);
+                    filteredSpeakers = next;
+                  }}
                   onrename={renameSpeaker}
                   onmerge={mergeSpeakers}
                   ontoggleirrelevant={toggleSpeakerIrrelevant}
@@ -1101,17 +1110,17 @@
         </div>
 
       {:else if hasTranscript}
-        {#if selectedSpeakers.size > 0}
+        {#if filteredSpeakers.size > 0}
           <div class="px-3 py-1.5 bg-primary-container/20 border-b border-border flex items-center gap-2 flex-wrap">
             <span class="text-xs font-ui text-on-surface-secondary">Filtered to:</span>
-            {#each [...selectedSpeakers] as speakerId}
+            {#each [...filteredSpeakers] as speakerId}
               <span class="text-xs font-ui font-medium text-primary inline-flex items-center gap-1">
                 <span class="w-2 h-2 rounded-full" style="background-color: {speakerColour(speakerId)}"></span>
                 {speakerId}
               </span>
             {/each}
             <button
-              onclick={clearSpeakerSelection}
+              onclick={clearSpeakerFilter}
               class="text-xs text-on-surface-muted hover:text-on-surface cursor-pointer ml-auto"
             >clear</button>
           </div>
