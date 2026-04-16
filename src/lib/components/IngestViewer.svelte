@@ -1111,6 +1111,48 @@
             >clear</button>
           </div>
         {/if}
+        {#if selected.size > 1}
+          <div class="px-4 py-2 bg-surface-alt border-b border-border flex items-center gap-2 flex-none">
+            <span class="text-xs font-ui text-on-surface-secondary">{selected.size} segments selected</span>
+            <div class="ml-auto flex items-center gap-1">
+              <button
+                onclick={() => {
+                  const targets = segments
+                    .filter((s) => selected.has(s.index))
+                    .map((s) => ({ speaker: s.speaker, time: s.time }));
+                  doc.setIrrelevant(targets, true);
+                  selected = new Set();
+                }}
+                class="text-xs font-ui px-2 py-1 rounded cursor-pointer text-on-surface-secondary hover:bg-error-container/30 hover:text-error"
+                title="Mark all selected as irrelevant"
+              >
+                Mark irrelevant
+              </button>
+              <button
+                onclick={() => {
+                  const targets = segments
+                    .filter((s) => selected.has(s.index))
+                    .map((s) => ({ speaker: s.speaker, time: s.time }));
+                  doc.setIrrelevant(targets, false);
+                  selected = new Set();
+                }}
+                class="text-xs font-ui px-2 py-1 rounded cursor-pointer text-on-surface-secondary hover:bg-success-container/30 hover:text-success"
+                title="Mark all selected as relevant"
+              >
+                Mark relevant
+              </button>
+              <button
+                onclick={() => { selected = new Set(); }}
+                class="text-xs text-on-surface-muted cursor-pointer hover:text-on-surface px-1"
+                title="Clear selection (Esc)"
+              >
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        {/if}
         <div class="flex-1 overflow-auto" data-scroll-sync onscroll={handleContentScroll}>
           {#each visibleSegments as segment, vi}
             {@const isSelected = selected.has(segment.index)}
@@ -1131,7 +1173,7 @@
             {:else}
               <div
                 data-segment-index={segment.index}
-                class="px-4 py-3 border-b transition-colors cursor-pointer
+                class="px-4 py-3 border-b transition-colors cursor-pointer select-none
                   {isSelected
                     ? 'bg-primary-container/30 border-primary/30'
                     : 'border-border/50 hover:bg-primary-container/10'}"
