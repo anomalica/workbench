@@ -9,6 +9,11 @@ import {
   findActiveSegmentForTime,
   extractFrontmatterSpeakers,
   isDefaultSpeakerName,
+  isSegmentIrrelevant,
+  groupSegmentsBySpeaker,
+  orderedNamedSpeakers,
+  SPEAKER_IRRELEVANT,
+  type Segment,
 } from "./transcript";
 
 describe("parseTimeToSeconds", () => {
@@ -83,9 +88,9 @@ describe("parseTranscript - new format (sentence-level timestamps)", () => {
     expect(segs[2].lines).toEqual(["So what you're telling me is that UFOs are real."]);
   });
 
-  it("sets irrelevant to false by default", () => {
+  it("no segments have [irrelevant] speaker by default", () => {
     const segs = parseTranscript(body);
-    expect(segs.every((s) => s.irrelevant === false)).toBe(true);
+    expect(segs.every((s) => !isSegmentIrrelevant(s))).toBe(true);
   });
 
   it("assigns sequential indices", () => {
@@ -94,7 +99,7 @@ describe("parseTranscript - new format (sentence-level timestamps)", () => {
   });
 });
 
-describe("parseTranscript - irrelevant markers", () => {
+describe("parseTranscript - legacy irrelevant markers", () => {
   const body = `
 <!-- speaker: Speaker 1 -->
 <!-- irrelevant -->
@@ -102,16 +107,16 @@ describe("parseTranscript - irrelevant markers", () => {
 00:00:07.6 This is relevant content.
 `;
 
-  it("marks the segment after <!-- irrelevant --> as irrelevant", () => {
+  it("converts legacy <!-- irrelevant --> to [irrelevant] speaker", () => {
     const segs = parseTranscript(body);
     expect(segs.length).toBe(2);
-    expect(segs[0].irrelevant).toBe(true);
+    expect(segs[0].speaker).toBe("[irrelevant]");
     expect(segs[0].lines).toEqual(["This is irrelevant content."]);
   });
 
-  it("does not mark the next segment as irrelevant", () => {
+  it("does not affect the next segment", () => {
     const segs = parseTranscript(body);
-    expect(segs[1].irrelevant).toBe(false);
+    expect(segs[1].speaker).toBe("Speaker 1");
     expect(segs[1].lines).toEqual(["This is relevant content."]);
   });
 });
@@ -144,10 +149,12 @@ Better known as Top Gun.
     expect(segs[0].seconds).toBe(437);
   });
 
-  it("reads irrelevant flag", () => {
+  it("old irrelevant: true field is ignored (use speaker name instead)", () => {
     const segs = parseTranscript(body);
-    expect(segs[0].irrelevant).toBe(false);
-    expect(segs[1].irrelevant).toBe(true);
+    // The old irrelevant field is no longer parsed - irrelevance is
+    // determined by the speaker name being [irrelevant]
+    expect(segs[0].speaker).toBe("David Fravor");
+    expect(segs[1].speaker).toBe("Lex Fridman");
   });
 
   it("extracts text content", () => {
@@ -187,7 +194,7 @@ describe("serializeTranscript - new format", () => {
         time: "00:00:01.8",
         seconds: 1.8,
         lines: ["Hello."],
-        irrelevant: false,
+
         index: 0,
       },
       {
@@ -195,7 +202,7 @@ describe("serializeTranscript - new format", () => {
         time: "00:00:05.0",
         seconds: 5,
         lines: ["World."],
-        irrelevant: false,
+
         index: 1,
       },
       {
@@ -203,7 +210,7 @@ describe("serializeTranscript - new format", () => {
         time: "00:00:10.0",
         seconds: 10,
         lines: ["Hi."],
-        irrelevant: false,
+
         index: 2,
       },
     ];
@@ -222,7 +229,7 @@ describe("serializeTranscript - new format", () => {
         time: "00:00:01.8",
         seconds: 1.8,
         lines: ["A."],
-        irrelevant: false,
+
         index: 0,
       },
       {
@@ -230,7 +237,7 @@ describe("serializeTranscript - new format", () => {
         time: "00:00:05.0",
         seconds: 5,
         lines: ["B."],
-        irrelevant: false,
+
         index: 1,
       },
     ];
@@ -239,14 +246,13 @@ describe("serializeTranscript - new format", () => {
     expect(matches?.length).toBe(1);
   });
 
-  it("outputs <!-- irrelevant --> for irrelevant segments", () => {
+  it("uses [irrelevant] speaker name for irrelevant segments", () => {
     const segs = [
       {
-        speaker: "Speaker 1",
+        speaker: SPEAKER_IRRELEVANT,
         time: "00:00:01.8",
         seconds: 1.8,
         lines: ["Skip this."],
-        irrelevant: true,
         index: 0,
       },
       {
@@ -254,16 +260,12 @@ describe("serializeTranscript - new format", () => {
         time: "00:00:05.0",
         seconds: 5,
         lines: ["Keep this."],
-        irrelevant: false,
         index: 1,
       },
     ];
     const result = serializeTranscript(segs);
-    expect(result).toContain("<!-- irrelevant -->");
-    // The irrelevant marker should come before the timestamped line
-    const irIdx = result.indexOf("<!-- irrelevant -->");
-    const lineIdx = result.indexOf("00:00:01.8 Skip this.");
-    expect(irIdx).toBeLessThan(lineIdx);
+    expect(result).toContain("<!-- speaker: [irrelevant] -->");
+    expect(result).toContain("<!-- speaker: Speaker 1 -->");
   });
 });
 
@@ -286,11 +288,11 @@ describe("round-trip: parse then serialize", () => {
       expect(reparsed[i].speaker).toBe(segs[i].speaker);
       expect(reparsed[i].time).toBe(segs[i].time);
       expect(reparsed[i].lines).toEqual(segs[i].lines);
-      expect(reparsed[i].irrelevant).toBe(segs[i].irrelevant);
+      expect(isSegmentIrrelevant(reparsed[i])).toBe(isSegmentIrrelevant(segs[i]));
     }
   });
 
-  it("preserves irrelevant flag through round-trip", () => {
+  it("preserves irrelevant speaker through round-trip", () => {
     const body = `
 <!-- speaker: Speaker 1 -->
 <!-- irrelevant -->
@@ -298,14 +300,14 @@ describe("round-trip: parse then serialize", () => {
 00:00:05.0 Keep this.
 `;
     const segs = parseTranscript(body);
-    expect(segs[0].irrelevant).toBe(true);
-    expect(segs[1].irrelevant).toBe(false);
+    expect(isSegmentIrrelevant(segs[0])).toBe(true);
+    expect(isSegmentIrrelevant(segs[1])).toBe(false);
 
     const serialised = serializeTranscript(segs);
     const reparsed = parseTranscript(serialised);
 
-    expect(reparsed[0].irrelevant).toBe(true);
-    expect(reparsed[1].irrelevant).toBe(false);
+    expect(isSegmentIrrelevant(reparsed[0])).toBe(true);
+    expect(isSegmentIrrelevant(reparsed[1])).toBe(false);
     expect(reparsed[0].lines).toEqual(["Skip this."]);
     expect(reparsed[1].lines).toEqual(["Keep this."]);
   });
@@ -443,17 +445,117 @@ describe("nextSpeakerName", () => {
 
   it("returns next number after highest", () => {
     const segs = [
-      { speaker: "Speaker 3", time: "", seconds: 0, lines: [], irrelevant: false, index: 0 },
-      { speaker: "Speaker 1", time: "", seconds: 0, lines: [], irrelevant: false, index: 1 },
+      { speaker: "Speaker 3", time: "", seconds: 0, lines: [], index: 0 },
+      { speaker: "Speaker 1", time: "", seconds: 0, lines: [], index: 1 },
     ];
     expect(nextSpeakerName(segs)).toBe("Speaker 4");
   });
 
   it("ignores named speakers", () => {
     const segs = [
-      { speaker: "Lex Fridman", time: "", seconds: 0, lines: [], irrelevant: false, index: 0 },
-      { speaker: "Speaker 2", time: "", seconds: 0, lines: [], irrelevant: false, index: 1 },
+      { speaker: "Lex Fridman", time: "", seconds: 0, lines: [], index: 0 },
+      { speaker: "Speaker 2", time: "", seconds: 0, lines: [], index: 1 },
     ];
     expect(nextSpeakerName(segs)).toBe("Speaker 3");
+  });
+});
+
+describe("groupSegmentsBySpeaker", () => {
+  it("groups consecutive segments with the same speaker", () => {
+    const body = `
+<!-- speaker: Speaker 1 -->
+00:00:01.8 First.
+00:00:05.0 Second.
+00:00:07.0 Third.
+
+<!-- speaker: Speaker 2 -->
+00:00:10.0 Fourth.
+
+<!-- speaker: Speaker 1 -->
+00:00:15.0 Fifth.
+00:00:18.0 Sixth.
+`;
+    const groups = groupSegmentsBySpeaker(parseTranscript(body));
+    expect(groups.length).toBe(3);
+    expect(groups[0].speaker).toBe("Speaker 1");
+    expect(groups[0].segments.length).toBe(3);
+    expect(groups[1].speaker).toBe("Speaker 2");
+    expect(groups[1].segments.length).toBe(1);
+    expect(groups[2].speaker).toBe("Speaker 1");
+    expect(groups[2].segments.length).toBe(2);
+  });
+
+  it("preserves segment order within groups", () => {
+    const body = `
+<!-- speaker: Speaker 1 -->
+00:00:01.8 A.
+00:00:05.0 B.
+00:00:07.0 C.
+`;
+    const groups = groupSegmentsBySpeaker(parseTranscript(body));
+    expect(groups[0].segments.map((s) => s.lines[0])).toEqual(["A.", "B.", "C."]);
+  });
+
+  it("returns empty array for empty input", () => {
+    expect(groupSegmentsBySpeaker([])).toEqual([]);
+  });
+
+  it("treats [irrelevant] as its own group", () => {
+    const body = `
+<!-- speaker: Speaker 1 -->
+00:00:01.8 A.
+
+<!-- speaker: [irrelevant] -->
+00:00:05.0 Skip.
+
+<!-- speaker: Speaker 1 -->
+00:00:10.0 B.
+`;
+    const groups = groupSegmentsBySpeaker(parseTranscript(body));
+    expect(groups.length).toBe(3);
+    expect(groups.map((g) => g.speaker)).toEqual(["Speaker 1", "[irrelevant]", "Speaker 1"]);
+  });
+});
+
+describe("orderedNamedSpeakers", () => {
+  const seg = (speaker: string, index: number): Segment => ({
+    speaker,
+    time: `00:00:${String(index).padStart(2, "0")}`,
+    seconds: index,
+    lines: [""],
+    index,
+  });
+
+  it("orders named speakers by first appearance in segments", () => {
+    const segments = [seg("Lex", 0), seg("Speaker 3", 1), seg("Guest", 2)];
+    const named = ["Guest", "Lex"]; // frontmatter order is different
+
+    expect(orderedNamedSpeakers(segments, named)).toEqual(["Lex", "Guest"]);
+  });
+
+  it("appends named speakers without segments in frontmatter order", () => {
+    const segments = [seg("Lex", 0)];
+    const named = ["Alice", "Lex", "Bob"]; // Alice and Bob have no segments yet
+
+    expect(orderedNamedSpeakers(segments, named)).toEqual(["Lex", "Alice", "Bob"]);
+  });
+
+  it("picker and sidebar produce identical named ordering", () => {
+    // Realistic scenario: diarisation clusters came back 13, 3, 10, 14
+    // User named two of them. Frontmatter lists them in the order they were renamed.
+    const segments = [
+      seg("Speaker 13", 0),
+      seg("Lex", 1), // renamed from Speaker 3
+      seg("Speaker 10", 2),
+      seg("Guest", 3), // renamed from Speaker 14
+      seg("Lex", 4),
+    ];
+    const named = ["Guest", "Lex"]; // named in rename order, different from transcript order
+
+    const sidebarOrder = orderedNamedSpeakers(segments, named);
+    const pickerOrder = orderedNamedSpeakers(segments, named);
+
+    expect(pickerOrder).toEqual(sidebarOrder);
+    expect(sidebarOrder).toEqual(["Lex", "Guest"]); // first appearance order
   });
 });

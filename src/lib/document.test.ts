@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { parseTranscript, serializeTranscript } from "./transcript";
+import {
+  parseTranscript,
+  serializeTranscript,
+  SPEAKER_IRRELEVANT,
+  isSegmentIrrelevant,
+} from "./transcript";
 
 // We can't test the Svelte $state-based DocumentStore directly in Vitest
 // (it needs the Svelte runtime). Instead we test the parse-modify-serialize
@@ -140,7 +145,7 @@ describe("speaker rename via parse-modify-serialize", () => {
   });
 });
 
-describe("mark irrelevant via parse-modify-serialize", () => {
+describe("mark irrelevant via speaker name", () => {
   const body = `
 <!-- speaker: Speaker 1 -->
 00:00:01.8 First line.
@@ -148,35 +153,36 @@ describe("mark irrelevant via parse-modify-serialize", () => {
 00:00:10.0 Third line.
 `;
 
-  it("marks a segment as irrelevant", () => {
+  it("marks a segment as irrelevant by changing speaker to [irrelevant]", () => {
     const result = roundTrip(body, (segs) => {
-      segs[0].irrelevant = true;
+      segs[0].speaker = SPEAKER_IRRELEVANT;
     });
-    expect(result).toContain("<!-- irrelevant -->");
+    expect(result).toContain("<!-- speaker: [irrelevant] -->");
     const reparsed = parseTranscript(result);
-    expect(reparsed[0].irrelevant).toBe(true);
-    expect(reparsed[1].irrelevant).toBe(false);
-    expect(reparsed[2].irrelevant).toBe(false);
+    expect(isSegmentIrrelevant(reparsed[0])).toBe(true);
+    expect(isSegmentIrrelevant(reparsed[1])).toBe(false);
+    expect(isSegmentIrrelevant(reparsed[2])).toBe(false);
   });
 
-  it("unmarks a segment as relevant", () => {
+  it("unmarks a segment by restoring speaker name", () => {
     const bodyWithIrrelevant = `
-<!-- speaker: Speaker 1 -->
-<!-- irrelevant -->
+<!-- speaker: [irrelevant] -->
 00:00:01.8 Was irrelevant.
+
+<!-- speaker: Speaker 1 -->
 00:00:05.0 Was relevant.
 `;
     const result = roundTrip(bodyWithIrrelevant, (segs) => {
-      segs[0].irrelevant = false;
+      segs[0].speaker = "Speaker 1";
     });
-    expect(result).not.toContain("<!-- irrelevant -->");
+    expect(result).not.toContain("[irrelevant]");
     const reparsed = parseTranscript(result);
-    expect(reparsed[0].irrelevant).toBe(false);
+    expect(isSegmentIrrelevant(reparsed[0])).toBe(false);
   });
 
-  it("preserves text content when toggling irrelevant", () => {
+  it("preserves text content when changing speaker to irrelevant", () => {
     const result = roundTrip(body, (segs) => {
-      segs[1].irrelevant = true;
+      segs[1].speaker = SPEAKER_IRRELEVANT;
     });
     const reparsed = parseTranscript(result);
     expect(reparsed[0].lines).toEqual(["First line."]);

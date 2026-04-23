@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Segment } from "$lib/transcript";
-  import { nextSpeakerName, speakerColour } from "$lib/transcript";
+  import { nextSpeakerName } from "$lib/transcript";
+  import SpeakerDot from "./SpeakerDot.svelte";
 
   let {
     segment,
@@ -19,8 +20,11 @@
   let fullText = $derived(segment.lines.join("\n"));
 
   // Default split at roughly the midpoint, snapped to a word boundary
+  // svelte-ignore state_referenced_locally
   let splitCharPos = $state(findMidpoint(segment.lines.join("\n")));
+  // svelte-ignore state_referenced_locally
   let aboveSpeaker = $state(segment.speaker);
+  // svelte-ignore state_referenced_locally
   let belowSpeaker = $state(nextSpeakerName(allSegments));
 
   let topText = $derived(fullText.slice(0, splitCharPos));
@@ -91,7 +95,7 @@
   <div class="px-4 pt-3 pb-2">
     <!-- Header -->
     <div class="flex items-center gap-2 mb-1">
-      <span class="w-2 h-2 rounded-full flex-none" style="background-color: {speakerColour(aboveSpeaker)}"></span>
+      <SpeakerDot speaker={aboveSpeaker} />
       <div class="relative">
         <button
           onclick={() => { showAbovePicker = !showAbovePicker; showBelowPicker = false; }}
@@ -105,7 +109,7 @@
             {#each allSpeakers as sp}
               <button onclick={() => selectSpeaker("above", sp)}
                 class="block w-full text-left px-3 py-1.5 text-sm font-ui cursor-pointer hover:bg-primary-container/30 text-on-surface">
-                <span class="inline-block w-2 h-2 rounded-full mr-2 align-middle" style="background-color: {speakerColour(sp)}"></span>{sp}
+                <SpeakerDot speaker={sp} inline />{sp}
               </button>
             {/each}
             <div class="border-t border-border mt-1 pt-1">
@@ -118,10 +122,13 @@
       <span class="text-xs text-on-surface-muted font-mono">{segment.time.replace(/^00:/, "")}</span>
     </div>
     <!-- Top text: clickable to move split up -->
-    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
     <div
       class="text-sm text-on-surface leading-relaxed pl-4 whitespace-pre-wrap cursor-text select-none"
       onclick={(e) => handleTextClick(e, 0)}
+      onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') e.preventDefault(); }}
+      role="button"
+      tabindex="0"
+      aria-label="Top half of split - click to reposition split point"
     >{topText}</div>
   </div>
 
@@ -134,7 +141,7 @@
   <div class="px-4 pt-1 pb-2 bg-primary-container/10">
     <!-- Header -->
     <div class="flex items-center gap-2 mb-1">
-      <span class="w-2 h-2 rounded-full flex-none" style="background-color: {speakerColour(belowSpeaker)}"></span>
+      <SpeakerDot speaker={belowSpeaker} />
       <div class="relative">
         <button
           onclick={() => { showBelowPicker = !showBelowPicker; showAbovePicker = false; }}
@@ -148,7 +155,7 @@
             {#each allSpeakers as sp}
               <button onclick={() => selectSpeaker("below", sp)}
                 class="block w-full text-left px-3 py-1.5 text-sm font-ui cursor-pointer hover:bg-primary-container/30 text-on-surface">
-                <span class="inline-block w-2 h-2 rounded-full mr-2 align-middle" style="background-color: {speakerColour(sp)}"></span>{sp}
+                <SpeakerDot speaker={sp} inline />{sp}
               </button>
             {/each}
             <div class="border-t border-border mt-1 pt-1">
@@ -160,10 +167,13 @@
       </div>
     </div>
     <!-- Bottom text: clickable to move split down -->
-    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
     <div
       class="text-sm text-on-surface leading-relaxed pl-4 whitespace-pre-wrap cursor-text select-none"
       onclick={(e) => handleTextClick(e, splitCharPos)}
+      onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') e.preventDefault(); }}
+      role="button"
+      tabindex="0"
+      aria-label="Bottom half of split - click to reposition split point"
     >{bottomText}</div>
   </div>
 

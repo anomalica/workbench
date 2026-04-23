@@ -29,10 +29,16 @@ export class DocumentStore {
   }
 
   load(markdown: string, contentHash: string) {
-    this.storageKey = `workbench:doc:${contentHash}`;
+    const newKey = `workbench:doc:${contentHash}`;
+    // Idempotent: if we've already loaded this exact ingest, keep in-memory
+    // state untouched. Without this, a redundant load() call could overwrite
+    // unsaved edits with older localStorage contents.
+    if (this.storageKey === newKey && this.original === markdown) {
+      return;
+    }
+    this.storageKey = newKey;
     this.original = markdown;
 
-    // Restore from localStorage if available
     const saved = localStorage.getItem(this.storageKey);
     if (saved) {
       try {
@@ -80,14 +86,30 @@ export class DocumentStore {
   }
 
   private save() {
-    localStorage.setItem(
-      this.storageKey,
-      JSON.stringify({
-        current: this.current,
-        past: this.past,
-        future: this.future,
-      }),
-    );
+    // Only persist the last few undo entries to avoid blowing localStorage's
+    // ~5MB quota. Each entry is the full markdown text, so 200 entries for a
+    // 50KB file would be 10MB - well over the limit.
+    const maxStoredHistory = 20;
+    const trimmedPast = this.past.slice(-maxStoredHistory);
+    const payload = JSON.stringify({
+      current: this.current,
+      past: trimmedPast,
+      future: this.future.slice(0, maxStoredHistory),
+    });
+    try {
+      localStorage.setItem(this.storageKey, payload);
+    } catch (e) {
+      // Quota exceeded - try again with no history at all
+      console.warn("[doc.save] localStorage quota exceeded, saving without history");
+      try {
+        localStorage.setItem(
+          this.storageKey,
+          JSON.stringify({ current: this.current, past: [], future: [] }),
+        );
+      } catch {
+        console.error("[doc.save] localStorage save failed entirely");
+      }
+    }
   }
 
   discard() {
@@ -172,13 +194,15 @@ export class DocumentStore {
     return segs.findIndex((s) => s.speaker === speaker && s.time === time);
   }
 
-  setIrrelevant(targets: { speaker: string; time: string }[], irrelevant: boolean) {
+  /** Mark segments as irrelevant by changing their speaker to [irrelevant].
+   *  Pass the original speaker name so we can restore it if toggling back. */
+  setSegmentsSpeaker(targets: { speaker: string; time: string }[], newSpeaker: string) {
     this.editSegments((segs) => {
       let changed = false;
       for (const { speaker, time } of targets) {
         const idx = this.findSegment(segs, speaker, time);
-        if (idx >= 0 && segs[idx].irrelevant !== irrelevant) {
-          segs[idx].irrelevant = irrelevant;
+        if (idx >= 0 && segs[idx].speaker !== newSpeaker) {
+          segs[idx].speaker = newSpeaker;
           changed = true;
         }
       }
@@ -213,6 +237,23 @@ export class DocumentStore {
       const idx = this.findSegment(segs, speaker, oldTime);
       if (idx < 0) return false;
       segs[idx].time = newTime;
+      return true;
+    });
+  }
+
+  editSegment(
+    oldSpeaker: string,
+    oldTime: string,
+    newSpeaker: string,
+    newTime: string,
+    newText: string,
+  ) {
+    this.editSegments((segs) => {
+      const idx = this.findSegment(segs, oldSpeaker, oldTime);
+      if (idx < 0) return false;
+      segs[idx].speaker = newSpeaker;
+      segs[idx].time = newTime;
+      segs[idx].lines = newText.split("\n").filter((l) => l.trim());
       return true;
     });
   }
@@ -265,7 +306,6 @@ export class DocumentStore {
           time: belowTime,
           seconds: 0,
           lines: afterText.split("\n").filter((l) => l.trim()),
-          irrelevant: seg.irrelevant,
           index: 0,
         },
       );

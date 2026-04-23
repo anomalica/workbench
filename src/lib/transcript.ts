@@ -3,7 +3,6 @@ export interface Segment {
   time: string;
   seconds: number;
   lines: string[];
-  irrelevant: boolean;
   /** Index in the original segment list, used for edit operations */
   index: number;
 }
@@ -67,7 +66,6 @@ export function parseTranscript(body: string): Segment[] {
       const yaml = blockLines.join("\n");
       const speakerMatch = yaml.match(/^speaker:\s*(.+)$/m);
       const timeMatch = yaml.match(/^time:\s*(.+)$/m);
-      const irrelevantMatch = yaml.match(/^irrelevant:\s*(.+)$/m);
 
       if (speakerMatch && timeMatch) {
         // Old-format speaker turn with explicit time
@@ -91,7 +89,6 @@ export function parseTranscript(body: string): Segment[] {
           time,
           seconds: parseTimeToSeconds(time),
           lines: textLines,
-          irrelevant: irrelevantMatch ? irrelevantMatch[1].trim() === "true" : false,
           index: segments.length,
         });
       }
@@ -99,19 +96,17 @@ export function parseTranscript(body: string): Segment[] {
       continue;
     }
 
-    // Irrelevant marker: <!-- irrelevant --> before a timestamped line
+    // Legacy <!-- irrelevant --> marker - treat as [irrelevant] speaker
     if (line === "<!-- irrelevant -->") {
       i++;
-      // Look ahead for the timestamped line
       const nextLine = i < lines.length ? lines[i].trim() : "";
       const nextTs = nextLine.match(TIMESTAMPED_LINE);
-      if (nextTs && currentSpeaker) {
+      if (nextTs) {
         segments.push({
-          speaker: currentSpeaker,
+          speaker: SPEAKER_IRRELEVANT,
           time: nextTs[1],
           seconds: parseTimeToSeconds(nextTs[1]),
           lines: [nextTs[2]],
-          irrelevant: true,
           index: segments.length,
         });
         i++;
@@ -135,7 +130,6 @@ export function parseTranscript(body: string): Segment[] {
         time,
         seconds: parseTimeToSeconds(time),
         lines: [text],
-        irrelevant: false,
         index: segments.length,
       });
       i++;
@@ -174,14 +168,12 @@ export function serializeTranscript(segments: Segment[]): string {
     }
     // If the time looks like sentence-level (has decimal), use timestamped line format
     if (seg.time.includes(".")) {
-      if (seg.irrelevant) result += "<!-- irrelevant -->\n";
       for (const line of seg.lines) {
         result += `${seg.time} ${line}\n`;
       }
     } else {
       // Old format: multi-line block
-      let yaml = `speaker: ${seg.speaker}\ntime: ${seg.time}`;
-      if (seg.irrelevant) yaml += "\nirrelevant: true";
+      const yaml = `speaker: ${seg.speaker}\ntime: ${seg.time}`;
       result += `\n<!--\n${yaml}\n-->\n${seg.lines.join("\n")}\n`;
       lastSpeaker = ""; // Reset because old format repeats speaker in each block
     }
@@ -233,7 +225,7 @@ export function speakerColour(speaker: string): string {
 export function findActiveSegmentForTime(segments: Segment[], currentTime: number): number {
   let best = -1;
   for (const seg of segments) {
-    if (seg.irrelevant) continue;
+    if (isSegmentIrrelevant(seg)) continue;
     if (seg.seconds <= currentTime) best = seg.index;
     else break;
   }
@@ -256,9 +248,26 @@ export function extractFrontmatterSpeakers(rawFrontmatter: string): string[] {
     .filter((l) => l);
 }
 
+/** Special speaker names. */
+export const SPEAKER_IRRELEVANT = "[irrelevant]";
+export const SPEAKER_NARRATOR = "[narrator]";
+export const SPEAKER_EXTERNAL_FOOTAGE = "[external footage]";
+
 /** Check if a speaker name looks like a default (Speaker N). */
 export function isDefaultSpeakerName(name: string): boolean {
   return /^Speaker \d+$/i.test(name);
+}
+
+/** Check if a speaker is a special name (not a real person). */
+export function isSpecialSpeaker(name: string): boolean {
+  return (
+    name === SPEAKER_IRRELEVANT || name === SPEAKER_NARRATOR || name === SPEAKER_EXTERNAL_FOOTAGE
+  );
+}
+
+/** Check if a segment is irrelevant (speaker is [irrelevant]). */
+export function isSegmentIrrelevant(seg: Segment): boolean {
+  return seg.speaker === SPEAKER_IRRELEVANT;
 }
 
 /** Return the next speaker number not yet used: "Speaker N". */
@@ -269,4 +278,44 @@ export function nextSpeakerName(segments: Segment[]): string {
     if (m) max = Math.max(max, parseInt(m[1], 10));
   }
   return `Speaker ${max + 1}`;
+}
+
+/** Return named speakers in display order: those with segments sorted by first
+ *  appearance in the transcript, followed by any named speakers not yet
+ *  appearing in segments in their frontmatter order. Used by both the sidebar
+ *  and the segment speaker picker to keep ordering consistent. */
+export function orderedNamedSpeakers(segments: Segment[], namedSpeakers: string[]): string[] {
+  const firstSeen = new Map<string, number>();
+  for (let i = 0; i < segments.length; i++) {
+    const name = segments[i].speaker;
+    if (name && !firstSeen.has(name)) firstSeen.set(name, i);
+  }
+  const namedSet = new Set(namedSpeakers);
+  const withSegments = [...firstSeen.entries()]
+    .filter(([name]) => namedSet.has(name))
+    .sort((a, b) => a[1] - b[1])
+    .map(([name]) => name);
+  const withSegmentsSet = new Set(withSegments);
+  const withoutSegments = namedSpeakers.filter((n) => !withSegmentsSet.has(n));
+  return [...withSegments, ...withoutSegments];
+}
+
+export interface SegmentGroup {
+  speaker: string;
+  segments: Segment[];
+}
+
+/** Group consecutive segments by speaker so the speaker header only needs to
+ *  be shown once per run. Timestamps stay on individual segments. */
+export function groupSegmentsBySpeaker(segments: Segment[]): SegmentGroup[] {
+  const groups: SegmentGroup[] = [];
+  for (const seg of segments) {
+    const last = groups[groups.length - 1];
+    if (last && last.speaker === seg.speaker) {
+      last.segments.push(seg);
+    } else {
+      groups.push({ speaker: seg.speaker, segments: [seg] });
+    }
+  }
+  return groups;
 }

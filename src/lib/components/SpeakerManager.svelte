@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Segment } from "$lib/transcript";
-  import { speakerColour, isDefaultSpeakerName } from "$lib/transcript";
+  import { isDefaultSpeakerName, isSpecialSpeaker, SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE } from "$lib/transcript";
+  import SpeakerDot from "./SpeakerDot.svelte";
 
   let {
     segments,
@@ -9,9 +10,9 @@
     filteredSpeakers,
     onselect,
     onfilter,
+    onsetfilter,
     onrename,
     onmerge,
-    ontoggleirrelevant,
     onaddnamed,
     onremovenamed,
     onrenamenamed,
@@ -22,9 +23,9 @@
     filteredSpeakers: Set<string>;
     onselect: (id: string, e?: MouseEvent) => void;
     onfilter: (id: string) => void;
+    onsetfilter: (ids: string[]) => void;
     onrename: (id: string, name: string) => void;
     onmerge: (sourceIds: string[], targetName: string) => void;
-    ontoggleirrelevant: (id: string) => void;
     onaddnamed: (name: string) => void;
     onremovenamed: (name: string) => void;
     onrenamenamed: (oldName: string, newName: string) => void;
@@ -33,40 +34,35 @@
   interface SpeakerRow {
     id: string;
     total: number;
-    relevant: number;
-    allIrrelevant: boolean;
   }
 
   // Build speaker rows from segments, sorted by first appearance
   let speakerRows = $derived((): SpeakerRow[] => {
     const firstSeen = new Map<string, number>();
     const totals = new Map<string, number>();
-    const relevants = new Map<string, number>();
     for (let i = 0; i < segments.length; i++) {
       const seg = segments[i];
       if (!seg.speaker) continue;
       if (!firstSeen.has(seg.speaker)) firstSeen.set(seg.speaker, i);
       totals.set(seg.speaker, (totals.get(seg.speaker) ?? 0) + 1);
-      if (!seg.irrelevant) {
-        relevants.set(seg.speaker, (relevants.get(seg.speaker) ?? 0) + 1);
-      }
     }
     return [...firstSeen.entries()]
       .sort((a, b) => a[1] - b[1])
       .map(([id]) => ({
         id,
         total: totals.get(id) ?? 0,
-        relevant: relevants.get(id) ?? 0,
-        allIrrelevant: (relevants.get(id) ?? 0) === 0,
       }));
   });
 
-  // Split into named (non-default names or in the namedSpeakers list) and unnamed
+  // Split into named, unnamed, and special
   let named = $derived(
-    speakerRows().filter((r) => !isDefaultSpeakerName(r.id) || namedSpeakers.includes(r.id)),
+    speakerRows().filter((r) => (!isDefaultSpeakerName(r.id) && !isSpecialSpeaker(r.id)) || namedSpeakers.includes(r.id)),
   );
   let unnamed = $derived(
     speakerRows().filter((r) => isDefaultSpeakerName(r.id) && !namedSpeakers.includes(r.id)),
+  );
+  let special = $derived(
+    speakerRows().filter((r) => isSpecialSpeaker(r.id)),
   );
 
   // Named speakers from frontmatter that don't have segments yet
@@ -121,47 +117,67 @@
     onmerge([unnamedId], namedId);
     assigningId = null;
   }
+
+  // All named-speaker IDs currently present in segments (excludes unassigned).
+  let namedIds = $derived(named.map((r) => r.id));
+  let unnamedIds = $derived(unnamed.map((r) => r.id));
+
+  // Is the transcript currently filtered to only this section's speakers?
+  function sectionFilterActive(ids: string[]): boolean {
+    if (ids.length === 0 || filteredSpeakers.size !== ids.length) return false;
+    for (const id of ids) if (!filteredSpeakers.has(id)) return false;
+    return true;
+  }
+
+  let namedFilterActive = $derived(sectionFilterActive(namedIds));
+  let unnamedFilterActive = $derived(sectionFilterActive(unnamedIds));
+
+  function toggleSectionFilter(ids: string[], active: boolean) {
+    if (active) onsetfilter([]);
+    else onsetfilter(ids);
+  }
 </script>
 
 <!-- Named speakers -->
 <div class="mb-3">
   <div class="flex items-center gap-2 px-2 py-1 mb-1">
-    <span class="text-xs font-ui font-medium text-on-surface-secondary uppercase flex-1">Named</span>
-    <button
-      onclick={() => { showNewInput = !showNewInput; }}
-      class="text-xs font-ui text-primary cursor-pointer hover:underline"
-    >
-      + Add
-    </button>
-  </div>
-
-  {#if showNewInput}
-    <form class="flex items-center gap-2 px-2 py-1 mb-1" onsubmit={(e) => { e.preventDefault(); addSpeaker(); }}>
-      <input
-        type="text"
-        bind:value={newSpeakerName}
-        placeholder="Speaker name"
-        class="flex-1 text-sm font-ui bg-surface border border-border rounded px-2 py-1
-          text-on-surface outline-none focus:border-primary placeholder:text-on-surface-muted/50"
-      />
-      <button type="submit" class="text-xs font-ui font-medium px-2 py-1 bg-primary text-on-primary rounded cursor-pointer hover:bg-primary-hover">
-        Add
+    <span class="text-xs font-ui font-medium text-on-surface-secondary uppercase flex-1">
+      Named{#if named.length + unassignedNamed.length > 0} ({named.length + unassignedNamed.length}){/if}
+    </span>
+    {#if namedIds.length > 0}
+      <button
+        onclick={() => toggleSectionFilter(namedIds, namedFilterActive)}
+        class="p-0.5 rounded cursor-pointer transition-colors
+          {namedFilterActive
+            ? 'bg-primary/20 text-primary'
+            : 'text-on-surface-muted/50 hover:text-on-surface hover:bg-surface'}"
+        title={namedFilterActive ? 'Clear filter' : 'Show only named speakers'}
+      >
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+          <circle cx="12" cy="12" r="3" />
+        </svg>
       </button>
-    </form>
-  {/if}
+    {/if}
+  </div>
 
   {#each named as row}
     {@const isSelected = selectedSpeakers.has(row.id)}
     <div
       class="group flex items-center gap-2 px-2 py-1.5 rounded text-sm cursor-pointer transition-colors select-none
-        {isSelected ? 'bg-primary-container/30 ring-1 ring-primary/30' : 'hover:bg-surface-alt'}
-        {row.allIrrelevant ? 'opacity-50' : ''}"
+        {isSelected ? 'bg-primary-container/30 ring-1 ring-primary/30' : 'hover:bg-surface-alt'}"
       role="button"
       tabindex="0"
       onclick={(e) => { if (editingId !== row.id) onselect(row.id, e); }}
       onkeydown={(e) => { if (editingId !== row.id && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onselect(row.id); } }}
     >
-      <button onclick={(e) => { e.stopPropagation(); onfilter(row.id); }} class="w-3 h-3 rounded-full flex-none cursor-pointer transition-transform hover:scale-125 {filteredSpeakers.has(row.id) ? 'ring-2 ring-primary' : ''}" style="background-color: {speakerColour(row.id)}" title="Filter transcript to this speaker"></button>
+      <button
+        onclick={(e) => { e.stopPropagation(); onfilter(row.id); }}
+        class="flex-none cursor-pointer"
+        title="Click to filter the transcript to this speaker"
+      >
+        <SpeakerDot speaker={row.id} size="md" ring={filteredSpeakers.has(row.id)} />
+      </button>
       {#if editingId === row.id}
         <input
           bind:this={editInputEl}
@@ -173,7 +189,7 @@
           class="flex-1 min-w-0 bg-surface text-sm font-ui text-on-surface outline-none px-1 py-0.5 rounded border border-primary"
         />
       {:else}
-        <span class="flex-1 min-w-0 text-sm font-ui text-on-surface truncate {row.allIrrelevant ? 'line-through' : ''}">{row.id}</span>
+        <span class="flex-1 min-w-0 text-sm font-ui text-on-surface truncate">{row.id}</span>
         <button
           onclick={(e) => { e.stopPropagation(); startEdit(row.id); }}
           class="opacity-0 group-hover:opacity-100 cursor-pointer p-0.5 text-on-surface-muted hover:text-primary transition-opacity"
@@ -185,23 +201,14 @@
           </svg>
         </button>
       {/if}
-      <span class="text-xs text-on-surface-muted flex-none font-mono tabular-nums">{row.total}</span>
       <button
-        onclick={(e) => { e.stopPropagation(); ontoggleirrelevant(row.id); }}
-        class="cursor-pointer p-0.5 flex-none transition-colors
-          {row.allIrrelevant ? 'text-on-surface-muted hover:text-success' : 'text-on-surface-muted/40 hover:text-error'}"
-        title={row.allIrrelevant ? 'Mark relevant' : 'Mark irrelevant'}
-      >
-        {#if row.allIrrelevant}
-          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-            <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" /><line x1="1" y1="1" x2="23" y2="23" />
-          </svg>
-        {:else}
-          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" />
-          </svg>
-        {/if}
-      </button>
+        onclick={(e) => { e.stopPropagation(); onfilter(row.id); }}
+        class="text-xs font-mono tabular-nums flex-none px-1.5 py-0.5 rounded cursor-pointer transition-colors
+          {filteredSpeakers.has(row.id)
+            ? 'bg-primary/20 text-primary'
+            : 'text-on-surface-muted hover:bg-surface hover:text-on-surface'}"
+        title="Click to filter the transcript to this speaker"
+      >{row.total}</button>
     </div>
   {/each}
 
@@ -213,7 +220,7 @@
       onclick={(e) => onselect(name, e)}
       onkeydown={(e) => { if (editingId !== name && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onselect(name); } }}
     >
-      <button onclick={(e) => { e.stopPropagation(); onfilter(name); }} class="w-3 h-3 rounded-full flex-none cursor-pointer transition-transform hover:scale-125 {filteredSpeakers.has(name) ? 'ring-2 ring-primary' : ''}" style="background-color: {speakerColour(name)}" title="Filter transcript to this speaker"></button>
+      <SpeakerDot speaker={name} size="md" />
       {#if editingId === name}
         <input
           bind:this={editInputEl}
@@ -237,7 +244,7 @@
           </svg>
         </button>
       {/if}
-      <span class="text-xs text-on-surface-muted flex-none font-mono tabular-nums">0</span>
+      <span class="text-xs font-mono tabular-nums flex-none px-1.5 py-0.5 text-on-surface-muted/50">0</span>
       <button
         onclick={(e) => { e.stopPropagation(); onremovenamed(name); }}
         class="opacity-0 group-hover:opacity-100 text-on-surface-muted/40 hover:text-error cursor-pointer p-0.5 transition-opacity"
@@ -253,27 +260,107 @@
   {#if named.length === 0 && unassignedNamed.length === 0}
     <p class="text-xs text-on-surface-muted px-2 py-1 italic">No named speakers yet</p>
   {/if}
+
+  <!-- Add new named speaker -->
+  {#if showNewInput}
+    <form class="flex items-center gap-2 px-2 py-1 mt-1" onsubmit={(e) => { e.preventDefault(); addSpeaker(); }}>
+      <input
+        type="text"
+        bind:value={newSpeakerName}
+        placeholder="Speaker name"
+        class="flex-1 text-sm font-ui bg-surface border border-border rounded px-2 py-1
+          text-on-surface outline-none focus:border-primary placeholder:text-on-surface-muted/50"
+        onkeydown={(e) => { if (e.key === 'Escape') { showNewInput = false; newSpeakerName = ''; } }}
+      />
+      <button type="submit" class="text-xs font-ui font-medium px-2 py-1 bg-primary text-on-primary rounded cursor-pointer hover:bg-primary-hover">
+        Add
+      </button>
+    </form>
+  {:else}
+    <button
+      onclick={() => { showNewInput = true; }}
+      class="text-xs font-ui text-primary cursor-pointer hover:underline px-2 py-1 mt-0.5"
+    >
+      + Add new speaker
+    </button>
+  {/if}
 </div>
+
+<!-- Special speakers -->
+{#if special.length > 0}
+  <div class="mt-3 mb-3">
+    <div class="px-2 py-1 mb-1">
+      <span class="text-xs font-ui font-medium text-on-surface-muted uppercase">Special ({special.length})</span>
+    </div>
+
+    {#each special as row}
+      {@const isSelected = selectedSpeakers.has(row.id)}
+      <div
+        class="group flex items-center gap-2 px-2 py-1.5 rounded text-sm cursor-pointer transition-colors select-none
+          {isSelected ? 'bg-primary-container/30 ring-1 ring-primary/30' : 'hover:bg-surface-alt'}"
+        role="button"
+        tabindex="0"
+        onclick={(e) => onselect(row.id, e)}
+        onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onselect(row.id); } }}
+      >
+        <button
+          onclick={(e) => { e.stopPropagation(); onfilter(row.id); }}
+          class="flex-none cursor-pointer"
+          title="Click to filter the transcript to this speaker"
+        >
+          <SpeakerDot speaker={row.id} size="md" ring={filteredSpeakers.has(row.id)} />
+        </button>
+        <span class="flex-1 text-sm font-ui text-on-surface-muted truncate italic">{row.id}</span>
+        <button
+          onclick={(e) => { e.stopPropagation(); onfilter(row.id); }}
+          class="text-xs font-mono tabular-nums flex-none px-1.5 py-0.5 rounded cursor-pointer transition-colors
+            {filteredSpeakers.has(row.id)
+              ? 'bg-primary/20 text-primary'
+              : 'text-on-surface-muted hover:bg-surface hover:text-on-surface'}"
+          title="Click to filter the transcript to this speaker"
+        >{row.total}</button>
+      </div>
+    {/each}
+  </div>
+{/if}
 
 <!-- Unnamed speakers -->
 {#if unnamed.length > 0}
   <div>
-    <div class="px-2 py-1 mb-1">
-      <span class="text-xs font-ui font-medium text-on-surface-muted uppercase">Unnamed ({unnamed.length})</span>
+    <div class="flex items-center gap-2 px-2 py-1 mb-1">
+      <span class="text-xs font-ui font-medium text-on-surface-muted uppercase flex-1">Unnamed ({unnamed.length})</span>
+      <button
+        onclick={() => toggleSectionFilter(unnamedIds, unnamedFilterActive)}
+        class="p-0.5 rounded cursor-pointer transition-colors
+          {unnamedFilterActive
+            ? 'bg-primary/20 text-primary'
+            : 'text-on-surface-muted/50 hover:text-on-surface hover:bg-surface'}"
+        title={unnamedFilterActive ? 'Clear filter' : 'Show only unnamed speakers'}
+      >
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+          <circle cx="12" cy="12" r="3" />
+        </svg>
+      </button>
     </div>
 
     {#each unnamed as row}
       {@const isSelected = selectedSpeakers.has(row.id)}
       <div
         class="group flex items-center gap-2 px-2 py-1.5 rounded text-sm cursor-pointer transition-colors select-none
-          {isSelected ? 'bg-primary-container/30 ring-1 ring-primary/30' : 'hover:bg-surface-alt'}
-          {row.allIrrelevant ? 'opacity-50' : ''}"
+          {isSelected ? 'bg-primary-container/30 ring-1 ring-primary/30' : 'hover:bg-surface-alt'}"
         role="button"
         tabindex="0"
         onclick={(e) => { if (assigningId !== row.id) onselect(row.id, e); }}
         onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onselect(row.id); } }}
       >
-        <button onclick={(e) => { e.stopPropagation(); onfilter(row.id); }} class="w-3 h-3 rounded-full flex-none cursor-pointer transition-transform hover:scale-125 {filteredSpeakers.has(row.id) ? 'ring-2 ring-primary' : ''}" style="background-color: {speakerColour(row.id)}" title="Filter transcript to this speaker"></button>
+        <button
+          onclick={(e) => { e.stopPropagation(); onfilter(row.id); }}
+          class="flex-none cursor-pointer"
+          title="Click to filter the transcript to this speaker"
+        >
+          <SpeakerDot speaker={row.id} size="md" ring={filteredSpeakers.has(row.id)} />
+        </button>
         <span class="flex-1 text-sm font-ui text-on-surface-muted truncate">{row.id}</span>
 
         <!-- Assign to named speaker -->
@@ -292,7 +379,7 @@
                   onclick={(e) => { e.stopPropagation(); assignSpeaker(row.id, name); }}
                   class="block w-full text-left px-3 py-1.5 text-sm font-ui cursor-pointer hover:bg-primary-container/30 text-on-surface"
                 >
-                  <span class="inline-block w-2 h-2 rounded-full mr-2 align-middle" style="background-color: {speakerColour(name)}"></span>
+                  <SpeakerDot speaker={name} inline />
                   {name}
                 </button>
               {/each}
@@ -301,35 +388,35 @@
                   onclick={(e) => { e.stopPropagation(); assignSpeaker(row.id, namedRow.id); }}
                   class="block w-full text-left px-3 py-1.5 text-sm font-ui cursor-pointer hover:bg-primary-container/30 text-on-surface"
                 >
-                  <span class="inline-block w-2 h-2 rounded-full mr-2 align-middle" style="background-color: {speakerColour(namedRow.id)}"></span>
+                  <SpeakerDot speaker={namedRow.id} inline />
                   {namedRow.id}
                 </button>
               {/each}
-              {#if namedSpeakers.length === 0 && named.length === 0}
-                <p class="text-xs text-on-surface-muted px-3 py-1.5 italic">Add named speakers first</p>
-              {/if}
+              <div class="border-t border-border mt-1 pt-1">
+                {#each [SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE] as specialName}
+                  <button
+                    onclick={(e) => { e.stopPropagation(); assignSpeaker(row.id, specialName); }}
+                    class="block w-full text-left px-3 py-1.5 text-sm font-ui cursor-pointer hover:bg-primary-container/30 text-on-surface-muted italic"
+                  >
+                    <SpeakerDot speaker={specialName} inline />
+                    {specialName}
+                  </button>
+                {/each}
+              </div>
             </div>
           {/if}
         </div>
 
-        <span class="text-xs text-on-surface-muted flex-none font-mono tabular-nums">{row.total}</span>
         <button
-          onclick={(e) => { e.stopPropagation(); ontoggleirrelevant(row.id); }}
-          class="cursor-pointer p-0.5 flex-none transition-colors
-            {row.allIrrelevant ? 'text-on-surface-muted hover:text-success' : 'text-on-surface-muted/40 hover:text-error'}"
-          title={row.allIrrelevant ? 'Mark relevant' : 'Mark irrelevant'}
-        >
-          {#if row.allIrrelevant}
-            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-              <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" /><line x1="1" y1="1" x2="23" y2="23" />
-            </svg>
-          {:else}
-            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" />
-            </svg>
-          {/if}
-        </button>
+          onclick={(e) => { e.stopPropagation(); onfilter(row.id); }}
+          class="text-xs font-mono tabular-nums flex-none px-1.5 py-0.5 rounded cursor-pointer transition-colors
+            {filteredSpeakers.has(row.id)
+              ? 'bg-primary/20 text-primary'
+              : 'text-on-surface-muted hover:bg-surface hover:text-on-surface'}"
+          title="Click to filter the transcript to this speaker"
+        >{row.total}</button>
       </div>
     {/each}
   </div>
 {/if}
+

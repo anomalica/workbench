@@ -2,11 +2,13 @@
   import type { IngestDetail, User } from "$lib/api";
   import { submitReview } from "$lib/api";
   import { DocumentStore } from "$lib/document.svelte";
-  import { parseTranscript, secondsToTime, speakerColour, findActiveSegmentForTime, extractFrontmatterSpeakers } from "$lib/transcript";
+  import { parseTranscript, secondsToTime, findActiveSegmentForTime, extractFrontmatterSpeakers, isSegmentIrrelevant, isSpecialSpeaker, nextSpeakerName, groupSegmentsBySpeaker, orderedNamedSpeakers, SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE } from "$lib/transcript";
+  import { nextSegmentBoundary, singleEndForCurrentTime } from "$lib/playback";
   import type { Segment } from "$lib/transcript";
   import SpeakerManager from "./SpeakerManager.svelte";
-  import SegmentActions from "./SegmentActions.svelte";
   import SplitEditor from "./SplitEditor.svelte";
+  import EditSegmentDialog from "./EditSegmentDialog.svelte";
+  import SpeakerDot from "./SpeakerDot.svelte";
   import DiffViewer from "./DiffViewer.svelte";
   import MilkdownEditor from "./MilkdownEditor.svelte";
   import { marked } from "marked";
@@ -27,8 +29,30 @@
 
   let rawMarkdown = $derived(ingest.raw_frontmatter + ingest.body);
 
+  // Only reload when we're actually looking at a different ingest.
+  // Without this guard, writes inside doc.load (to $state fields) can
+  // retrigger the effect and wipe localStorage-restored state.
+  let lastLoadedHash = "";
+  let loadEffectCount = 0;
   $effect(() => {
-    doc.load(rawMarkdown, ingest.content_hash);
+    const hash = ingest.content_hash;
+    const md = rawMarkdown;
+    loadEffectCount++;
+    const run = loadEffectCount;
+    if (hash === lastLoadedHash) {
+      console.log(`[load-effect #${run}] skipped (hash unchanged: ${hash.slice(0, 12)}...)`);
+      return;
+    }
+    lastLoadedHash = hash;
+    const key = `workbench:doc:${hash}`;
+    const hasSaved = localStorage.getItem(key) !== null;
+    console.log(`[load-effect #${run}] loading`, { hash: hash.slice(0, 12), hasSaved, mdLen: md.length });
+    doc.load(md, hash);
+    console.log(`[load-effect #${run}] after load`, {
+      dirty: doc.dirty,
+      currentLen: doc.current.length,
+      pastCount: doc.past.length,
+    });
   });
 
   let currentBody = $derived(() => {
@@ -84,6 +108,7 @@
 
   // File drop state (for dropping source files onto the left panel)
   let dragging = $state(false);
+  // svelte-ignore state_referenced_locally
   let localSourceFile = $state<File | null>(sourceFile);
 
   // Who can see the body:
@@ -301,6 +326,28 @@
   let currentTime = $state(0);
   let activeSegment = $state(-1);
   let timeInterval: ReturnType<typeof setInterval> | null = null;
+  let playbackMode = $state<"auto" | "single">("auto");
+  let singleSegmentEnd = -1; // seconds at which to pause (used in interval as backup)
+  let singleCheckEnabled = false; // delayed flag to avoid stale-time false pauses
+  let singlePauseTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function cancelSinglePauseTimer() {
+    if (singlePauseTimer) {
+      clearTimeout(singlePauseTimer);
+      singlePauseTimer = null;
+    }
+  }
+
+  function schedulePauseAt(boundarySeconds: number, fromSeconds: number) {
+    cancelSinglePauseTimer();
+    const durationMs = Math.max(0, (boundarySeconds - fromSeconds) * 1000);
+    singlePauseTimer = setTimeout(() => {
+      if (ytPlayer && playerReady) ytPlayer.pauseVideo();
+      singleSegmentEnd = -1;
+      singleCheckEnabled = false;
+      singlePauseTimer = null;
+    }, durationMs);
+  }
 
   // Speaker selection - for merging and UI highlight.
   let selectedSpeakers = $state(new Set<string>());
@@ -308,7 +355,7 @@
   let filteredSpeakers = $state(new Set<string>());
 
   // Irrelevant visibility
-  let hideIrrelevant = $state(false);
+  let hideIrrelevant = $state(true);
 
   // Segment selection (for the Mark irrelevant action)
   let selected = $state(new Set<number>());
@@ -316,21 +363,45 @@
 
   // Split editing mode
   let splittingIndex = $state<number | null>(null);
+  let editingIndex = $state<number | null>(null);
+  // Which picker is open, if any. "sentence" uses segment.index as key;
+  // "group" uses the first segment of the group's index as key.
+  let speakerPicker = $state<null | { kind: "sentence" | "group" | "multi"; key: number }>(null);
+
+  // Close the speaker picker on outside click
+  $effect(() => {
+    if (speakerPicker === null) return;
+    const handler = () => { speakerPicker = null; };
+    document.addEventListener("click", handler);
+    return () => document.removeEventListener("click", handler);
+  });
+
+  // Drop filter/selection entries for speakers that no longer exist
+  // (e.g. after rename, merge, or assign).
+  $effect(() => {
+    const existing = new Set(segments.map((s) => s.speaker));
+    const prunedFilter = new Set([...filteredSpeakers].filter((id) => existing.has(id)));
+    if (prunedFilter.size !== filteredSpeakers.size) filteredSpeakers = prunedFilter;
+    const prunedSelection = new Set([...selectedSpeakers].filter((id) => existing.has(id)));
+    if (prunedSelection.size !== selectedSpeakers.size) selectedSpeakers = prunedSelection;
+  });
 
   // Auto-follow: sync the highlighted segment with video playback.
-  // Skips irrelevant segments by seeking past them to the next relevant one.
-  // Pauses briefly after manual seeking so clicks aren't overridden.
+  // In "auto" mode: focus follows continuously, skipping irrelevant segments.
+  // In "single" mode: highlight stays on the clicked segment; the interval handles pausing.
   $effect(() => {
     if (!hasTranscript || selected.size > 1 || splittingIndex !== null) return;
     if (view !== "ingest") return;
     if (autoFollowPaused) return;
+    if (playbackMode === "single") return;
     const t = currentTime;
+
     let best = findActiveSegmentForTime(segments, t);
     if (best >= 0 && best !== activeSegment) {
       // If the current time falls within an irrelevant segment, skip to the next relevant one
       const bestSeg = segments.find((s) => s.index === best);
-      if (bestSeg?.irrelevant) {
-        const nextRelevant = segments.find((s) => !s.irrelevant && s.seconds > t);
+      if (bestSeg && isSegmentIrrelevant(bestSeg)) {
+        const nextRelevant = segments.find((s) => !isSegmentIrrelevant(s) && s.seconds > t);
         if (nextRelevant && ytPlayer && playerReady) {
           ytPlayer.seekTo(nextRelevant.seconds, true);
           best = nextRelevant.index;
@@ -340,7 +411,6 @@
       activeSegment = best;
       selected = new Set([best]);
       lastClicked = best;
-      // Don't use seekTo here - that would set lastManualSeek and block us
       const el = document.querySelector(`[data-segment-index="${best}"]`);
       if (el) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
     }
@@ -374,18 +444,21 @@
   // Derived: visible segments after filters
   let visibleSegments = $derived(
     segments
-      .filter((s) => !hideIrrelevant || !s.irrelevant)
+      .filter((s) => !hideIrrelevant || !isSegmentIrrelevant(s))
       .filter((s) => filteredSpeakers.size === 0 || filteredSpeakers.has(s.speaker)),
   );
+
+  // Derived: visible segments grouped by consecutive same-speaker runs
+  let visibleGroups = $derived(groupSegmentsBySpeaker(visibleSegments));
 
   // Derived: speakers visible in current filter mode
   let visibleSpeakerIds = $derived(new Set(
     segments
-      .filter((s) => !hideIrrelevant || !s.irrelevant)
+      .filter((s) => !hideIrrelevant || !isSegmentIrrelevant(s))
       .map((s) => s.speaker),
   ));
 
-  let irrelevantCount = $derived(segments.filter((s) => s.irrelevant).length);
+  let irrelevantCount = $derived(segments.filter((s) => isSegmentIrrelevant(s)).length);
 
   // Ordered list of unique speaker names for the speaker picker
   let allSpeakerNames = $derived((): string[] => {
@@ -406,6 +479,7 @@
     return match ? match[1] : "";
   });
   let namedSpeakers = $derived(extractFrontmatterSpeakers(currentFrontmatter()));
+  let namedSpeakersOrdered = $derived(orderedNamedSpeakers(segments, namedSpeakers));
 
   function addNamedSpeaker(name: string) {
     if (!namedSpeakers.includes(name)) {
@@ -423,11 +497,10 @@
 
   // True if every selected segment is already irrelevant. Used to flip
   // the toggle action: irrelevant -> relevant, otherwise relevant -> irrelevant.
-  let selectedAllIrrelevant = $derived(() => {
-    if (selected.size === 0) return false;
-    const sel = segments.filter((s) => selected.has(s.index));
-    return sel.length > 0 && sel.every((s) => s.irrelevant);
-  });
+  let selectedAllIrrelevant = $derived(
+    selected.size > 0 &&
+      segments.filter((s) => selected.has(s.index)).every((s) => isSegmentIrrelevant(s)),
+  );
 
   function initYouTubePlayer(id: string) {
     if (typeof YT === "undefined" || !YT.Player) {
@@ -448,7 +521,15 @@
         onReady: () => {
           playerReady = true;
           timeInterval = setInterval(() => {
-            if (ytPlayer) currentTime = ytPlayer.getCurrentTime();
+            if (!ytPlayer) return;
+            const t = ytPlayer.getCurrentTime();
+            currentTime = t;
+            // Single-mode pause: check directly against the live player time
+            if (singleCheckEnabled && singleSegmentEnd > 0 && t >= singleSegmentEnd) {
+              ytPlayer.pauseVideo();
+              singleSegmentEnd = -1;
+              singleCheckEnabled = false;
+            }
           }, 250);
         },
       },
@@ -459,13 +540,41 @@
   let autoFollowPaused = $state(false);
   let autoFollowTimer: ReturnType<typeof setTimeout> | null = null;
 
+  function togglePlaybackMode() {
+    cancelSinglePauseTimer();
+    if (playbackMode === "auto") {
+      playbackMode = "single";
+      singleSegmentEnd = singleEndForCurrentTime(segments, currentTime);
+      singleCheckEnabled = singleSegmentEnd > 0;
+      if (singleSegmentEnd > 0) schedulePauseAt(singleSegmentEnd, currentTime);
+    } else {
+      playbackMode = "auto";
+      singleSegmentEnd = -1;
+      singleCheckEnabled = false;
+    }
+  }
+
   function seekTo(seconds: number, segIndex: number) {
     activeSegment = segIndex;
     autoFollowPaused = true;
     if (autoFollowTimer) clearTimeout(autoFollowTimer);
     autoFollowTimer = setTimeout(() => { autoFollowPaused = false; }, 1000);
+    singleCheckEnabled = false;
+    cancelSinglePauseTimer();
     if (ytPlayer && playerReady) {
       ytPlayer.seekTo(seconds, true);
+      ytPlayer.playVideo();
+      if (playbackMode === "single") {
+        singleSegmentEnd = nextSegmentBoundary(segments, segIndex);
+        if (singleSegmentEnd > 0) {
+          // Precise pause via setTimeout using the segment duration
+          schedulePauseAt(singleSegmentEnd, seconds);
+          // Also re-enable the interval backup after a delay
+          setTimeout(() => { singleCheckEnabled = true; }, 500);
+        }
+      } else {
+        singleSegmentEnd = -1;
+      }
     }
   }
 
@@ -483,14 +592,16 @@
       selected = next;
       lastClicked = segment.index;
     } else if (e.shiftKey && lastClicked >= 0) {
-      // Range select
+      // Range select from the anchor (lastClicked) to this click.
+      // Replaces the selection so moving the click back toward the anchor shrinks the range.
       const from = Math.min(lastClicked, segment.index);
       const to = Math.max(lastClicked, segment.index);
-      const next = new Set(selected);
+      const next = new Set<number>();
       for (const s of segments) {
         if (s.index >= from && s.index <= to) next.add(s.index);
       }
       selected = next;
+      seekTo(segment.seconds, segment.index);
     } else {
       // Normal click - seek video and select just this segment
       seekTo(segment.seconds, segment.index);
@@ -504,7 +615,7 @@
       .filter((s) => selected.has(s.index))
       .map((s) => ({ speaker: s.speaker, time: s.time }));
     if (targets.length > 0) {
-      doc.setIrrelevant(targets, irrelevant);
+      doc.setSegmentsSpeaker(targets, irrelevant ? SPEAKER_IRRELEVANT : nextSpeakerName(segments));
       selected = new Set();
     }
   }
@@ -512,7 +623,7 @@
   function toggleSelectedIrrelevance() {
     // If everything selected is already irrelevant, mark relevant.
     // Otherwise (some or all relevant) mark everything irrelevant.
-    markSelectedIrrelevant(!selectedAllIrrelevant());
+    markSelectedIrrelevant(!selectedAllIrrelevant);
   }
 
   // Edit operations
@@ -591,17 +702,6 @@
         if (el) el.scrollIntoView({ block: "center", behavior: "smooth" });
       }
     });
-  }
-
-  function toggleSpeakerIrrelevant(speakerId: string) {
-    // If any of the speaker's segments are relevant, mark all irrelevant.
-    // Otherwise (everything already irrelevant) mark all relevant.
-    const speakerSegments = segments.filter((s) => s.speaker === speakerId);
-    const anyRelevant = speakerSegments.some((s) => !s.irrelevant);
-    const targets = speakerSegments.map((s) => ({ speaker: s.speaker, time: s.time }));
-    if (targets.length > 0) {
-      doc.setIrrelevant(targets, anyRelevant);
-    }
   }
 
   // Keyboard shortcuts
@@ -687,6 +787,7 @@
 </script>
 
 <div class="flex flex-col h-full"
+  role="presentation"
   ondragover={(e) => e.preventDefault()}
   ondrop={(e) => e.preventDefault()}>
   <!-- Title bar -->
@@ -741,16 +842,16 @@
 
   <!-- Submit review modal -->
   {#if showSubmitForm}
-    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
     <div
       class="fixed inset-0 bg-ink/50 z-50 flex items-center justify-center p-4"
-      onclick={() => { showSubmitForm = false; }}
+      onclick={(e) => { if (e.target === e.currentTarget) showSubmitForm = false; }}
+      onkeydown={(e) => { if (e.key === 'Escape') showSubmitForm = false; }}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Submit review"
+      tabindex="-1"
     >
-      <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-      <div
-        class="bg-surface rounded-lg shadow-lg max-w-md w-full p-6"
-        onclick={(e) => e.stopPropagation()}
-      >
+      <div class="bg-surface rounded-lg shadow-lg max-w-md w-full p-6">
         <h3 class="font-ui font-semibold text-on-surface mb-4">Submit review</h3>
 
         {#if user}
@@ -850,6 +951,8 @@
           <div
             class="flex-1 flex items-center justify-center text-sm text-center transition-colors cursor-default
               {dragging ? 'bg-primary-container/20 text-primary' : 'text-on-surface-muted'}"
+            role="region"
+            aria-label="Drop target for source file"
             ondragover={(e) => { e.preventDefault(); dragging = true; }}
             ondragleave={() => { dragging = false; }}
             ondrop={handleFileDrop}
@@ -881,9 +984,9 @@
                     else next.add(id);
                     filteredSpeakers = next;
                   }}
+                  onsetfilter={(ids) => { filteredSpeakers = new Set(ids); }}
                   onrename={renameSpeaker}
                   onmerge={mergeSpeakers}
-                  ontoggleirrelevant={toggleSpeakerIrrelevant}
                   onaddnamed={addNamedSpeaker}
                   onremovenamed={removeNamedSpeaker}
                   onrenamenamed={renameNamedSpeaker}
@@ -934,6 +1037,32 @@
         </button>
 
         <div class="ml-auto flex items-center gap-1">
+          <!-- Playback mode toggle -->
+          {#if view === "ingest" && hasTranscript && ytId}
+            <button
+              onclick={togglePlaybackMode}
+              class="flex items-center gap-1 cursor-pointer px-1.5 py-0.5 rounded-full transition-colors text-xs font-ui font-medium
+                {playbackMode === 'single'
+                  ? 'bg-primary/10 text-primary'
+                  : 'text-on-surface-muted hover:text-on-surface hover:bg-surface'}"
+              title={playbackMode === "auto"
+                ? "Auto-follow: video plays continuously, focus follows"
+                : "Single segment: pauses after each segment"}
+            >
+              {#if playbackMode === "single"}
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <rect x="6" y="4" width="4" height="16" rx="1" />
+                  <rect x="14" y="4" width="4" height="16" rx="1" />
+                </svg>
+              {:else}
+                <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M8 5v14l11-7z" />
+                </svg>
+              {/if}
+              {playbackMode === "single" ? "Single" : "Auto"}
+            </button>
+          {/if}
+
           <!-- Global show/hide irrelevant toggle -->
           {#if view === "ingest" && hasTranscript}
             {#if irrelevantCount > 0}
@@ -1115,7 +1244,7 @@
             <span class="text-xs font-ui text-on-surface-secondary">Filtered to:</span>
             {#each [...filteredSpeakers] as speakerId}
               <span class="text-xs font-ui font-medium text-primary inline-flex items-center gap-1">
-                <span class="w-2 h-2 rounded-full" style="background-color: {speakerColour(speakerId)}"></span>
+                <SpeakerDot speaker={speakerId} />
                 {speakerId}
               </span>
             {/each}
@@ -1126,35 +1255,112 @@
           </div>
         {/if}
         {#if selected.size > 1}
+          {@const multiPickerOpen = speakerPicker?.kind === "multi"}
           <div class="px-4 py-2 bg-surface-alt border-b border-border flex items-center gap-2 flex-none">
             <span class="text-xs font-ui text-on-surface-secondary">{selected.size} segments selected</span>
             <div class="ml-auto flex items-center gap-1">
-              <button
-                onclick={() => {
-                  const targets = segments
-                    .filter((s) => selected.has(s.index))
-                    .map((s) => ({ speaker: s.speaker, time: s.time }));
-                  doc.setIrrelevant(targets, true);
-                  selected = new Set();
-                }}
-                class="text-xs font-ui px-2 py-1 rounded cursor-pointer text-on-surface-secondary hover:bg-error-container/30 hover:text-error"
-                title="Mark all selected as irrelevant"
-              >
-                Mark irrelevant
-              </button>
-              <button
-                onclick={() => {
-                  const targets = segments
-                    .filter((s) => selected.has(s.index))
-                    .map((s) => ({ speaker: s.speaker, time: s.time }));
-                  doc.setIrrelevant(targets, false);
-                  selected = new Set();
-                }}
-                class="text-xs font-ui px-2 py-1 rounded cursor-pointer text-on-surface-secondary hover:bg-success-container/30 hover:text-success"
-                title="Mark all selected as relevant"
-              >
-                Mark relevant
-              </button>
+              <!-- Change speaker (extract into a different or new speaker) -->
+              <div class="relative">
+                <button
+                  onclick={(e) => {
+                    e.stopPropagation();
+                    speakerPicker = multiPickerOpen ? null : { kind: "multi", key: 0 };
+                  }}
+                  class="text-xs font-ui px-2 py-1 rounded cursor-pointer text-on-surface-secondary hover:bg-primary-container/30 hover:text-primary flex items-center gap-1"
+                  title="Change speaker for all selected"
+                >
+                  Change speaker
+                  <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+                {#if multiPickerOpen}
+                  {@const current = ""}
+                  {@const nm = namedSpeakersOrdered.filter((s) => s !== current)}
+                  {@const sp = [SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE].filter((s) => s !== current)}
+                  {@const ot = allSpeakerNames().filter((s) => !namedSpeakers.includes(s) && !isSpecialSpeaker(s))}
+                  {@const assign = (name: string) => {
+                    const targets = segments
+                      .filter((s) => selected.has(s.index))
+                      .map((s) => ({ speaker: s.speaker, time: s.time }));
+                    doc.setSegmentsSpeaker(targets, name);
+                    selected = new Set();
+                    speakerPicker = null;
+                  }}
+                  <div
+                    onclick={(e) => e.stopPropagation()}
+                    onkeydown={() => {}}
+                    role="menu"
+                    tabindex="-1"
+                    class="absolute right-0 top-full mt-1 z-30 bg-surface-raised border border-border rounded shadow-lg py-1 min-w-40 max-h-60 overflow-auto"
+                  >
+                    {#each nm as name}
+                      <button onclick={() => assign(name)}
+                        class="block w-full text-left px-3 py-1.5 text-sm font-ui cursor-pointer hover:bg-primary-container/30 text-on-surface">
+                        <SpeakerDot speaker={name} inline />
+                        {name}
+                      </button>
+                    {/each}
+                    {#if nm.length > 0 && sp.length > 0}
+                      <div class="border-t border-border my-1"></div>
+                    {/if}
+                    {#each sp as name}
+                      <button onclick={() => assign(name)}
+                        class="block w-full text-left px-3 py-1.5 text-sm font-ui cursor-pointer hover:bg-primary-container/30 text-on-surface-muted italic">
+                        <SpeakerDot speaker={name} inline />
+                        {name}
+                      </button>
+                    {/each}
+                    {#if ot.length > 0}
+                      <div class="border-t border-border my-1"></div>
+                      {#each ot as name}
+                        <button onclick={() => assign(name)}
+                          class="block w-full text-left px-3 py-1.5 text-sm font-ui cursor-pointer hover:bg-primary-container/30 text-on-surface-muted">
+                          <SpeakerDot speaker={name} inline />
+                          {name}
+                        </button>
+                      {/each}
+                    {/if}
+                    <div class="border-t border-border mt-1 pt-1">
+                      <button onclick={() => assign(nextSpeakerName(segments))}
+                        class="block w-full text-left px-3 py-1.5 text-sm font-ui cursor-pointer hover:bg-primary-container/30 text-primary">
+                        + New speaker
+                      </button>
+                    </div>
+                  </div>
+                {/if}
+              </div>
+
+              <!-- Mark irrelevant / relevant (only one shown, based on current state) -->
+              {#if selectedAllIrrelevant}
+                <button
+                  onclick={() => {
+                    const targets = segments
+                      .filter((s) => selected.has(s.index))
+                      .map((s) => ({ speaker: s.speaker, time: s.time }));
+                    doc.setSegmentsSpeaker(targets, nextSpeakerName(segments));
+                    selected = new Set();
+                  }}
+                  class="text-xs font-ui px-2 py-1 rounded cursor-pointer text-on-surface-secondary hover:bg-success-container/30 hover:text-success"
+                  title="Mark all selected as relevant"
+                >
+                  Mark relevant
+                </button>
+              {:else}
+                <button
+                  onclick={() => {
+                    const targets = segments
+                      .filter((s) => selected.has(s.index))
+                      .map((s) => ({ speaker: s.speaker, time: s.time }));
+                    doc.setSegmentsSpeaker(targets, SPEAKER_IRRELEVANT);
+                    selected = new Set();
+                  }}
+                  class="text-xs font-ui px-2 py-1 rounded cursor-pointer text-on-surface-secondary hover:bg-error-container/30 hover:text-error"
+                  title="Mark all selected as irrelevant"
+                >
+                  Mark irrelevant
+                </button>
+              {/if}
               <button
                 onclick={() => { selected = new Set(); }}
                 class="text-xs text-on-surface-muted cursor-pointer hover:text-on-surface px-1"
@@ -1168,83 +1374,253 @@
           </div>
         {/if}
         <div class="flex-1 overflow-auto" data-scroll-sync onscroll={handleContentScroll}>
-          {#each visibleSegments as segment, vi}
-            {@const isSelected = selected.has(segment.index)}
-            {#if splittingIndex === segment.index}
-              <!-- Split editing mode: replaces the segment in place -->
-              <div class="border-b border-border/50">
-                <SplitEditor
-                  {segment}
-                  allSegments={segments}
-                  allSpeakers={allSpeakerNames()}
-                  onsplit={(charPos, aboveSp, belowSp, belowTime) => {
-                    doc.splitSegment(segment.speaker, segment.time, charPos, aboveSp, belowSp, belowTime);
-                    splittingIndex = null;
-                  }}
-                  oncancel={() => { splittingIndex = null; }}
-                />
-              </div>
-            {:else}
-              <div
-                data-segment-index={segment.index}
-                class="px-4 py-3 border-b transition-colors cursor-pointer select-none
-                  {isSelected
-                    ? 'bg-primary-container/30 border-primary/30'
-                    : 'border-border/50 hover:bg-primary-container/10'}"
-                style:opacity={segment.irrelevant ? 0.4 : undefined}
-                style:background={segment.irrelevant ? 'var(--color-surface-alt)' : undefined}
-                role="button"
-                tabindex="0"
-                onclick={(e) => handleSegmentClick(segment, e)}
-                onkeydown={(e) => { if (e.key === 'Enter') handleSegmentClick(segment, e as unknown as MouseEvent); }}
-              >
-                {#if isSelected && selected.size === 1}
-                  <SegmentActions
-                    {segment}
-                    allSegments={segments}
-                    allSpeakers={allSpeakerNames()}
-                  {namedSpeakers}
-                    isFirst={vi === 0}
-                    isLast={vi === visibleSegments.length - 1}
-                    videoTime={currentTime}
-                    onchangespeaker={(sp) => doc.changeSegmentSpeaker(segment.speaker, segment.time, sp)}
-                    onchangetime={(t) => doc.changeSegmentTime(segment.speaker, segment.time, t)}
-                    onmergeup={() => doc.mergeSegmentUp(segment.speaker, segment.time)}
-                    onmergedown={() => doc.mergeSegmentDown(segment.speaker, segment.time)}
-                    onstartsplit={() => { splittingIndex = segment.index; }}
-                    ontoggleirrelevant={() => {
-                      const markingIrrelevant = !segment.irrelevant;
-                      doc.setIrrelevant([{ speaker: segment.speaker, time: segment.time }], markingIrrelevant);
-                      // If marking irrelevant during playback, seek to the next relevant segment
-                      if (markingIrrelevant && ytPlayer && playerReady) {
-                        const nextRelevant = segments.find((s) => !s.irrelevant && s.seconds > segment.seconds && s.index !== segment.index);
-                        if (nextRelevant) {
-                          ytPlayer.seekTo(nextRelevant.seconds, true);
-                        }
-                      }
+          {#each visibleGroups as group}
+            {@const groupIrrelevant = isSegmentIrrelevant(group.segments[0])}
+            {@const groupKey = group.segments[0].index}
+            {@const groupPickerOpen = speakerPicker?.kind === "group" && speakerPicker.key === groupKey}
+            <div
+              class="border-b border-border/50 transition-colors
+                {groupPickerOpen ? 'bg-primary-container/20' : ''}"
+              style:opacity={groupIrrelevant ? 0.4 : undefined}
+              style:background={groupIrrelevant && !groupPickerOpen ? 'var(--color-surface-alt)' : undefined}
+            >
+              <!-- Group header: speaker shown once per run, click to change whole block -->
+              <div class="px-4 pt-3 pb-1 flex items-center gap-2">
+                <div class="w-4 flex-none flex items-center justify-center">
+                  <SpeakerDot speaker={group.speaker} />
+                </div>
+                <div class="relative">
+                  <button
+                    onclick={(e) => {
+                      e.stopPropagation();
+                      speakerPicker = groupPickerOpen ? null : { kind: "group", key: groupKey };
                     }}
-                  />
+                    class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
+                    title="Change speaker for this whole block"
+                  >
+                    {group.speaker}
+                  </button>
+                  {#if groupPickerOpen}
+                    {@const current = group.speaker}
+                    {@const nm = namedSpeakersOrdered.filter((s) => s !== current)}
+                    {@const sp = [SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE].filter((s) => s !== current)}
+                    {@const ot = allSpeakerNames().filter((s) => s !== current && !namedSpeakers.includes(s) && !isSpecialSpeaker(s))}
+                    <div
+                      onclick={(e) => e.stopPropagation()}
+                      onkeydown={() => {}}
+                      role="menu"
+                      tabindex="-1"
+                      class="absolute left-0 top-full mt-1 z-30 bg-surface-raised border border-border rounded shadow-lg py-1 min-w-40 max-h-60 overflow-auto"
+                    >
+                      {#each nm as name}
+                        <button
+                          onclick={() => {
+                            doc.setSegmentsSpeaker(group.segments.map((s) => ({ speaker: s.speaker, time: s.time })), name);
+                            speakerPicker = null;
+                          }}
+                          class="block w-full text-left px-3 py-1.5 text-sm font-ui cursor-pointer hover:bg-primary-container/30 text-on-surface"
+                        >
+                          <SpeakerDot speaker={name} inline />
+                          {name}
+                        </button>
+                      {/each}
+                      {#if nm.length > 0 && sp.length > 0}
+                        <div class="border-t border-border my-1"></div>
+                      {/if}
+                      {#each sp as name}
+                        <button
+                          onclick={() => {
+                            doc.setSegmentsSpeaker(group.segments.map((s) => ({ speaker: s.speaker, time: s.time })), name);
+                            speakerPicker = null;
+                          }}
+                          class="block w-full text-left px-3 py-1.5 text-sm font-ui cursor-pointer hover:bg-primary-container/30 text-on-surface-muted italic"
+                        >
+                          <SpeakerDot speaker={name} inline />
+                          {name}
+                        </button>
+                      {/each}
+                      {#if ot.length > 0}
+                        <div class="border-t border-border my-1"></div>
+                        {#each ot as name}
+                          <button
+                            onclick={() => {
+                              doc.setSegmentsSpeaker(group.segments.map((s) => ({ speaker: s.speaker, time: s.time })), name);
+                              speakerPicker = null;
+                            }}
+                            class="block w-full text-left px-3 py-1.5 text-sm font-ui cursor-pointer hover:bg-primary-container/30 text-on-surface-muted"
+                          >
+                            <SpeakerDot speaker={name} inline />
+                            {name}
+                          </button>
+                        {/each}
+                      {/if}
+                      <div class="border-t border-border mt-1 pt-1">
+                        <button
+                          onclick={() => {
+                            doc.setSegmentsSpeaker(group.segments.map((s) => ({ speaker: s.speaker, time: s.time })), nextSpeakerName(segments));
+                            speakerPicker = null;
+                          }}
+                          class="block w-full text-left px-3 py-1.5 text-sm font-ui cursor-pointer hover:bg-primary-container/30 text-primary"
+                        >
+                          + New speaker
+                        </button>
+                      </div>
+                    </div>
+                  {/if}
+                </div>
+                {#if groupIrrelevant}
+                  <span class="text-xs text-on-surface-muted italic">irrelevant</span>
+                {/if}
+              </div>
+
+              <!-- Sentences within the group -->
+              {#each group.segments as segment}
+                {@const isSelected = selected.has(segment.index)}
+                {@const isSingleSelected = isSelected && selected.size === 1}
+                {#if splittingIndex === segment.index}
+                  <div class="px-4 pb-2">
+                    <SplitEditor
+                      {segment}
+                      allSegments={segments}
+                      allSpeakers={allSpeakerNames()}
+                      onsplit={(charPos, aboveSp, belowSp, belowTime) => {
+                        doc.splitSegment(segment.speaker, segment.time, charPos, aboveSp, belowSp, belowTime);
+                        splittingIndex = null;
+                      }}
+                      oncancel={() => { splittingIndex = null; }}
+                    />
+                  </div>
                 {:else}
-                  <div class="flex items-center gap-2 mb-1 h-6">
-                    <span
-                      class="w-2 h-2 rounded-full flex-none"
-                      style="background-color: {speakerColour(segment.speaker)}"
-                    ></span>
-                    <span class="text-xs font-ui font-medium text-primary">{segment.speaker}</span>
-                    <span class="text-xs text-on-surface-muted font-mono">{formatTime(segment.time)}</span>
-                    {#if segment.irrelevant}
-                      <span class="text-xs text-on-surface-muted italic">irrelevant</span>
-                    {/if}
+                  {@const sentencePickerOpen = speakerPicker?.kind === "sentence" && speakerPicker.key === segment.index}
+                  <div
+                    data-segment-index={segment.index}
+                    class="px-4 py-1 transition-colors cursor-pointer select-none group/row
+                      {isSelected ? 'bg-primary-container/30' : 'hover:bg-primary-container/10'}"
+                    role="button"
+                    tabindex="0"
+                    onclick={(e) => handleSegmentClick(segment, e)}
+                    onkeydown={(e) => { if (e.key === 'Enter') handleSegmentClick(segment, e as unknown as MouseEvent); }}
+                  >
+                    <div class="flex items-start gap-2">
+                      <!-- Per-sentence speaker picker: muted chevron, aligned with group dot -->
+                      <div class="relative flex-none w-4 flex items-start justify-center pt-0.5">
+                        <button
+                          onclick={(e) => {
+                            e.stopPropagation();
+                            speakerPicker = sentencePickerOpen ? null : { kind: "sentence", key: segment.index };
+                          }}
+                          class="w-4 h-4 flex items-center justify-center rounded cursor-pointer text-on-surface-muted/40 hover:text-on-surface hover:bg-surface-alt transition-colors"
+                          title="Change speaker for this sentence"
+                        >
+                          <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+                          </svg>
+                        </button>
+                        {#if sentencePickerOpen}
+                          {@const current = segment.speaker}
+                          {@const nm = namedSpeakersOrdered.filter((s) => s !== current)}
+                          {@const sp = [SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE].filter((s) => s !== current)}
+                          {@const ot = allSpeakerNames().filter((s) => s !== current && !namedSpeakers.includes(s) && !isSpecialSpeaker(s))}
+                          <div
+                            onclick={(e) => e.stopPropagation()}
+                            onkeydown={() => {}}
+                            role="menu"
+                            tabindex="-1"
+                            class="absolute left-0 top-full mt-1 z-30 bg-surface-raised border border-border rounded shadow-lg py-1 min-w-40 max-h-60 overflow-auto"
+                          >
+                            {#each nm as name}
+                              <button
+                                onclick={() => { doc.changeSegmentSpeaker(segment.speaker, segment.time, name); speakerPicker = null; }}
+                                class="block w-full text-left px-3 py-1.5 text-sm font-ui cursor-pointer hover:bg-primary-container/30 text-on-surface"
+                              >
+                                <SpeakerDot speaker={name} inline />
+                                {name}
+                              </button>
+                            {/each}
+                            {#if nm.length > 0 && sp.length > 0}
+                              <div class="border-t border-border my-1"></div>
+                            {/if}
+                            {#each sp as name}
+                              <button
+                                onclick={() => { doc.changeSegmentSpeaker(segment.speaker, segment.time, name); speakerPicker = null; }}
+                                class="block w-full text-left px-3 py-1.5 text-sm font-ui cursor-pointer hover:bg-primary-container/30 text-on-surface-muted italic"
+                              >
+                                <SpeakerDot speaker={name} inline />
+                                {name}
+                              </button>
+                            {/each}
+                            {#if ot.length > 0}
+                              <div class="border-t border-border my-1"></div>
+                              {#each ot as name}
+                                <button
+                                  onclick={() => { doc.changeSegmentSpeaker(segment.speaker, segment.time, name); speakerPicker = null; }}
+                                  class="block w-full text-left px-3 py-1.5 text-sm font-ui cursor-pointer hover:bg-primary-container/30 text-on-surface-muted"
+                                >
+                                  <SpeakerDot speaker={name} inline />
+                                  {name}
+                                </button>
+                              {/each}
+                            {/if}
+                            <div class="border-t border-border mt-1 pt-1">
+                              <button
+                                onclick={() => { doc.changeSegmentSpeaker(segment.speaker, segment.time, nextSpeakerName(segments)); speakerPicker = null; }}
+                                class="block w-full text-left px-3 py-1.5 text-sm font-ui cursor-pointer hover:bg-primary-container/30 text-primary"
+                              >
+                                + New speaker
+                              </button>
+                            </div>
+                          </div>
+                        {/if}
+                      </div>
+                      <span class="text-sm text-on-surface leading-relaxed flex-1">{segment.lines.join(" ")}</span>
+                      {#if isSingleSelected}
+                        <div class="flex items-center gap-0.5 flex-none pt-0.5">
+                          <button onclick={(e) => {
+                              e.stopPropagation();
+                              const wasIrrelevant = isSegmentIrrelevant(segment);
+                              const newSpeaker = wasIrrelevant ? nextSpeakerName(segments) : SPEAKER_IRRELEVANT;
+                              doc.setSegmentsSpeaker(
+                                [{ speaker: segment.speaker, time: segment.time }],
+                                newSpeaker,
+                              );
+                              if (!wasIrrelevant && ytPlayer && playerReady) {
+                                const nextRelevant = segments.find((s) => !isSegmentIrrelevant(s) && s.seconds > segment.seconds && s.index !== segment.index);
+                                if (nextRelevant) ytPlayer.seekTo(nextRelevant.seconds, true);
+                              }
+                            }}
+                            class="p-0.5 rounded cursor-pointer transition-colors
+                              {isSegmentIrrelevant(segment)
+                                ? 'text-on-surface-muted hover:text-success'
+                                : 'text-on-surface-muted/50 hover:text-error hover:bg-surface-alt'}"
+                            title={isSegmentIrrelevant(segment) ? 'Mark as relevant' : 'Mark as irrelevant'}>
+                            {#if isSegmentIrrelevant(segment)}
+                              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" /><line x1="1" y1="1" x2="23" y2="23" /></svg>
+                            {:else}
+                              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></svg>
+                            {/if}
+                          </button>
+                          {#if segment.lines.join("\n").length > 1}
+                            <button onclick={(e) => { e.stopPropagation(); splittingIndex = segment.index; }}
+                              class="p-0.5 rounded cursor-pointer text-on-surface-muted/50 hover:text-on-surface hover:bg-surface-alt transition-colors"
+                              title="Split this segment">
+                              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" d="M12 2v20M2 12h4M18 12h4" /></svg>
+                            </button>
+                          {/if}
+                          <button onclick={(e) => { e.stopPropagation(); editingIndex = segment.index; }}
+                            class="p-0.5 rounded cursor-pointer text-on-surface-muted/50 hover:text-primary hover:bg-surface-alt transition-colors"
+                            title="Edit timestamp and text">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                              <path stroke-linecap="round" stroke-linejoin="round" d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                              <path stroke-linecap="round" stroke-linejoin="round" d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                            </svg>
+                          </button>
+                        </div>
+                      {/if}
+                    </div>
                   </div>
                 {/if}
-
-                <div class="text-sm text-on-surface leading-relaxed pl-4">
-                  {#each segment.lines as line}
-                    <p class="mb-0.5">{line}</p>
-                  {/each}
-                </div>
-              </div>
-            {/if}
+              {/each}
+            </div>
           {/each}
         </div>
 
@@ -1267,3 +1643,20 @@
     </div>
   </div>
 </div>
+
+{#if editingIndex !== null}
+  {@const editSegment = segments.find((s) => s.index === editingIndex)}
+  {#if editSegment}
+    <EditSegmentDialog
+      segment={editSegment}
+      allSpeakers={allSpeakerNames()}
+      namedSpeakers={namedSpeakersOrdered}
+      videoTime={currentTime}
+      onsave={(newSpeaker, newTime, newText) => {
+        doc.editSegment(editSegment.speaker, editSegment.time, newSpeaker, newTime, newText);
+        editingIndex = null;
+      }}
+      oncancel={() => { editingIndex = null; }}
+    />
+  {/if}
+{/if}
