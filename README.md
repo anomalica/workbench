@@ -11,9 +11,9 @@ Plain Svelte 5 single-page application. No server-side rendering, no meta-framew
 - **Svelte 5** with runes for reactivity
 - **Vite** as the build tool
 - **Tailwind CSS v4** with shared design tokens from anomalica-brand
-- **FastAPI** (Python) backend for git repository operations (separate repository)
+- **FastAPI** (Python) backend in `backend/`, serving git repository operations
 
-During development, Vite proxies `/api` requests to the FastAPI backend. In production, FastAPI serves both the API and the built static files.
+The backend lives in this repository under `backend/` and is started alongside the frontend during development. During development, Vite (port 5173) proxies `/api` requests to the FastAPI backend (port 8000). In production, FastAPI serves both the API and the built static files.
 
 ## Key libraries (planned)
 
@@ -26,10 +26,21 @@ During development, Vite proxies `/api` requests to the FastAPI backend. In prod
 
 ## Development
 
+Requires `just`, Node.js, and Python with `uvicorn` + FastAPI available (see `backend/` for Python dependencies).
+
 ```bash
 npm install
-npm run dev
+just dev          # Starts FastAPI on :8000 and Vite on :5173 together
 ```
+
+Individual services:
+
+```bash
+just backend      # FastAPI only (uvicorn with --reload on :8000)
+just frontend     # Vite dev server only (:5173) - API calls will fail without backend
+```
+
+`npm run dev` is the same as `just frontend` - frontend-only, backend must be started separately.
 
 ## Build
 
