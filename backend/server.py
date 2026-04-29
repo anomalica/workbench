@@ -11,9 +11,15 @@ the full design, particularly the copyright handling section.
 
 from __future__ import annotations
 
+import json
+import math
 import mimetypes
 import os
+import random
 import re
+import secrets
+import string
+import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 
@@ -25,6 +31,11 @@ from backend.auth import setup_auth
 FULL_HASH_LENGTH = 64
 PUBLIC_HASH_LENGTH = 56
 FULL_HASH_PATTERN = re.compile(r"^[a-f0-9]{64}$")
+
+CHALLENGES_PER_SESSION = 10
+PASS_RATIO = 0.8
+MIN_POOL_FOR_CLOZE_GATE = 5
+VERIFICATION_SESSION_TTL_SECONDS = 1800
 
 DEFAULT_INGESTS_PATH = Path(__file__).resolve().parents[2] / "anomalica-ingests"
 DEFAULT_SOURCES_PATH = Path(__file__).resolve().parents[2] / "sources"
@@ -102,6 +113,10 @@ class IngestSource(ABC):
         notes: str,
     ) -> None:
         """Commit the current state of the file as a review."""
+
+    @abstractmethod
+    def load_verification(self, full_hash: str) -> dict | None:
+        """Load the verification sidecar for a record, or None if absent."""
 
 
 def normalise_hash(value: str | None) -> str | None:
@@ -233,6 +248,13 @@ class LocalIngestSource(IngestSource):
             env=env,
         )
 
+    def load_verification(self, full_hash: str) -> dict | None:
+        path = self.store / f"{full_hash}.verification.json"
+        if not path.exists():
+            return None
+        with open(path) as f:
+            return json.load(f)
+
 
 class GitHubIngestSource(IngestSource):
     """Fetches ingests from a private GitHub repository via the API.
@@ -255,6 +277,9 @@ class GitHubIngestSource(IngestSource):
         raise NotImplementedError("GitHubIngestSource is not yet implemented")
 
     def commit_review(self, **kwargs: str) -> None:
+        raise NotImplementedError("GitHubIngestSource is not yet implemented")
+
+    def load_verification(self, full_hash: str) -> dict | None:
         raise NotImplementedError("GitHubIngestSource is not yet implemented")
 
 
@@ -364,3 +389,141 @@ def submit_review(full_hash: str, body: dict, request: Request) -> JSONResponse:
     )
 
     return JSONResponse({"submitted": True})
+
+
+# Verification: cloze-challenge proof of possession.
+# Reviewers prove they have the source by filling in N short cloze blanks
+# drawn from the body. The sidecar (`{hash}.verification.json`) lives next
+# to the record in the ingests store. Answers must never reach the client.
+# Mirrors the normalisation in anomalica-ingester/shared/verification.py.
+
+_verification_sessions: dict[str, dict] = {}
+
+
+def _normalise_word(word: str) -> str:
+    return word.strip(string.punctuation + "“”‘’\"'").lower()
+
+
+def _drop_expired_sessions(now: float) -> None:
+    expired = [
+        sid
+        for sid, sess in _verification_sessions.items()
+        if now - sess["created"] > VERIFICATION_SESSION_TTL_SECONDS
+    ]
+    for sid in expired:
+        _verification_sessions.pop(sid, None)
+
+
+@app.get("/api/ingests/{full_hash}/verification")
+def verification_info(full_hash: str) -> JSONResponse:
+    if not FULL_HASH_PATTERN.match(full_hash):
+        raise HTTPException(status_code=404, detail="Not found")
+
+    sidecar = source.load_verification(full_hash)
+    if sidecar is None:
+        return JSONResponse({"available": False})
+
+    pool_size = len(sidecar.get("challenges", []))
+    served = min(CHALLENGES_PER_SESSION, pool_size)
+    return JSONResponse(
+        {
+            "available": True,
+            "algorithm": sidecar.get("algorithm", "cloze-v1"),
+            "pool_size": pool_size,
+            "challenges_per_session": served,
+            "min_correct_to_pass": math.ceil(PASS_RATIO * served) if served else 0,
+            "cloze_gateable": pool_size >= MIN_POOL_FOR_CLOZE_GATE,
+            "sha_fastpath_available": "sha256" in sidecar,
+        }
+    )
+
+
+@app.post("/api/ingests/{full_hash}/verification/start")
+def verification_start(full_hash: str) -> JSONResponse:
+    if not FULL_HASH_PATTERN.match(full_hash):
+        raise HTTPException(status_code=404, detail="Not found")
+
+    sidecar = source.load_verification(full_hash)
+    if sidecar is None:
+        raise HTTPException(status_code=404, detail="No verification available")
+
+    pool = sidecar.get("challenges", [])
+    if len(pool) < MIN_POOL_FOR_CLOZE_GATE:
+        raise HTTPException(
+            status_code=409, detail="Cloze gate not available for this record"
+        )
+
+    n = min(CHALLENGES_PER_SESSION, len(pool))
+    sample = random.sample(pool, n)
+
+    now = time.time()
+    _drop_expired_sessions(now)
+    session_id = secrets.token_urlsafe(24)
+    _verification_sessions[session_id] = {
+        "hash": full_hash,
+        "challenges": sample,
+        "created": now,
+    }
+
+    client_challenges = [
+        {"id": i + 1, "before": c["before"], "after": c["after"]}
+        for i, c in enumerate(sample)
+    ]
+    return JSONResponse(
+        {
+            "session_id": session_id,
+            "challenges": client_challenges,
+            "min_correct_to_pass": math.ceil(PASS_RATIO * n),
+        }
+    )
+
+
+@app.post("/api/ingests/{full_hash}/verification/submit")
+def verification_submit(full_hash: str, body: dict) -> JSONResponse:
+    if not FULL_HASH_PATTERN.match(full_hash):
+        raise HTTPException(status_code=404, detail="Not found")
+
+    sidecar = source.load_verification(full_hash)
+    if sidecar is None:
+        raise HTTPException(status_code=404, detail="No verification available")
+
+    submitted_sha = body.get("sha256")
+    if (
+        isinstance(submitted_sha, str)
+        and "sha256" in sidecar
+        and submitted_sha.lower() == sidecar["sha256"].lower()
+    ):
+        return JSONResponse(
+            {"passed": True, "method": "sha256", "score": None, "needed": None}
+        )
+
+    session_id = body.get("session_id")
+    session = _verification_sessions.get(session_id) if session_id else None
+    if not session or session["hash"] != full_hash:
+        raise HTTPException(status_code=400, detail="Invalid or expired session")
+
+    now = time.time()
+    if now - session["created"] > VERIFICATION_SESSION_TTL_SECONDS:
+        _verification_sessions.pop(session_id, None)
+        raise HTTPException(status_code=400, detail="Session expired")
+
+    responses = body.get("responses") or {}
+    sample = session["challenges"]
+    needed = math.ceil(PASS_RATIO * len(sample))
+    correct = sum(
+        1
+        for i, challenge in enumerate(sample)
+        if _normalise_word(str(responses.get(str(i + 1), "")))
+        == challenge.get("answer", "")
+    )
+
+    _verification_sessions.pop(session_id, None)
+
+    return JSONResponse(
+        {
+            "passed": correct >= needed,
+            "method": "cloze",
+            "score": correct,
+            "needed": needed,
+        }
+    )
