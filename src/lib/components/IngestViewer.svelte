@@ -806,6 +806,11 @@
       <h2 class="font-ui font-semibold text-on-surface truncate">
         {ingest.frontmatter.title ?? "Untitled"}
       </h2>
+      {#if ingest.authors && ingest.authors.length > 0}
+        <p class="text-xs text-on-surface-muted truncate">
+          {ingest.authors.join(", ")}
+        </p>
+      {/if}
       <div class="flex gap-3 mt-1 text-xs text-on-surface-muted font-ui">
         <span>{ingest.frontmatter.source_type?.toUpperCase()}</span>
         <span>{ingest.frontmatter.date}</span>

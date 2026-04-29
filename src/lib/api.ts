@@ -9,6 +9,7 @@ export interface IngestSummary {
   content_hash: string;
   public_hash: string;
   title: string;
+  authors: string[];
   date: string;
   source_type: string;
   source_url: string;
@@ -20,6 +21,7 @@ export interface IngestDetail {
   content_hash: string;
   public_hash: string;
   copyright_status: CopyrightStatus;
+  authors: string[];
   frontmatter: Record<string, string>;
   raw_frontmatter: string;
   body: string;

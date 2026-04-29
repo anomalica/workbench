@@ -76,11 +76,18 @@ def parse_frontmatter(text: str) -> tuple[dict, str, str]:
             else:
                 # Block start (e.g. "copyright:" with children below)
                 current_parent = key
+        # Indented list item under current parent (e.g. authors)
+        elif (
+            line.startswith("  ") and current_parent and line.lstrip().startswith("- ")
+        ):
+            item = line.lstrip()[2:].strip().strip('"').strip("'")
+            if item and ":" not in item:
+                existing = frontmatter.setdefault(current_parent, [])
+                if isinstance(existing, list):
+                    existing.append(item)
         # Nested key (indented with spaces)
         elif line.startswith("  ") and ":" in line and current_parent:
             nested_line = line.strip()
-            if nested_line.startswith("- "):
-                continue  # Skip list items
             key, _, value = nested_line.partition(":")
             value = value.strip().strip('"').strip("'")
             frontmatter[f"{current_parent}.{key.strip()}"] = value
@@ -162,11 +169,15 @@ class LocalIngestSource(IngestSource):
     def list_ingests(self) -> list[dict]:
         ingests: list[dict] = []
         for content_hash, (_, frontmatter) in self._scan().items():
+            authors = frontmatter.get("authors") or []
+            if not isinstance(authors, list):
+                authors = []
             ingests.append(
                 {
                     "content_hash": content_hash,
                     "public_hash": content_hash[:PUBLIC_HASH_LENGTH],
                     "title": frontmatter.get("title", "Untitled"),
+                    "authors": authors,
                     "date": frontmatter.get(
                         "date_published", frontmatter.get("date", "")
                     ),
@@ -191,10 +202,14 @@ class LocalIngestSource(IngestSource):
             content = f.read()
 
         frontmatter, body, raw_frontmatter = parse_frontmatter(content)
+        authors = frontmatter.pop("authors", None) or []
+        if not isinstance(authors, list):
+            authors = []
         return {
             "content_hash": full_hash,
             "public_hash": full_hash[:PUBLIC_HASH_LENGTH],
             "copyright_status": frontmatter.get("copyright.status", "restricted"),
+            "authors": authors,
             "frontmatter": frontmatter,
             "raw_frontmatter": raw_frontmatter,
             "body": body,

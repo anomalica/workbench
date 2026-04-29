@@ -16,7 +16,7 @@
   let loading = $state(true);
   let searchQuery = $state("");
   let filterType = $state<string>("all");
-  let sortBy = $state<"date" | "title" | "type" | "publisher" | "copyright">("date");
+  let sortBy = $state<"date" | "title" | "type" | "publisher" | "author" | "copyright">("date");
   let sortAsc = $state(false);
 
   let filteredIngests = $derived(
@@ -40,6 +40,10 @@
         else if (sortBy === "title") { va = a.title.toLowerCase(); vb = b.title.toLowerCase(); }
         else if (sortBy === "type") { va = a.source_type; vb = b.source_type; }
         else if (sortBy === "publisher") { va = a.publisher || "zzz"; vb = b.publisher || "zzz"; }
+        else if (sortBy === "author") {
+          va = (a.authors[0] || "zzz").toLowerCase();
+          vb = (b.authors[0] || "zzz").toLowerCase();
+        }
         else { va = a.copyright_status; vb = b.copyright_status; }
         const cmp = va < vb ? -1 : va > vb ? 1 : 0;
         return sortAsc ? cmp : -cmp;
@@ -181,7 +185,7 @@
               {sortAsc}
               onsort={(field) => {
                 if (sortBy === field) { sortAsc = !sortAsc; }
-                else { sortBy = field as typeof sortBy; sortAsc = field === "title"; }
+                else { sortBy = field as typeof sortBy; sortAsc = field === "title" || field === "author"; }
               }}
               onselect={(hash) => selectIngest(hash)}
             />

@@ -48,8 +48,11 @@
   <button onclick={() => onsort("publisher")} class="w-28 flex-none cursor-pointer hover:text-on-surface text-left" title="Sort by publisher">
     Publisher {sortBy === "publisher" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
   </button>
-  <button onclick={() => onsort("title")} class="flex-1 cursor-pointer hover:text-on-surface text-left" title="Sort by title">
+  <button onclick={() => onsort("title")} class="flex-1 cursor-pointer hover:text-on-surface text-left pr-3" title="Sort by title">
     Title {sortBy === "title" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
+  </button>
+  <button onclick={() => onsort("author")} class="w-40 flex-none cursor-pointer hover:text-on-surface text-left" title="Sort by author">
+    Author {sortBy === "author" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
   </button>
   <button onclick={() => onsort("copyright")} class="w-32 flex-none cursor-pointer hover:text-on-surface text-right" title="Sort by access">
     {sortBy === "copyright" ? (sortAsc ? "\u25B2" : "\u25BC") : ""} Access
@@ -71,7 +74,10 @@
         <span class="text-xs text-on-surface-secondary w-28 flex-none truncate">
           {ingest.publisher || ""}
         </span>
-        <p class="text-sm text-on-surface truncate flex-1">{ingest.title}</p>
+        <p class="text-sm text-on-surface truncate flex-1 pr-3">{ingest.title}</p>
+        <span class="text-xs text-on-surface-secondary w-40 flex-none truncate">
+          {ingest.authors?.join(", ") ?? ""}
+        </span>
         <span class="text-xs font-ui w-32 flex-none text-right {copyrightColours[ingest.copyright_status] ?? 'text-on-surface-muted'}">
           {copyrightLabels[ingest.copyright_status] ?? ingest.copyright_status}
         </span>
