@@ -108,6 +108,7 @@
 
   // File drop state (for dropping source files onto the left panel)
   let dragging = $state(false);
+  let sourceFileInput = $state<HTMLInputElement | null>(null);
   // svelte-ignore state_referenced_locally
   let localSourceFile = $state<File | null>(sourceFile);
 
@@ -171,19 +172,28 @@
     }
   });
 
+  function acceptFile(file: File) {
+    loadingFile = true;
+    accessGranted = true;
+    // Use requestAnimationFrame to let the spinner render before
+    // the browser starts processing the file
+    requestAnimationFrame(() => {
+      localSourceFile = file;
+    });
+  }
+
   function handleFileDrop(e: DragEvent) {
     e.preventDefault();
     dragging = false;
     const file = e.dataTransfer?.files[0];
-    if (file) {
-      loadingFile = true;
-      accessGranted = true;
-      // Use requestAnimationFrame to let the spinner render before
-      // the browser starts processing the file
-      requestAnimationFrame(() => {
-        localSourceFile = file;
-      });
-    }
+    if (file) acceptFile(file);
+  }
+
+  function handleFilePick(e: Event) {
+    const input = e.target as HTMLInputElement;
+    const file = input.files?.[0];
+    if (file) acceptFile(file);
+    input.value = "";
   }
 
   // Web ingests without a source file don't need a separate left panel
@@ -954,7 +964,7 @@
         {:else}
           <!-- Drop target fills all available space -->
           <div
-            class="flex-1 flex items-center justify-center text-sm text-center transition-colors cursor-default
+            class="flex-1 flex flex-col items-center justify-center gap-3 text-sm text-center transition-colors cursor-default p-8
               {dragging ? 'bg-primary-container/20 text-primary' : 'text-on-surface-muted'}"
             role="region"
             aria-label="Drop target for source file"
@@ -962,7 +972,15 @@
             ondragleave={() => { dragging = false; }}
             ondrop={handleFileDrop}
           >
-            <p class="p-8">{dragging ? "Drop file here" : "Drop a source file here to view alongside the ingest"}</p>
+            <p>{dragging ? "Drop file here" : "Drop a source file here to view alongside the ingest"}</p>
+            <input type="file" class="hidden" onchange={handleFilePick} bind:this={sourceFileInput} />
+            <button
+              type="button"
+              onclick={() => sourceFileInput?.click()}
+              class="px-3 py-1.5 text-xs font-ui bg-surface-alt hover:bg-surface-alt/70 border border-border rounded transition-colors"
+            >
+              Choose file
+            </button>
           </div>
         {/if}
 

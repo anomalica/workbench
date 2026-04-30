@@ -50,15 +50,13 @@
 </script>
 
 <div
-  class="border-2 border-dashed rounded-lg p-8 text-center transition-colors cursor-pointer
-    {dragging ? 'border-primary bg-primary-container/30' : 'border-border hover:border-primary/50'}"
-  role="button"
-  tabindex="0"
+  class="border-2 border-dashed rounded-lg p-8 text-center transition-colors
+    {dragging ? 'border-primary bg-primary-container/30' : 'border-border'}"
+  role="region"
+  aria-label="Drop a source file"
   ondragover={(e) => { e.preventDefault(); dragging = true; }}
   ondragleave={() => { dragging = false; }}
   ondrop={onDrop}
-  onclick={() => document.getElementById('file-input')?.click()}
-  onkeydown={(e) => { if (e.key === 'Enter') document.getElementById('file-input')?.click(); }}
 >
   <input id="file-input" type="file" class="hidden" onchange={onInput} />
 
@@ -67,10 +65,15 @@
   {:else if status === "checking"}
     <p class="text-on-surface-secondary">Looking up ingest for {fileName}...</p>
   {:else}
-    <p class="text-on-surface-secondary">
-      Drop a source file here or click to browse
-    </p>
-    <p class="text-on-surface-muted text-sm mt-2">
+    <p class="text-on-surface-secondary">Drop a source file here</p>
+    <button
+      type="button"
+      onclick={() => document.getElementById('file-input')?.click()}
+      class="mt-3 px-3 py-1.5 text-xs font-ui bg-surface-alt hover:bg-surface-alt/70 border border-border rounded transition-colors"
+    >
+      Choose file
+    </button>
+    <p class="text-on-surface-muted text-sm mt-3">
       The file is hashed locally and matched against known ingests. It is never uploaded.
     </p>
   {/if}
