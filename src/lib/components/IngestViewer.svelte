@@ -97,6 +97,9 @@
   // Source
   let isPdf = $derived(ingest.frontmatter.source_type === "pdf");
   let isWeb = $derived(ingest.frontmatter.source_type === "web");
+  let isAudio = $derived(ingest.frontmatter.source_type === "audio");
+  let isVideo = $derived(ingest.frontmatter.source_type === "video");
+  let isEbook = $derived(ingest.frontmatter.source_type === "ebook");
 
   // Copyright: public/accessible records can show everything freely
   let isPublic = $derived(
@@ -196,8 +199,10 @@
     input.value = "";
   }
 
-  // Web ingests without a source file don't need a separate left panel
-  let singleColumn = $derived(isWeb && !localSourceFile);
+  // No left panel when there's nothing useful to show in it:
+  // - web records without a dropped source file (the URL is the source)
+  // - ebook records (inline EPUB preview not yet supported)
+  let singleColumn = $derived((isWeb && !localSourceFile) || isEbook);
 
   // PDF page sync
   let pdfPage = $state(1);
@@ -987,7 +992,7 @@
               {ingest.frontmatter.source_url}
             </a>
           </div>
-        {:else if localSourceUrl}
+        {:else if localSourceUrl && (isAudio || isVideo)}
           <div class="flex-none p-4">
             <video controls src={localSourceUrl} class="w-full rounded">
               <track kind="captions" />
