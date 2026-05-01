@@ -91,3 +91,16 @@ body {
   color: var(--color-on-surface-muted);
   white-space: nowrap;
 }
+
+.ingest-figure {
+  margin: 1.5rem auto;
+  text-align: center;
+}
+
+.ingest-figure img {
+  display: inline-block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 0.25rem;
+  background: var(--color-surface-alt);
+}

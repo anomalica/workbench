@@ -207,32 +207,63 @@
       : null,
   );
 
-  /** Replace annotation comment blocks with visible HTML elements. */
+  function escapeHtml(s: string): string {
+    return s.replace(/[&<>"']/g, (c) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;",
+    }[c] as string));
+  }
+
+  /** Replace annotation comment blocks with visible HTML elements.
+   *
+   *  Per architecture/record-format.md, structural-only annotations
+   *  (chapter, chapter_title, printed_page) are suppressed in the body -
+   *  they drive navigation, not prose. Speaker annotations are also
+   *  suppressed here; the transcript view consumes them via parseTranscript.
+   */
   function preprocessAnnotations(body: string): string {
+    const recordHash = ingest.content_hash;
     return body.replace(
       /<!--\s*([\s\S]*?)-->/g,
       (_, content) => {
         const trimmed = content.trim();
-        // Page marker
-        const pageMatch = trimmed.match(/file_page:\s*(\d+)/);
+        // Page marker (PDFs)
+        const pageMatch = trimmed.match(/^file_page:\s*(\d+)/);
         if (pageMatch) {
           return `<div class="page-marker" data-file-page="${pageMatch[1]}"><span class="page-label">Page ${pageMatch[1]}</span></div>`;
         }
-        // Image description
-        const imageMatch = trimmed.match(/^image:\s*([\s\S]+)/);
-        if (imageMatch) {
-          const desc = imageMatch[1].trim();
-          return `<div class="annotation annotation-image"><span class="annotation-label">Image</span> ${desc}</div>`;
+        // Structural markers: suppress in body (used for nav, not display)
+        if (/^(chapter|chapter_title|printed_page|speaker)\s*:/.test(trimmed)) {
+          return "";
+        }
+        // Image with extracted file: render as actual <img> from the media endpoint
+        const imageFileMatch = trimmed.match(
+          /^image\s*:\s*\n\s*file\s*:\s*([0-9a-f]{12}\.[a-z]{3,4})(?:\s*\n\s*alt\s*:\s*"?([^"\n]*)"?)?/,
+        );
+        if (imageFileMatch) {
+          const file = imageFileMatch[1];
+          const alt = (imageFileMatch[2] || "").trim();
+          const src = `/api/ingests/${recordHash}/media/${file}`;
+          return `<figure class="ingest-figure"><img src="${src}" alt="${escapeHtml(alt)}" loading="lazy" /></figure>`;
+        }
+        // Image description (no extracted file)
+        const imageDescMatch = trimmed.match(/^image\s*:\s*([\s\S]+)/);
+        if (imageDescMatch) {
+          const desc = imageDescMatch[1].trim();
+          return `<div class="annotation annotation-image"><span class="annotation-label">Image</span> ${escapeHtml(desc)}</div>`;
         }
         // Redacted block
-        const redactedMatch = trimmed.match(/^redacted:\s*\n\s*extent:\s*([\s\S]+)/);
+        const redactedMatch = trimmed.match(/^redacted\s*:\s*\n\s*extent\s*:\s*([\s\S]+)/);
         if (redactedMatch) {
           const extent = redactedMatch[1].trim();
-          return `<div class="annotation annotation-redacted"><span class="annotation-label">Redacted</span> ${extent}</div>`;
+          return `<div class="annotation annotation-redacted"><span class="annotation-label">Redacted</span> ${escapeHtml(extent)}</div>`;
         }
-        // Unknown annotation - show as generic
+        // Unknown annotation: keep visible so reviewers can spot stray markers
         if (trimmed) {
-          return `<div class="annotation">${trimmed}</div>`;
+          return `<div class="annotation">${escapeHtml(trimmed)}</div>`;
         }
         return "";
       },
@@ -251,6 +282,24 @@
         const label = type === "illegible" ? "illegible" : "redacted";
         const width = n * 2.5;
         return `<span class="redaction" title="${label}: ~${n} word${n > 1 ? "s" : ""}" style="width:${width}em"></span>`;
+      },
+    );
+  }
+
+  /** Unwrap anchor tags whose hrefs point inside the source archive
+   *  rather than at a real destination. EPUBs and HTML scrapes commonly
+   *  contain links like `9780063235588_Chapter_1.xhtml#ch1` or bare
+   *  `#fragment` references that resolve to nothing in the rendered
+   *  view; leaving them as live <a> tags makes every chapter heading
+   *  and TOC entry look like a dead link. We keep external links
+   *  (http/https/mailto) untouched.
+   */
+  function stripDeadLinks(html: string): string {
+    return html.replace(
+      /<a\s+href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi,
+      (full, href, inner) => {
+        if (/^(https?:|mailto:)/i.test(href)) return full;
+        return inner;
       },
     );
   }
@@ -1649,7 +1698,7 @@
 
       {:else}
         {@const processedBody = preprocessAnnotations(currentBody())}
-        {@const renderedHtml = renderRedactions(marked.parse(processedBody) as string)}
+        {@const renderedHtml = stripDeadLinks(renderRedactions(marked.parse(processedBody) as string))}
         <div
           bind:this={proseContainer}
           data-scroll-sync

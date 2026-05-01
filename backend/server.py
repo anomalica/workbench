@@ -315,6 +315,9 @@ setup_auth(app)
 
 source: IngestSource = build_source()
 sources_path = Path(os.environ.get("SOURCES_PATH", str(DEFAULT_SOURCES_PATH)))
+ingests_path = Path(os.environ.get("INGESTS_PATH", str(DEFAULT_INGESTS_PATH)))
+
+MEDIA_FILENAME_PATTERN = re.compile(r"^[0-9a-f]{12}\.[a-z]{3,4}$")
 
 
 @app.get("/api/ingests")
@@ -368,6 +371,31 @@ def get_source(full_hash: str) -> FileResponse:
         raise HTTPException(status_code=404, detail="Not found")
 
     file_path = matches[0]
+    media_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
+    return FileResponse(file_path, media_type=media_type)
+
+
+@app.get("/api/ingests/{full_hash}/media/{filename}")
+def get_record_media(full_hash: str, filename: str) -> FileResponse:
+    """Serve an extracted media file (image) belonging to a record.
+
+    Files live at `{ingests_root}/media/{record_hash}/{filename}`. The
+    filename is constrained to `{12-hex}.{ext}` (the format the ingester
+    writes) so this endpoint cannot be used to read arbitrary paths.
+    Same hash-and-not-found indistinguishability as the other endpoints.
+
+    Currently ungated for development. In production access follows the
+    parent record's copyright status.
+    """
+    if not FULL_HASH_PATTERN.match(full_hash):
+        raise HTTPException(status_code=404, detail="Not found")
+    if not MEDIA_FILENAME_PATTERN.match(filename):
+        raise HTTPException(status_code=404, detail="Not found")
+
+    file_path = ingests_path / "media" / full_hash / filename
+    if not file_path.is_file():
+        raise HTTPException(status_code=404, detail="Not found")
+
     media_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
     return FileResponse(file_path, media_type=media_type)
 
