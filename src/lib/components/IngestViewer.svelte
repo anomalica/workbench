@@ -1210,7 +1210,15 @@
 
       {#if !canShowBody}
         <!-- Restricted content: need hash verification -->
-        <div class="flex-1 flex items-center justify-center p-8">
+        <div
+          class="flex-1 flex items-center justify-center p-8 transition-colors
+            {dragging ? 'bg-primary-container/20' : ''}"
+          role="region"
+          aria-label="Drop source file or enter hash to unlock"
+          ondragover={(e) => { e.preventDefault(); dragging = true; }}
+          ondragleave={() => { dragging = false; }}
+          ondrop={handleFileDrop}
+        >
           <div class="text-center max-w-md">
             <div class="text-on-surface-muted mb-3">
               <svg class="w-10 h-10 mx-auto" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
@@ -1220,8 +1228,19 @@
             </div>
             <h3 class="font-ui font-semibold text-on-surface mb-2">Restricted content</h3>
             <p class="text-sm text-on-surface-secondary mb-4">
-              This record contains copyrighted material. Drop your source file onto the left panel, or enter the file's SHA-256 hash below.
+              This record contains copyrighted material. Drop the source file anywhere on this panel, choose it from your computer, or paste its SHA-256 hash.
             </p>
+
+            <!-- File picker -->
+            <input type="file" class="hidden" onchange={handleFilePick} bind:this={sourceFileInput} />
+            <button
+              type="button"
+              onclick={() => sourceFileInput?.click()}
+              class="text-xs font-ui font-medium px-4 py-2 rounded cursor-pointer
+                bg-surface-alt hover:bg-surface-alt/70 border border-border"
+            >
+              Choose file
+            </button>
 
             <!-- Hash input form - password manager friendly -->
             <form
@@ -1237,7 +1256,7 @@
                 value={ingest.public_hash}
               />
               <label class="block text-xs font-ui text-on-surface-secondary mb-1" for="hash-input">
-                SHA-256 hash of the source file
+                Or enter the SHA-256 hash
               </label>
               <div class="flex gap-2">
                 <input
