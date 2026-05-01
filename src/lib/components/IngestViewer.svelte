@@ -286,23 +286,6 @@
     );
   }
 
-  /** Unwrap anchor tags whose hrefs point inside the source archive
-   *  rather than at a real destination. EPUBs and HTML scrapes commonly
-   *  contain links like `9780063235588_Chapter_1.xhtml#ch1` or bare
-   *  `#fragment` references that resolve to nothing in the rendered
-   *  view; leaving them as live <a> tags makes every chapter heading
-   *  and TOC entry look like a dead link. We keep external links
-   *  (http/https/mailto) untouched.
-   */
-  function stripDeadLinks(html: string): string {
-    return html.replace(
-      /<a\s+href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi,
-      (full, href, inner) => {
-        if (/^(https?:|mailto:)/i.test(href)) return full;
-        return inner;
-      },
-    );
-  }
 
 
   function navigatePdfToPage(page: number) {
@@ -1698,7 +1681,7 @@
 
       {:else}
         {@const processedBody = preprocessAnnotations(currentBody())}
-        {@const renderedHtml = stripDeadLinks(renderRedactions(marked.parse(processedBody) as string))}
+        {@const renderedHtml = renderRedactions(marked.parse(processedBody) as string)}
         <div
           bind:this={proseContainer}
           data-scroll-sync
