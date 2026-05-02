@@ -11,6 +11,7 @@
   import SpeakerDot from "./SpeakerDot.svelte";
   import DiffViewer from "./DiffViewer.svelte";
   import MilkdownEditor from "./MilkdownEditor.svelte";
+  import EpubViewer from "./EpubViewer.svelte";
   import { marked } from "marked";
 
   let {
@@ -199,10 +200,10 @@
     input.value = "";
   }
 
-  // No left panel when there's nothing useful to show in it:
-  // - web records without a dropped source file (the URL is the source)
-  // - ebook records (inline EPUB preview not yet supported)
-  let singleColumn = $derived((isWeb && !localSourceFile) || isEbook);
+  // No left panel when there's nothing useful to show in it: web and
+  // ebook records without a dropped source file. Once a source file is
+  // attached, ebooks render via EpubViewer in the left panel.
+  let singleColumn = $derived(!localSourceFile && (isWeb || isEbook));
 
   // PDF page sync
   let pdfPage = $state(1);
@@ -998,6 +999,8 @@
               <track kind="captions" />
             </video>
           </div>
+        {:else if localSourceFile && isEbook}
+          <EpubViewer file={localSourceFile} />
         {:else}
           <!-- Drop target fills all available space -->
           <div
