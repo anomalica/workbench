@@ -947,17 +947,19 @@
           </div>
         {/if}
 
-        <label class="block text-xs font-ui text-on-surface-secondary mb-1" for="review-notes">
-          Notes (optional)
-        </label>
-        <textarea
-          id="review-notes"
-          bind:value={reviewNotes}
-          placeholder="What did you change and why?"
-          rows="3"
-          class="w-full text-sm bg-surface border border-border rounded px-3 py-2
-            text-on-surface outline-none focus:border-primary placeholder:text-on-surface-muted/50 resize-none"
-        ></textarea>
+        {#if doc.dirty}
+          <label class="block text-xs font-ui text-on-surface-secondary mb-1" for="review-notes">
+            Notes (optional)
+          </label>
+          <textarea
+            id="review-notes"
+            bind:value={reviewNotes}
+            placeholder="What did you change and why?"
+            rows="3"
+            class="w-full text-sm bg-surface border border-border rounded px-3 py-2
+              text-on-surface outline-none focus:border-primary placeholder:text-on-surface-muted/50 resize-none"
+          ></textarea>
+        {/if}
 
         {#if submitError}
           <p class="text-xs text-error mt-2">{submitError}</p>
