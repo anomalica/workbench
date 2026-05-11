@@ -11,7 +11,6 @@ the full design, particularly the copyright handling section.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import mimetypes
@@ -22,7 +21,6 @@ import secrets
 import string
 import time
 from abc import ABC, abstractmethod
-from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -41,13 +39,6 @@ VERIFICATION_SESSION_TTL_SECONDS = 1800
 
 DEFAULT_INGESTS_PATH = Path(__file__).resolve().parents[2] / "anomalica-ingests"
 DEFAULT_SOURCES_PATH = Path(__file__).resolve().parents[2] / "sources"
-
-DEFAULT_REVIEWS_PATH = (
-    Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local" / "state")))
-    / "anomalica-workbench"
-    / "reviews"
-)
-REVIEWS_SCHEMA = "anomalica/workbench-reviews/1"
 
 
 def parse_frontmatter(text: str) -> tuple[dict, str, str]:
@@ -133,6 +124,10 @@ class IngestSource(ABC):
     @abstractmethod
     def load_verification(self, full_hash: str) -> dict | None:
         """Load the verification sidecar for a record, or None if absent."""
+
+    @abstractmethod
+    def reviewed_by_email(self, email: str) -> set[str]:
+        """Return content_hashes this user has authored review commits for."""
 
 
 def normalise_hash(value: str | None) -> str | None:
@@ -248,10 +243,6 @@ class LocalIngestSource(IngestSource):
         md_path, frontmatter = entry
         title = frontmatter.get("title", full_hash[:12])
 
-        message = f"review: {title}"
-        if notes:
-            message += f"\n\n{notes}"
-
         env = {
             **os.environ,
             "GIT_AUTHOR_NAME": author_name,
@@ -265,12 +256,93 @@ class LocalIngestSource(IngestSource):
             check=True,
             env=env,
         )
-        subprocess.run(
-            ["git", "commit", "-m", message],
+
+        # If save_ingest wrote the same bytes that were already on disk,
+        # there's nothing staged. That's the "approved as-is" case - record
+        # it as an empty commit so the review is still part of the audit
+        # trail and shows up in the same git log as content-changing reviews.
+        diff = subprocess.run(
+            ["git", "diff", "--cached", "--quiet"],
             cwd=repo_dir,
-            check=True,
             env=env,
         )
+        no_changes = diff.returncode == 0
+
+        message = f"review: {title}"
+        if no_changes:
+            message += " (approved as-is)"
+        if notes:
+            message += f"\n\n{notes}"
+
+        cmd = ["git", "commit", "-m", message]
+        if no_changes:
+            cmd.append("--allow-empty")
+        subprocess.run(cmd, cwd=repo_dir, check=True, env=env)
+
+        # Invalidate the cached review index so the new commit shows up
+        # in /api/me/reviews on the next read.
+        self._reviewed_cache = None
+
+    _reviewed_cache: dict[str, set[str]] | None = None
+
+    def reviewed_by_email(self, email: str) -> set[str]:
+        """Return the set of content_hashes this user has authored a
+        review commit for. Built from the ingests repo's git log.
+        Cached; commit_review invalidates."""
+        target = email.strip().lower()
+        if self._reviewed_cache is None:
+            self._reviewed_cache = self._scan_git_reviews()
+        return set(self._reviewed_cache.get(target, set()))
+
+    def _scan_git_reviews(self) -> dict[str, set[str]]:
+        import subprocess
+
+        repo_dir = self.store.parent
+        if not (repo_dir / ".git").exists():
+            return {}
+
+        # File name to content_hash. Records aren't always named by hash
+        # any more (the new ingester uses source_id), so we resolve via
+        # _scan rather than parsing the filename.
+        index = self._scan()
+        file_to_hash: dict[str, str] = {}
+        for content_hash, (md_path, _) in index.items():
+            rel = str(md_path.relative_to(repo_dir))
+            file_to_hash[rel] = content_hash
+
+        result = subprocess.run(
+            [
+                "git",
+                "log",
+                "--no-merges",
+                "--pretty=format:COMMIT %ae",
+                "--name-only",
+                "--",
+                "store/",
+            ],
+            cwd=repo_dir,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        out: dict[str, set[str]] = {}
+        if result.returncode != 0:
+            return out
+
+        current_email: str | None = None
+        for raw in result.stdout.splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            if line.startswith("COMMIT "):
+                current_email = line[len("COMMIT ") :].strip().lower()
+                continue
+            if current_email is None:
+                continue
+            content_hash = file_to_hash.get(line)
+            if content_hash:
+                out.setdefault(current_email, set()).add(content_hash)
+        return out
 
     def load_verification(self, full_hash: str) -> dict | None:
         path = self.store / f"{full_hash}.verification.json"
@@ -306,6 +378,12 @@ class GitHubIngestSource(IngestSource):
     def load_verification(self, full_hash: str) -> dict | None:
         raise NotImplementedError("GitHubIngestSource is not yet implemented")
 
+    def reviewed_by_email(self, email: str) -> set[str]:
+        # TODO: query the GitHub REST API for commits authored by this email
+        # under store/ in the ingests repo. Returning an empty set is correct
+        # default behaviour - no records show as reviewed until implemented.
+        return set()
+
 
 def build_source() -> IngestSource:
     """Select the ingest source based on environment variables."""
@@ -325,15 +403,8 @@ setup_auth(app)
 source: IngestSource = build_source()
 sources_path = Path(os.environ.get("SOURCES_PATH", str(DEFAULT_SOURCES_PATH)))
 ingests_path = Path(os.environ.get("INGESTS_PATH", str(DEFAULT_INGESTS_PATH)))
-reviews_path = Path(os.environ.get("REVIEWS_PATH", str(DEFAULT_REVIEWS_PATH)))
 
 MEDIA_FILENAME_PATTERN = re.compile(r"^[0-9a-f]{12}\.[a-z]{3,4}$")
-
-
-def _email_hash(email: str) -> str:
-    """SHA-256 of the lowercased, stripped email. Used as the storage key
-    for per-user state so the email itself doesn't end up on disk."""
-    return hashlib.sha256(email.strip().lower().encode("utf-8")).hexdigest()
 
 
 def _require_user(request: Request) -> dict:
@@ -341,38 +412,6 @@ def _require_user(request: Request) -> dict:
     if not user or not user.get("email"):
         raise HTTPException(status_code=401, detail="Login required")
     return user
-
-
-def _reviews_file(user: dict) -> Path:
-    return reviews_path / f"{_email_hash(user['email'])}.json"
-
-
-def _load_reviews(user: dict) -> dict:
-    path = _reviews_file(user)
-    if not path.is_file():
-        return {"schema": REVIEWS_SCHEMA, "reviews": {}}
-    try:
-        data = json.loads(path.read_text())
-        if not isinstance(data, dict) or not isinstance(data.get("reviews"), dict):
-            return {"schema": REVIEWS_SCHEMA, "reviews": {}}
-        return data
-    except (OSError, json.JSONDecodeError):
-        return {"schema": REVIEWS_SCHEMA, "reviews": {}}
-
-
-def _save_reviews(user: dict, data: dict) -> None:
-    path = _reviews_file(user)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, indent=2, sort_keys=True))
-    tmp.replace(path)
-
-
-def _set_reviewed(user: dict, full_hash: str, when: str | None = None) -> None:
-    when = when or datetime.now(timezone.utc).isoformat(timespec="seconds")
-    data = _load_reviews(user)
-    data["reviews"][full_hash] = {"reviewed_at": when}
-    _save_reviews(user, data)
 
 
 @app.get("/api/ingests")
@@ -486,44 +525,18 @@ def submit_review(full_hash: str, body: dict, request: Request) -> JSONResponse:
         notes=notes,
     )
 
-    # Submitting changes implies the reviewer has looked at the record.
-    _set_reviewed(user, full_hash)
-
     return JSONResponse({"submitted": True})
 
 
 @app.get("/api/me/reviews")
 def list_my_reviews(request: Request) -> JSONResponse:
-    """Return the current user's review state: which records they have
-    marked as reviewed and when. Login required."""
+    """Return the set of content_hashes the current user has submitted a
+    review commit for. Derived from the ingests repo's git log, not from
+    a separate sidecar - the canonical 'who reviewed what' event is the
+    review commit itself."""
     user = _require_user(request)
-    data = _load_reviews(user)
-    return JSONResponse({"reviews": data.get("reviews", {})})
-
-
-@app.post("/api/me/reviews/{full_hash}")
-def mark_reviewed(full_hash: str, request: Request) -> JSONResponse:
-    """Mark a record as reviewed for the current user. Idempotent."""
-    if not FULL_HASH_PATTERN.match(full_hash):
-        raise HTTPException(status_code=404, detail="Not found")
-    user = _require_user(request)
-    if source.get_ingest(full_hash) is None:
-        raise HTTPException(status_code=404, detail="Not found")
-    _set_reviewed(user, full_hash)
-    return JSONResponse({"reviewed": True})
-
-
-@app.delete("/api/me/reviews/{full_hash}")
-def unmark_reviewed(full_hash: str, request: Request) -> JSONResponse:
-    """Remove the reviewed mark for the current user. Idempotent."""
-    if not FULL_HASH_PATTERN.match(full_hash):
-        raise HTTPException(status_code=404, detail="Not found")
-    user = _require_user(request)
-    data = _load_reviews(user)
-    if full_hash in data["reviews"]:
-        del data["reviews"][full_hash]
-        _save_reviews(user, data)
-    return JSONResponse({"reviewed": False})
+    hashes = source.reviewed_by_email(user["email"])
+    return JSONResponse({"reviewed": sorted(hashes)})
 
 
 # Verification: cloze-challenge proof of possession.

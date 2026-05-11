@@ -13,7 +13,6 @@
   import MilkdownEditor from "./MilkdownEditor.svelte";
   import EpubViewer from "./EpubViewer.svelte";
   import { marked } from "marked";
-  import { markReviewed, unmarkReviewed } from "$lib/api";
 
   let {
     ingest,
@@ -30,15 +29,6 @@
     onreviewedchange?: (hash: string, reviewed: boolean) => void;
     onback: () => void;
   } = $props();
-
-  async function toggleReviewed() {
-    if (!user) return;
-    const target = !reviewed;
-    const ok = target
-      ? await markReviewed(ingest.content_hash)
-      : await unmarkReviewed(ingest.content_hash);
-    if (ok) onreviewedchange?.(ingest.content_hash, target);
-  }
 
   const doc = new DocumentStore();
 
@@ -886,30 +876,16 @@
         {/if}
       </div>
     </div>
-    {#if user}
-      <button
-        onclick={toggleReviewed}
-        class="flex items-center gap-1.5 text-xs font-ui font-medium px-3 py-1.5 rounded-full
-          cursor-pointer transition-colors flex-none border
-          {reviewed
-            ? 'bg-success/15 text-success border-success/30 hover:bg-success/20'
-            : 'bg-surface text-on-surface-secondary border-border hover:bg-surface-alt'}"
-        title={reviewed
-          ? "You've marked this reviewed - click to undo"
-          : "Mark this record as reviewed"}
+    {#if reviewed}
+      <span
+        class="flex items-center gap-1.5 text-xs font-ui font-medium text-success flex-none"
+        title="You have submitted a review for this record"
       >
-        {#if reviewed}
-          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
-          </svg>
-          Reviewed
-        {:else}
-          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-            <circle cx="12" cy="12" r="9" />
-          </svg>
-          Mark reviewed
-        {/if}
-      </button>
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+        </svg>
+        Reviewed
+      </span>
     {/if}
   </div>
 
@@ -946,7 +922,14 @@
       tabindex="-1"
     >
       <div class="bg-surface rounded-lg shadow-lg max-w-md w-full p-6">
-        <h3 class="font-ui font-semibold text-on-surface mb-4">Submit review</h3>
+        <h3 class="font-ui font-semibold text-on-surface mb-1">
+          {doc.dirty ? "Submit review" : "Approve as-is"}
+        </h3>
+        <p class="text-xs text-on-surface-muted mb-4">
+          {doc.dirty
+            ? "Commits your changes to the ingests repo with you as author."
+            : "Records an empty review commit so this record shows as reviewed by you. No content changes."}
+        </p>
 
         {#if user}
           <div class="flex items-center gap-3 mb-4 p-3 bg-surface-alt rounded">
@@ -987,7 +970,7 @@
             disabled={submitting}
             class="text-xs font-ui font-medium px-4 py-1.5 bg-primary text-on-primary rounded cursor-pointer hover:bg-primary-hover"
           >
-            {submitting ? "Submitting..." : "Submit review"}
+            {submitting ? "Submitting..." : doc.dirty ? "Submit review" : "Approve"}
           </button>
         </div>
       </div>
@@ -1222,14 +1205,28 @@
           </button>
           <button
             onclick={() => { if (user) showSubmitForm = true; else window.location.href = '/api/auth/login'; }}
-            disabled={submitting || !doc.dirty}
+            disabled={submitting || !user}
             class="text-xs font-ui font-medium px-3 py-1 rounded cursor-pointer transition-colors
-              {doc.dirty
-                ? 'bg-primary text-on-primary hover:bg-primary-hover'
-                : 'bg-on-surface-muted/10 text-on-surface-muted cursor-default'}"
-            title={user ? "Submit review (Ctrl+S)" : "Log in to submit"}
+              {!user
+                ? 'bg-on-surface-muted/10 text-on-surface-muted cursor-default'
+                : doc.dirty
+                  ? 'bg-primary text-on-primary hover:bg-primary-hover'
+                  : 'bg-surface text-on-surface-secondary border border-border hover:bg-surface-alt'}"
+            title={!user
+              ? "Log in to submit"
+              : doc.dirty
+                ? "Submit changes as a review (Ctrl+S)"
+                : "Approve this record as-is (empty review commit)"}
           >
-            {submitting ? "Submitting..." : user ? "Submit" : "Log in to submit"}
+            {#if submitting}
+              Submitting...
+            {:else if !user}
+              Log in to submit
+            {:else if doc.dirty}
+              Submit
+            {:else}
+              Approve
+            {/if}
           </button>
           <button
             onclick={() => doc.discard()}

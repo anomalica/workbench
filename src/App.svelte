@@ -3,7 +3,7 @@
     fetchIngests,
     fetchIngest,
     fetchCurrentUser,
-    fetchReviews,
+    fetchReviewedHashes,
   } from "$lib/api";
   import type { IngestSummary, IngestDetail, User } from "$lib/api";
   import FileDropZone from "$lib/components/FileDropZone.svelte";
@@ -30,8 +30,8 @@
   let sortAsc = $state(false);
 
   async function loadReviews() {
-    const data = await fetchReviews();
-    reviewedHashes = new Set(Object.keys(data));
+    const hashes = await fetchReviewedHashes();
+    reviewedHashes = new Set(hashes);
   }
 
   function setReviewed(hash: string, reviewed: boolean) {
