@@ -5,12 +5,14 @@
     ingests,
     sortBy,
     sortAsc,
+    reviewedHashes = new Set(),
     onsort,
     onselect,
   }: {
     ingests: IngestSummary[];
     sortBy: string;
     sortAsc: boolean;
+    reviewedHashes?: Set<string>;
     onsort: (field: string) => void;
     onselect: (hash: string) => void;
   } = $props();
@@ -39,6 +41,7 @@
 
 <!-- Column headers -->
 <div class="flex items-center px-6 py-2 border-b border-border bg-surface-alt text-xs font-ui text-on-surface-muted select-none sticky top-0 z-10">
+  <span class="w-6 flex-none" aria-hidden="true"></span>
   <button onclick={() => onsort("type")} class="w-12 flex-none cursor-pointer hover:text-on-surface text-left" title="Sort by type">
     Type {sortBy === "type" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
   </button>
@@ -67,6 +70,16 @@
       onclick={() => onselect(ingest.content_hash)}
     >
       <div class="flex items-baseline gap-0">
+        <span
+          class="w-6 flex-none text-center text-sm leading-none"
+          title={reviewedHashes.has(ingest.content_hash) ? "Reviewed" : "Not yet reviewed"}
+        >
+          {#if reviewedHashes.has(ingest.content_hash)}
+            <span class="text-success" aria-label="Reviewed">&#x2713;</span>
+          {:else}
+            <span class="text-on-surface-muted/40" aria-label="Not yet reviewed">&#x2022;</span>
+          {/if}
+        </span>
         <span class="text-xs font-ui font-medium text-primary uppercase w-12 flex-none">
           {typeLabels[ingest.source_type] ?? ingest.source_type}
         </span>

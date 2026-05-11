@@ -1,5 +1,10 @@
 <script lang="ts">
-  import { fetchIngests, fetchIngest, fetchCurrentUser } from "$lib/api";
+  import {
+    fetchIngests,
+    fetchIngest,
+    fetchCurrentUser,
+    fetchReviews,
+  } from "$lib/api";
   import type { IngestSummary, IngestDetail, User } from "$lib/api";
   import FileDropZone from "$lib/components/FileDropZone.svelte";
   import IngestList from "$lib/components/IngestList.svelte";
@@ -7,7 +12,10 @@
 
   let user = $state<User | null>(null);
 
-  fetchCurrentUser().then((u) => { user = u; });
+  fetchCurrentUser().then((u) => {
+    user = u;
+    if (u) loadReviews();
+  });
 
   let ingests = $state<IngestSummary[]>([]);
   let selectedIngest = $state<IngestDetail | null>(null);
@@ -16,13 +24,29 @@
   let loading = $state(true);
   let searchQuery = $state("");
   let filterType = $state<string>("all");
+  let filterReviewed = $state<"all" | "pending" | "reviewed">("all");
+  let reviewedHashes = $state<Set<string>>(new Set());
   let sortBy = $state<"date" | "title" | "type" | "publisher" | "author" | "copyright">("date");
   let sortAsc = $state(false);
+
+  async function loadReviews() {
+    const data = await fetchReviews();
+    reviewedHashes = new Set(Object.keys(data));
+  }
+
+  function setReviewed(hash: string, reviewed: boolean) {
+    const next = new Set(reviewedHashes);
+    if (reviewed) next.add(hash);
+    else next.delete(hash);
+    reviewedHashes = next;
+  }
 
   let filteredIngests = $derived(
     ingests
       .filter((i) => {
         if (filterType !== "all" && i.source_type !== filterType) return false;
+        if (filterReviewed === "reviewed" && !reviewedHashes.has(i.content_hash)) return false;
+        if (filterReviewed === "pending" && reviewedHashes.has(i.content_hash)) return false;
         if (searchQuery.trim()) {
           const q = searchQuery.toLowerCase();
           return (
@@ -137,7 +161,14 @@
 
   <main class="flex-1 flex flex-col min-h-0">
     {#if selectedIngest}
-      <IngestViewer ingest={selectedIngest} {sourceFile} {user} onback={goBack} />
+      <IngestViewer
+        ingest={selectedIngest}
+        {sourceFile}
+        {user}
+        reviewed={reviewedHashes.has(selectedIngest.content_hash)}
+        onreviewedchange={(hash, reviewed) => setReviewed(hash, reviewed)}
+        onback={goBack}
+      />
     {:else}
       <div class="flex-1 flex flex-col min-h-0">
         <!-- Search and filter bar -->
@@ -163,6 +194,17 @@
               >{type.charAt(0).toUpperCase() + type.slice(1)}</button>
             {/each}
           </div>
+          {#if user}
+            <div class="flex items-center gap-1 border-l border-border pl-3">
+              {#each [["all", "All"], ["pending", "Pending"], ["reviewed", "Reviewed"]] as [id, label]}
+                <button
+                  onclick={() => { filterReviewed = id as typeof filterReviewed; }}
+                  class="text-xs font-ui px-2 py-1 rounded cursor-pointer transition-colors
+                    {filterReviewed === id ? 'bg-primary text-on-primary' : 'text-on-surface-secondary hover:bg-surface'}"
+                >{label}</button>
+              {/each}
+            </div>
+          {/if}
           <span class="text-xs text-on-surface-muted">
             {filteredIngests.length}{filteredIngests.length !== ingests.length ? ` of ${ingests.length}` : ''} records
           </span>
@@ -183,6 +225,7 @@
               ingests={filteredIngests}
               {sortBy}
               {sortAsc}
+              {reviewedHashes}
               onsort={(field) => {
                 if (sortBy === field) { sortAsc = !sortAsc; }
                 else { sortBy = field as typeof sortBy; sortAsc = field === "title" || field === "author"; }

@@ -11,6 +11,7 @@ the full design, particularly the copyright handling section.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import mimetypes
@@ -21,6 +22,7 @@ import secrets
 import string
 import time
 from abc import ABC, abstractmethod
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -39,6 +41,13 @@ VERIFICATION_SESSION_TTL_SECONDS = 1800
 
 DEFAULT_INGESTS_PATH = Path(__file__).resolve().parents[2] / "anomalica-ingests"
 DEFAULT_SOURCES_PATH = Path(__file__).resolve().parents[2] / "sources"
+
+DEFAULT_REVIEWS_PATH = (
+    Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local" / "state")))
+    / "anomalica-workbench"
+    / "reviews"
+)
+REVIEWS_SCHEMA = "anomalica/workbench-reviews/1"
 
 
 def parse_frontmatter(text: str) -> tuple[dict, str, str]:
@@ -316,8 +325,54 @@ setup_auth(app)
 source: IngestSource = build_source()
 sources_path = Path(os.environ.get("SOURCES_PATH", str(DEFAULT_SOURCES_PATH)))
 ingests_path = Path(os.environ.get("INGESTS_PATH", str(DEFAULT_INGESTS_PATH)))
+reviews_path = Path(os.environ.get("REVIEWS_PATH", str(DEFAULT_REVIEWS_PATH)))
 
 MEDIA_FILENAME_PATTERN = re.compile(r"^[0-9a-f]{12}\.[a-z]{3,4}$")
+
+
+def _email_hash(email: str) -> str:
+    """SHA-256 of the lowercased, stripped email. Used as the storage key
+    for per-user state so the email itself doesn't end up on disk."""
+    return hashlib.sha256(email.strip().lower().encode("utf-8")).hexdigest()
+
+
+def _require_user(request: Request) -> dict:
+    user = request.session.get("user")
+    if not user or not user.get("email"):
+        raise HTTPException(status_code=401, detail="Login required")
+    return user
+
+
+def _reviews_file(user: dict) -> Path:
+    return reviews_path / f"{_email_hash(user['email'])}.json"
+
+
+def _load_reviews(user: dict) -> dict:
+    path = _reviews_file(user)
+    if not path.is_file():
+        return {"schema": REVIEWS_SCHEMA, "reviews": {}}
+    try:
+        data = json.loads(path.read_text())
+        if not isinstance(data, dict) or not isinstance(data.get("reviews"), dict):
+            return {"schema": REVIEWS_SCHEMA, "reviews": {}}
+        return data
+    except (OSError, json.JSONDecodeError):
+        return {"schema": REVIEWS_SCHEMA, "reviews": {}}
+
+
+def _save_reviews(user: dict, data: dict) -> None:
+    path = _reviews_file(user)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=True))
+    tmp.replace(path)
+
+
+def _set_reviewed(user: dict, full_hash: str, when: str | None = None) -> None:
+    when = when or datetime.now(timezone.utc).isoformat(timespec="seconds")
+    data = _load_reviews(user)
+    data["reviews"][full_hash] = {"reviewed_at": when}
+    _save_reviews(user, data)
 
 
 @app.get("/api/ingests")
@@ -431,7 +486,44 @@ def submit_review(full_hash: str, body: dict, request: Request) -> JSONResponse:
         notes=notes,
     )
 
+    # Submitting changes implies the reviewer has looked at the record.
+    _set_reviewed(user, full_hash)
+
     return JSONResponse({"submitted": True})
+
+
+@app.get("/api/me/reviews")
+def list_my_reviews(request: Request) -> JSONResponse:
+    """Return the current user's review state: which records they have
+    marked as reviewed and when. Login required."""
+    user = _require_user(request)
+    data = _load_reviews(user)
+    return JSONResponse({"reviews": data.get("reviews", {})})
+
+
+@app.post("/api/me/reviews/{full_hash}")
+def mark_reviewed(full_hash: str, request: Request) -> JSONResponse:
+    """Mark a record as reviewed for the current user. Idempotent."""
+    if not FULL_HASH_PATTERN.match(full_hash):
+        raise HTTPException(status_code=404, detail="Not found")
+    user = _require_user(request)
+    if source.get_ingest(full_hash) is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    _set_reviewed(user, full_hash)
+    return JSONResponse({"reviewed": True})
+
+
+@app.delete("/api/me/reviews/{full_hash}")
+def unmark_reviewed(full_hash: str, request: Request) -> JSONResponse:
+    """Remove the reviewed mark for the current user. Idempotent."""
+    if not FULL_HASH_PATTERN.match(full_hash):
+        raise HTTPException(status_code=404, detail="Not found")
+    user = _require_user(request)
+    data = _load_reviews(user)
+    if full_hash in data["reviews"]:
+        del data["reviews"][full_hash]
+        _save_reviews(user, data)
+    return JSONResponse({"reviewed": False})
 
 
 # Verification: cloze-challenge proof of possession.

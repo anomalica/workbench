@@ -13,18 +13,32 @@
   import MilkdownEditor from "./MilkdownEditor.svelte";
   import EpubViewer from "./EpubViewer.svelte";
   import { marked } from "marked";
+  import { markReviewed, unmarkReviewed } from "$lib/api";
 
   let {
     ingest,
     sourceFile,
     user,
+    reviewed = false,
+    onreviewedchange,
     onback,
   }: {
     ingest: IngestDetail;
     sourceFile: File | null;
     user: User | null;
+    reviewed?: boolean;
+    onreviewedchange?: (hash: string, reviewed: boolean) => void;
     onback: () => void;
   } = $props();
+
+  async function toggleReviewed() {
+    if (!user) return;
+    const target = !reviewed;
+    const ok = target
+      ? await markReviewed(ingest.content_hash)
+      : await unmarkReviewed(ingest.content_hash);
+    if (ok) onreviewedchange?.(ingest.content_hash, target);
+  }
 
   const doc = new DocumentStore();
 
@@ -484,6 +498,8 @@
       doc.past = [];
       doc.future = [];
       localStorage.removeItem(doc.storageKey);
+      // Backend auto-marks reviewed on submit; mirror it locally.
+      onreviewedchange?.(ingest.content_hash, true);
     } else {
       submitError = result.error ?? "Failed to submit";
     }
@@ -870,6 +886,31 @@
         {/if}
       </div>
     </div>
+    {#if user}
+      <button
+        onclick={toggleReviewed}
+        class="flex items-center gap-1.5 text-xs font-ui font-medium px-3 py-1.5 rounded-full
+          cursor-pointer transition-colors flex-none border
+          {reviewed
+            ? 'bg-success/15 text-success border-success/30 hover:bg-success/20'
+            : 'bg-surface text-on-surface-secondary border-border hover:bg-surface-alt'}"
+        title={reviewed
+          ? "You've marked this reviewed - click to undo"
+          : "Mark this record as reviewed"}
+      >
+        {#if reviewed}
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+          </svg>
+          Reviewed
+        {:else}
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="9" />
+          </svg>
+          Mark reviewed
+        {/if}
+      </button>
+    {/if}
   </div>
 
   <!-- Status bar -->

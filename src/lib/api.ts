@@ -81,3 +81,27 @@ export async function hashFile(file: File): Promise<string> {
   const hashArray = Array.from(new Uint8Array(hashBuffer));
   return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
 }
+
+/** Per-record review state for the currently logged-in user. */
+export interface ReviewState {
+  reviewed_at: string;
+}
+
+/** Fetch the current user's review state. Returns an empty map if the
+ *  user is not logged in or the backend has no record for them. */
+export async function fetchReviews(): Promise<Record<string, ReviewState>> {
+  const res = await fetch("/api/me/reviews");
+  if (!res.ok) return {};
+  const data = await res.json().catch(() => ({}));
+  return data.reviews || {};
+}
+
+export async function markReviewed(fullHash: string): Promise<boolean> {
+  const res = await fetch(`/api/me/reviews/${fullHash}`, { method: "POST" });
+  return res.ok;
+}
+
+export async function unmarkReviewed(fullHash: string): Promise<boolean> {
+  const res = await fetch(`/api/me/reviews/${fullHash}`, { method: "DELETE" });
+  return res.ok;
+}
