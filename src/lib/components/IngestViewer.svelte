@@ -470,6 +470,10 @@
 
   // Submit review state
   let submitting = $state(false);
+  // Approve is a no-op empty commit on top of an existing reviewed record,
+  // so disable when there are no changes and we already reviewed this one.
+  let alreadyApproved = $derived(!doc.dirty && reviewed);
+  let submitDisabled = $derived(submitting || !user || alreadyApproved);
   let submitError = $state<string | null>(null);
   let showSubmitForm = $state(false);
   let reviewNotes = $state("");
@@ -1205,23 +1209,27 @@
           </button>
           <button
             onclick={() => { if (user) showSubmitForm = true; else window.location.href = '/api/auth/login'; }}
-            disabled={submitting || !user}
-            class="text-xs font-ui font-medium px-3 py-1 rounded cursor-pointer transition-colors
-              {!user
+            disabled={submitDisabled}
+            class="text-xs font-ui font-medium px-3 py-1 rounded transition-colors
+              {submitDisabled
                 ? 'bg-on-surface-muted/10 text-on-surface-muted cursor-default'
                 : doc.dirty
-                  ? 'bg-primary text-on-primary hover:bg-primary-hover'
-                  : 'bg-surface text-on-surface-secondary border border-border hover:bg-surface-alt'}"
+                  ? 'bg-primary text-on-primary hover:bg-primary-hover cursor-pointer'
+                  : 'bg-surface text-on-surface-secondary border border-border hover:bg-surface-alt cursor-pointer'}"
             title={!user
               ? "Log in to submit"
-              : doc.dirty
-                ? "Submit changes as a review (Ctrl+S)"
-                : "Approve this record as-is (empty review commit)"}
+              : alreadyApproved
+                ? "You've already approved this record as-is. Make changes to submit a new review."
+                : doc.dirty
+                  ? "Submit changes as a review (Ctrl+S)"
+                  : "Approve this record as-is (empty review commit)"}
           >
             {#if submitting}
               Submitting...
             {:else if !user}
               Log in to submit
+            {:else if alreadyApproved}
+              Approved
             {:else if doc.dirty}
               Submit
             {:else}
