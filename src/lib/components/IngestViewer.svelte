@@ -158,10 +158,22 @@
 
   // For public records, try to fetch the source file from the backend.
   // Skip if there's a YouTube embed (the video is more useful than the extracted audio).
+  //
+  // Key resolution: for pdf/audio/video the record's content_hash IS the
+  // source-file SHA, so /api/sources/{content_hash} resolves directly.
+  // For web (and ebook) the record content_hash is hashed from extracted
+  // text, so it won't match a source file - the ingester adds a separate
+  // `source_hash:` field in those frontmatters. Prefer source_hash when
+  // present, fall back to content_hash for the legacy / matching case.
+  let sourceKey = $derived(
+    (ingest.frontmatter.source_hash || "").replace(/^sha256:/, "") ||
+      ingest.content_hash,
+  );
+
   $effect(() => {
     if (isPublic && !localSourceFile && !localSourceUrl && !ytId) {
       loadingFile = true;
-      fetch(`/api/sources/${ingest.content_hash}`)
+      fetch(`/api/sources/${sourceKey}`)
         .then((res) => {
           if (res.ok) return res.blob();
           return null;
@@ -204,10 +216,17 @@
     input.value = "";
   }
 
-  // No left panel when there's nothing useful to show in it: web and
-  // ebook records without a dropped source file. Once a source file is
-  // attached, ebooks render via EpubViewer in the left panel.
-  let singleColumn = $derived(!localSourceFile && (isWeb || isEbook));
+  // No left panel when there's nothing useful to show in it:
+  // - web records with no archived/dropped source (URL bar only)
+  // - ebook records (inline EPUB preview is parked - EpubViewer.svelte
+  //   and lib/epub.ts stay in tree but are unwired; the chapter-stacked
+  //   iframe layout produced confusing nested scrolling)
+  // Once a web record's archived HTML loads (localSourceUrl set via
+  // /api/sources fetch), we flip to two-pane so the iframe can render
+  // alongside the extracted markdown.
+  let singleColumn = $derived(
+    (isWeb && !localSourceFile && !localSourceUrl) || isEbook,
+  );
 
   // PDF page sync
   let pdfPage = $state(1);
@@ -1029,6 +1048,21 @@
               <track kind="captions" />
             </video>
           </div>
+        {:else if localSourceUrl && isWeb}
+          <!-- Archived web page in an opaque-origin sandbox. No scripts,
+               no same-origin, so the page can't reach our cookies or DOM.
+               Current ingester archives bare HTML (no inlined assets), so
+               img/css/font references will issue live requests to the
+               publisher origin from this iframe context. Acceptable as
+               v1; the render-as-PDF artefact (when the ingester ships
+               it) will replace or sit alongside this branch as a fully
+               self-contained alternative. -->
+          <iframe
+            src={localSourceUrl}
+            sandbox=""
+            class="flex-1 w-full border-none bg-white"
+            title="Archived source page"
+          ></iframe>
         {:else if localSourceFile && isEbook}
           <EpubViewer file={localSourceFile} />
         {:else}
@@ -1101,10 +1135,15 @@
             href={ingest.frontmatter.source_url}
             target="_blank"
             rel="noopener"
-            class="text-xs text-primary hover:underline truncate"
+            class="text-xs text-primary hover:underline truncate min-w-0"
           >
             {ingest.frontmatter.source_url}
           </a>
+          {#if ingest.frontmatter.date_accessed}
+            <span class="text-xs text-on-surface-muted font-ui flex-none ml-auto" title={ingest.frontmatter.date_accessed}>
+              accessed {ingest.frontmatter.date_accessed.slice(0, 10)}
+            </span>
+          {/if}
         </div>
       {/if}
       <!-- Panel header with view tabs and controls -->
