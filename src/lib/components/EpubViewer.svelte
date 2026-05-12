@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { parseEpub, type ParsedEpub, type EpubChapter } from "$lib/epub";
+  import { parseEpub, flattenEpubToHtml, type ParsedEpub } from "$lib/epub";
 
   let { file }: { file: File } = $props();
 
@@ -26,47 +26,7 @@
       });
   });
 
-  // Lazy-render iframes only when their wrapper scrolls near the viewport.
-  // Each iframe holds inlined data URIs for images plus full chapter HTML,
-  // so eagerly rendering 50 chapters is wasteful. We attach the srcdoc
-  // attribute when the wrapper enters the rootMargin window and detach it
-  // when it leaves to free memory.
-  let visible = $state<Set<string>>(new Set());
-  let scrollRoot: HTMLDivElement | null = $state(null);
-
-  $effect(() => {
-    if (!scrollRoot || !parsed) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        let next: Set<string> | null = null;
-        for (const entry of entries) {
-          const id = (entry.target as HTMLElement).dataset.chapterId;
-          if (!id) continue;
-          if (entry.isIntersecting) {
-            if (!visible.has(id)) {
-              next = next || new Set(visible);
-              next.add(id);
-            }
-          } else {
-            if (visible.has(id)) {
-              next = next || new Set(visible);
-              next.delete(id);
-            }
-          }
-        }
-        if (next) visible = next;
-      },
-      { root: scrollRoot, rootMargin: "400px 0px" },
-    );
-    for (const wrapper of scrollRoot.querySelectorAll("[data-chapter-id]")) {
-      observer.observe(wrapper);
-    }
-    return () => observer.disconnect();
-  });
-
-  function chapterLabel(c: EpubChapter, index: number): string {
-    return c.title || `Section ${index + 1}`;
-  }
+  let flattenedHtml = $derived(parsed ? flattenEpubToHtml(parsed) : "");
 </script>
 
 <div class="flex-1 flex flex-col min-h-0 bg-surface">
@@ -88,26 +48,11 @@
       </div>
     </div>
   {:else if parsed}
-    <div bind:this={scrollRoot} class="flex-1 overflow-auto">
-      {#each parsed.chapters as chapter, i (chapter.id)}
-        <section data-chapter-id={chapter.id} class="border-b border-border last:border-b-0">
-          <header class="px-4 py-2 bg-surface-alt border-b border-border sticky top-0 z-10">
-            <h3 class="text-xs font-ui font-medium text-on-surface-secondary uppercase tracking-wide">
-              {chapterLabel(chapter, i)}
-            </h3>
-          </header>
-          {#if visible.has(chapter.id)}
-            <iframe
-              title={chapterLabel(chapter, i)}
-              sandbox=""
-              srcdoc={chapter.html}
-              class="w-full h-[80vh] border-none bg-white"
-            ></iframe>
-          {:else}
-            <div class="h-[80vh] bg-surface-alt/30"></div>
-          {/if}
-        </section>
-      {/each}
-    </div>
+    <iframe
+      title="EPUB source"
+      sandbox=""
+      srcdoc={flattenedHtml}
+      class="flex-1 w-full border-none bg-white"
+    ></iframe>
   {/if}
 </div>

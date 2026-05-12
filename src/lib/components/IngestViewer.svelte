@@ -265,14 +265,14 @@
 
   // No left panel when there's nothing useful to show in it:
   // - web records with no archived/dropped source (URL bar only)
-  // - ebook records (inline EPUB preview is parked - EpubViewer.svelte
-  //   and lib/epub.ts stay in tree but are unwired; the chapter-stacked
-  //   iframe layout produced confusing nested scrolling)
-  // Once a web record's archived HTML loads (localSourceUrl set via
-  // /api/sources fetch), we flip to two-pane so the iframe can render
-  // alongside the extracted markdown.
+  // - ebook records without a dropped source file (the reviewer has to
+  //   provide the .epub themselves; EPUBs are licensed material so we
+  //   don't auto-fetch them)
+  // Once the source is attached, two-pane shows the rendered EPUB
+  // (flattenEpubToHtml -> single sandbox="" iframe) next to the ingest.
   let singleColumn = $derived(
-    (isWeb && !localSourceFile && !localSourceUrl) || isEbook,
+    (isWeb && !localSourceFile && !localSourceUrl) ||
+      (isEbook && !localSourceFile),
   );
 
   // PDF page sync

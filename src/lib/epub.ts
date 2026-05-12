@@ -37,6 +37,77 @@ export interface ParsedEpub {
   chapters: EpubChapter[];
 }
 
+/** Flatten a parsed EPUB into a single self-contained HTML document.
+ *
+ *  Each chapter's <body> content is appended into one combined body,
+ *  separated by a chapter heading and a horizontal rule. Style blocks
+ *  from every chapter's <head> are collected and emitted into a single
+ *  <head>. Images and CSS are already data URIs (done at parse time),
+ *  so the result is fully self-contained: it renders correctly inside
+ *  a sandbox="" iframe with srcdoc, no network requests.
+ *
+ *  This is the EPUB analogue of the "single_file" snapshot used for
+ *  web records - one HTML document, one scroll surface, no nested
+ *  iframes per chapter.
+ */
+export function flattenEpubToHtml(parsed: ParsedEpub): string {
+  const parser = new DOMParser();
+  const styles: string[] = [];
+  const bodies: string[] = [];
+
+  parsed.chapters.forEach((chapter, index) => {
+    let doc: Document;
+    try {
+      doc = parser.parseFromString(chapter.html, "application/xhtml+xml");
+      // XHTML parser sets documentElement.tagName to 'parsererror' on failure
+      if (doc.querySelector("parsererror")) {
+        doc = parser.parseFromString(chapter.html, "text/html");
+      }
+    } catch {
+      doc = parser.parseFromString(chapter.html, "text/html");
+    }
+
+    for (const style of Array.from(doc.querySelectorAll("head style"))) {
+      styles.push(style.textContent || "");
+    }
+
+    const bodyContent = doc.body ? doc.body.innerHTML : chapter.html;
+    const heading = chapter.title
+      ? `<h2 class="epub-chapter-heading">${escapeHtml(chapter.title)}</h2>`
+      : "";
+    bodies.push(
+      `<section class="epub-chapter" data-chapter-index="${index}">${heading}${bodyContent}</section>`,
+    );
+  });
+
+  const combinedStyles = styles.join("\n");
+  const builtinStyles = `
+    body { margin: 0; padding: 2rem; max-width: 48rem; margin-left: auto; margin-right: auto;
+      font-family: Georgia, serif; line-height: 1.6; color: #222; background: #fdfcf8; }
+    .epub-chapter { padding-top: 2rem; }
+    .epub-chapter + .epub-chapter { border-top: 1px solid #ddd; margin-top: 3rem; }
+    .epub-chapter-heading { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em;
+      color: #888; margin-bottom: 2rem; font-weight: normal; }
+    img, svg { max-width: 100%; height: auto; display: block; margin: 1rem auto; }
+  `;
+
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${builtinStyles}</style><style>${combinedStyles}</style></head><body>${bodies.join("")}</body></html>`;
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(
+    /[&<>"']/g,
+    (c) =>
+      ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      })[c] as string,
+  );
+}
+
 export async function parseEpub(file: File): Promise<ParsedEpub> {
   const reader = new ZipReader(new BlobReader(file));
   try {
