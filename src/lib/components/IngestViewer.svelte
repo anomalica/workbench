@@ -13,6 +13,7 @@
   import MilkdownEditor from "./MilkdownEditor.svelte";
   import EpubViewer from "./EpubViewer.svelte";
   import { marked } from "marked";
+  import yaml from "js-yaml";
 
   let {
     ingest,
@@ -159,15 +160,61 @@
   // For public records, try to fetch the source file from the backend.
   // Skip if there's a YouTube embed (the video is more useful than the extracted audio).
   //
-  // Key resolution: for pdf/audio/video the record's content_hash IS the
-  // source-file SHA, so /api/sources/{content_hash} resolves directly.
-  // For web (and ebook) the record content_hash is hashed from extracted
-  // text, so it won't match a source file - the ingester adds a separate
-  // `source_hash:` field in those frontmatters. Prefer source_hash when
-  // present, fall back to content_hash for the legacy / matching case.
+  // Key resolution for web records uses a fidelity ladder. The ingester
+  // produces up to three sibling artefacts: a "single_file" capture with
+  // every external asset inlined as data URIs (renders identically to
+  // the original page under sandbox=""), a "page_render" PDF, and the
+  // raw post-render HTML pointed at by source_hash. We prefer the
+  // single_file capture, then the PDF, then the raw HTML. Other source
+  // types fall back to source_hash or content_hash directly.
+  //
+  // The naive frontmatter parser on the backend collapses the snapshots
+  // list incorrectly (treats it as one nested object), so we reparse the
+  // raw frontmatter block with js-yaml and pull the list ourselves.
+  interface Snapshot {
+    role: string;
+    hash: string;
+    content_type: string;
+  }
+
+  let parsedFrontmatter = $derived.by((): Record<string, unknown> => {
+    const raw = ingest.raw_frontmatter || "";
+    const stripped = raw.replace(/^---\n/, "").replace(/\n---\n?$/, "");
+    try {
+      const out = yaml.load(stripped);
+      return (out && typeof out === "object") ? out as Record<string, unknown> : {};
+    } catch {
+      return {};
+    }
+  });
+
+  let snapshots = $derived.by((): Snapshot[] => {
+    const raw = parsedFrontmatter.snapshots;
+    if (!Array.isArray(raw)) return [];
+    return raw.filter(
+      (s): s is Snapshot =>
+        s != null && typeof s === "object" && typeof (s as Snapshot).hash === "string",
+    );
+  });
+
+  function pickSnapshot(snaps: Snapshot[]): Snapshot | null {
+    const byRole = (r: string) => snaps.find((s) => s.role === r);
+    return byRole("single_file") || byRole("page_render") || null;
+  }
+
+  let preferredSnapshot = $derived(pickSnapshot(snapshots));
+
   let sourceKey = $derived(
-    (ingest.frontmatter.source_hash || "").replace(/^sha256:/, "") ||
-      ingest.content_hash,
+    (preferredSnapshot?.hash || ingest.frontmatter.source_hash || "")
+      .replace(/^sha256:/, "") || ingest.content_hash,
+  );
+
+  // What kind of file are we fetching? Drives the left-pane renderer
+  // choice (PDF panel vs HTML iframe). Falls back to the source_type
+  // for legacy records that have no snapshots list.
+  let sourceContentType = $derived(
+    preferredSnapshot?.content_type ||
+      (isPdf ? "application/pdf" : isWeb ? "text/html" : ""),
   );
 
   $effect(() => {
@@ -1048,15 +1095,23 @@
               <track kind="captions" />
             </video>
           </div>
+        {:else if localSourceUrl && isWeb && sourceContentType === "application/pdf"}
+          <!-- "page_render" snapshot: a paginated PDF of the page taken
+               at ingest time. Browser's native PDF viewer handles this. -->
+          <iframe
+            src={localSourceUrl}
+            class="flex-1 w-full border-none bg-white"
+            title="Archived source page (PDF render)"
+          ></iframe>
         {:else if localSourceUrl && isWeb}
-          <!-- Archived web page in an opaque-origin sandbox. No scripts,
-               no same-origin, so the page can't reach our cookies or DOM.
-               Current ingester archives bare HTML (no inlined assets), so
-               img/css/font references will issue live requests to the
-               publisher origin from this iframe context. Acceptable as
-               v1; the render-as-PDF artefact (when the ingester ships
-               it) will replace or sit alongside this branch as a fully
-               self-contained alternative. -->
+          <!-- "single_file" snapshot (preferred) or raw HTML (fallback).
+               Either way it renders in an opaque-origin sandbox - no
+               scripts, no same-origin, can't reach our cookies or DOM.
+               The single_file capture has every asset inlined as data
+               URIs and renders identically to the original page; the
+               raw HTML falls back to browser defaults because its
+               relative asset paths resolve against the blob URL origin
+               instead of the publisher. -->
           <iframe
             src={localSourceUrl}
             sandbox=""
