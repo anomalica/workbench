@@ -300,8 +300,30 @@
    *  they drive navigation, not prose. Speaker annotations are also
    *  suppressed here; the transcript view consumes them via parseTranscript.
    */
+  /** Pair `![alt](url)` with an immediately-following italic-only
+   *  paragraph and rewrite as <figure><figcaption>. Web records commonly
+   *  emit captions as plain italic prose on the next line, which marked
+   *  otherwise renders at body-text size on its own paragraph. Detect
+   *  and group them so the caption ends up styled correctly.
+   *
+   *  Patterns matched (must be a paragraph entirely consisting of the
+   *  italic-wrapped caption, no other prose on the same line):
+   *
+   *    ![alt](url)
+   *
+   *    *Caption text here.*
+   */
+  function pairImageCaptions(body: string): string {
+    return body.replace(
+      /^(!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\))\s*\n\n\*([^*\n][^*]*?)\*\s*(?=\n|$)/gm,
+      (_, _img, alt, url, caption) =>
+        `<figure class="ingest-figure caption-figure"><img src="${url}" alt="${escapeHtml(alt)}" loading="lazy" /><figcaption>${escapeHtml(caption)}</figcaption></figure>`,
+    );
+  }
+
   function preprocessAnnotations(body: string): string {
     const recordHash = ingest.content_hash;
+    body = pairImageCaptions(body);
     return body.replace(
       /<!--\s*([\s\S]*?)-->/g,
       (_, content) => {

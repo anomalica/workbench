@@ -104,3 +104,12 @@ body {
   border-radius: 0.25rem;
   background: var(--color-surface-alt);
 }
+
+.ingest-figure figcaption {
+  margin-top: 0.5rem;
+  font-size: 0.8rem;
+  font-style: italic;
+  color: var(--color-on-surface-muted);
+  text-align: center;
+  line-height: 1.4;
+}
