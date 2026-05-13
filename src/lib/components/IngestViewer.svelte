@@ -359,8 +359,13 @@
    *    *Caption text here.*
    */
   function pairImageCaptions(body: string): string {
+    // Trailing match is `[ \t]*$` (with the m flag) rather than `\s*` so we
+    // don't accidentally consume the newline that separates the caption
+    // line from the next paragraph. Without that newline, marked treats
+    // the following paragraph as a continuation of our injected HTML
+    // block and stops parsing inline markdown (links included) in it.
     return body.replace(
-      /^(!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\))\s*\n\n\*([^*\n][^*]*?)\*\s*(?=\n|$)/gm,
+      /^(!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\))[ \t]*\n\n\*([^*\n][^*]*?)\*[ \t]*$/gm,
       (_, _img, alt, url, caption) =>
         `<figure class="ingest-figure caption-figure"><img src="${url}" alt="${escapeHtml(alt)}" loading="lazy" /><figcaption>${escapeHtml(caption)}</figcaption></figure>`,
     );
