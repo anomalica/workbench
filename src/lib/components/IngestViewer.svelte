@@ -10,6 +10,7 @@
   import EditSegmentDialog from "./EditSegmentDialog.svelte";
   import SpeakerDot from "./SpeakerDot.svelte";
   import DiffViewer from "./DiffViewer.svelte";
+  import MilkdownEditor from "./MilkdownEditor.svelte";
   import EpubViewer from "./EpubViewer.svelte";
   import { marked } from "marked";
   import yaml from "js-yaml";
@@ -68,7 +69,7 @@
   let hasTranscript = $derived(segments.length > 0 && segments[0].speaker !== "");
 
   // View mode
-  let view = $state<"ingest" | "diff" | "raw">("ingest");
+  let view = $state<"ingest" | "edit" | "diff" | "raw">("ingest");
 
   // Scroll sync between views: save fraction on scroll, restore on view switch
   let scrollFraction = 0;
@@ -1343,7 +1344,7 @@
       {/if}
       <!-- Panel header with view tabs and controls -->
       <div class="px-4 py-2 bg-surface-alt border-b border-border flex items-center gap-1">
-        {#each [["ingest", "Ingest", "Rendered view"], ["raw", "Raw", "Edit the markdown source"], ["diff", "Diff", "View changes from original"]] as [id, label, tip]}
+        {#each [["ingest", "Ingest", "Rendered view"], ["edit", "Edit", "Rich markdown editor"], ["raw", "Raw", "Edit raw markdown with frontmatter"], ["diff", "Diff", "View changes from original"]] as [id, label, tip]}
           <button
             onclick={() => { view = id as typeof view; }}
             class="text-xs font-ui font-medium px-2 py-1 rounded transition-colors cursor-pointer
@@ -1579,6 +1580,14 @@
       {:else if view === "diff"}
         <div class="flex-1 overflow-auto" data-scroll-sync onscroll={handleContentScroll}>
           <DiffViewer original={doc.original} modified={doc.current} />
+        </div>
+
+      {:else if view === "edit"}
+        <div class="flex-1 flex flex-col min-h-0">
+          <MilkdownEditor
+            value={currentBody()}
+            onchange={(md) => doc.editBody(md)}
+          />
         </div>
 
       {:else if view === "raw"}
