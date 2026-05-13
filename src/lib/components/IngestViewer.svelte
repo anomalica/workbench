@@ -217,13 +217,58 @@
       (isPdf ? "application/pdf" : isWeb ? "text/html" : ""),
   );
 
+  /** Display-only stylesheet injected into HTML source snapshots before
+   *  rendering. Hides common ad-slot containers that the publisher
+   *  reserves layout space for via CSS min-height. Under our sandbox=""
+   *  the ad loader script can't run, so those reserved heights stay
+   *  empty and become visible gaps between paragraphs.
+   *
+   *  Modifies the in-memory blob only - the saved artefact on disk is
+   *  unchanged.
+   */
+  const AD_HIDE_CSS = `
+    <style>
+      .adthrive-ad,
+      [id^="AdThrive_"],
+      [id^="div-gpt-ad"],
+      [id*="taboola"],
+      [id*="outbrain"],
+      [class*="advert"],
+      [class*="ad-slot"],
+      [class*="adslot"],
+      [class*="ad-container"],
+      [class*="banner-ad"],
+      [class*="dfp-ad"] {
+        display: none !important;
+      }
+    </style>
+  `;
+
+  function injectAdHideCss(html: string): string {
+    if (/<\/head>/i.test(html)) {
+      return html.replace(/<\/head>/i, `${AD_HIDE_CSS}</head>`);
+    }
+    if (/<body[^>]*>/i.test(html)) {
+      return html.replace(/<body[^>]*>/i, (m) => `${m}${AD_HIDE_CSS}`);
+    }
+    return AD_HIDE_CSS + html;
+  }
+
   $effect(() => {
     if (isPublic && !localSourceFile && !localSourceUrl && !ytId) {
       loadingFile = true;
       fetch(`/api/sources/${sourceKey}`)
-        .then((res) => {
-          if (res.ok) return res.blob();
-          return null;
+        .then(async (res) => {
+          if (!res.ok) return null;
+          const blob = await res.blob();
+          if (blob.size === 0) return null;
+          // For HTML snapshots, rewrite in-memory to suppress ad slots.
+          const contentType = res.headers.get("content-type") || blob.type;
+          if (contentType.startsWith("text/html")) {
+            const text = await blob.text();
+            return new Blob([injectAdHideCss(text)], { type: "text/html" });
+          }
+          return blob;
         })
         .then((blob) => {
           if (blob && blob.size > 0) {
