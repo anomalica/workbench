@@ -254,6 +254,53 @@
     return AD_HIDE_CSS + html;
   }
 
+  /** Copy data-src / data-original / data-lazy-src into src on <img> and
+   *  <source> tags whose current src is empty or a placeholder data URI.
+   *  Same for data-srcset -> srcset. Lets the iframe fetch the real
+   *  image from the publisher CDN when the page is parsed under
+   *  sandbox="" (no scripts to do the swap natively).
+   *
+   *  Trade-off: resolved URLs are remote, so the reviewer's IP is
+   *  visible to the publisher origin during render. Accepted because
+   *  the alternative is images that never appear at all (SingleFile
+   *  decides what to inline based on what the browser fetched at
+   *  capture time, and lazy-loaded images often don't trigger before
+   *  the save completes).
+   */
+  function resolveLazyImages(html: string): string {
+    return html.replace(
+      /<(img|source)\b([^>]*?)\s*\/?>/gi,
+      (full, tag, attrs) => {
+        const dataSrc = attrs.match(/\sdata-(?:src|original|lazy-src)="([^"]+)"/i);
+        const dataSrcset = attrs.match(/\sdata-srcset="([^"]+)"/i);
+        if (!dataSrc && !dataSrcset) return full;
+
+        const srcMatch = attrs.match(/\ssrc="([^"]*)"/i);
+        const currentSrc = srcMatch ? srcMatch[1] : "";
+        // Heuristic for placeholder src: empty, or a short data: URI
+        // (typical lazy-load placeholders are tiny transparent gifs or
+        // SVGs well under 200 chars; real inlined images are kilobytes).
+        const looksPlaceholder =
+          !currentSrc ||
+          (currentSrc.startsWith("data:") && currentSrc.length < 200);
+
+        let newAttrs = attrs;
+        if (dataSrc && looksPlaceholder) {
+          newAttrs = srcMatch
+            ? newAttrs.replace(/\ssrc="[^"]*"/i, ` src="${dataSrc[1]}"`)
+            : `${newAttrs} src="${dataSrc[1]}"`;
+        }
+        if (dataSrcset) {
+          const srcsetMatch = attrs.match(/\ssrcset="([^"]*)"/i);
+          newAttrs = srcsetMatch
+            ? newAttrs.replace(/\ssrcset="[^"]*"/i, ` srcset="${dataSrcset[1]}"`)
+            : `${newAttrs} srcset="${dataSrcset[1]}"`;
+        }
+        return `<${tag}${newAttrs}>`;
+      },
+    );
+  }
+
   $effect(() => {
     if (isPublic && !localSourceFile && !localSourceUrl && !ytId) {
       loadingFile = true;
@@ -262,11 +309,14 @@
           if (!res.ok) return null;
           const blob = await res.blob();
           if (blob.size === 0) return null;
-          // For HTML snapshots, rewrite in-memory to suppress ad slots.
+          // For HTML snapshots: hide ad slots and resolve lazy-loaded
+          // image references that SingleFile couldn't inline at capture.
           const contentType = res.headers.get("content-type") || blob.type;
           if (contentType.startsWith("text/html")) {
-            const text = await blob.text();
-            return new Blob([injectAdHideCss(text)], { type: "text/html" });
+            let text = await blob.text();
+            text = resolveLazyImages(text);
+            text = injectAdHideCss(text);
+            return new Blob([text], { type: "text/html" });
           }
           return blob;
         })
