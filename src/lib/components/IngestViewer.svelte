@@ -2,7 +2,7 @@
   import type { IngestDetail, User } from "$lib/api";
   import { submitReview } from "$lib/api";
   import { DocumentStore } from "$lib/document.svelte";
-  import { parseTranscript, secondsToTime, findActiveSegmentForTime, extractFrontmatterSpeakers, isSegmentIrrelevant, isSpecialSpeaker, nextSpeakerName, groupSegmentsBySpeaker, orderedNamedSpeakers, SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE } from "$lib/transcript";
+  import { parseTranscript, secondsToTime, findActiveSegmentForTime, extractFrontmatterSpeakers, isSegmentIrrelevant, isSpecialSpeaker, nextSpeakerName, groupSegmentsBySpeaker, orderedNamedSpeakers, SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE, SPEAKER_GROUP } from "$lib/transcript";
   import { nextSegmentBoundary, singleEndForCurrentTime } from "$lib/playback";
   import type { Segment } from "$lib/transcript";
   import SpeakerManager from "./SpeakerManager.svelte";
@@ -1642,7 +1642,7 @@
                 {#if multiPickerOpen}
                   {@const current = ""}
                   {@const nm = namedSpeakersOrdered.filter((s) => s !== current)}
-                  {@const sp = [SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE].filter((s) => s !== current)}
+                  {@const sp = [SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE, SPEAKER_GROUP].filter((s) => s !== current)}
                   {@const ot = allSpeakerNames().filter((s) => !namedSpeakers.includes(s) && !isSpecialSpeaker(s))}
                   {@const assign = (name: string) => {
                     const targets = segments
@@ -1768,7 +1768,7 @@
                   {#if groupPickerOpen}
                     {@const current = group.speaker}
                     {@const nm = namedSpeakersOrdered.filter((s) => s !== current)}
-                    {@const sp = [SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE].filter((s) => s !== current)}
+                    {@const sp = [SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE, SPEAKER_GROUP].filter((s) => s !== current)}
                     {@const ot = allSpeakerNames().filter((s) => s !== current && !namedSpeakers.includes(s) && !isSpecialSpeaker(s))}
                     <div
                       onclick={(e) => e.stopPropagation()}
@@ -1884,7 +1884,7 @@
                         {#if sentencePickerOpen}
                           {@const current = segment.speaker}
                           {@const nm = namedSpeakersOrdered.filter((s) => s !== current)}
-                          {@const sp = [SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE].filter((s) => s !== current)}
+                          {@const sp = [SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE, SPEAKER_GROUP].filter((s) => s !== current)}
                           {@const ot = allSpeakerNames().filter((s) => s !== current && !namedSpeakers.includes(s) && !isSpecialSpeaker(s))}
                           <div
                             onclick={(e) => e.stopPropagation()}

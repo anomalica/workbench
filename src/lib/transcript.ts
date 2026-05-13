@@ -252,6 +252,17 @@ export function extractFrontmatterSpeakers(rawFrontmatter: string): string[] {
 export const SPEAKER_IRRELEVANT = "[irrelevant]";
 export const SPEAKER_NARRATOR = "[narrator]";
 export const SPEAKER_EXTERNAL_FOOTAGE = "[external footage]";
+/** Multiple speakers saying the same thing simultaneously - chants,
+ *  unison answers, committee responses. Use when no one individual
+ *  owns the line. */
+export const SPEAKER_GROUP = "[group]";
+
+export const SPECIAL_SPEAKERS = [
+  SPEAKER_IRRELEVANT,
+  SPEAKER_NARRATOR,
+  SPEAKER_EXTERNAL_FOOTAGE,
+  SPEAKER_GROUP,
+] as const;
 
 /** Check if a speaker name looks like a default (Speaker N). */
 export function isDefaultSpeakerName(name: string): boolean {
@@ -260,9 +271,7 @@ export function isDefaultSpeakerName(name: string): boolean {
 
 /** Check if a speaker is a special name (not a real person). */
 export function isSpecialSpeaker(name: string): boolean {
-  return (
-    name === SPEAKER_IRRELEVANT || name === SPEAKER_NARRATOR || name === SPEAKER_EXTERNAL_FOOTAGE
-  );
+  return (SPECIAL_SPEAKERS as readonly string[]).includes(name);
 }
 
 /** Check if a segment is irrelevant (speaker is [irrelevant]). */
