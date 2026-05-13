@@ -68,30 +68,30 @@
 <div class="flex-1 flex flex-col min-h-0 border-l-2 border-primary/30">
   <!-- Toolbar -->
   <div class="flex items-center gap-0.5 px-3 py-1.5 border-b border-border flex-none">
-    <button onclick={() => run(toggleStrongCommand.key)} class="toolbar-btn" title="Bold (Ctrl+B)">
+    <button onmousedown={(e) => e.preventDefault()} onclick={() => run(toggleStrongCommand.key)} class="toolbar-btn" title="Bold (Ctrl+B)">
       <strong>B</strong>
     </button>
-    <button onclick={() => run(toggleEmphasisCommand.key)} class="toolbar-btn" title="Italic (Ctrl+I)">
+    <button onmousedown={(e) => e.preventDefault()} onclick={() => run(toggleEmphasisCommand.key)} class="toolbar-btn" title="Italic (Ctrl+I)">
       <em>I</em>
     </button>
-    <button onclick={promptLink} class="toolbar-btn" title="Link (Ctrl+K)">
+    <button onmousedown={(e) => e.preventDefault()} onclick={promptLink} class="toolbar-btn" title="Link (Ctrl+K)">
       <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
         <path stroke-linecap="round" d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71" />
         <path stroke-linecap="round" d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71" />
       </svg>
     </button>
     <div class="w-px h-4 bg-border mx-1"></div>
-    <button onclick={() => run(wrapInHeadingCommand.key, 1)} class="toolbar-btn" title="Heading 1">H1</button>
-    <button onclick={() => run(wrapInHeadingCommand.key, 2)} class="toolbar-btn" title="Heading 2">H2</button>
-    <button onclick={() => run(wrapInHeadingCommand.key, 3)} class="toolbar-btn" title="Heading 3">H3</button>
+    <button onmousedown={(e) => e.preventDefault()} onclick={() => run(wrapInHeadingCommand.key, 1)} class="toolbar-btn" title="Heading 1">H1</button>
+    <button onmousedown={(e) => e.preventDefault()} onclick={() => run(wrapInHeadingCommand.key, 2)} class="toolbar-btn" title="Heading 2">H2</button>
+    <button onmousedown={(e) => e.preventDefault()} onclick={() => run(wrapInHeadingCommand.key, 3)} class="toolbar-btn" title="Heading 3">H3</button>
     <div class="w-px h-4 bg-border mx-1"></div>
-    <button onclick={() => run(wrapInBlockquoteCommand.key)} class="toolbar-btn" title="Blockquote">
+    <button onmousedown={(e) => e.preventDefault()} onclick={() => run(wrapInBlockquoteCommand.key)} class="toolbar-btn" title="Blockquote">
       <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
         <path stroke-linecap="round" d="M3 21c3 0 7-1 7-8V5c0-1.25-.756-2.017-2-2H4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2 1 0 1 0 1 1v1c0 1-1 2-2 2s-1 .008-1 1.031V20" />
         <path stroke-linecap="round" d="M15 21c3 0 7-1 7-8V5c0-1.25-.757-2.017-2-2h-4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2h.75c0 2.25.25 4-2.75 5v3" />
       </svg>
     </button>
-    <button onclick={() => run(wrapInBulletListCommand.key)} class="toolbar-btn" title="Bullet list">
+    <button onmousedown={(e) => e.preventDefault()} onclick={() => run(wrapInBulletListCommand.key)} class="toolbar-btn" title="Bullet list">
       <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
         <line x1="8" y1="6" x2="21" y2="6" /><line x1="8" y1="12" x2="21" y2="12" /><line x1="8" y1="18" x2="21" y2="18" />
         <line x1="3" y1="6" x2="3.01" y2="6" /><line x1="3" y1="12" x2="3.01" y2="12" /><line x1="3" y1="18" x2="3.01" y2="18" />
@@ -130,6 +130,8 @@
     border-radius: 0.25rem;
     cursor: pointer;
     color: var(--color-on-surface-secondary);
+    background: transparent;
+    border: none;
     transition: background-color 0.15s, color 0.15s;
     display: flex;
     align-items: center;
@@ -137,7 +139,10 @@
     min-width: 1.75rem;
   }
   .toolbar-btn:hover {
-    background: var(--color-surface);
+    background: color-mix(in srgb, var(--color-primary) 12%, transparent);
     color: var(--color-on-surface);
+  }
+  .toolbar-btn:active {
+    background: color-mix(in srgb, var(--color-primary) 22%, transparent);
   }
 </style>
