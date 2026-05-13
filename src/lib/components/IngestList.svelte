@@ -83,7 +83,12 @@
         <span class="text-xs font-ui font-medium text-primary uppercase w-12 flex-none">
           {typeLabels[ingest.source_type] ?? ingest.source_type}
         </span>
-        <span class="text-xs text-on-surface-muted font-mono w-20 flex-none">{ingest.date}</span>
+        <span
+          class="text-xs text-on-surface-muted font-mono w-20 flex-none"
+          title={ingest.date}
+        >
+          {ingest.date.slice(0, 10)}
+        </span>
         <span class="text-xs text-on-surface-secondary w-28 flex-none truncate">
           {ingest.publisher || ""}
         </span>
