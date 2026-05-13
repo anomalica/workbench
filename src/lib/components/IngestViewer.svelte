@@ -1077,8 +1077,27 @@
     {:else}
       <!-- Left panel -->
       <div class="w-1/2 border-r border-border flex flex-col min-h-0">
-        <div class="px-3 py-2 bg-surface-alt border-b border-border flex-none">
-          <span class="text-xs font-ui font-medium text-on-surface-secondary uppercase">Original</span>
+        <div class="px-3 py-2 bg-surface-alt border-b border-border flex-none flex items-center gap-3">
+          <span class="text-xs font-ui font-medium text-on-surface-secondary uppercase flex-none">Original</span>
+          {#if ingest.frontmatter.source_url}
+            <a
+              href={ingest.frontmatter.source_url}
+              target="_blank"
+              rel="noopener"
+              class="text-xs text-primary hover:underline truncate min-w-0"
+              title={ingest.frontmatter.source_url}
+            >
+              {ingest.frontmatter.source_url}
+            </a>
+          {/if}
+          {#if ingest.frontmatter.date_accessed}
+            <span
+              class="text-xs text-on-surface-muted font-ui flex-none ml-auto"
+              title={ingest.frontmatter.date_accessed}
+            >
+              accessed {ingest.frontmatter.date_accessed.slice(0, 10)}
+            </span>
+          {/if}
         </div>
 
         {#if pdfSrc && isPdf}
