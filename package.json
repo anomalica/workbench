@@ -27,6 +27,11 @@
     "vitest": "^4.1.4"
   },
   "dependencies": {
+    "@milkdown/core": "^7.21.1",
+    "@milkdown/ctx": "^7.21.1",
+    "@milkdown/plugin-listener": "^7.21.1",
+    "@milkdown/preset-commonmark": "^7.21.1",
+    "@milkdown/theme-nord": "^7.21.1",
     "@tailwindcss/typography": "^0.5.19",
     "@zip.js/zip.js": "^2.8.26",
     "js-yaml": "^4.1.1",
