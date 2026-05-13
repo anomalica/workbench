@@ -273,6 +273,11 @@ class LocalIngestSource(IngestSource):
             message += " (approved as-is)"
         if notes:
             message += f"\n\n{notes}"
+        # Reviewed-Record trailer lets _scan_git_reviews attribute the
+        # commit to a content_hash even when nothing was staged (empty
+        # "approved as-is" commits don't touch any file, so a file-path
+        # scan misses them).
+        message += f"\n\nReviewed-Record: sha256:{full_hash}"
 
         cmd = ["git", "commit", "-m", message]
         if no_changes:
@@ -295,22 +300,65 @@ class LocalIngestSource(IngestSource):
         return set(self._reviewed_cache.get(target, set()))
 
     def _scan_git_reviews(self) -> dict[str, set[str]]:
+        """Build the reviewer-email to set-of-content-hashes index.
+
+        Two detection paths in priority order:
+
+        1. **Reviewed-Record trailer.** Every commit produced by
+           commit_review() now appends `Reviewed-Record: sha256:HASH`
+           as a git trailer. Picks up empty "approved as-is" commits
+           that don't touch any file.
+        2. **File-path scan.** Legacy fallback for commits that
+           pre-date the trailer (review commits made before the bug
+           fix, and any external commit that touched a store file).
+           Maps the touched filename back to a content_hash via the
+           current scan index.
+        """
         import subprocess
 
         repo_dir = self.store.parent
         if not (repo_dir / ".git").exists():
             return {}
 
-        # File name to content_hash. Records aren't always named by hash
-        # any more (the new ingester uses source_id), so we resolve via
-        # _scan rather than parsing the filename.
+        out: dict[str, set[str]] = {}
+
+        # Trailer-based detection.
+        trailer_result = subprocess.run(
+            [
+                "git",
+                "log",
+                "--no-merges",
+                "--format=%ae|%(trailers:key=Reviewed-Record,valueonly,separator=,)",
+            ],
+            cwd=repo_dir,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if trailer_result.returncode == 0:
+            for raw in trailer_result.stdout.splitlines():
+                if "|" not in raw:
+                    continue
+                email, trailer = raw.split("|", 1)
+                email = email.strip().lower()
+                trailer = trailer.strip()
+                if not email or not trailer:
+                    continue
+                for entry in trailer.split(","):
+                    entry = entry.strip()
+                    if entry.startswith("sha256:"):
+                        entry = entry[len("sha256:") :]
+                    if FULL_HASH_PATTERN.match(entry):
+                        out.setdefault(email, set()).add(entry)
+
+        # File-path detection (legacy fallback).
         index = self._scan()
         file_to_hash: dict[str, str] = {}
         for content_hash, (md_path, _) in index.items():
             rel = str(md_path.relative_to(repo_dir))
             file_to_hash[rel] = content_hash
 
-        result = subprocess.run(
+        file_result = subprocess.run(
             [
                 "git",
                 "log",
@@ -325,23 +373,20 @@ class LocalIngestSource(IngestSource):
             text=True,
             check=False,
         )
-        out: dict[str, set[str]] = {}
-        if result.returncode != 0:
-            return out
-
-        current_email: str | None = None
-        for raw in result.stdout.splitlines():
-            line = raw.strip()
-            if not line:
-                continue
-            if line.startswith("COMMIT "):
-                current_email = line[len("COMMIT ") :].strip().lower()
-                continue
-            if current_email is None:
-                continue
-            content_hash = file_to_hash.get(line)
-            if content_hash:
-                out.setdefault(current_email, set()).add(content_hash)
+        if file_result.returncode == 0:
+            current_email: str | None = None
+            for raw in file_result.stdout.splitlines():
+                line = raw.strip()
+                if not line:
+                    continue
+                if line.startswith("COMMIT "):
+                    current_email = line[len("COMMIT ") :].strip().lower()
+                    continue
+                if current_email is None:
+                    continue
+                content_hash = file_to_hash.get(line)
+                if content_hash:
+                    out.setdefault(current_email, set()).add(content_hash)
         return out
 
     def load_verification(self, full_hash: str) -> dict | None:
