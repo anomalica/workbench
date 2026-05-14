@@ -16,6 +16,7 @@
   import { nord } from "@milkdown/theme-nord";
   import { listener, listenerCtx } from "@milkdown/plugin-listener";
   import { callCommand, replaceAll } from "@milkdown/utils";
+  import { lift } from "prosemirror-commands";
   import { untrack } from "svelte";
 
   let {
@@ -111,6 +112,34 @@
       run(wrapInBulletListCommand.key);
     } else {
       run(wrapInBulletListCommand.key);
+    }
+  }
+
+  function inBlockquote(): boolean {
+    if (!editor) return false;
+    let result = false;
+    editor.action((ctx) => {
+      const view = ctx.get(editorViewCtx);
+      const from = view.state.selection.$from;
+      for (let d = from.depth; d > 0; d--) {
+        if (from.node(d).type.name === "blockquote") {
+          result = true;
+          return;
+        }
+      }
+    });
+    return result;
+  }
+
+  function toggleBlockquote() {
+    if (!editor) return;
+    if (inBlockquote()) {
+      editor.action((ctx) => {
+        const view = ctx.get(editorViewCtx);
+        lift(view.state, view.dispatch);
+      });
+    } else {
+      run(wrapInBlockquoteCommand.key);
     }
   }
 
@@ -249,7 +278,7 @@
     <button onmousedown={(e) => e.preventDefault()} onclick={() => run(wrapInHeadingCommand.key, 2)} class="toolbar-btn" title="Heading 2">H2</button>
     <button onmousedown={(e) => e.preventDefault()} onclick={() => run(wrapInHeadingCommand.key, 3)} class="toolbar-btn" title="Heading 3">H3</button>
     <div class="w-px h-4 bg-border mx-1"></div>
-    <button onmousedown={(e) => e.preventDefault()} onclick={() => run(wrapInBlockquoteCommand.key)} class="toolbar-btn" title="Blockquote">
+    <button onmousedown={(e) => e.preventDefault()} onclick={toggleBlockquote} class="toolbar-btn" title="Blockquote (click again to remove)">
       <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
         <path stroke-linecap="round" d="M3 21c3 0 7-1 7-8V5c0-1.25-.756-2.017-2-2H4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2 1 0 1 0 1 1v1c0 1-1 2-2 2s-1 .008-1 1.031V20" />
         <path stroke-linecap="round" d="M15 21c3 0 7-1 7-8V5c0-1.25-.757-2.017-2-2h-4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2h.75c0 2.25.25 4-2.75 5v3" />
