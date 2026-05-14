@@ -25,20 +25,30 @@
   let searchQuery = $state("");
   let filterType = $state<string>("all");
   let filterReviewed = $state<"all" | "pending" | "reviewed">("all");
-  let reviewedHashes = $state<Set<string>>(new Set());
+  let reviewedTimes = $state<Record<string, string>>({});
+  let reviewedHashes = $derived(new Set(Object.keys(reviewedTimes)));
   let sortBy = $state<"date" | "title" | "type" | "publisher" | "author" | "copyright">("date");
+  let dateField = $state<"published" | "ingested" | "reviewed">("published");
   let sortAsc = $state(false);
 
   async function loadReviews() {
-    const hashes = await fetchReviewedHashes();
-    reviewedHashes = new Set(hashes);
+    reviewedTimes = await fetchReviewedHashes();
   }
 
-  function setReviewed(hash: string, reviewed: boolean) {
-    const next = new Set(reviewedHashes);
-    if (reviewed) next.add(hash);
-    else next.delete(hash);
-    reviewedHashes = next;
+  function setReviewed(hash: string, reviewed: boolean, when?: string) {
+    const next = { ...reviewedTimes };
+    if (reviewed) {
+      next[hash] = when || new Date().toISOString();
+    } else {
+      delete next[hash];
+    }
+    reviewedTimes = next;
+  }
+
+  function dateValueFor(i: IngestSummary): string {
+    if (dateField === "ingested") return i.date_ingested || "";
+    if (dateField === "reviewed") return reviewedTimes[i.content_hash] || "";
+    return i.date || "";
   }
 
   let filteredIngests = $derived(
@@ -60,7 +70,18 @@
       .sort((a, b) => {
         let va: string;
         let vb: string;
-        if (sortBy === "date") { va = a.date; vb = b.date; }
+        if (sortBy === "date") {
+          // Empty date values always sort to the bottom regardless of
+          // direction, so records with no review/ingestion timestamp
+          // don't push everything else off the screen.
+          const ad = dateValueFor(a);
+          const bd = dateValueFor(b);
+          if (!ad && !bd) return 0;
+          if (!ad) return 1;
+          if (!bd) return -1;
+          va = ad;
+          vb = bd;
+        }
         else if (sortBy === "title") { va = a.title.toLowerCase(); vb = b.title.toLowerCase(); }
         else if (sortBy === "type") { va = a.source_type; vb = b.source_type; }
         else if (sortBy === "publisher") { va = a.publisher || "zzz"; vb = b.publisher || "zzz"; }
@@ -226,10 +247,13 @@
               {sortBy}
               {sortAsc}
               {reviewedHashes}
+              {reviewedTimes}
+              {dateField}
               onsort={(field) => {
                 if (sortBy === field) { sortAsc = !sortAsc; }
                 else { sortBy = field as typeof sortBy; sortAsc = field === "title" || field === "author"; }
               }}
+              ondatefield={(f) => { dateField = f; sortBy = "date"; }}
               onselect={(hash) => selectIngest(hash)}
             />
           {:else if searchQuery || filterType !== "all"}

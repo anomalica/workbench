@@ -10,7 +10,10 @@ export interface IngestSummary {
   public_hash: string;
   title: string;
   authors: string[];
+  /** date_published from the record frontmatter. */
   date: string;
+  /** date_extracted (falls back to date_accessed) - when the ingester ran. */
+  date_ingested: string;
   source_type: string;
   source_url: string;
   publisher: string;
@@ -82,11 +85,15 @@ export async function hashFile(file: File): Promise<string> {
   return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-/** Fetch the set of content_hashes the current user has submitted a
- *  review commit for. Empty when not logged in. */
-export async function fetchReviewedHashes(): Promise<string[]> {
+/** Fetch a map of {content_hash: latest_review_iso} for the current user.
+ *  Empty when not logged in. */
+export async function fetchReviewedHashes(): Promise<Record<string, string>> {
   const res = await fetch("/api/me/reviews");
-  if (!res.ok) return [];
+  if (!res.ok) return {};
   const data = await res.json().catch(() => ({}));
-  return Array.isArray(data.reviewed) ? data.reviewed : [];
+  const reviewed = data.reviewed;
+  if (reviewed && typeof reviewed === "object" && !Array.isArray(reviewed)) {
+    return reviewed as Record<string, string>;
+  }
+  return {};
 }

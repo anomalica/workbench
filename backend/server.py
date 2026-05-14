@@ -126,8 +126,8 @@ class IngestSource(ABC):
         """Load the verification sidecar for a record, or None if absent."""
 
     @abstractmethod
-    def reviewed_by_email(self, email: str) -> set[str]:
-        """Return content_hashes this user has authored review commits for."""
+    def reviewed_by_email(self, email: str) -> dict[str, str]:
+        """Return {content_hash: latest_review_iso} for this user's reviews."""
 
 
 def normalise_hash(value: str | None) -> str | None:
@@ -184,6 +184,9 @@ class LocalIngestSource(IngestSource):
                     "authors": authors,
                     "date": frontmatter.get(
                         "date_published", frontmatter.get("date", "")
+                    ),
+                    "date_ingested": frontmatter.get(
+                        "date_extracted", frontmatter.get("date_accessed", "")
                     ),
                     "source_type": frontmatter.get("source_type", ""),
                     "source_url": frontmatter.get("source_url", ""),
@@ -288,18 +291,18 @@ class LocalIngestSource(IngestSource):
         # in /api/me/reviews on the next read.
         self._reviewed_cache = None
 
-    _reviewed_cache: dict[str, set[str]] | None = None
+    _reviewed_cache: dict[str, dict[str, str]] | None = None
 
-    def reviewed_by_email(self, email: str) -> set[str]:
-        """Return the set of content_hashes this user has authored a
-        review commit for. Built from the ingests repo's git log.
-        Cached; commit_review invalidates."""
+    def reviewed_by_email(self, email: str) -> dict[str, str]:
+        """Return a {content_hash: latest_review_iso} map for this user.
+        Empty when the user has no review commits. Built from the
+        ingests repo's git log. Cached; commit_review invalidates."""
         target = email.strip().lower()
         if self._reviewed_cache is None:
             self._reviewed_cache = self._scan_git_reviews()
-        return set(self._reviewed_cache.get(target, set()))
+        return dict(self._reviewed_cache.get(target, {}))
 
-    def _scan_git_reviews(self) -> dict[str, set[str]]:
+    def _scan_git_reviews(self) -> dict[str, dict[str, str]]:
         """Build the reviewer-email to set-of-content-hashes index.
 
         Two detection paths in priority order:
@@ -320,15 +323,22 @@ class LocalIngestSource(IngestSource):
         if not (repo_dir / ".git").exists():
             return {}
 
-        out: dict[str, set[str]] = {}
+        out: dict[str, dict[str, str]] = {}
 
-        # Trailer-based detection.
+        def record(email: str, content_hash: str, iso_ts: str) -> None:
+            bucket = out.setdefault(email, {})
+            existing = bucket.get(content_hash)
+            # Keep the most recent commit timestamp.
+            if existing is None or iso_ts > existing:
+                bucket[content_hash] = iso_ts
+
+        # Trailer-based detection. Newest first via default git log order.
         trailer_result = subprocess.run(
             [
                 "git",
                 "log",
                 "--no-merges",
-                "--format=%ae|%(trailers:key=Reviewed-Record,valueonly,separator=,)",
+                "--format=%ae|%aI|%(trailers:key=Reviewed-Record,valueonly,separator=,)",
             ],
             cwd=repo_dir,
             capture_output=True,
@@ -337,21 +347,23 @@ class LocalIngestSource(IngestSource):
         )
         if trailer_result.returncode == 0:
             for raw in trailer_result.stdout.splitlines():
-                if "|" not in raw:
+                parts = raw.split("|", 2)
+                if len(parts) < 3:
                     continue
-                email, trailer = raw.split("|", 1)
+                email, iso_ts, trailer = parts
                 email = email.strip().lower()
+                iso_ts = iso_ts.strip()
                 trailer = trailer.strip()
-                if not email or not trailer:
+                if not email or not trailer or not iso_ts:
                     continue
                 for entry in trailer.split(","):
                     entry = entry.strip()
                     if entry.startswith("sha256:"):
                         entry = entry[len("sha256:") :]
                     if FULL_HASH_PATTERN.match(entry):
-                        out.setdefault(email, set()).add(entry)
+                        record(email, entry, iso_ts)
 
-        # File-path detection (legacy fallback).
+        # File-path detection (legacy fallback for commits without the trailer).
         index = self._scan()
         file_to_hash: dict[str, str] = {}
         for content_hash, (md_path, _) in index.items():
@@ -363,7 +375,7 @@ class LocalIngestSource(IngestSource):
                 "git",
                 "log",
                 "--no-merges",
-                "--pretty=format:COMMIT %ae",
+                "--pretty=format:COMMIT %ae %aI",
                 "--name-only",
                 "--",
                 "store/",
@@ -375,18 +387,27 @@ class LocalIngestSource(IngestSource):
         )
         if file_result.returncode == 0:
             current_email: str | None = None
+            current_ts: str | None = None
             for raw in file_result.stdout.splitlines():
                 line = raw.strip()
                 if not line:
                     continue
                 if line.startswith("COMMIT "):
-                    current_email = line[len("COMMIT ") :].strip().lower()
+                    rest = line[len("COMMIT ") :].strip()
+                    # Format is "email iso_timestamp" - split on last space.
+                    sep = rest.rfind(" ")
+                    if sep > 0:
+                        current_email = rest[:sep].strip().lower()
+                        current_ts = rest[sep + 1 :].strip()
+                    else:
+                        current_email = rest.lower()
+                        current_ts = None
                     continue
-                if current_email is None:
+                if current_email is None or current_ts is None:
                     continue
                 content_hash = file_to_hash.get(line)
                 if content_hash:
-                    out.setdefault(current_email, set()).add(content_hash)
+                    record(current_email, content_hash, current_ts)
         return out
 
     def load_verification(self, full_hash: str) -> dict | None:
@@ -423,11 +444,11 @@ class GitHubIngestSource(IngestSource):
     def load_verification(self, full_hash: str) -> dict | None:
         raise NotImplementedError("GitHubIngestSource is not yet implemented")
 
-    def reviewed_by_email(self, email: str) -> set[str]:
+    def reviewed_by_email(self, email: str) -> dict[str, str]:
         # TODO: query the GitHub REST API for commits authored by this email
-        # under store/ in the ingests repo. Returning an empty set is correct
+        # under store/ in the ingests repo. Returning an empty dict is correct
         # default behaviour - no records show as reviewed until implemented.
-        return set()
+        return {}
 
 
 def build_source() -> IngestSource:
@@ -575,13 +596,12 @@ def submit_review(full_hash: str, body: dict, request: Request) -> JSONResponse:
 
 @app.get("/api/me/reviews")
 def list_my_reviews(request: Request) -> JSONResponse:
-    """Return the set of content_hashes the current user has submitted a
-    review commit for. Derived from the ingests repo's git log, not from
-    a separate sidecar - the canonical 'who reviewed what' event is the
-    review commit itself."""
+    """Return {content_hash: latest_review_iso} for the current user.
+    Derived from the ingests repo's git log - the canonical
+    'who reviewed what (and when)' event is the review commit itself."""
     user = _require_user(request)
-    hashes = source.reviewed_by_email(user["email"])
-    return JSONResponse({"reviewed": sorted(hashes)})
+    reviewed = source.reviewed_by_email(user["email"])
+    return JSONResponse({"reviewed": reviewed})
 
 
 # Verification: cloze-challenge proof of possession.
