@@ -11,7 +11,8 @@
   } from "@milkdown/preset-commonmark";
   import { nord } from "@milkdown/theme-nord";
   import { listener, listenerCtx } from "@milkdown/plugin-listener";
-  import { callCommand } from "@milkdown/utils";
+  import { callCommand, replaceAll } from "@milkdown/utils";
+  import { untrack } from "svelte";
 
   let {
     value,
@@ -23,16 +24,22 @@
 
   let container: HTMLDivElement | undefined = $state();
   let editor: Editor | null = null;
+  // Tracks the last markdown that flowed in either direction so the
+  // two-way sync doesn't trigger feedback loops.
   let lastValueSet = "";
 
+  // Create the editor once. Reads value via untrack so changing the
+  // value prop later doesn't tear the editor down and rebuild it (which
+  // was clearing the user's selection mid-edit).
   $effect(() => {
     if (!container) return;
     const target = container;
-    lastValueSet = value;
+    const initial = untrack(() => value);
+    lastValueSet = initial;
     Editor.make()
       .config((ctx) => {
         ctx.set(rootCtx, target);
-        ctx.set(defaultValueCtx, value);
+        ctx.set(defaultValueCtx, initial);
         ctx.get(listenerCtx).markdownUpdated((_, md) => {
           if (md === lastValueSet) return;
           lastValueSet = md;
@@ -51,6 +58,18 @@
       editor?.destroy();
       editor = null;
     };
+  });
+
+  // When the parent pushes in a value that doesn't match what the
+  // editor just emitted (e.g. discard, undo, switching records),
+  // replace the editor content. Skips when the value is our own emit
+  // coming back through props.
+  $effect(() => {
+    const md = value;
+    if (md === lastValueSet) return;
+    if (!editor) return;
+    lastValueSet = md;
+    editor.action(replaceAll(md));
   });
 
   function run(commandKey: Parameters<typeof callCommand>[0], payload?: unknown) {
