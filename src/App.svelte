@@ -25,21 +25,57 @@
   let searchQuery = $state("");
   let filterType = $state<string>("all");
   let filterReviewed = $state<"all" | "pending" | "reviewed">("all");
-  let reviewedHashes = $state<Set<string>>(new Set());
+  let reviewedTimes = $state<Record<string, string>>({});
+  let reviewedHashes = $derived(new Set(Object.keys(reviewedTimes)));
   let sortBy = $state<"date" | "title" | "type" | "publisher" | "author" | "copyright">("date");
   let sortAsc = $state(false);
+  // Which date the date column shows (and what "Date" sort uses).
+  // Lives in the toolbar above the list as a separate selector;
+  // the table's Date column header stays a plain sort-direction toggle.
+  let dateField = $state<"published" | "ingested" | "reviewed">("published");
+  let dateMenuOpen = $state(false);
+
+  const DATE_FIELD_LABELS: Record<typeof dateField, string> = {
+    published: "Published",
+    ingested: "Ingested",
+    reviewed: "Reviewed",
+  };
 
   async function loadReviews() {
-    const hashes = await fetchReviewedHashes();
-    reviewedHashes = new Set(hashes);
+    reviewedTimes = await fetchReviewedHashes();
   }
 
   function setReviewed(hash: string, reviewed: boolean) {
-    const next = new Set(reviewedHashes);
-    if (reviewed) next.add(hash);
-    else next.delete(hash);
-    reviewedHashes = next;
+    const next = { ...reviewedTimes };
+    if (reviewed) next[hash] = new Date().toISOString();
+    else delete next[hash];
+    reviewedTimes = next;
   }
+
+  function dateValueFor(i: IngestSummary): string {
+    if (dateField === "ingested") return i.date_ingested || "";
+    if (dateField === "reviewed") return reviewedTimes[i.content_hash] || "";
+    return i.date || "";
+  }
+
+  function pickDateField(f: typeof dateField) {
+    dateField = f;
+    dateMenuOpen = false;
+  }
+
+  function handleDocClickForDateMenu(e: MouseEvent) {
+    if (!dateMenuOpen) return;
+    const t = e.target as HTMLElement | null;
+    if (t?.closest("[data-date-menu]")) return;
+    if (t?.closest('[data-date-menu-trigger="1"]')) return;
+    dateMenuOpen = false;
+  }
+
+  $effect(() => {
+    if (!dateMenuOpen) return;
+    document.addEventListener("mousedown", handleDocClickForDateMenu);
+    return () => document.removeEventListener("mousedown", handleDocClickForDateMenu);
+  });
 
   let filteredIngests = $derived(
     ingests
@@ -60,7 +96,16 @@
       .sort((a, b) => {
         let va: string;
         let vb: string;
-        if (sortBy === "date") { va = a.date; vb = b.date; }
+        if (sortBy === "date") {
+          const ad = dateValueFor(a);
+          const bd = dateValueFor(b);
+          // Empty values always last regardless of direction.
+          if (!ad && !bd) return 0;
+          if (!ad) return 1;
+          if (!bd) return -1;
+          va = ad;
+          vb = bd;
+        }
         else if (sortBy === "title") { va = a.title.toLowerCase(); vb = b.title.toLowerCase(); }
         else if (sortBy === "type") { va = a.source_type; vb = b.source_type; }
         else if (sortBy === "publisher") { va = a.publisher || "zzz"; vb = b.publisher || "zzz"; }
@@ -205,6 +250,43 @@
               {/each}
             </div>
           {/if}
+
+          <!-- Date-field selector: what value the Date column shows
+               and what "Date" sort uses. Lives in the toolbar so the
+               column header itself stays a plain sort-direction toggle. -->
+          <div class="flex items-center gap-2 border-l border-border pl-3 relative">
+            <span class="text-xs font-ui text-on-surface-muted">Date:</span>
+            <button
+              data-date-menu-trigger="1"
+              onclick={() => { dateMenuOpen = !dateMenuOpen; }}
+              class="text-xs font-ui px-2 py-1 rounded cursor-pointer transition-colors
+                flex items-center gap-1 bg-surface text-on-surface-secondary
+                hover:bg-surface/60 border border-border"
+              title="Change which date the Date column shows"
+            >
+              {DATE_FIELD_LABELS[dateField]}
+              <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6" />
+              </svg>
+            </button>
+            {#if dateMenuOpen}
+              <div
+                data-date-menu
+                class="absolute top-full left-0 mt-1 min-w-32 z-30 bg-surface border border-border rounded shadow-lg py-1"
+              >
+                {#each (["published", "ingested", "reviewed"] as Array<typeof dateField>) as f}
+                  <button
+                    onclick={() => pickDateField(f)}
+                    class="w-full text-left text-xs font-ui px-3 py-1.5 hover:bg-surface-alt cursor-pointer
+                      {dateField === f ? 'text-primary font-medium' : 'text-on-surface'}"
+                  >
+                    {DATE_FIELD_LABELS[f]}
+                  </button>
+                {/each}
+              </div>
+            {/if}
+          </div>
+
           <span class="text-xs text-on-surface-muted">
             {filteredIngests.length}{filteredIngests.length !== ingests.length ? ` of ${ingests.length}` : ''} records
           </span>
@@ -226,6 +308,8 @@
               {sortBy}
               {sortAsc}
               {reviewedHashes}
+              {reviewedTimes}
+              {dateField}
               onsort={(field) => {
                 if (sortBy === field) { sortAsc = !sortAsc; }
                 else { sortBy = field as typeof sortBy; sortAsc = field === "title" || field === "author"; }

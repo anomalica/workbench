@@ -6,6 +6,8 @@
     sortBy,
     sortAsc,
     reviewedHashes = new Set(),
+    reviewedTimes = {},
+    dateField = "published",
     onsort,
     onselect,
   }: {
@@ -13,9 +15,17 @@
     sortBy: string;
     sortAsc: boolean;
     reviewedHashes?: Set<string>;
+    reviewedTimes?: Record<string, string>;
+    dateField?: "published" | "ingested" | "reviewed";
     onsort: (field: string) => void;
     onselect: (hash: string) => void;
   } = $props();
+
+  function dateValueFor(i: IngestSummary): string {
+    if (dateField === "ingested") return i.date_ingested || "";
+    if (dateField === "reviewed") return reviewedTimes[i.content_hash] || "";
+    return i.date || "";
+  }
 
   const typeLabels: Record<string, string> = {
     pdf: "PDF",
@@ -85,9 +95,9 @@
         </span>
         <span
           class="text-xs text-on-surface-muted font-mono w-20 flex-none"
-          title={ingest.date}
+          title={dateValueFor(ingest) || "no value"}
         >
-          {ingest.date.slice(0, 10)}
+          {dateValueFor(ingest).slice(0, 10) || "—"}
         </span>
         <span class="text-xs text-on-surface-secondary w-28 flex-none truncate">
           {ingest.publisher || ""}
