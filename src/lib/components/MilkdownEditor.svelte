@@ -8,6 +8,7 @@
     wrapInHeadingCommand,
     wrapInBlockquoteCommand,
     wrapInBulletListCommand,
+    turnIntoTextCommand,
   } from "@milkdown/preset-commonmark";
   import { nord } from "@milkdown/theme-nord";
   import { listener, listenerCtx } from "@milkdown/plugin-listener";
@@ -100,6 +101,7 @@
       </svg>
     </button>
     <div class="w-px h-4 bg-border mx-1"></div>
+    <button onmousedown={(e) => e.preventDefault()} onclick={() => run(turnIntoTextCommand.key)} class="toolbar-btn" title="Paragraph (turn heading/quote back to plain text)">P</button>
     <button onmousedown={(e) => e.preventDefault()} onclick={() => run(wrapInHeadingCommand.key, 1)} class="toolbar-btn" title="Heading 1">H1</button>
     <button onmousedown={(e) => e.preventDefault()} onclick={() => run(wrapInHeadingCommand.key, 2)} class="toolbar-btn" title="Heading 2">H2</button>
     <button onmousedown={(e) => e.preventDefault()} onclick={() => run(wrapInHeadingCommand.key, 3)} class="toolbar-btn" title="Heading 3">H3</button>
