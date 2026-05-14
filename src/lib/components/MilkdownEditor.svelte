@@ -1,10 +1,11 @@
 <script lang="ts">
-  import { Editor, rootCtx, defaultValueCtx } from "@milkdown/core";
+  import { Editor, rootCtx, defaultValueCtx, editorViewCtx } from "@milkdown/core";
   import {
     commonmark,
     toggleStrongCommand,
     toggleEmphasisCommand,
     toggleLinkCommand,
+    updateLinkCommand,
     wrapInHeadingCommand,
     wrapInBlockquoteCommand,
     wrapInBulletListCommand,
@@ -78,10 +79,38 @@
     editor.action(callCommand(commandKey, payload));
   }
 
+  function currentLinkHref(): string {
+    if (!editor) return "";
+    let href = "";
+    editor.action((ctx) => {
+      const view = ctx.get(editorViewCtx);
+      const linkType = view.state.schema.marks.link;
+      if (!linkType) return;
+      const { from, to } = view.state.selection;
+      view.state.doc.nodesBetween(from, to, (node) => {
+        if (href) return false;
+        const mark = node.marks.find((m) => m.type === linkType);
+        if (mark) href = mark.attrs.href ?? "";
+      });
+    });
+    return href;
+  }
+
   function promptLink() {
-    const url = window.prompt("Link URL");
-    if (!url) return;
-    run(toggleLinkCommand.key, { href: url });
+    const current = currentLinkHref();
+    const url = window.prompt("Link URL", current);
+    if (url === null) return; // cancelled
+    if (url === "") {
+      // Empty input on an existing link means "remove the link".
+      // toggleLink with no selection on a link removes it; otherwise no-op.
+      if (current) run(toggleLinkCommand.key, { href: "" });
+      return;
+    }
+    if (current) {
+      run(updateLinkCommand.key, { href: url });
+    } else {
+      run(toggleLinkCommand.key, { href: url });
+    }
   }
 </script>
 
