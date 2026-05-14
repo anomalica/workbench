@@ -9,6 +9,8 @@
     wrapInHeadingCommand,
     wrapInBlockquoteCommand,
     wrapInBulletListCommand,
+    wrapInOrderedListCommand,
+    liftListItemCommand,
     turnIntoTextCommand,
   } from "@milkdown/preset-commonmark";
   import { nord } from "@milkdown/theme-nord";
@@ -77,6 +79,51 @@
   function run(commandKey: Parameters<typeof callCommand>[0], payload?: unknown) {
     if (!editor) return;
     editor.action(callCommand(commandKey, payload));
+  }
+
+  function currentListType(): "bullet" | "ordered" | null {
+    if (!editor) return null;
+    let result: "bullet" | "ordered" | null = null;
+    editor.action((ctx) => {
+      const view = ctx.get(editorViewCtx);
+      const { $from } = view.state.selection;
+      for (let d = $from.depth; d > 0; d--) {
+        const name = $from.node(d).type.name;
+        if (name === "bullet_list") {
+          result = "bullet";
+          return;
+        }
+        if (name === "ordered_list") {
+          result = "ordered";
+          return;
+        }
+      }
+    });
+    return result;
+  }
+
+  function toggleBulletList() {
+    const t = currentListType();
+    if (t === "bullet") {
+      run(liftListItemCommand.key);
+    } else if (t === "ordered") {
+      run(liftListItemCommand.key);
+      run(wrapInBulletListCommand.key);
+    } else {
+      run(wrapInBulletListCommand.key);
+    }
+  }
+
+  function toggleOrderedList() {
+    const t = currentListType();
+    if (t === "ordered") {
+      run(liftListItemCommand.key);
+    } else if (t === "bullet") {
+      run(liftListItemCommand.key);
+      run(wrapInOrderedListCommand.key);
+    } else {
+      run(wrapInOrderedListCommand.key);
+    }
   }
 
   function currentLinkHref(): string {
@@ -208,10 +255,20 @@
         <path stroke-linecap="round" d="M15 21c3 0 7-1 7-8V5c0-1.25-.757-2.017-2-2h-4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2h.75c0 2.25.25 4-2.75 5v3" />
       </svg>
     </button>
-    <button onmousedown={(e) => e.preventDefault()} onclick={() => run(wrapInBulletListCommand.key)} class="toolbar-btn" title="Bullet list">
+    <button onmousedown={(e) => e.preventDefault()} onclick={toggleBulletList} class="toolbar-btn" title="Bullet list (click again to remove)">
       <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
         <line x1="8" y1="6" x2="21" y2="6" /><line x1="8" y1="12" x2="21" y2="12" /><line x1="8" y1="18" x2="21" y2="18" />
         <line x1="3" y1="6" x2="3.01" y2="6" /><line x1="3" y1="12" x2="3.01" y2="12" /><line x1="3" y1="18" x2="3.01" y2="18" />
+      </svg>
+    </button>
+    <button onmousedown={(e) => e.preventDefault()} onclick={toggleOrderedList} class="toolbar-btn" title="Numbered list (click again to remove)">
+      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
+        <line x1="10" y1="6" x2="21" y2="6" />
+        <line x1="10" y1="12" x2="21" y2="12" />
+        <line x1="10" y1="18" x2="21" y2="18" />
+        <path d="M4 6h1v4" />
+        <path d="M4 10h2" />
+        <path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1" />
       </svg>
     </button>
   </div>
