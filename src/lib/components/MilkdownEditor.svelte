@@ -96,13 +96,46 @@
     return href;
   }
 
-  function promptLink() {
+  // Link popover: shown when the link button is pressed. Captures the
+  // editor selection's link mark and floats next to the cursor with an
+  // input prefilled to the existing href. Confirm dispatches update/
+  // toggle commands against the original selection (which ProseMirror
+  // retains even when the editor isn't focused).
+  let linkPopover = $state<{
+    x: number;
+    y: number;
+    href: string;
+    current: string;
+  } | null>(null);
+  let linkInput: HTMLInputElement | undefined = $state();
+
+  function openLinkPopover() {
+    if (!editor) return;
     const current = currentLinkHref();
-    const url = window.prompt("Link URL", current);
-    if (url === null) return; // cancelled
-    if (url === "") {
-      // Empty input on an existing link means "remove the link".
-      // toggleLink with no selection on a link removes it; otherwise no-op.
+    let coords = { left: 0, top: 0, bottom: 0 };
+    editor.action((ctx) => {
+      const view = ctx.get(editorViewCtx);
+      const { from } = view.state.selection;
+      coords = view.coordsAtPos(from);
+    });
+    linkPopover = {
+      x: coords.left,
+      y: coords.bottom + 6,
+      href: current,
+      current,
+    };
+    queueMicrotask(() => {
+      linkInput?.focus();
+      linkInput?.select();
+    });
+  }
+
+  function confirmLink() {
+    if (!linkPopover) return;
+    const url = linkPopover.href.trim();
+    const current = linkPopover.current;
+    linkPopover = null;
+    if (!url) {
       if (current) run(toggleLinkCommand.key, { href: "" });
       return;
     }
@@ -112,6 +145,40 @@
       run(toggleLinkCommand.key, { href: url });
     }
   }
+
+  function cancelLink() {
+    linkPopover = null;
+  }
+
+  function unlinkLink() {
+    const current = linkPopover?.current;
+    linkPopover = null;
+    if (current) run(toggleLinkCommand.key, { href: "" });
+  }
+
+  function handlePopoverKey(e: KeyboardEvent) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      confirmLink();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      cancelLink();
+    }
+  }
+
+  function handleDocClick(e: MouseEvent) {
+    if (!linkPopover) return;
+    const target = e.target as HTMLElement | null;
+    if (target?.closest(".link-popover")) return;
+    if (target?.closest('[data-link-trigger="1"]')) return;
+    cancelLink();
+  }
+
+  $effect(() => {
+    if (!linkPopover) return;
+    document.addEventListener("mousedown", handleDocClick);
+    return () => document.removeEventListener("mousedown", handleDocClick);
+  });
 </script>
 
 <div class="flex-1 flex flex-col min-h-0 border-l-2 border-primary/30">
@@ -123,7 +190,7 @@
     <button onmousedown={(e) => e.preventDefault()} onclick={() => run(toggleEmphasisCommand.key)} class="toolbar-btn" title="Italic (Ctrl+I)">
       <em>I</em>
     </button>
-    <button onmousedown={(e) => e.preventDefault()} onclick={promptLink} class="toolbar-btn" title="Link (Ctrl+K)">
+    <button onmousedown={(e) => e.preventDefault()} onclick={openLinkPopover} data-link-trigger="1" class="toolbar-btn" title="Link (Ctrl+K)">
       <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
         <path stroke-linecap="round" d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71" />
         <path stroke-linecap="round" d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71" />
@@ -151,6 +218,28 @@
 
   <div bind:this={container} class="milkdown-host flex-1 overflow-auto"></div>
 </div>
+
+{#if linkPopover}
+  <div
+    class="link-popover"
+    style="left: {linkPopover.x}px; top: {linkPopover.y}px"
+    role="dialog"
+    aria-label="Edit link"
+  >
+    <input
+      bind:this={linkInput}
+      bind:value={linkPopover.href}
+      placeholder="https://..."
+      class="link-popover-input"
+      onkeydown={handlePopoverKey}
+    />
+    <button onmousedown={(e) => e.preventDefault()} onclick={confirmLink} class="link-popover-btn primary" title="Apply (Enter)">OK</button>
+    {#if linkPopover.current}
+      <button onmousedown={(e) => e.preventDefault()} onclick={unlinkLink} class="link-popover-btn" title="Remove link">Unlink</button>
+    {/if}
+    <button onmousedown={(e) => e.preventDefault()} onclick={cancelLink} class="link-popover-btn" title="Cancel (Esc)">Cancel</button>
+  </div>
+{/if}
 
 <style>
   /* Match Ingest view's line-height (Tailwind prose ~1.75) and font feel. */
@@ -194,5 +283,56 @@
   }
   .toolbar-btn:active {
     background: color-mix(in srgb, var(--color-primary) 22%, transparent);
+  }
+
+  .link-popover {
+    position: fixed;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.375rem;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 0.375rem;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    font-family: var(--font-ui);
+  }
+  .link-popover-input {
+    flex: 1;
+    min-width: 18rem;
+    font-size: 0.75rem;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.25rem;
+    background: var(--color-surface-alt);
+    border: 1px solid var(--color-border);
+    color: var(--color-on-surface);
+    outline: none;
+  }
+  .link-popover-input:focus {
+    border-color: var(--color-primary);
+  }
+  .link-popover-btn {
+    font-size: 0.75rem;
+    font-family: var(--font-ui);
+    padding: 0.25rem 0.6rem;
+    border-radius: 0.25rem;
+    border: 1px solid var(--color-border);
+    background: var(--color-surface-alt);
+    color: var(--color-on-surface-secondary);
+    cursor: pointer;
+    transition: background-color 0.15s, color 0.15s;
+  }
+  .link-popover-btn:hover {
+    background: color-mix(in srgb, var(--color-primary) 12%, var(--color-surface-alt));
+    color: var(--color-on-surface);
+  }
+  .link-popover-btn.primary {
+    background: var(--color-primary);
+    color: var(--color-on-primary);
+    border-color: var(--color-primary);
+  }
+  .link-popover-btn.primary:hover {
+    background: var(--color-primary-hover, var(--color-primary));
   }
 </style>
