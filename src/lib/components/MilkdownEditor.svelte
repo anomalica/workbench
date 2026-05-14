@@ -86,9 +86,9 @@
     let result: "bullet" | "ordered" | null = null;
     editor.action((ctx) => {
       const view = ctx.get(editorViewCtx);
-      const { $from } = view.state.selection;
-      for (let d = $from.depth; d > 0; d--) {
-        const name = $from.node(d).type.name;
+      const from = view.state.selection.$from;
+      for (let d = from.depth; d > 0; d--) {
+        const name = from.node(d).type.name;
         if (name === "bullet_list") {
           result = "bullet";
           return;
