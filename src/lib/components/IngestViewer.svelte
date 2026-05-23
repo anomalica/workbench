@@ -243,14 +243,48 @@
   // Deep-link to a specific claim. The assembled-site references emit URLs
   // of the form /<public_hash>#claim-<uuid>. We do the scroll/flash entirely
   // in JS (no native anchor jump) so we can wait for the async-loaded digest
-  // to render its claim cards before resolving the lookup. The effect re-runs
-  // whenever `digest` changes (cold load via direct link) and on every URL
-  // hash change (link clicked within the workbench).
+  // to render its claim cards before resolving the lookup.
+  //
+  // Selection model: `selectedClaimId` is the persistent state. When set,
+  // the matching card gets `.claim-selected` (subtle outline + background
+  // tint) and stays highlighted until the user clicks outside it or the URL
+  // hash changes to something different. The brief `.claim-flash` entry
+  // pulse is layered on top so the reader's eye is drawn to it on arrival.
+  let selectedClaimId = $state<string | null>(null);
+
+  /** Bounded poll for the card element. Large records can have hundreds of
+   *  claims that take a moment to render after the digest column mounts,
+   *  so a single delayed lookup misses. ~2 s ceiling (25 attempts at 80 ms)
+   *  is more than enough in practice; longer would just be hiding a real
+   *  rendering problem we'd rather see than paper over. */
+  function _findCardWithRetry(
+    claimId: string,
+    attempts: number,
+    onFound: (el: HTMLElement) => void,
+  ) {
+    const el = document.querySelector<HTMLElement>(
+      `[data-claim-id="${CSS.escape(claimId)}"]`,
+    );
+    if (el) {
+      onFound(el);
+      return;
+    }
+    if (attempts <= 0) {
+      console.warn(`[ingest-viewer] claim card not found after polling: ${claimId}`);
+      return;
+    }
+    setTimeout(() => _findCardWithRetry(claimId, attempts - 1, onFound), 80);
+  }
+
   function _scrollToClaimFromHash() {
     if (typeof window === "undefined" || !digest) return;
     const h = window.location.hash;
     const m = h.match(/^#claim-([a-f0-9-]{36})$/i);
-    if (!m) return;
+    // Hash changed to something that isn't a claim ref: clear any selection.
+    if (!m) {
+      selectedClaimId = null;
+      return;
+    }
     const claimId = m[1];
     // Ensure the digest column is visible (it may have been toggled off via
     // the column-visibility controls). When PaneForge gets involved later
@@ -258,18 +292,50 @@
     if (!cols.digest) {
       cols = { ...cols, digest: true };
     }
-    // Wait a tick so the column show + claim list render before we query.
+    selectedClaimId = claimId;
     requestAnimationFrame(() => {
-      setTimeout(() => {
-        const el = document.querySelector<HTMLElement>(
-          `[data-claim-id="${CSS.escape(claimId)}"]`,
-        );
-        if (!el) return;
+      _findCardWithRetry(claimId, 25, (el) => {
         el.scrollIntoView({ behavior: "smooth", block: "center" });
+        // Brief entry pulse on top of the persistent selection state.
         el.classList.add("claim-flash");
         setTimeout(() => el.classList.remove("claim-flash"), 1800);
-      }, 80);
+      });
     });
+  }
+
+  // Apply / remove .claim-selected on the matching card whenever the
+  // selection state changes. Separate from the scroll/flash effect because
+  // it needs to react to selectedClaimId being cleared too (click-outside).
+  $effect(() => {
+    const id = selectedClaimId;
+    const previouslySelected = document.querySelectorAll<HTMLElement>(
+      "[data-claim-id].claim-selected",
+    );
+    previouslySelected.forEach((el) => el.classList.remove("claim-selected"));
+    if (!id) return;
+    const el = document.querySelector<HTMLElement>(
+      `[data-claim-id="${CSS.escape(id)}"]`,
+    );
+    if (el) el.classList.add("claim-selected");
+  });
+
+  // Click-outside: clear the selection if the user clicks anywhere that
+  // isn't the currently highlighted card.
+  function _handleClaimClickOutside(e: MouseEvent) {
+    if (!selectedClaimId) return;
+    const target = e.target as HTMLElement | null;
+    if (!target) return;
+    const closestCard = target.closest<HTMLElement>("[data-claim-id]");
+    if (closestCard?.dataset.claimId === selectedClaimId) return;
+    selectedClaimId = null;
+    // Also strip the hash from the URL so a refresh doesn't re-select it.
+    if (window.location.hash.startsWith("#claim-")) {
+      history.replaceState(null, "", window.location.pathname + window.location.search);
+    }
+  }
+
+  if (typeof window !== "undefined") {
+    document.addEventListener("mousedown", _handleClaimClickOutside);
   }
 
   $effect(() => {

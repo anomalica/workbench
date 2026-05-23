@@ -114,9 +114,10 @@ body {
   line-height: 1.4;
 }
 
-/* Deep-link flash: when the URL has #claim-<id>, the matching claim card
-   scrolls into view and briefly flashes so the reader can locate it. The
-   site emits these links from each reference in an assembled article. */
+/* Deep-link flash: brief entry pulse when the URL has #claim-<id> and the
+   matching claim card scrolls into view. Decays in ~1.8s. Layered on top
+   of .claim-selected (below) so the reader sees motion on arrival and
+   then a sticky highlight afterwards. */
 .claim-flash {
   animation: claim-flash-keyframes 1.8s ease-out;
 }
@@ -124,4 +125,14 @@ body {
 @keyframes claim-flash-keyframes {
   0%   { background-color: var(--color-primary-container); box-shadow: 0 0 0 2px var(--color-primary); }
   100% { background-color: transparent; box-shadow: 0 0 0 0 transparent; }
+}
+
+/* Persistent selection: stays applied while the URL hash points at this
+   claim. Cleared by clicking outside the card or by the hash changing to
+   something else. Distinct enough from the flash to be visible after the
+   pulse decays, subtle enough that it doesn't fight the card's own
+   styling. */
+.claim-selected {
+  background-color: color-mix(in srgb, var(--color-primary) 10%, transparent) !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 50%, transparent);
 }
