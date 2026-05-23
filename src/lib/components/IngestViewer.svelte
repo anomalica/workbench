@@ -342,6 +342,7 @@
     const closestCard = target.closest<HTMLElement>("[data-claim-id]");
     if (closestCard?.dataset.claimId === selectedClaimId) return;
     selectedClaimId = null;
+    _clearQuoteHighlight();
     // Also strip the hash from the URL so a refresh doesn't re-select it.
     if (window.location.hash.startsWith("#claim-")) {
       history.replaceState(null, "", window.location.pathname + window.location.search);
@@ -350,6 +351,114 @@
 
   if (typeof window !== "undefined") {
     document.addEventListener("mousedown", _handleClaimClickOutside);
+  }
+
+  // Quote-to-ingest highlighting. When a claim card is clicked, we look
+  // up the claim's verbatim `quote` text in the rendered ingest body,
+  // create a Range across the matching text nodes, register it as a CSS
+  // Custom Highlight (no DOM mutation, no node fragmentation), and
+  // scroll the match into view.
+  //
+  // Browser support: CSS.highlights is Chromium 105+, Firefox 140+,
+  // Safari 17.2+. If unavailable we gracefully degrade to scroll only.
+  const QUOTE_HIGHLIGHT_NAME = "claim-quote";
+
+  function _clearQuoteHighlight() {
+    if (typeof CSS === "undefined" || !(CSS as any).highlights) return;
+    (CSS as any).highlights.delete(QUOTE_HIGHLIGHT_NAME);
+  }
+
+  function _findTextRange(root: HTMLElement, query: string): Range | null {
+    const target = query.trim();
+    if (!target) return null;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const nodes: Array<{ node: Text; start: number }> = [];
+    let full = "";
+    let n: Node | null = walker.nextNode();
+    while (n) {
+      nodes.push({ node: n as Text, start: full.length });
+      full += n.textContent ?? "";
+      n = walker.nextNode();
+    }
+    const idx = full.indexOf(target);
+    if (idx === -1) return null;
+    const endIdx = idx + target.length;
+    const locate = (pos: number): { node: Text; offset: number } | null => {
+      for (let i = 0; i < nodes.length; i++) {
+        const end = i + 1 < nodes.length ? nodes[i + 1].start : full.length;
+        if (pos >= nodes[i].start && pos <= end) {
+          return { node: nodes[i].node, offset: pos - nodes[i].start };
+        }
+      }
+      return null;
+    };
+    const start = locate(idx);
+    const end = locate(endIdx);
+    if (!start || !end) return null;
+    const range = document.createRange();
+    range.setStart(start.node, start.offset);
+    range.setEnd(end.node, end.offset);
+    return range;
+  }
+
+  function _highlightQuoteInIngest(quote: string) {
+    _clearQuoteHighlight();
+    if (!proseContainer) return;
+    if (typeof CSS === "undefined" || !(CSS as any).highlights) {
+      // No Custom Highlight API - just scroll without the visual.
+      const range = _findTextRange(proseContainer, quote);
+      range?.startContainer.parentElement?.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+      return;
+    }
+    const range = _findTextRange(proseContainer, quote);
+    if (!range) {
+      console.warn("[ingest-viewer] quote not found in ingest body:", quote.slice(0, 60));
+      return;
+    }
+    // Register the highlight under the global Highlights registry.
+    const HighlightCtor = (window as any).Highlight as
+      | { new (range: Range): unknown }
+      | undefined;
+    if (HighlightCtor) {
+      (CSS as any).highlights.set(QUOTE_HIGHLIGHT_NAME, new HighlightCtor(range));
+    }
+    // Centre the match in the prose scroll container if it's not visible.
+    const rect = range.getBoundingClientRect();
+    const containerRect = proseContainer.getBoundingClientRect();
+    if (rect.top < containerRect.top + 40 || rect.bottom > containerRect.bottom - 40) {
+      const targetTop =
+        rect.top - containerRect.top + proseContainer.scrollTop - containerRect.height / 2 + rect.height / 2;
+      proseContainer.scrollTo({ top: Math.max(0, targetTop), behavior: "smooth" });
+    }
+  }
+
+  function _activateClaim(c: { id: string; quote?: string }) {
+    selectedClaimId = c.id;
+    if (typeof window !== "undefined") {
+      history.replaceState(
+        null,
+        "",
+        `${window.location.pathname}${window.location.search}#claim-${c.id}`,
+      );
+    }
+    if (c.quote) _highlightQuoteInIngest(c.quote);
+  }
+
+  /** Click-handler for claim cards. Skips when the click came from an
+   *  inner link/button so refs and inline controls still work normally. */
+  function _onClaimCardClick(c: { id: string; quote?: string }, e: MouseEvent) {
+    const target = e.target as HTMLElement | null;
+    if (target?.closest("a, button")) return;
+    _activateClaim(c);
+  }
+
+  function _onClaimCardKey(c: { id: string; quote?: string }, e: KeyboardEvent) {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    e.preventDefault();
+    _activateClaim(c);
   }
 
   $effect(() => {
@@ -2560,7 +2669,16 @@
               {#if !isCollapsed}
               <ul class="space-y-3">
                 {#each section.claims as c (c.id)}
-                  <li data-claim-id={c.id} class="bg-surface-alt/40 border border-border rounded-md px-3.5 py-3 text-sm leading-relaxed claim-card">
+                  <!-- svelte-ignore a11y_no_noninteractive_element_to_interactive_role -->
+                  <li
+                    data-claim-id={c.id}
+                    role="button"
+                    tabindex="0"
+                    onclick={(e) => _onClaimCardClick(c, e)}
+                    onkeydown={(e) => _onClaimCardKey(c, e)}
+                    class="bg-surface-alt/40 border border-border rounded-md px-3.5 py-3 text-sm leading-relaxed claim-card cursor-pointer hover:bg-surface-alt/70 transition-colors"
+                    title="Click to highlight this claim's quote in the ingest"
+                  >
                     <!-- Metadata row -->
                     <div class="text-[11px] font-ui text-on-surface-muted mb-2 flex gap-x-2 gap-y-1 flex-wrap items-center">
                       <span class="px-1.5 py-0.5 rounded bg-primary/10 text-primary font-medium uppercase tracking-wide text-[10px]">

@@ -136,3 +136,13 @@ body {
   background-color: color-mix(in srgb, var(--color-primary) 10%, transparent) !important;
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 50%, transparent);
 }
+
+/* Custom Highlight for claim-quote: paints over the matching text range
+   in the rendered ingest body when the reader clicks a claim card in
+   the digest column. CSS.highlights API (Chromium 105+, Firefox 140+,
+   Safari 17.2+). Browsers that don't support it just scroll without
+   the visual - the workbench degrades gracefully. */
+::highlight(claim-quote) {
+  background-color: color-mix(in srgb, var(--color-primary) 25%, transparent);
+  color: inherit;
+}
