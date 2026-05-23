@@ -2,10 +2,16 @@
   import {
     fetchIngests,
     fetchIngest,
+    fetchDigest,
     fetchCurrentUser,
     fetchReviewedHashes,
   } from "$lib/api";
-  import type { IngestSummary, IngestDetail, User } from "$lib/api";
+  import type {
+    IngestSummary,
+    IngestDetail,
+    DigestDocument,
+    User,
+  } from "$lib/api";
   import FileDropZone from "$lib/components/FileDropZone.svelte";
   import IngestList from "$lib/components/IngestList.svelte";
   import IngestViewer from "$lib/components/IngestViewer.svelte";
@@ -19,6 +25,7 @@
 
   let ingests = $state<IngestSummary[]>([]);
   let selectedIngest = $state<IngestDetail | null>(null);
+  let selectedDigest = $state<DigestDocument | null>(null);
   let sourceFile = $state<File | null>(null);
   let error = $state<string | null>(null);
   let loading = $state(true);
@@ -135,7 +142,12 @@
 
   async function selectIngest(hash: string, file: File | null = null) {
     try {
-      selectedIngest = await fetchIngest(hash);
+      const [ingest, digest] = await Promise.all([
+        fetchIngest(hash),
+        fetchDigest(hash).catch(() => null),
+      ]);
+      selectedIngest = ingest;
+      selectedDigest = digest;
       sourceFile = file;
       error = null;
       // Put the public hash in the URL so password managers can associate with it
@@ -156,6 +168,7 @@
 
   function goBack() {
     selectedIngest = null;
+    selectedDigest = null;
     sourceFile = null;
     error = null;
     history.pushState(null, "", "/");
@@ -208,6 +221,7 @@
     {#if selectedIngest}
       <IngestViewer
         ingest={selectedIngest}
+        digest={selectedDigest}
         {sourceFile}
         {user}
         reviewed={reviewedHashes.has(selectedIngest.content_hash)}

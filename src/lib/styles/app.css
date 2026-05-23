@@ -113,3 +113,15 @@ body {
   text-align: center;
   line-height: 1.4;
 }
+
+/* Deep-link flash: when the URL has #claim-<id>, the matching claim card
+   scrolls into view and briefly flashes so the reader can locate it. The
+   site emits these links from each reference in an assembled article. */
+.claim-flash {
+  animation: claim-flash-keyframes 1.8s ease-out;
+}
+
+@keyframes claim-flash-keyframes {
+  0%   { background-color: var(--color-primary-container); box-shadow: 0 0 0 2px var(--color-primary); }
+  100% { background-color: transparent; box-shadow: 0 0 0 0 transparent; }
+}

@@ -39,6 +39,7 @@ VERIFICATION_SESSION_TTL_SECONDS = 1800
 
 DEFAULT_INGESTS_PATH = Path(__file__).resolve().parents[2] / "anomalica-ingests"
 DEFAULT_SOURCES_PATH = Path(__file__).resolve().parents[2] / "sources"
+DEFAULT_DIGESTS_PATH = Path(__file__).resolve().parents[2] / "anomalica-digests"
 
 
 def parse_frontmatter(text: str) -> tuple[dict, str, str]:
@@ -465,6 +466,7 @@ setup_auth(app)
 source: IngestSource = build_source()
 sources_path = Path(os.environ.get("SOURCES_PATH", str(DEFAULT_SOURCES_PATH)))
 ingests_path = Path(os.environ.get("INGESTS_PATH", str(DEFAULT_INGESTS_PATH)))
+digests_path = Path(os.environ.get("DIGESTS_PATH", str(DEFAULT_DIGESTS_PATH)))
 
 MEDIA_FILENAME_PATTERN = re.compile(r"^[0-9a-f]{12}\.[a-z]{3,4}$")
 
@@ -503,6 +505,567 @@ def get_ingest(full_hash: str) -> JSONResponse:
         raise HTTPException(status_code=404, detail="Not found")
 
     return JSONResponse(ingest)
+
+
+def _hash_to_digest_path(full_hash: str) -> Path | None:
+    """Map an ingest content_hash to its matching digest YAML, if one exists.
+
+    The digester writes per-record YAML at ``anomalica-digests/records/<name>.yaml``
+    where ``<name>`` is the friendly filename used by the ingester's records/
+    symlinks (e.g. ``2024-08-19-ebook-imminent-...``). To bridge the two we
+    walk the ingest records/ symlinks, resolve each to its store/{hash}.md
+    target, read the content_hash from frontmatter, and return the matching
+    digest path.
+    """
+    records_dir = ingests_path / "records"
+    if not records_dir.exists():
+        return None
+    for symlink in records_dir.glob("*.md"):
+        try:
+            target = symlink.resolve()
+            with open(target) as f:
+                frontmatter, _, _ = parse_frontmatter(f.read())
+        except OSError:
+            continue
+        content_hash = normalise_hash(frontmatter.get("content_hash"))
+        if content_hash == full_hash:
+            yaml_path = digests_path / "records" / f"{symlink.stem}.yaml"
+            if yaml_path.exists():
+                return yaml_path
+            return None
+    return None
+
+
+# Patterns for node names the extraction model sometimes emits but that are
+# unusable downstream (redacted-name "persons", parens-type artefacts). These
+# match the deterministic backstop in digester/import_markdown.py so the
+# workbench view matches what makes it into the knowledge graph.
+_DIGEST_REDACTED_RE = re.compile(r"\([Rr][Ee][Dd][Aa][Cc][Tt][Ee][Dd]\)")
+_DIGEST_TYPE_SUFFIX_RE = re.compile(
+    r"\s*\((person|organisation|place|event|matter|object|document|concept|record)\)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _is_unusable_node_name(name: str) -> bool:
+    if not isinstance(name, str):
+        return False
+    if _DIGEST_REDACTED_RE.search(name):
+        return True
+    if _DIGEST_TYPE_SUFFIX_RE.search(name):
+        return True
+    return False
+
+
+# Deterministic acronym expansions the digester applies at import time. Mirror
+# them here so the workbench Digest column shows the same expanded forms as
+# the graph.
+_WB_SQUADRON_PREFIXES = {
+    "VFA": "Strike Fighter Squadron",
+    "VMFA": "Marine Fighter Attack Squadron",
+    "VAQ": "Electronic Attack Squadron",
+    "VAW": "Carrier Airborne Early Warning Squadron",
+    "VRC": "Fleet Logistics Support Squadron",
+    "HS": "Helicopter Anti-Submarine Squadron",
+    "CSG": "Carrier Strike Group",
+    "CVW": "Carrier Air Wing",
+}
+_WB_SQUADRON_RE = re.compile(
+    r"\b("
+    + "|".join(sorted(_WB_SQUADRON_PREFIXES, key=len, reverse=True))
+    + r")-(\d+)\b"
+)
+_WB_PROGRAMME_EXPANSIONS = {
+    "AATIP": "Advanced Aerospace Threat Identification Program",
+    "AAWSAP": "Advanced Aerospace Weapon System Applications Program",
+    "AARO": "All-Domain Anomaly Resolution Office",
+}
+
+
+def _wb_expand_squadron(match: "re.Match[str]") -> str:
+    prefix, number = match.group(1), match.group(2)
+    full = _WB_SQUADRON_PREFIXES[prefix]
+    return f"{full} {number} ({prefix}-{number})"
+
+
+# Universal acronyms - mirrors SAFE_ACRONYMS in
+# anomalica-digester/workspace/digester/extract.py. Kept in sync by hand;
+# if you change one, change the other.
+_WB_UNIVERSAL_ACRONYMS = {
+    "UFO",
+    "UAP",
+    "CIA",
+    "FBI",
+    "NSA",
+    "NASA",
+    "DOD",
+    "DoD",
+    "FAA",
+    "NATO",
+    "UN",
+    "EU",
+    "US",
+    "USA",
+    "UK",
+    "USSR",
+    "GPS",
+    "TV",
+    "CPU",
+    "GPU",
+    "USB",
+    "URL",
+    "API",
+}
+
+
+def _collapse_nested_acronym_parens(name: str) -> str:
+    """Reduce "X (Y (ACRONYM))" -> "X (ACRONYM)".
+
+    The extraction model occasionally emits self-nested expansions like
+    "All-domain Anomaly Resolution Office (All-Domain Anomaly Resolution
+    Office (AARO))". This collapses any number of nesting layers down to a
+    single "Full Form (ACRONYM)" form.
+    """
+    if not isinstance(name, str):
+        return name
+    pattern = re.compile(r"\(\s*[^()]+?\s*\(([A-Z0-9][A-Z0-9-]+)\)\s*\)")
+    prev = None
+    out = name
+    while prev != out:
+        prev = out
+        out = pattern.sub(lambda m: f"({m.group(1)})", out)
+    return out
+
+
+def _reduce_universal_expansions(text: str) -> str:
+    """Reduce "Full Form (UNIVERSAL_ACRONYM)" -> "UNIVERSAL_ACRONYM".
+
+    Universally-known acronyms (UFO, UAP, CIA, FBI, NASA etc.) don't need to
+    carry their full form in either node names or claim text. When the model
+    has expanded one anyway, collapse "Unidentified Flying Object (UFO)" to
+    just "UFO".
+    """
+    if not isinstance(text, str):
+        return text
+    out = text
+    for acro in _WB_UNIVERSAL_ACRONYMS:
+        # Match capitalised-word expansion immediately before "(ACRONYM)".
+        # The expansion can include hyphens, spaces, slashes; it should not
+        # span sentence punctuation.
+        out = re.sub(
+            rf"[A-Z][A-Za-z][A-Za-z\- /]{{0,80}}?\s*\({acro}\)",
+            acro,
+            out,
+        )
+    return out
+
+
+def _normalise_name(name: str) -> str:
+    if not isinstance(name, str):
+        return name
+    out = _collapse_nested_acronym_parens(name)
+    out = _reduce_universal_expansions(out)
+    if not any(full in out for full in _WB_SQUADRON_PREFIXES.values()):
+        out = _WB_SQUADRON_RE.sub(_wb_expand_squadron, out)
+    for acro, full in _WB_PROGRAMME_EXPANSIONS.items():
+        # Case-insensitive substring check so "All-domain Anomaly Resolution
+        # Office" counts as already-expanded for "All-Domain Anomaly Resolution
+        # Office".
+        if full.lower() in out.lower():
+            continue
+        # (?<!\() prevents matching an acronym that is already inside a
+        # parenthetical-acronym pattern like "(AARO)".
+        out = re.sub(
+            rf"(?<!\()\b{acro}\b(?!-\d|\))",
+            f"{full} ({acro})",
+            out,
+        )
+    out = out.replace("—", " - ").replace("–", "-")
+    out = re.sub(r" {2,}", " ", out)
+    return out
+
+
+_ACRONYM_SUFFIX_RE = re.compile(r"\s*\(([A-Z0-9][A-Z0-9-]{1,}[A-Z0-9])\)\s*$")
+
+
+def _equivalence_key(name: str) -> str:
+    """Lowercase, acronym-suffix-stripped key for matching equivalent names."""
+    if not isinstance(name, str):
+        return ""
+    return _ACRONYM_SUFFIX_RE.sub("", name).lower().strip()
+
+
+# Month-name -> 2-digit ISO month, mirrors digester/import_markdown.py.
+_WB_MONTH_NAMES = {
+    "january": "01",
+    "february": "02",
+    "march": "03",
+    "april": "04",
+    "may": "05",
+    "june": "06",
+    "july": "07",
+    "august": "08",
+    "september": "09",
+    "october": "10",
+    "november": "11",
+    "december": "12",
+}
+_WB_SPELLED_DATE_DAY_RE = re.compile(
+    r"\b(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})\b",
+    re.IGNORECASE,
+)
+_WB_SPELLED_DATE_MY_RE = re.compile(
+    r"\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})\b",
+    re.IGNORECASE,
+)
+
+
+def _wb_normalise_spelled_dates(name: str) -> str:
+    if not isinstance(name, str):
+        return name
+
+    def _d(m):
+        return (
+            f"{m.group(3)}-{_WB_MONTH_NAMES[m.group(2).lower()]}-{int(m.group(1)):02d}"
+        )
+
+    def _my(m):
+        return f"{m.group(2)}-{_WB_MONTH_NAMES[m.group(1).lower()]}"
+
+    return _WB_SPELLED_DATE_MY_RE.sub(_my, _WB_SPELLED_DATE_DAY_RE.sub(_d, name))
+
+
+def _wb_codename_roots(codenames):
+    roots = set()
+    for cn in codenames:
+        if not cn:
+            continue
+        tokens = cn.strip().split()
+        first = tokens[0] if tokens else ""
+        if first and (first.isupper() or first[0].isupper()) and len(first) >= 4:
+            roots.add(first)
+        roots.add(cn)
+    return roots
+
+
+def _wb_build_terminology_enforcers(terminology):
+    if not terminology:
+        return set(), {}
+    raw_codenames = {
+        (c.get("codename") or "").strip()
+        for c in (terminology.get("codenames") or [])
+        if c.get("codename")
+    }
+    codenames = _wb_codename_roots(raw_codenames)
+    expansions = {}
+    for a in terminology.get("acronyms") or []:
+        acro = (a.get("acronym") or "").strip()
+        full = (a.get("expansion") or "").strip()
+        if not (acro and full):
+            continue
+        if "(" in full:
+            continue  # descriptive, not lexical (e.g. SSN-724 hull number)
+        if re.search(r"-\d", acro):
+            continue  # designator, handled by squadron normaliser
+        if acro in _WB_UNIVERSAL_ACRONYMS:
+            continue  # universally known - expanding adds noise
+        expansions[acro] = f"{full} ({acro})"
+    return codenames, expansions
+
+
+def _wb_apply_doc_terminology(name, codenames, expansions):
+    if not name or not isinstance(name, str):
+        return name, None
+    for cn in codenames:
+        if cn and re.search(rf"\b{re.escape(cn)}\b", name):
+            return name, f"codename '{cn}'"
+    out = _collapse_nested_acronym_parens(name)
+    for acro in sorted(expansions, key=len, reverse=True):
+        full = expansions[acro]  # "Full Form (ACRONYM)"
+        # Case-insensitive "is already there".
+        if full.lower() in out.lower():
+            continue
+        # Also skip if the name CONTAINS the bare full-form (without the
+        # paren-acronym suffix), in which case we want the append-suffix
+        # pass below to add "(ACRONYM)" rather than re-substituting.
+        bare_full = full[: full.rfind("(")].strip()
+        if bare_full.lower() in out.lower():
+            continue
+        out = re.sub(
+            rf"(?<!\()\b{re.escape(acro)}\b(?!-\d|\))",
+            full,
+            out,
+            count=1,
+        )
+
+    # If the name exactly matches the bare full form of a known acronym,
+    # append "(ACRONYM)". So "National Geospatial-Intelligence Agency" gets
+    # the "(NGA)" suffix when NGA is in the document's acronym map.
+    for acro in sorted(expansions, key=len, reverse=True):
+        full = expansions[acro]
+        bare_full = full[: full.rfind("(")].strip()
+        if bare_full.lower() == out.lower() and f"({acro})" not in out:
+            out = f"{bare_full} ({acro})"
+            break
+
+    out = _wb_normalise_spelled_dates(out)
+    return out, None
+
+
+def _filter_digest(digest: dict) -> dict:
+    """Strip rejected nodes and references to them, expand bare acronyms in
+    surviving names, and collapse X / X (ACRONYM) duplicates within this
+    digest. Mirrors the import-time normalisation so the Digest column and
+    the knowledge graph agree."""
+    codenames, doc_acronyms = _wb_build_terminology_enforcers(digest.get("terminology"))
+
+    # Normalise the terminology block too so the header strip shows the same
+    # cleaned-up names the body claims use.
+    term = digest.get("terminology")
+    if term:
+        new_term = dict(term)
+        for key in ("main_matter", "main_event"):
+            v = new_term.get(key)
+            if isinstance(v, dict) and v.get("name"):
+                cleaned, _ = _wb_apply_doc_terminology(
+                    _normalise_name(v["name"]), codenames, doc_acronyms
+                )
+                new_term[key] = {**v, "name": cleaned}
+        digest = {**digest, "terminology": new_term}
+
+    raw_nodes = digest.get("nodes") or []
+    bad_ids: set[str] = set()
+    bad_names: set[str] = set()
+    name_rewrites: dict[str, str] = {}
+    intermediate_nodes: list[dict] = []
+    for n in raw_nodes:
+        name = n.get("name") if isinstance(n, dict) else None
+        if name and _is_unusable_node_name(name):
+            if n.get("id"):
+                bad_ids.add(n["id"])
+            bad_names.add(name)
+            continue
+        if name:
+            new_name = _normalise_name(name)
+            if new_name != name:
+                name_rewrites[name] = new_name
+                n = {**n, "name": new_name}
+        intermediate_nodes.append(n)
+
+    # Collapse duplicates within this digest. Group by equivalence key and
+    # pick the canonical form per group: prefer a name that already includes
+    # the acronym in parens ("Carrier Air Wing 11 (CVW-11)"); fall back to
+    # the longest name as a proxy for "most informative". Other names in the
+    # group are redirected via name_rewrites and their ids fold into the
+    # canonical id so claim refs/speakers still resolve.
+    groups: dict[str, list[dict]] = {}
+    for n in intermediate_nodes:
+        key = _equivalence_key(n.get("name", ""))
+        if not key:
+            groups.setdefault(f"__keyless__{id(n)}", []).append(n)
+        else:
+            groups.setdefault(key, []).append(n)
+
+    # Apply per-document terminology AFTER the global normalisation. If a node
+    # matches a codename it goes onto the reject list; otherwise its name is
+    # expanded with per-doc acronyms and spelled-out dates normalised to ISO.
+    final_intermediate: list[dict] = []
+    for n in intermediate_nodes:
+        if not isinstance(n, dict):
+            final_intermediate.append(n)
+            continue
+        name = n.get("name")
+        if not name:
+            final_intermediate.append(n)
+            continue
+        rewritten, reject = _wb_apply_doc_terminology(name, codenames, doc_acronyms)
+        if reject:
+            if n.get("id"):
+                bad_ids.add(n["id"])
+            bad_names.add(name)
+            continue
+        if rewritten != name:
+            name_rewrites[name] = rewritten
+            n = {**n, "name": rewritten}
+        final_intermediate.append(n)
+    intermediate_nodes = final_intermediate
+
+    # Rebuild groups after the rewrite (rewrites may have collapsed pairs).
+    groups = {}
+    for n in intermediate_nodes:
+        key = _equivalence_key(n.get("name", ""))
+        if not key:
+            groups.setdefault(f"__keyless__{id(n)}", []).append(n)
+        else:
+            groups.setdefault(key, []).append(n)
+
+    kept_nodes: list[dict] = []
+    id_redirect: dict[str, str] = {}
+    for group in groups.values():
+        if len(group) == 1:
+            kept_nodes.append(group[0])
+            continue
+
+        # Pick canonical: parenthetical-acronym preferred, then longest name.
+        def _score(node: dict) -> tuple[int, int]:
+            name = node.get("name", "")
+            has_parens = bool(_ACRONYM_SUFFIX_RE.search(name))
+            return (1 if has_parens else 0, len(name))
+
+        canonical = max(group, key=_score)
+        kept_nodes.append(canonical)
+        canonical_name = canonical.get("name", "")
+        canonical_id = canonical.get("id")
+        for other in group:
+            if other is canonical:
+                continue
+            other_name = other.get("name", "")
+            other_id = other.get("id")
+            if other_name and other_name != canonical_name:
+                name_rewrites[other_name] = canonical_name
+            if other_id and canonical_id and other_id != canonical_id:
+                id_redirect[other_id] = canonical_id
+
+    digest = {**digest, "nodes": kept_nodes}
+
+    def _rewrite_ref(r):
+        if not isinstance(r, dict):
+            return r
+        out = dict(r)
+        rid = out.get("id")
+        if rid in id_redirect:
+            out["id"] = id_redirect[rid]
+        name = out.get("name")
+        if name in name_rewrites:
+            out["name"] = name_rewrites[name]
+        return out
+
+    def _clean_refs(refs):
+        out = []
+        for r in refs or []:
+            if not isinstance(r, dict):
+                out.append(r)
+                continue
+            if r.get("id") in bad_ids or r.get("name") in bad_names:
+                continue
+            out.append(_rewrite_ref(r))
+        return out
+
+    def _normalise_claim_text(text):
+        """Apply per-doc acronym expansion + dedup + ISO date normalisation to
+        claim prose. Does NOT touch quote text - the verbatim source excerpt
+        is preserved as-is for attribution.
+
+        Rules within a single claim:
+        - Expand each acronym on FIRST use only (bare ACRONYM not already
+          paired with its full form).
+        - DEDUPE subsequent "Full Form (ACRONYM)" patterns down to bare
+          "ACRONYM" so the same acronym is not expanded multiple times in
+          one claim.
+        - Normalise spelled-out months to ISO format.
+        """
+        if not isinstance(text, str) or not text:
+            return text
+        out = text
+
+        for acro in sorted(doc_acronyms, key=len, reverse=True):
+            full = doc_acronyms[acro]  # form: "Full Form (ACRONYM)"
+
+            # Pattern that matches ANY case variant of "Full Form (ACRONYM)"
+            # so "Forward Looking Infrared (FLIR)" and "forward-looking
+            # infrared (FLIR)" are treated as the same expansion. The
+            # parenthetical acronym must match exact case.
+            full_no_paren = full[: full.rfind("(")].strip()
+            case_insensitive_full = (
+                re.escape(full_no_paren).replace(r"\ ", r"[-\s]")
+                + rf"\s*\({re.escape(acro)}\)"
+            )
+
+            # Step A - find the first BARE acronym (not already in parens,
+            # not part of hyphen designator). If it comes before any
+            # full-form occurrence (any case), expand it.
+            bare_pattern = rf"(?<!\(){re.escape(acro)}(?![\)\w-])"
+            first_full = re.search(case_insensitive_full, out, flags=re.IGNORECASE)
+            first_full_pos = first_full.start() if first_full else -1
+            m = re.search(bare_pattern, out)
+            if m and (first_full_pos == -1 or m.start() < first_full_pos):
+                out = out[: m.start()] + full + out[m.end() :]
+
+            # Step B - dedupe case-insensitively. Walk all matches of the
+            # case-insensitive "Full Form (ACRONYM)" pattern; keep the first,
+            # reduce each subsequent occurrence to just the bare ACRONYM.
+            matches = list(re.finditer(case_insensitive_full, out, flags=re.IGNORECASE))
+            for m in reversed(matches[1:]):
+                out = out[: m.start()] + acro + out[m.end() :]
+
+        # Reduce universal expansions: "Unidentified Flying Object (UFO)" -> "UFO".
+        out = _reduce_universal_expansions(out)
+
+        # ASCII punctuation: em-dash / en-dash -> " - "
+        out = out.replace("—", " - ").replace("–", "-")
+        # Collapse the doubled spaces that the em-dash substitution can
+        # produce when the dash already had spaces around it.
+        out = re.sub(r" {2,}", " ", out)
+
+        out = _wb_normalise_spelled_dates(out)
+        return out
+
+    for section in ("domain_claims", "infrastructure_claims"):
+        claims = digest.get(section) or []
+        cleaned = []
+        for c in claims:
+            if not isinstance(c, dict):
+                cleaned.append(c)
+                continue
+            spk = c.get("speaker")
+            if isinstance(spk, dict):
+                if spk.get("id") in bad_ids or spk.get("name") in bad_names:
+                    c = {**c, "speaker": None}
+                    c.pop("speaker")
+                else:
+                    c = {**c, "speaker": _rewrite_ref(spk)}
+            c = {**c, "refs": _clean_refs(c.get("refs"))}
+            if not c["refs"]:
+                c.pop("refs")
+            # Normalise claim text (acronyms + ISO dates). Quote is left raw.
+            if c.get("text"):
+                new_text = _normalise_claim_text(c["text"])
+                if new_text != c["text"]:
+                    c = {**c, "text": new_text}
+            cleaned.append(c)
+        digest = {**digest, section: cleaned}
+    return digest
+
+
+@app.get("/api/ingests/{full_hash}/digest")
+def get_digest(full_hash: str) -> JSONResponse:
+    """Fetch the digester's YAML output for an ingest by its full SHA-256.
+
+    Returns the parsed digest document directly, or 404 if no digest has
+    been produced for this record. Filters out node names the deterministic
+    importer rejects (redacted-persons, parens-type artefacts) so this view
+    matches the knowledge graph. The schema is `anomalica/digest/1` - see
+    anomalica/architecture/digest-format.md and decision 0027 in the
+    meta-repo.
+    """
+    if not FULL_HASH_PATTERN.match(full_hash):
+        raise HTTPException(status_code=404, detail="Not found")
+
+    yaml_path = _hash_to_digest_path(full_hash)
+    if yaml_path is None:
+        raise HTTPException(status_code=404, detail="No digest for record")
+
+    try:
+        import yaml as _yaml
+
+        with open(yaml_path) as f:
+            digest = _yaml.safe_load(f) or {}
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to parse digest: {exc}"
+        ) from exc
+
+    return JSONResponse(_filter_digest(digest))
 
 
 @app.get("/api/sources/{full_hash}")

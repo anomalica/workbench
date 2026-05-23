@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { IngestDetail, User } from "$lib/api";
+  import type { IngestDetail, DigestDocument, User } from "$lib/api";
   import { submitReview } from "$lib/api";
   import { DocumentStore } from "$lib/document.svelte";
   import { parseTranscript, secondsToTime, findActiveSegmentForTime, extractFrontmatterSpeakers, isSegmentIrrelevant, isSpecialSpeaker, nextSpeakerName, groupSegmentsBySpeaker, orderedNamedSpeakers, SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE, SPEAKER_GROUP } from "$lib/transcript";
@@ -17,6 +17,7 @@
 
   let {
     ingest,
+    digest = null,
     sourceFile,
     user,
     reviewed = false,
@@ -24,6 +25,7 @@
     onback,
   }: {
     ingest: IngestDetail;
+    digest?: DigestDocument | null;
     sourceFile: File | null;
     user: User | null;
     reviewed?: boolean;
@@ -68,8 +70,149 @@
   let segments = $derived(parseTranscript(currentBody()));
   let hasTranscript = $derived(segments.length > 0 && segments[0].speaker !== "");
 
-  // View mode
+  // View mode for the ingest column's sub-tabs (rendered/edit/raw/diff).
+  // Digest is no longer a sub-tab; it lives in its own column.
   let view = $state<"ingest" | "edit" | "diff" | "raw">("ingest");
+
+  // Claim sections in display order. Derived rather than inline so the typed
+  // tuple isn't inferred as a union by Svelte's compiler.
+  const NODE_TYPE_ORDER = [
+    "person",
+    "organisation",
+    "place",
+    "event",
+    "matter",
+    "object",
+    "document",
+    "concept",
+  ];
+  const NODE_TYPE_PLURALS: Record<string, string> = {
+    person: "People",
+    organisation: "Organisations",
+    place: "Places",
+    event: "Events",
+    matter: "Matters",
+    object: "Objects",
+    document: "Documents",
+    concept: "Concepts",
+  };
+  // Claim type filter - toggle each on/off. Default: all on.
+  const CLAIM_TYPES = [
+    "observation",
+    "testimony",
+    "hearsay",
+    "opinion",
+    "measurement",
+    "administrative",
+  ];
+  let claimTypeFilter = $state<Record<string, boolean>>(
+    Object.fromEntries(CLAIM_TYPES.map((t) => [t, true])),
+  );
+  function toggleClaimType(t: string) {
+    claimTypeFilter = { ...claimTypeFilter, [t]: !claimTypeFilter[t] };
+  }
+  let allClaimTypesOn = $derived(
+    CLAIM_TYPES.every((t) => claimTypeFilter[t]),
+  );
+
+  // Collapsible digest sections. Persists per-section in localStorage so the
+  // reviewer's preferred layout sticks across records.
+  type Collapsible = "nodes" | "domain" | "infrastructure";
+  const COLLAPSE_STORAGE_KEY = "workbench:digest-collapsed";
+  function _loadCollapsed(): Record<Collapsible, boolean> {
+    try {
+      const raw = localStorage.getItem(COLLAPSE_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === "object") {
+          return {
+            nodes: !!parsed.nodes,
+            domain: !!parsed.domain,
+            infrastructure: !!parsed.infrastructure,
+          };
+        }
+      }
+    } catch {}
+    return { nodes: false, domain: false, infrastructure: false };
+  }
+  let collapsed = $state<Record<Collapsible, boolean>>(_loadCollapsed());
+  $effect(() => {
+    try {
+      localStorage.setItem(COLLAPSE_STORAGE_KEY, JSON.stringify(collapsed));
+    } catch {}
+  });
+  function toggleCollapsed(s: Collapsible) {
+    collapsed = { ...collapsed, [s]: !collapsed[s] };
+  }
+
+  // Optional filter: click a node chip to show only claims referencing it.
+  // Plain click sets the filter to that one node (replacing any current
+  // selection). Ctrl/Cmd/Shift click toggles the node in/out of a multi-node
+  // selection - a claim then matches if it references ANY selected node.
+  let selectedNodeIds = $state<Set<string>>(new Set());
+  let selectedNodeNames = $derived(
+    digest
+      ? [...selectedNodeIds]
+          .map((id) => digest.nodes.find((n) => n.id === id)?.name)
+          .filter((n): n is string => !!n)
+      : [],
+  );
+
+  function _toggleNodeFilter(nodeId: string, additive: boolean) {
+    const next = new Set(selectedNodeIds);
+    if (additive) {
+      if (next.has(nodeId)) next.delete(nodeId);
+      else next.add(nodeId);
+    } else {
+      // Plain click: if the only selected node is this one, clear. Otherwise
+      // replace selection with just this node.
+      if (next.size === 1 && next.has(nodeId)) next.clear();
+      else {
+        next.clear();
+        next.add(nodeId);
+      }
+    }
+    selectedNodeIds = next;
+  }
+
+  function toggleNodeFilter(nodeId: string, event?: MouseEvent | KeyboardEvent) {
+    const additive = !!event && (event.ctrlKey || event.metaKey || event.shiftKey);
+    _toggleNodeFilter(nodeId, additive);
+  }
+
+  function claimMatchesFilter(c: import("$lib/api").DigestClaim): boolean {
+    // Type filter: if the claim's type is toggled off, hide it. Treat unknown
+    // types as visible so a future claim type doesn't disappear silently.
+    if (c.type in claimTypeFilter && !claimTypeFilter[c.type]) return false;
+    // Node filter: claim must reference at least one selected node (OR).
+    if (selectedNodeIds.size === 0) return true;
+    if (c.speaker?.id && selectedNodeIds.has(c.speaker.id)) return true;
+    return (c.refs || []).some((r) => r.id && selectedNodeIds.has(r.id));
+  }
+
+  let claimSections = $derived(
+    digest
+      ? [
+          {
+            label: "Domain claims",
+            claims: (digest.domain_claims ?? []).filter(claimMatchesFilter),
+            total: (digest.domain_claims ?? []).length,
+          },
+          {
+            label: "Infrastructure claims",
+            claims: (digest.infrastructure_claims ?? []).filter(claimMatchesFilter),
+            total: (digest.infrastructure_claims ?? []).length,
+          },
+        ]
+      : [],
+  );
+
+  // Reset the filter when switching to a different record so we don't carry
+  // stale node ids between digests.
+  $effect(() => {
+    digest;  // dependency
+    selectedNodeIds = new Set();
+  });
 
   // Scroll sync between views: save fraction on scroll, restore on view switch
   let scrollFraction = 0;
@@ -96,6 +239,52 @@
     void view;
     restoreScroll();
   });
+
+  // Deep-link to a specific claim. The assembled-site references emit URLs
+  // of the form /<public_hash>#claim-<uuid>. We do the scroll/flash entirely
+  // in JS (no native anchor jump) so we can wait for the async-loaded digest
+  // to render its claim cards before resolving the lookup. The effect re-runs
+  // whenever `digest` changes (cold load via direct link) and on every URL
+  // hash change (link clicked within the workbench).
+  function _scrollToClaimFromHash() {
+    if (typeof window === "undefined" || !digest) return;
+    const h = window.location.hash;
+    const m = h.match(/^#claim-([a-f0-9-]{36})$/i);
+    if (!m) return;
+    const claimId = m[1];
+    // Ensure the digest column is visible (it may have been toggled off via
+    // the column-visibility controls). When PaneForge gets involved later
+    // this is the hook to open the panel programmatically.
+    if (!cols.digest) {
+      cols = { ...cols, digest: true };
+    }
+    // Wait a tick so the column show + claim list render before we query.
+    requestAnimationFrame(() => {
+      setTimeout(() => {
+        const el = document.querySelector<HTMLElement>(
+          `[data-claim-id="${CSS.escape(claimId)}"]`,
+        );
+        if (!el) return;
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        el.classList.add("claim-flash");
+        setTimeout(() => el.classList.remove("claim-flash"), 1800);
+      }, 80);
+    });
+  }
+
+  $effect(() => {
+    // Subscribe to digest (cold load via direct link) AND to the URL hash
+    // (in-page navigation). Both should trigger the scroll/flash.
+    void digest;
+    if (typeof window !== "undefined") {
+      void window.location.hash;
+    }
+    _scrollToClaimFromHash();
+  });
+
+  if (typeof window !== "undefined") {
+    window.addEventListener("hashchange", _scrollToClaimFromHash);
+  }
 
   // Metadata parsed from frontmatter (read-only display)
   let showMetadata = $state(false);
@@ -369,6 +558,81 @@
     (isWeb && !localSourceFile && !localSourceUrl) ||
       (isEbook && !localSourceFile),
   );
+
+  // Column visibility: user toggles which of source/ingest/digest are shown.
+  // Persists to localStorage. The Source column is auto-suppressed for
+  // record types that have nothing to display there (see singleColumn).
+  type ColumnState = { source: boolean; ingest: boolean; digest: boolean };
+  const COLUMN_STORAGE_KEY = "workbench:columns";
+
+  function _loadCols(): ColumnState {
+    try {
+      const raw = localStorage.getItem(COLUMN_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (
+          typeof parsed === "object" && parsed
+          && "source" in parsed && "ingest" in parsed && "digest" in parsed
+        ) {
+          return {
+            source: !!parsed.source,
+            ingest: !!parsed.ingest,
+            digest: !!parsed.digest,
+          };
+        }
+      }
+    } catch {
+      // ignore corrupt localStorage entries
+    }
+    return { source: true, ingest: true, digest: false };
+  }
+
+  let cols = $state<ColumnState>(_loadCols());
+
+  $effect(() => {
+    try {
+      localStorage.setItem(COLUMN_STORAGE_KEY, JSON.stringify(cols));
+    } catch {
+      // storage full or disabled; the user just loses persistence
+    }
+  });
+
+  // First time a record with a digest is opened and the user hasn't already
+  // turned the digest column on, show it. This is a one-shot reveal so they
+  // see the new column exists; subsequent toggles are remembered.
+  let digestRevealed = false;
+  $effect(() => {
+    if (digest && !digestRevealed) {
+      digestRevealed = true;
+      if (!cols.digest) cols = { ...cols, digest: true };
+    }
+  });
+
+  // Effective column visibility after applying singleColumn (no source pane
+  // possible for some record types) and digest availability.
+  let visibleCols = $derived({
+    source: cols.source && !singleColumn,
+    ingest: cols.ingest,
+    digest: cols.digest && !!digest,
+  });
+  let visibleCount = $derived(
+    (visibleCols.source ? 1 : 0)
+      + (visibleCols.ingest ? 1 : 0)
+      + (visibleCols.digest ? 1 : 0),
+  );
+  let colWidthClass = $derived(
+    visibleCount >= 3 ? "w-1/3" : visibleCount === 2 ? "w-1/2" : "w-full",
+  );
+
+  function toggleCol(name: "source" | "ingest" | "digest") {
+    const next = { ...cols, [name]: !cols[name] };
+    const effSource = next.source && !singleColumn;
+    const effIngest = next.ingest;
+    const effDigest = next.digest && !!digest;
+    // At least one column must remain visible.
+    if (!effSource && !effIngest && !effDigest) return;
+    cols = next;
+  }
 
   // PDF page sync
   let pdfPage = $state(1);
@@ -1068,6 +1332,49 @@
         {/if}
       </div>
     </div>
+    <!-- Column visibility toggles -->
+    <div
+      class="flex items-center gap-0.5 text-xs font-ui font-medium flex-none p-0.5 rounded bg-surface border border-border"
+      role="group"
+      aria-label="Column visibility"
+    >
+      <button
+        onclick={() => toggleCol("source")}
+        disabled={singleColumn}
+        title={singleColumn ? "No source available for this record" : (cols.source ? "Hide source column" : "Show source column")}
+        class="px-2 py-1 rounded transition-colors
+          {singleColumn
+            ? 'text-on-surface-muted opacity-50 cursor-default'
+            : cols.source
+              ? 'bg-primary text-on-primary cursor-pointer'
+              : 'text-on-surface-secondary hover:bg-surface-alt cursor-pointer'}"
+      >Source</button>
+      <button
+        onclick={() => toggleCol("ingest")}
+        title={cols.ingest ? "Hide ingest column" : "Show ingest column"}
+        class="px-2 py-1 rounded transition-colors cursor-pointer
+          {cols.ingest ? 'bg-primary text-on-primary' : 'text-on-surface-secondary hover:bg-surface-alt'}"
+      >Ingest</button>
+      <button
+        onclick={() => toggleCol("digest")}
+        disabled={!digest}
+        title={!digest ? "No digest produced for this record yet" : (cols.digest ? "Hide digest column" : "Show digest column")}
+        class="px-2 py-1 rounded transition-colors
+          {!digest
+            ? 'text-on-surface-muted opacity-50 cursor-default'
+            : cols.digest
+              ? 'bg-primary text-on-primary cursor-pointer'
+              : 'text-on-surface-secondary hover:bg-surface-alt cursor-pointer'}"
+      >
+        Digest
+        {#if digest}
+          <span class="ml-1 text-[10px] opacity-70 tabular-nums">
+            {(digest.domain_claims?.length || 0) + (digest.infrastructure_claims?.length || 0)}
+          </span>
+        {/if}
+      </button>
+    </div>
+
     {#if reviewed}
       <span
         class="flex items-center gap-1.5 text-xs font-ui font-medium text-success flex-none"
@@ -1172,11 +1479,9 @@
   {/if}
 
   <div class="flex-1 flex min-h-0">
-    {#if singleColumn}
-      <!-- Single-column layout for web ingests -->
-    {:else}
-      <!-- Left panel -->
-      <div class="w-1/2 border-r border-border flex flex-col min-h-0">
+    {#if visibleCols.source}
+      <!-- Source panel -->
+      <div class="{colWidthClass} border-r border-border flex flex-col min-h-0">
         <div class="px-3 py-2 bg-surface-alt border-b border-border flex-none flex items-center gap-3">
           <span class="text-xs font-ui font-medium text-on-surface-secondary uppercase flex-none">Original</span>
           {#if ingest.frontmatter.source_url}
@@ -1321,10 +1626,11 @@
     </div>
     {/if}
 
-    <!-- Right panel (or full-width for web ingests) -->
-    <div class="{singleColumn ? 'w-full' : 'w-1/2'} flex flex-col">
-      <!-- Source URL bar for single-column web ingests -->
-      {#if singleColumn && ingest.frontmatter.source_url}
+    {#if visibleCols.ingest}
+    <!-- Ingest panel -->
+    <div class="{colWidthClass} flex flex-col {visibleCols.digest ? 'border-r border-border' : ''}">
+      <!-- Source URL bar shown when the source column is hidden (e.g. for web ingests) -->
+      {#if !visibleCols.source && ingest.frontmatter.source_url}
         <div class="px-4 py-2 bg-surface-alt border-b border-border flex items-center gap-2 flex-none">
           <span class="text-xs font-ui font-medium text-on-surface-secondary uppercase flex-none">Source</span>
           <a
@@ -1342,8 +1648,9 @@
           {/if}
         </div>
       {/if}
-      <!-- Panel header with view tabs and controls -->
-      <div class="px-4 py-2 bg-surface-alt border-b border-border flex items-center gap-1">
+      <!-- Panel header with view tabs and controls. flex-wrap so the strip
+           reflows cleanly when the column is narrow (three-column layout). -->
+      <div class="px-3 py-2 bg-surface-alt border-b border-border flex flex-wrap items-center gap-x-1 gap-y-1.5">
         {#each [["ingest", "Ingest", "Rendered view"], ["edit", "Edit", "Rich markdown editor"], ["raw", "Raw", "Edit raw markdown with frontmatter"], ["diff", "Diff", "View changes from original"]] as [id, label, tip]}
           <button
             onclick={() => { view = id as typeof view; }}
@@ -2006,6 +2313,239 @@
         </div>
       {/if}
     </div>
+    {/if}
+
+    {#if visibleCols.digest && digest}
+    <!-- Digest panel -->
+    <div class="{colWidthClass} flex flex-col">
+      <div class="px-3 py-2 bg-surface-alt border-b border-border flex-none flex items-center gap-3">
+        <span class="text-xs font-ui font-medium text-on-surface-secondary uppercase flex-none">Digest</span>
+        <span class="text-xs text-on-surface-muted font-ui flex-none">{digest.model}</span>
+        <span class="text-xs text-on-surface-muted font-ui flex-none" title="Schema version">{digest.schema}</span>
+        <span class="text-xs text-on-surface-muted font-ui flex-none ml-auto tabular-nums">
+          {digest.nodes.length} nodes ·
+          {(digest.domain_claims?.length || 0) + (digest.infrastructure_claims?.length || 0)} claims
+        </span>
+      </div>
+
+      <!-- View controls: claim-type filter pills + collapse-all -->
+      <div class="px-3 py-2 bg-surface border-b border-border flex-none flex flex-wrap items-center gap-1.5 text-xs font-ui">
+        <span class="text-on-surface-muted">Show:</span>
+        {#each CLAIM_TYPES as ct}
+          {@const on = claimTypeFilter[ct]}
+          <button
+            type="button"
+            onclick={() => toggleClaimType(ct)}
+            class="px-2 py-0.5 rounded transition-colors cursor-pointer capitalize
+              {on
+                ? 'bg-primary/15 text-primary font-medium'
+                : 'bg-surface-alt text-on-surface-muted hover:bg-surface line-through opacity-60'}"
+            title="{on ? 'Hide' : 'Show'} {ct} claims"
+          >{ct}</button>
+        {/each}
+        <button
+          type="button"
+          onclick={() => {
+            const target = !allClaimTypesOn;
+            claimTypeFilter = Object.fromEntries(CLAIM_TYPES.map((t) => [t, target]));
+          }}
+          class="ml-1 px-2 py-0.5 rounded text-on-surface-muted hover:bg-surface-alt cursor-pointer"
+          title={allClaimTypesOn ? "Hide all" : "Show all"}
+        >{allClaimTypesOn ? "none" : "all"}</button>
+
+        <span class="ml-auto"></span>
+        <button
+          type="button"
+          onclick={() => {
+            const anyOpen = !collapsed.nodes || !collapsed.domain || !collapsed.infrastructure;
+            collapsed = { nodes: anyOpen, domain: anyOpen, infrastructure: anyOpen };
+          }}
+          class="px-2 py-0.5 rounded text-on-surface-muted hover:bg-surface-alt cursor-pointer"
+          title="Collapse or expand all sections"
+        >{(collapsed.nodes && collapsed.domain && collapsed.infrastructure) ? "expand all" : "collapse all"}</button>
+      </div>
+
+      <!-- Active filter indicator: outside the scroll container so it sits
+           flush against the controls bar instead of becoming a sticky island
+           inside the padded scroll area. -->
+      {#if selectedNodeIds.size > 0}
+        <div class="px-3 py-2 bg-primary/10 border-b border-primary/40 flex-none flex items-center gap-2 text-xs font-ui">
+          <span class="text-on-surface-muted flex-none">
+            Filtering by{selectedNodeIds.size > 1 ? ` (${selectedNodeIds.size}, any of)` : ""}:
+          </span>
+          <div class="flex flex-wrap gap-1 min-w-0">
+            {#each selectedNodeNames as name, i}
+              {@const nodeId = [...selectedNodeIds][i]}
+              <span class="font-mono text-primary font-medium inline-flex items-center gap-1 bg-primary/15 rounded px-1.5 py-0.5">
+                {name}
+                <button
+                  type="button"
+                  onclick={() => _toggleNodeFilter(nodeId, true)}
+                  class="text-primary/70 hover:text-primary cursor-pointer"
+                  title="Remove from filter"
+                  aria-label="Remove {name} from filter"
+                >×</button>
+              </span>
+            {/each}
+          </div>
+          <button
+            type="button"
+            onclick={() => { selectedNodeIds = new Set(); }}
+            class="ml-auto px-2 py-0.5 rounded text-primary hover:bg-primary/15 cursor-pointer font-medium flex-none"
+            title="Clear filter"
+          >Clear</button>
+        </div>
+      {/if}
+
+      <div class="flex-1 overflow-auto px-5 py-5 space-y-8">
+        <!-- Nodes grouped by type. One name per line, divider between rows. -->
+        <section>
+          <button
+            type="button"
+            onclick={() => toggleCollapsed("nodes")}
+            class="w-full text-left text-xs font-ui font-semibold uppercase tracking-wide text-on-surface-secondary mb-3 pb-2 border-b border-border flex items-center gap-2 cursor-pointer hover:text-on-surface"
+            title={collapsed.nodes ? "Expand nodes" : "Collapse nodes"}
+          >
+            <svg
+              class="w-3 h-3 transition-transform {collapsed.nodes ? '' : 'rotate-90'}"
+              fill="currentColor"
+              viewBox="0 0 20 20"
+            ><path d="M6 5l8 5-8 5V5z" /></svg>
+            Nodes <span class="opacity-50 tabular-nums font-normal normal-case">{digest.nodes.length}</span>
+          </button>
+          {#if !collapsed.nodes}
+          <div class="space-y-5">
+            {#each NODE_TYPE_ORDER as nodeType}
+              {@const ofType = digest.nodes.filter(n => n.type === nodeType)}
+              {#if ofType.length > 0}
+                <div>
+                  <div class="text-[11px] font-ui font-medium uppercase tracking-wider text-on-surface-muted mb-1.5 flex items-baseline gap-2">
+                    <span>{NODE_TYPE_PLURALS[nodeType] || nodeType}</span>
+                    <span class="opacity-60 tabular-nums normal-case font-normal">{ofType.length}</span>
+                  </div>
+                  <ul class="divide-y divide-border/60">
+                    {#each ofType as n (n.id)}
+                      <li class="leading-snug">
+                        <button
+                          type="button"
+                          onclick={(e) => toggleNodeFilter(n.id, e)}
+                          title={selectedNodeIds.has(n.id) ? "Click to clear; Ctrl/Cmd/Shift+click to remove from selection" : "Click to filter; Ctrl/Cmd/Shift+click to add to selection"}
+                          class="w-full text-left py-1.5 px-1 -mx-1 text-sm font-mono break-words rounded transition-colors cursor-pointer
+                            {selectedNodeIds.has(n.id)
+                              ? 'bg-primary/15 text-primary'
+                              : 'hover:bg-surface-alt'}"
+                        >{n.name}</button>
+                      </li>
+                    {/each}
+                  </ul>
+                </div>
+              {/if}
+            {/each}
+          </div>
+          {/if}
+        </section>
+
+        <!-- Claims (domain first, then infrastructure). Card per claim,
+             clear visible boundaries. -->
+        {#each claimSections as section, sectionIndex}
+          {@const sectionKey = (sectionIndex === 0 ? "domain" : "infrastructure")}
+          {@const isCollapsed = collapsed[sectionKey]}
+          {#if section.total > 0}
+            <section>
+              <button
+                type="button"
+                onclick={() => toggleCollapsed(sectionKey)}
+                class="w-full text-left text-xs font-ui font-semibold uppercase tracking-wide text-on-surface-secondary mb-3 pb-2 border-b border-border flex items-center gap-2 cursor-pointer hover:text-on-surface"
+                title={isCollapsed ? "Expand " + section.label : "Collapse " + section.label}
+              >
+                <svg
+                  class="w-3 h-3 transition-transform {isCollapsed ? '' : 'rotate-90'}"
+                  fill="currentColor"
+                  viewBox="0 0 20 20"
+                ><path d="M6 5l8 5-8 5V5z" /></svg>
+                {section.label}
+                <span class="opacity-50 tabular-nums font-normal normal-case">
+                  {#if (selectedNodeIds.size > 0 || !allClaimTypesOn) && section.claims.length !== section.total}
+                    {section.claims.length} / {section.total}
+                  {:else}
+                    {section.total}
+                  {/if}
+                </span>
+              </button>
+              {#if !isCollapsed && section.claims.length === 0}
+                <p class="text-xs text-on-surface-muted font-ui italic mb-2">
+                  No claims match the current filters.
+                </p>
+              {/if}
+              {#if !isCollapsed}
+              <ul class="space-y-3">
+                {#each section.claims as c (c.id)}
+                  <li data-claim-id={c.id} class="bg-surface-alt/40 border border-border rounded-md px-3.5 py-3 text-sm leading-relaxed claim-card">
+                    <!-- Metadata row -->
+                    <div class="text-[11px] font-ui text-on-surface-muted mb-2 flex gap-x-2 gap-y-1 flex-wrap items-center">
+                      <span class="px-1.5 py-0.5 rounded bg-primary/10 text-primary font-medium uppercase tracking-wide text-[10px]">
+                        {c.type}
+                      </span>
+                      <span class="opacity-70">{c.attestation.replace("_", "-")}</span>
+                      {#if c.speaker}
+                        <span class="opacity-50">·</span>
+                        <span>by <span class="font-mono text-on-surface">{c.speaker.name}</span></span>
+                      {/if}
+                      {#if c.date}
+                        <span class="opacity-50">·</span>
+                        <span class="tabular-nums">{c.date}</span>
+                      {/if}
+                      {#if c.date_range}
+                        <span class="opacity-50">·</span>
+                        <span class="tabular-nums">{c.date_range[0]} to {c.date_range[1]}</span>
+                      {/if}
+                      {#if c.location}
+                        <span class="opacity-50">·</span>
+                        <span class="opacity-70">{c.location}</span>
+                      {/if}
+                    </div>
+
+                    <!-- Claim text -->
+                    <div class="text-on-surface">{c.text}</div>
+
+                    <!-- Verbatim quote, indented to make the relationship obvious -->
+                    {#if c.quote}
+                      <blockquote class="mt-2 pl-3 border-l-2 border-border/70 text-xs italic text-on-surface-muted leading-relaxed">
+                        {c.quote}
+                      </blockquote>
+                    {/if}
+
+                    <!-- Referenced nodes (click to filter claims to that node) -->
+                    {#if c.refs && c.refs.length > 0}
+                      <div class="mt-2.5 flex flex-wrap gap-1 pt-2 border-t border-border/40">
+                        {#each c.refs as r}
+                          {#if r.id}
+                            <button
+                              type="button"
+                              onclick={(e) => toggleNodeFilter(r.id!, e)}
+                              class="text-[10px] px-1.5 py-0.5 rounded border font-mono transition-colors cursor-pointer
+                                {selectedNodeIds.has(r.id)
+                                  ? 'bg-primary/15 border-primary/40 text-primary'
+                                  : 'bg-surface border-border hover:bg-surface-alt'}"
+                              title={selectedNodeIds.has(r.id) ? `In filter (Ctrl/Shift+click to remove): ${r.name}` : `Filter to ${r.name} (Ctrl/Shift+click to add to selection)`}
+                            >{r.name}</button>
+                          {:else}
+                            <span class="text-[10px] px-1.5 py-0.5 rounded bg-surface border border-border font-mono opacity-60"
+                                  title="No id - cannot filter">{r.name}</span>
+                          {/if}
+                        {/each}
+                      </div>
+                    {/if}
+                  </li>
+                {/each}
+              </ul>
+              {/if}
+            </section>
+          {/if}
+        {/each}
+      </div>
+    </div>
+    {/if}
   </div>
 </div>
 

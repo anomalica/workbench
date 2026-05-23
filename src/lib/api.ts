@@ -42,6 +42,58 @@ export async function fetchIngest(hash: string): Promise<IngestDetail> {
   return res.json();
 }
 
+/** Digest interchange format (schema: anomalica/digest/1).
+ *  See architecture/digest-format.md and decision 0027 in the meta-repo. */
+export interface DigestRef {
+  id?: string;
+  name: string;
+}
+
+export interface DigestNode {
+  id: string;
+  type: string;
+  name: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface DigestClaim {
+  id: string;
+  type: string;
+  attestation: string;
+  speaker?: DigestRef;
+  location?: string;
+  date?: string;
+  date_range?: [string, string];
+  refs?: DigestRef[];
+  quote?: string;
+  text: string;
+}
+
+export interface DigestDocument {
+  schema: string;
+  extracted_at: string;
+  model: string;
+  record: {
+    id: string;
+    title?: string;
+    producer?: string;
+    date?: string;
+    reference?: string | null;
+  };
+  nodes: DigestNode[];
+  domain_claims?: DigestClaim[];
+  infrastructure_claims?: DigestClaim[];
+}
+
+/** Fetch the digester's YAML output for an ingest. Returns null if no digest
+ *  has been produced for this record yet (404). */
+export async function fetchDigest(hash: string): Promise<DigestDocument | null> {
+  const res = await fetch(`/api/ingests/${hash}/digest`);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`Failed to fetch digest: ${res.status}`);
+  return res.json();
+}
+
 /** Check whether an ingest exists for a given full hash. */
 export async function ingestExists(fullHash: string): Promise<boolean> {
   const res = await fetch(`/api/ingests/${fullHash}`);
