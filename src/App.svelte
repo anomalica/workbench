@@ -17,6 +17,12 @@
   import IngestViewer from "$lib/components/IngestViewer.svelte";
 
   let user = $state<User | null>(null);
+  // True while a cold-load deep link (e.g. /<public_hash>#claim-<uuid>) is
+  // resolving: list fetch then record + digest fetch. Drives a centred
+  // "Opening record..." indicator so the user sees progress instead of a
+  // blank list. Set true synchronously by checkUrlHash on boot when the
+  // URL points at a specific record, cleared in selectIngest's finally.
+  let openingRecord = $state(false);
 
   fetchCurrentUser().then((u) => {
     user = u;
@@ -150,11 +156,16 @@
       selectedDigest = digest;
       sourceFile = file;
       error = null;
-      // Put the public hash in the URL so password managers can associate with it
+      // Put the public hash in the URL so password managers can associate
+      // with it. Preserve any existing fragment (e.g. #claim-<uuid> from a
+      // deep-link arrival) so IngestViewer's hash-watcher can still see it.
       const publicHash = selectedIngest.public_hash;
-      history.pushState(null, "", `/${publicHash}`);
+      const fragment = window.location.hash || "";
+      history.pushState(null, "", `/${publicHash}${fragment}`);
     } catch (e) {
       error = `Failed to load ingest: ${hash}`;
+    } finally {
+      openingRecord = false;
     }
   }
 
@@ -178,16 +189,29 @@
   async function checkUrlHash() {
     const path = window.location.pathname.slice(1);
     if (path && /^[a-f0-9]{56}$/.test(path)) {
-      // Find the ingest whose public hash matches
+      openingRecord = true;
       await loadIngests();
       const match = ingests.find((i) => i.public_hash === path);
       if (match) {
         selectIngest(match.content_hash);
         return;
       }
+      // Public hash didn't match any record; drop the loading state and
+      // fall through to showing the list.
+      openingRecord = false;
     }
     loadIngests();
   }
+
+  // What the cold-load loading indicator says. If the URL has a #claim-
+  // fragment we tell the user we're going somewhere specific, otherwise
+  // a generic message.
+  let openingLabel = $derived.by(() => {
+    if (typeof window === "undefined") return "Opening record...";
+    return /^#claim-/i.test(window.location.hash)
+      ? "Opening claim..."
+      : "Opening record...";
+  });
 
   checkUrlHash();
 </script>
@@ -218,7 +242,19 @@
   </header>
 
   <main class="flex-1 flex flex-col min-h-0">
-    {#if selectedIngest}
+    {#if openingRecord && !selectedIngest}
+      <!-- Cold-load deep-link: list + record + digest are fetching. Show a
+           centred indicator so the user knows the click registered. Hidden
+           the moment selectedIngest is set; IngestViewer then takes over
+           and runs its own claim-scroll/flash. -->
+      <div class="flex-1 flex flex-col items-center justify-center gap-3 text-on-surface-muted">
+        <svg class="w-6 h-6 animate-spin text-primary" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+        </svg>
+        <p class="text-sm font-ui">{openingLabel}</p>
+      </div>
+    {:else if selectedIngest}
       <IngestViewer
         ingest={selectedIngest}
         digest={selectedDigest}

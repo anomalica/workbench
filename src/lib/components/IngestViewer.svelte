@@ -292,6 +292,20 @@
     if (!cols.digest) {
       cols = { ...cols, digest: true };
     }
+    // Reshape the digest view so the linked claim isn't buried: collapse
+    // the nodes section, expand whichever claim section (domain /
+    // infrastructure) contains the target, and clear any node-filter that
+    // might otherwise hide the card. Mutates the persisted `collapsed`
+    // state intentionally - arriving via a deep link is a context switch,
+    // not a layout preference change to fight.
+    const inDomain = (digest.domain_claims ?? []).some((c) => c.id === claimId);
+    const inInfra = (digest.infrastructure_claims ?? []).some((c) => c.id === claimId);
+    collapsed = {
+      nodes: true,
+      domain: inDomain ? false : collapsed.domain,
+      infrastructure: inInfra ? false : collapsed.infrastructure,
+    };
+    if (selectedNodeIds.size > 0) selectedNodeIds = new Set();
     selectedClaimId = claimId;
     requestAnimationFrame(() => {
       _findCardWithRetry(claimId, 25, (el) => {
