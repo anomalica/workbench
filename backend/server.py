@@ -277,11 +277,22 @@ class LocalIngestSource(IngestSource):
             message += " (approved as-is)"
         if notes:
             message += f"\n\n{notes}"
-        # Reviewed-Record trailer lets _scan_git_reviews attribute the
-        # commit to a content_hash even when nothing was staged (empty
-        # "approved as-is" commits don't touch any file, so a file-path
-        # scan misses them).
-        message += f"\n\nReviewed-Record: sha256:{full_hash}"
+
+        # Reviewed-Record trailers: one per identity the record carries
+        # at review time. Format is `<kind>:<value>` with kind in
+        # {url, sha256, content}, per architecture/review-workbench.md.
+        # Strongest available identity wins on scan, so emitting all
+        # makes the review survive future re-ingestions that rotate the
+        # weaker identities.
+        trailers: list[str] = []
+        source_url = (frontmatter.get("source_url") or "").strip()
+        if source_url:
+            trailers.append(f"Reviewed-Record: url:{source_url}")
+        source_hash = normalise_hash(frontmatter.get("source_hash"))
+        if source_hash:
+            trailers.append(f"Reviewed-Record: sha256:{source_hash}")
+        trailers.append(f"Reviewed-Record: content:{full_hash}")
+        message += "\n\n" + "\n".join(trailers)
 
         cmd = ["git", "commit", "-m", message]
         if no_changes:
@@ -292,29 +303,72 @@ class LocalIngestSource(IngestSource):
         # in /api/me/reviews on the next read.
         self._reviewed_cache = None
 
-    _reviewed_cache: dict[str, dict[str, str]] | None = None
+    # Per-email list of (kind, value, iso_ts) trailers. Cross-referenced
+    # against record frontmatter identities in reviewed_by_email.
+    _reviewed_cache: dict[str, list[tuple[str, str, str]]] | None = None
 
     def reviewed_by_email(self, email: str) -> dict[str, str]:
-        """Return {content_hash: latest_review_iso} for this user.
-        Built from the ingests repo's git log. Cached; commit_review
-        invalidates."""
+        """Return {content_hash: latest_review_iso} for this user across
+        the current corpus. For each record, walk its three identities
+        (source_url, source_hash, content_hash) and check the trailer
+        index. Any matching kind on any historical commit counts; the
+        latest matching timestamp wins. Per
+        architecture/review-workbench.md `Review identity across
+        re-ingestion`."""
         target = email.strip().lower()
         if self._reviewed_cache is None:
             self._reviewed_cache = self._scan_git_reviews()
-        return dict(self._reviewed_cache.get(target, {}))
+        trailers = self._reviewed_cache.get(target, [])
+        if not trailers:
+            return {}
 
-    def _scan_git_reviews(self) -> dict[str, dict[str, str]]:
-        """Build the {email: {content_hash: latest_iso}} index.
+        # Flatten to (kind, value) -> latest ts for O(1) lookups.
+        by_kind_value: dict[tuple[str, str], str] = {}
+        for kind, value, ts in trailers:
+            key = (kind, value)
+            existing = by_kind_value.get(key)
+            if existing is None or ts > existing:
+                by_kind_value[key] = ts
 
-        Two detection paths in priority order:
+        out: dict[str, str] = {}
+        for content_hash, (_, frontmatter) in self._scan().items():
+            candidates: list[str] = []
+            source_url = (frontmatter.get("source_url") or "").strip()
+            if source_url:
+                ts = by_kind_value.get(("url", source_url))
+                if ts:
+                    candidates.append(ts)
+            source_hash = normalise_hash(frontmatter.get("source_hash"))
+            if source_hash:
+                ts = by_kind_value.get(("sha256", source_hash))
+                if ts:
+                    candidates.append(ts)
+            ts = by_kind_value.get(("content", content_hash))
+            if ts:
+                candidates.append(ts)
+            if candidates:
+                out[content_hash] = max(candidates)
+        return out
 
-        1. **Reviewed-Record trailer.** Every commit produced by
-           commit_review() appends `Reviewed-Record: sha256:HASH` as
-           a git trailer. Picks up empty "approved as-is" commits
-           that don't touch any file.
-        2. **File-path scan.** Legacy fallback for commits that
-           pre-date the trailer. Maps the touched filename back to
-           a content_hash via the current scan index.
+    def _scan_git_reviews(self) -> dict[str, list[tuple[str, str, str]]]:
+        """Walk review commits in the ingests repo and collect every
+        Reviewed-Record trailer (and synthesise content-kind entries
+        for legacy commits that touched a store/<hash>.md file but
+        carried no trailer).
+
+        Returns {email: [(kind, value, iso_ts), ...]}. The kind is one
+        of `url`, `sha256`, `content` per the spec. Resolution against
+        a specific record happens in reviewed_by_email.
+
+        Back-compatibility: historical commits emitted
+        `Reviewed-Record: sha256:<content_hash>` because the kind/value
+        split didn't exist yet - the value was always a content_hash
+        despite the `sha256:` prefix. Per the spec's back-compat
+        subsection, such trailers are recorded under BOTH `sha256` and
+        `content` kinds so the historical reviews keep matching after
+        the spec change. The chance of a content_hash colliding with
+        another record's source_hash is astronomical, so the dual
+        registration is safe.
         """
         import subprocess
 
@@ -322,13 +376,10 @@ class LocalIngestSource(IngestSource):
         if not (repo_dir / ".git").exists():
             return {}
 
-        out: dict[str, dict[str, str]] = {}
+        out: dict[str, list[tuple[str, str, str]]] = {}
 
-        def record(email: str, content_hash: str, iso_ts: str) -> None:
-            bucket = out.setdefault(email, {})
-            existing = bucket.get(content_hash)
-            if existing is None or iso_ts > existing:
-                bucket[content_hash] = iso_ts
+        def record(email: str, kind: str, value: str, ts: str) -> None:
+            out.setdefault(email, []).append((kind, value, ts))
 
         # Trailer-based detection.
         trailer_result = subprocess.run(
@@ -356,12 +407,28 @@ class LocalIngestSource(IngestSource):
                     continue
                 for entry in trailer.split(","):
                     entry = entry.strip()
-                    if entry.startswith("sha256:"):
-                        entry = entry[len("sha256:") :]
-                    if FULL_HASH_PATTERN.match(entry):
-                        record(email, entry, iso_ts)
+                    if not entry:
+                        continue
+                    # url: values can contain colons (https://...) - split
+                    # only on the first colon to extract the kind.
+                    colon = entry.find(":")
+                    if colon < 0:
+                        continue
+                    kind = entry[:colon]
+                    value = entry[colon + 1 :]
+                    if kind == "url" and value:
+                        record(email, "url", value, iso_ts)
+                    elif kind == "sha256" and FULL_HASH_PATTERN.match(value):
+                        record(email, "sha256", value, iso_ts)
+                        # Spec back-compat: legacy commits used
+                        # sha256:<content_hash>. Try as content-kind too.
+                        record(email, "content", value, iso_ts)
+                    elif kind == "content" and FULL_HASH_PATTERN.match(value):
+                        record(email, "content", value, iso_ts)
 
-        # File-path detection (legacy fallback).
+        # File-path detection (legacy fallback for commits with no
+        # Reviewed-Record trailer at all). Anything touched in store/
+        # is treated as a content-kind review of that file's record.
         index = self._scan()
         file_to_hash: dict[str, str] = {}
         for content_hash, (md_path, _) in index.items():
@@ -404,7 +471,7 @@ class LocalIngestSource(IngestSource):
                     continue
                 content_hash = file_to_hash.get(line)
                 if content_hash:
-                    record(current_email, content_hash, current_ts)
+                    record(current_email, "content", content_hash, current_ts)
         return out
 
     def load_verification(self, full_hash: str) -> dict | None:
