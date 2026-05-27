@@ -21,6 +21,10 @@
     sourceFile,
     user,
     reviewed = false,
+    hasNext = false,
+    hasPrev = false,
+    onnext,
+    onprev,
     onreviewedchange,
     onback,
   }: {
@@ -29,6 +33,13 @@
     sourceFile: File | null;
     user: User | null;
     reviewed?: boolean;
+    /** Whether there is a record after this one in the current
+     *  filtered+sorted list - drives the Next button enabled state and
+     *  the n/ArrowRight keyboard shortcut. */
+    hasNext?: boolean;
+    hasPrev?: boolean;
+    onnext?: () => void;
+    onprev?: () => void;
     onreviewedchange?: (hash: string, reviewed: boolean) => void;
     onback: () => void;
   } = $props();
@@ -1118,6 +1129,10 @@
   let submitError = $state<string | null>(null);
   let showSubmitForm = $state(false);
   let reviewNotes = $state("");
+  // When the modal's "Approve & next" button (or Shift+A keystroke) fires,
+  // we set this true so a successful submit advances to the next record
+  // automatically. Reset on every modal open.
+  let submitAndAdvance = $state(false);
 
   async function handleSubmit() {
     if (!user) return;
@@ -1135,6 +1150,12 @@
       localStorage.removeItem(doc.storageKey);
       // Backend auto-marks reviewed on submit; mirror it locally.
       onreviewedchange?.(ingest.content_hash, true);
+      if (submitAndAdvance) {
+        submitAndAdvance = false;
+        // Advance after the next microtask so the reviewed-state change
+        // gets applied to the list view before we navigate.
+        queueMicrotask(() => onnext?.());
+      }
     } else {
       submitError = result.error ?? "Failed to submit";
     }
@@ -1406,6 +1427,7 @@
   // Keyboard shortcuts
   function handleKeydown(e: KeyboardEvent) {
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+    if (e.target instanceof HTMLElement && e.target.isContentEditable) return;
     if (e.key === " " && ytId && ytPlayer && playerReady) {
       e.preventDefault();
       if (ytPlayer.getPlayerState() === 1) ytPlayer.pauseVideo();
@@ -1433,6 +1455,19 @@
       navigateSegment(e.key === "ArrowDown" ? 1 : -1, e.shiftKey);
     } else if (e.key === "Delete" && selected.size > 0) {
       toggleSelectedIrrelevance();
+    } else if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key === "n" || e.key === "ArrowRight") && hasNext) {
+      // Next record in the filtered+sorted list view.
+      e.preventDefault();
+      onnext?.();
+    } else if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key === "p" || e.key === "ArrowLeft") && hasPrev) {
+      e.preventDefault();
+      onprev?.();
+    } else if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === "a" && user && !submitDisabled) {
+      // Open the Approve modal. Same gate as the Submit/Approve toolbar
+      // button - won't fire when already approved-as-is for a clean record.
+      e.preventDefault();
+      submitAndAdvance = e.shiftKey && hasNext;
+      showSubmitForm = true;
     }
   }
 
@@ -1500,6 +1535,36 @@
         <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />
       </svg>
     </button>
+    <div class="flex items-center gap-0.5 flex-none">
+      <button
+        onclick={() => onprev?.()}
+        disabled={!hasPrev}
+        class="p-1.5 rounded transition-colors flex-none
+          {hasPrev
+            ? 'text-on-surface-muted hover:text-on-surface hover:bg-surface cursor-pointer'
+            : 'text-on-surface-muted/30 cursor-default'}"
+        title="Previous record (P)"
+        aria-label="Previous record"
+      >
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />
+        </svg>
+      </button>
+      <button
+        onclick={() => onnext?.()}
+        disabled={!hasNext}
+        class="p-1.5 rounded transition-colors flex-none
+          {hasNext
+            ? 'text-on-surface-muted hover:text-on-surface hover:bg-surface cursor-pointer'
+            : 'text-on-surface-muted/30 cursor-default'}"
+        title="Next record (N)"
+        aria-label="Next record"
+      >
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+        </svg>
+      </button>
+    </div>
     <div class="w-px h-8 bg-border flex-none"></div>
     <div class="flex-1 min-w-0">
       <h2 class="font-ui font-semibold text-on-surface truncate">
@@ -1652,16 +1717,26 @@
         <div class="flex items-center gap-2 mt-4">
           <div class="flex-1"></div>
           <button
-            onclick={() => { showSubmitForm = false; }}
+            onclick={() => { showSubmitForm = false; submitAndAdvance = false; }}
             class="text-xs font-ui text-on-surface-muted px-3 py-1.5 rounded cursor-pointer hover:text-on-surface"
           >Cancel</button>
           <button
-            onclick={handleSubmit}
+            onclick={() => { submitAndAdvance = false; handleSubmit(); }}
             disabled={submitting}
             class="text-xs font-ui font-medium px-4 py-1.5 bg-primary text-on-primary rounded cursor-pointer hover:bg-primary-hover"
           >
             {submitting ? "Submitting..." : doc.dirty ? "Submit review" : "Approve"}
           </button>
+          {#if hasNext}
+            <button
+              onclick={() => { submitAndAdvance = true; handleSubmit(); }}
+              disabled={submitting}
+              class="text-xs font-ui font-medium px-4 py-1.5 bg-primary/80 text-on-primary rounded cursor-pointer hover:bg-primary"
+              title="Submit, then jump to the next record in the list"
+            >
+              {doc.dirty ? "Submit & next" : "Approve & next"}
+            </button>
+          {/if}
         </div>
       </div>
     </div>

@@ -146,6 +146,33 @@
     }
   }
 
+  // Position of the currently-open record within the filtered+sorted list,
+  // so the next/prev nav obeys what the user sees in the list view rather
+  // than picking arbitrarily.
+  let currentIndex = $derived(
+    selectedIngest
+      ? filteredIngests.findIndex(
+          (i) => i.content_hash === selectedIngest!.content_hash,
+        )
+      : -1,
+  );
+  let hasNext = $derived(
+    currentIndex >= 0 && currentIndex < filteredIngests.length - 1,
+  );
+  let hasPrev = $derived(currentIndex > 0);
+
+  function goNext() {
+    if (!hasNext) return;
+    const next = filteredIngests[currentIndex + 1];
+    if (next) selectIngest(next.content_hash);
+  }
+
+  function goPrev() {
+    if (!hasPrev) return;
+    const prev = filteredIngests[currentIndex - 1];
+    if (prev) selectIngest(prev.content_hash);
+  }
+
   async function selectIngest(hash: string, file: File | null = null) {
     try {
       const [ingest, digest] = await Promise.all([
@@ -261,6 +288,10 @@
         {sourceFile}
         {user}
         reviewed={reviewedHashes.has(selectedIngest.content_hash)}
+        {hasNext}
+        {hasPrev}
+        onnext={goNext}
+        onprev={goPrev}
         onreviewedchange={(hash, reviewed) => setReviewed(hash, reviewed)}
         onback={goBack}
       />
