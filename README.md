@@ -10,7 +10,7 @@ Plain Svelte 5 single-page application. No server-side rendering, no meta-framew
 
 - **Svelte 5** with runes for reactivity
 - **Vite** as the build tool
-- **Tailwind CSS v4** with shared design tokens from anomalica-brand
+- **Tailwind CSS v4** with shared design tokens from brand
 - **FastAPI** (Python) backend in `backend/`, serving git repository operations
 
 The backend lives in this repository under `backend/` and is started alongside the frontend during development. During development, Vite (port 5173) proxies `/api` requests to the FastAPI backend (port 8000). In production, FastAPI serves both the API and the built static files.

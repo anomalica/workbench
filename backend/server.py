@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """FastAPI backend for the Anomalica Workbench.
 
-Serves ingests from the anomalica-ingests repository to authenticated
+Serves ingests from the ingests repository to authenticated
 reviewers. In local mode reads from a local clone; in remote mode
 talks to the GitHub API via a service account. Selected via env vars.
 
@@ -37,9 +37,9 @@ PASS_RATIO = 0.8
 MIN_POOL_FOR_CLOZE_GATE = 5
 VERIFICATION_SESSION_TTL_SECONDS = 1800
 
-DEFAULT_INGESTS_PATH = Path(__file__).resolve().parents[2] / "anomalica-ingests"
+DEFAULT_INGESTS_PATH = Path(__file__).resolve().parents[2] / "ingests"
 DEFAULT_SOURCES_PATH = Path(__file__).resolve().parents[2] / "sources"
-DEFAULT_DIGESTS_PATH = Path(__file__).resolve().parents[2] / "anomalica-digests"
+DEFAULT_DIGESTS_PATH = Path(__file__).resolve().parents[2] / "digests"
 
 
 def parse_frontmatter(text: str) -> tuple[dict, str, str]:
@@ -142,7 +142,7 @@ def normalise_hash(value: str | None) -> str | None:
 
 
 class LocalIngestSource(IngestSource):
-    """Reads ingests directly from a local clone of anomalica-ingests.
+    """Reads ingests directly from a local clone of ingests.
 
     Records are discovered by scanning every `.md` file in the store and
     reading the `content_hash` from the frontmatter. The filename itself
@@ -577,7 +577,7 @@ def get_ingest(full_hash: str) -> JSONResponse:
 def _hash_to_digest_path(full_hash: str) -> Path | None:
     """Map an ingest content_hash to its matching digest YAML, if one exists.
 
-    The digester writes per-record YAML at ``anomalica-digests/records/<name>.yaml``
+    The digester writes per-record YAML at ``digests/records/<name>.yaml``
     where ``<name>`` is the friendly filename used by the ingester's records/
     symlinks (e.g. ``2024-08-19-ebook-imminent-...``). To bridge the two we
     walk the ingest records/ symlinks, resolve each to its store/{hash}.md
@@ -656,7 +656,7 @@ def _wb_expand_squadron(match: "re.Match[str]") -> str:
 
 
 # Universal acronyms - mirrors SAFE_ACRONYMS in
-# anomalica-digester/workspace/digester/extract.py. Kept in sync by hand;
+# digester/workspace/digester/extract.py. Kept in sync by hand;
 # if you change one, change the other.
 _WB_UNIVERSAL_ACRONYMS = {
     "UFO",
@@ -1233,7 +1233,7 @@ def list_my_reviews(request: Request) -> JSONResponse:
 # Reviewers prove they have the source by filling in N short cloze blanks
 # drawn from the body. The sidecar (`{hash}.verification.json`) lives next
 # to the record in the ingests store. Answers must never reach the client.
-# Mirrors the normalisation in anomalica-ingester/shared/verification.py.
+# Mirrors the normalisation in ingester/shared/verification.py.
 
 _verification_sessions: dict[str, dict] = {}
 

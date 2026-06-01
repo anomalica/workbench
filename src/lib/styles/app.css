@@ -1,6 +1,6 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
-@import "../../../../anomalica-brand/css/tokens.css";
+@import "../../../../brand/css/tokens.css";
 
 html {
   -webkit-font-smoothing: antialiased;
