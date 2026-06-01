@@ -48,8 +48,17 @@ if GITHUB_CLIENT_ID:
 
 
 def get_session_secret() -> str:
-    """Return a stable session secret, generating one if needed."""
-    secret_file = os.path.expanduser("~/.config/anomalica-workbench/session-secret")
+    """Return a stable session secret.
+
+    In production this comes from the environment (``SESSION_SECRET``), which is
+    populated from Bitwarden and stays consistent across restarts and instances.
+    For local development, fall back to a per-machine cached file so logins
+    survive restarts without any configuration.
+    """
+    env_secret = os.environ.get("SESSION_SECRET")
+    if env_secret:
+        return env_secret
+    secret_file = os.path.expanduser("~/.config/anomalica/workbench/session-secret")
     os.makedirs(os.path.dirname(secret_file), exist_ok=True)
     if os.path.exists(secret_file):
         with open(secret_file) as f:
