@@ -190,6 +190,20 @@ export function secondsToTime(s: number): string {
   return `${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
 }
 
+/** Full sentence-level timecode `HH:MM:SS.D` (one decimal place), matching
+ *  the record format. Use this when writing a timestamp back - secondsToTime
+ *  floors to whole seconds and so silently discards sub-second precision
+ *  (the exact thing the edit dialog's fine-scrub is for). */
+export function secondsToTimecode(s: number): string {
+  const t = Math.max(0, s);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const h = Math.floor(t / 3600);
+  const m = Math.floor((t % 3600) / 60);
+  const sec = Math.floor(t % 60);
+  const tenth = Math.floor((t * 10) % 10);
+  return `${pad(h)}:${pad(m)}:${pad(sec)}.${tenth}`;
+}
+
 const SPEAKER_COLOURS = [
   "#0B6E6E",
   "#B35A28",
@@ -230,6 +244,28 @@ export function findActiveSegmentForTime(segments: Segment[], currentTime: numbe
     else break;
   }
   return best;
+}
+
+/** The segment actually playing at time t: the one whose start is the
+ *  largest <= t, INCLUDING irrelevant segments. Unlike
+ *  findActiveSegmentForTime (which skips irrelevant segments so the
+ *  highlight can follow only real content), this can report that the
+ *  playhead is sitting inside an irrelevant region - which is what the
+ *  skip-irrelevant playback feature needs to know. Robust to minor
+ *  timestamp disorder: it takes the largest start <= t, not the last in
+ *  array order. Returns null when t precedes every segment. */
+export function segmentAtTime(segments: Segment[], t: number): Segment | null {
+  let current: Segment | null = null;
+  for (const s of segments) {
+    if (s.seconds <= t && (!current || s.seconds > current.seconds)) current = s;
+  }
+  return current;
+}
+
+/** The first relevant (non-irrelevant) segment that starts strictly after
+ *  t, in document order. The skip-irrelevant feature jumps here. */
+export function nextRelevantSegmentAfter(segments: Segment[], t: number): Segment | null {
+  return segments.find((s) => !isSegmentIrrelevant(s) && s.seconds > t) ?? null;
 }
 
 /** Extract named speakers from frontmatter YAML.
