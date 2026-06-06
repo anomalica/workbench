@@ -2708,8 +2708,8 @@
                       allSegments={segments}
                       allSpeakers={allSpeakerNames()}
                       namedSpeakers={namedSpeakersOrdered}
-                      onsplit={(charPos, aboveSp, belowSp, belowTime) => {
-                        doc.splitSegment(segment.speaker, segment.time, charPos, aboveSp, belowSp, belowTime);
+                      onsplit={(pieces) => {
+                        doc.splitSegmentMulti(segment.speaker, segment.time, pieces);
                         splittingIndex = null;
                       }}
                       oncancel={() => { splittingIndex = null; }}

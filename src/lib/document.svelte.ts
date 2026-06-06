@@ -322,37 +322,33 @@ export class DocumentStore {
     });
   }
 
-  splitSegment(
+  /** Replace one segment with N consecutive pieces in a single edit. Each
+   *  piece carries its own speaker, timestamp, and text - the SplitEditor
+   *  works out the boundaries and the interpolated timestamps. seconds/index
+   *  are placeholders; editSegments serialises and reparses, which recomputes
+   *  both from the written time and document order. Needs at least two
+   *  non-empty pieces, otherwise it's a no-op. */
+  splitSegmentMulti(
     speaker: string,
     time: string,
-    charPos: number,
-    aboveSpeaker: string,
-    belowSpeaker: string,
-    belowTime: string,
+    pieces: { speaker: string; time: string; text: string }[],
   ) {
     this.editSegments((segs) => {
       const idx = this.findSegment(segs, speaker, time);
       if (idx < 0) return false;
-      const seg = segs[idx];
-      const fullText = seg.lines.join("\n");
-      if (charPos <= 0 || charPos >= fullText.length) return false;
 
-      const beforeText = fullText.slice(0, charPos).trim();
-      const afterText = fullText.slice(charPos).trim();
-      if (!beforeText || !afterText) return false;
-
-      segs.splice(
-        idx,
-        1,
-        { ...seg, speaker: aboveSpeaker, lines: beforeText.split("\n").filter((l) => l.trim()) },
-        {
-          speaker: belowSpeaker,
-          time: belowTime,
+      const newSegs = pieces
+        .map((p) => ({
+          speaker: p.speaker,
+          time: p.time,
           seconds: 0,
-          lines: afterText.split("\n").filter((l) => l.trim()),
+          lines: p.text.split("\n").filter((l) => l.trim()),
           index: 0,
-        },
-      );
+        }))
+        .filter((s) => s.lines.length > 0);
+      if (newSegs.length < 2) return false;
+
+      segs.splice(idx, 1, ...newSegs);
       return true;
     });
   }
