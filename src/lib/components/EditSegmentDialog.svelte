@@ -2,6 +2,7 @@
   import type { Segment } from "$lib/transcript";
   import {
     secondsToTime,
+    secondsToTimecode,
     parseTimeToSeconds,
     isSpecialSpeaker,
     SPEAKER_IRRELEVANT,
@@ -16,6 +17,8 @@
     allSpeakers,
     namedSpeakers,
     videoTime,
+    canPreview = false,
+    onpreview,
     onsave,
     oncancel,
   }: {
@@ -23,6 +26,9 @@
     allSpeakers: string[];
     namedSpeakers: string[];
     videoTime: number;
+    /** Whether the background player can be seeked/played for audible preview. */
+    canPreview?: boolean;
+    onpreview?: (seconds: number) => void;
     onsave: (newSpeaker: string, newTime: string, newText: string) => void;
     oncancel: () => void;
   } = $props();
@@ -35,6 +41,37 @@
   let editSpeaker = $state(segment.speaker);
   let showSpeakerPicker = $state(false);
   let textareaEl: HTMLTextAreaElement | undefined = $state();
+
+  // Format seconds to MM:SS.D (or HH:MM:SS.D), keeping the tenths so a 0.1
+  // nudge is actually visible - secondsToTime() floors to whole seconds.
+  function fmtTenths(s: number): string {
+    const t = Math.max(0, s);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const h = Math.floor(t / 3600);
+    const m = Math.floor((t % 3600) / 60);
+    const sec = Math.floor(t % 60);
+    const tenth = Math.floor((t * 10) % 10);
+    const base = h > 0 ? `${pad(h)}:${pad(m)}:${pad(sec)}` : `${pad(m)}:${pad(sec)}`;
+    return `${base}.${tenth}`;
+  }
+
+  // Round to tenths so the value stays clean as the buttons nudge it.
+  function nudge(delta: number) {
+    editSeconds = Math.max(0, Math.round((editSeconds + delta) * 10) / 10);
+    onpreview?.(editSeconds);
+  }
+
+  // Fine-scrub slider window: a +/-6s span that recenters if the value is
+  // pushed outside it by the coarse buttons.
+  // svelte-ignore state_referenced_locally
+  let scrubCenter = $state(segment.seconds);
+  $effect(() => {
+    if (editSeconds < scrubCenter - 6 || editSeconds > scrubCenter + 6) {
+      scrubCenter = editSeconds;
+    }
+  });
+  let scrubMin = $derived(Math.max(0, scrubCenter - 6));
+  let scrubMax = $derived(scrubCenter + 6);
 
   $effect(() => {
     if (textareaEl) {
@@ -52,7 +89,9 @@
   function save() {
     const newText = text.trim();
     if (!newText) return;
-    onsave(editSpeaker, secondsToTime(editSeconds), newText);
+    // secondsToTimecode keeps the tenths - secondsToTime would floor them
+    // away, silently dropping the fine-scrub adjustment.
+    onsave(editSpeaker, secondsToTimecode(editSeconds), newText);
   }
 
   function handleKeydown(e: KeyboardEvent) {
@@ -142,30 +181,56 @@
     <div class="mb-3">
       <label for="edit-time" class="block text-xs font-ui font-medium text-on-surface-secondary uppercase mb-1">Timestamp</label>
       <div class="flex items-center gap-1.5">
-        <button onclick={() => { editSeconds = Math.max(0, editSeconds - 1); }}
+        <button onclick={() => nudge(-1)}
           class="text-xs font-mono px-1.5 py-0.5 bg-surface border border-border rounded cursor-pointer hover:bg-surface-alt">-1s</button>
-        <button onclick={() => { editSeconds = Math.max(0, editSeconds - 0.1); }}
+        <button onclick={() => nudge(-0.1)}
           class="text-xs font-mono px-1.5 py-0.5 bg-surface border border-border rounded cursor-pointer hover:bg-surface-alt">-0.1</button>
         <input
           id="edit-time"
           type="text"
-          value={secondsToTime(editSeconds)}
+          value={fmtTenths(editSeconds)}
           oninput={(e) => {
             const parsed = parseTimeToSeconds((e.target as HTMLInputElement).value);
             if (!isNaN(parsed)) editSeconds = parsed;
           }}
           class="text-sm font-mono text-on-surface bg-surface border border-border rounded px-2 py-0.5 flex-1 text-center outline-none focus:border-primary tabular-nums"
         />
-        <button onclick={() => { editSeconds += 0.1; }}
+        <button onclick={() => nudge(0.1)}
           class="text-xs font-mono px-1.5 py-0.5 bg-surface border border-border rounded cursor-pointer hover:bg-surface-alt">+0.1</button>
-        <button onclick={() => { editSeconds += 1; }}
+        <button onclick={() => nudge(1)}
           class="text-xs font-mono px-1.5 py-0.5 bg-surface border border-border rounded cursor-pointer hover:bg-surface-alt">+1s</button>
-        <button onclick={() => { editSeconds = videoTime; }}
+        <button onclick={() => { editSeconds = videoTime; onpreview?.(editSeconds); }}
           class="text-xs font-ui px-2 py-0.5 bg-primary-container/30 text-primary rounded cursor-pointer hover:bg-primary-container/50"
           title="Use current video time">
           Video ({secondsToTime(videoTime)})
         </button>
       </div>
+
+      {#if canPreview}
+        <!-- Fine-scrub slider: drag to a precise start, release to hear it.
+             Range follows the value within a +/-6s window. -->
+        <div class="flex items-center gap-2 mt-2">
+          <button
+            onclick={() => onpreview?.(editSeconds)}
+            class="flex-none flex items-center gap-1 text-xs font-ui px-2 py-1 bg-primary text-on-primary rounded cursor-pointer hover:bg-primary-hover"
+            title="Play the video from this timestamp"
+          >
+            <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
+            Play from here
+          </button>
+          <input
+            type="range"
+            min={scrubMin}
+            max={scrubMax}
+            step="0.05"
+            value={editSeconds}
+            oninput={(e) => { editSeconds = Math.round(parseFloat((e.target as HTMLInputElement).value) * 10) / 10; }}
+            onchange={() => onpreview?.(editSeconds)}
+            class="flex-1 accent-primary cursor-pointer"
+            aria-label="Fine-scrub timestamp"
+          />
+        </div>
+      {/if}
     </div>
 
     <!-- Text editor -->
