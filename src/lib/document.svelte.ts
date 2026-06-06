@@ -258,11 +258,55 @@ export class DocumentStore {
     });
   }
 
+  /** Edit a segment identified by its parse-order index rather than by
+   *  (speaker, time). Index is unique; (speaker, time) is not - two
+   *  segments can share both (e.g. the two halves immediately after a
+   *  split), in which case a (speaker, time) lookup hits the first match,
+   *  not necessarily the one the reviewer clicked. The edit dialog knows
+   *  the exact index, so it uses this. */
+  editSegmentByIndex(index: number, newSpeaker: string, newTime: string, newText: string) {
+    this.editSegments((segs) => {
+      const target = segs.find((s) => s.index === index);
+      if (!target) return false;
+      target.speaker = newSpeaker;
+      target.time = newTime;
+      target.lines = newText.split("\n").filter((l) => l.trim());
+      return true;
+    });
+  }
+
+  /** Append a segment's text onto a target segment as one continuous run
+   *  (single space between), then remove the source segment. The merged
+   *  text collapses into the target's last line so it reads as one
+   *  sentence rather than two stacked timestamped lines. The target keeps
+   *  its own timestamp and speaker. The target must sit before the source
+   *  in document order - the caller resolves "the segment above" (which,
+   *  with irrelevant segments hidden, is the previous *visible* segment,
+   *  not necessarily the previous document segment). */
+  mergeSegmentInto(fromSpeaker: string, fromTime: string, intoSpeaker: string, intoTime: string) {
+    this.editSegments((segs) => {
+      const fromIdx = this.findSegment(segs, fromSpeaker, fromTime);
+      const intoIdx = this.findSegment(segs, intoSpeaker, intoTime);
+      if (fromIdx < 0 || intoIdx < 0 || intoIdx >= fromIdx) return false;
+      const intoText = segs[intoIdx].lines.join(" ").trim();
+      const fromText = segs[fromIdx].lines.join(" ").trim();
+      const merged = [intoText, fromText].filter(Boolean).join(" ");
+      segs[intoIdx].lines = merged ? [merged] : [];
+      segs.splice(fromIdx, 1);
+      return true;
+    });
+  }
+
+  /** Merge a segment into the one immediately above it in document order. */
   mergeSegmentUp(speaker: string, time: string) {
     this.editSegments((segs) => {
       const idx = this.findSegment(segs, speaker, time);
       if (idx <= 0) return false;
-      segs[idx - 1].lines.push(...segs[idx].lines);
+      const prev = segs[idx - 1];
+      const prevText = prev.lines.join(" ").trim();
+      const thisText = segs[idx].lines.join(" ").trim();
+      const merged = [prevText, thisText].filter(Boolean).join(" ");
+      prev.lines = merged ? [merged] : [];
       segs.splice(idx, 1);
       return true;
     });
