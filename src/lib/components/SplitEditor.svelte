@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Segment } from "$lib/transcript";
-  import { nextSpeakerName } from "$lib/transcript";
+  import { nextSpeakerName, secondsToTimecode } from "$lib/transcript";
   import SpeakerDot from "./SpeakerDot.svelte";
 
   let {
@@ -31,6 +31,25 @@
   let bottomText = $derived(fullText.slice(splitCharPos));
   let showAbovePicker = $state(false);
   let showBelowPicker = $state(false);
+
+  // Estimate when the bottom half starts: interpolate between this segment's
+  // start and the next segment's start, in proportion to where the split
+  // falls in the text. This keeps the timeline moving forwards (previously
+  // the bottom half just inherited the top half's timestamp, which left it
+  // wrong and could break monotonicity after later edits). Falls back to the
+  // current start when there's no following segment to interpolate towards.
+  let nextSegment = $derived(allSegments.find((s) => s.index === segment.index + 1) ?? null);
+  let belowSeconds = $derived.by(() => {
+    const start = segment.seconds;
+    const total = fullText.length || 1;
+    if (nextSegment && nextSegment.seconds > start) {
+      const frac = Math.min(1, Math.max(0, splitCharPos / total));
+      return Math.round((start + frac * (nextSegment.seconds - start)) * 10) / 10;
+    }
+    return start;
+  });
+  let belowTime = $derived(secondsToTimecode(belowSeconds));
+  let isEstimate = $derived(!!nextSegment && nextSegment.seconds > segment.seconds);
 
   function findMidpoint(text: string): number {
     const mid = Math.floor(text.length / 2);
@@ -85,7 +104,7 @@
 
   function commitSplit() {
     if (topText.trim() && bottomText.trim()) {
-      onsplit(splitCharPos, aboveSpeaker, belowSpeaker, segment.time);
+      onsplit(splitCharPos, aboveSpeaker, belowSpeaker, belowTime);
     }
   }
 </script>
@@ -165,6 +184,9 @@
           </div>
         {/if}
       </div>
+      <span class="text-xs font-mono text-on-surface-muted" title={isEstimate ? "Estimated from the split position - check and fine-tune in Edit" : "No following segment to estimate from"}>
+        {belowTime.replace(/^00:/, "")}{#if isEstimate}<span class="text-warning ml-1" title="Estimated timestamp">~</span>{/if}
+      </span>
     </div>
     <!-- Bottom text: clickable to move split down -->
     <div
