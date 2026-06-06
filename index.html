@@ -11,6 +11,20 @@
       rel="stylesheet"
     />
     <title>Anomalica Workbench</title>
+    <script>
+      // Apply the saved (or system-preferred) theme before first paint so
+      // there's no flash of the wrong palette. Mirrors src/lib/theme.svelte.ts.
+      (function () {
+        try {
+          var saved = localStorage.getItem("workbench:theme");
+          var dark =
+            saved === "dark" ||
+            (saved == null &&
+              window.matchMedia("(prefers-color-scheme: dark)").matches);
+          document.documentElement.classList.toggle("dark", dark);
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="app"></div>

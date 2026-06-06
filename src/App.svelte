@@ -15,6 +15,7 @@
   import FileDropZone from "$lib/components/FileDropZone.svelte";
   import IngestList from "$lib/components/IngestList.svelte";
   import IngestViewer from "$lib/components/IngestViewer.svelte";
+  import { themeState } from "$lib/theme.svelte";
 
   let user = $state<User | null>(null);
   // True while a cold-load deep link (e.g. /<public_hash>#claim-<uuid>) is
@@ -255,6 +256,25 @@
       <span class="text-bone/60 text-sm leading-none mt-auto">Workbench</span>
     </a>
     <div class="flex-1"></div>
+    <button
+      onclick={() => themeState.toggle()}
+      class="p-1.5 rounded text-bone/60 hover:text-bone hover:bg-bone/10 transition-colors"
+      title={themeState.isDark ? "Switch to light mode" : "Switch to dark mode"}
+      aria-label="Toggle dark mode"
+    >
+      {#if themeState.isDark}
+        <!-- sun -->
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="4" />
+          <path stroke-linecap="round" d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
+        </svg>
+      {:else}
+        <!-- moon -->
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+        </svg>
+      {/if}
+    </button>
     {#if user}
       <div class="flex items-center gap-2">
         {#if user.avatar_url}
