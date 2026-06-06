@@ -44,6 +44,10 @@
   // svelte-ignore state_referenced_locally
   let speakers = $state<string[]>([segment.speaker, nextSpeakerName(allSegments)]);
   let openPicker = $state<number | null>(null);
+  // Which split (boundary index) is selected for repositioning. Clicking the
+  // text moves THIS split and nothing else - no nearest-guessing. Starts on
+  // the initial split so the common single-split case just works.
+  let selectedBoundary = $state<number | null>(0);
 
   let fullText = $derived(segment.lines.join("\n"));
 
@@ -118,14 +122,20 @@
     while (k < boundaries.length && boundaries[k] < charPos) k++;
     boundaries.splice(k, 0, charPos);
     speakers.splice(k + 1, 0, speakers[k]);
+    selectedBoundary = k; // select the new split so a text click positions it
   }
 
   // Remove boundary k; its trailing piece merges back into the one above it,
-  // which keeps its speaker.
+  // which keeps its speaker. Keep the selection pointing at a real split.
   function removeBoundary(k: number) {
     if (k < 0 || k >= boundaries.length) return;
     boundaries.splice(k, 1);
     speakers.splice(k + 1, 1);
+    if (boundaries.length === 0) selectedBoundary = null;
+    else if (selectedBoundary !== null) {
+      if (selectedBoundary === k) selectedBoundary = Math.min(k, boundaries.length - 1);
+      else if (selectedBoundary > k) selectedBoundary -= 1;
+    }
   }
 
   // Add a fresh split at the midpoint of the longest current piece.
@@ -144,21 +154,13 @@
     addBoundary(snapToWord(fullText, Math.floor((starts[bestI] + ends[bestI]) / 2)));
   }
 
-  // Move the boundary nearest the clicked offset to that offset, clamped to
-  // stay strictly between its neighbours. With a single boundary this is the
-  // old "click to reposition the split" behaviour.
-  function moveNearestBoundary(globalPos: number) {
-    if (boundaries.length === 0) return;
+  // Move the SELECTED split to the clicked offset, clamped to stay within its
+  // own gap (between its neighbouring splits). No nearest-guessing: with
+  // nothing selected, a text click does nothing.
+  function moveSelectedBoundary(globalPos: number) {
+    const k = selectedBoundary;
+    if (k === null || k < 0 || k >= boundaries.length) return;
     if (globalPos <= 0 || globalPos >= fullText.length) return;
-    let k = 0;
-    let best = Infinity;
-    for (let j = 0; j < boundaries.length; j++) {
-      const d = Math.abs(boundaries[j] - globalPos);
-      if (d < best) {
-        best = d;
-        k = j;
-      }
-    }
     const lo = (boundaries[k - 1] ?? 0) + 1;
     const hi = (boundaries[k + 1] ?? fullText.length) - 1;
     boundaries[k] = Math.min(hi, Math.max(lo, globalPos));
@@ -189,7 +191,7 @@
       offset += node.textContent?.length ?? 0;
     }
 
-    moveNearestBoundary(offsetBase + offset);
+    moveSelectedBoundary(offsetBase + offset);
   }
 
   function commitSplit() {
@@ -237,11 +239,27 @@
 <div class="ring-2 ring-primary/30 rounded-lg overflow-hidden">
   {#each pieces as piece, i (i)}
     {#if i > 0}
-      <!-- Boundary between the part above and this one: line + remove control -->
+      {@const bIdx = i - 1}
+      {@const sel = selectedBoundary === bIdx}
+      <!-- Boundary: click to select it (highlights), then click the text to move it -->
       <div class="flex items-center gap-2 px-3 py-1">
-        <div class="flex-1 h-0.5 rounded bg-primary"></div>
         <button
-          onclick={() => removeBoundary(i - 1)}
+          type="button"
+          onclick={() => { selectedBoundary = sel ? null : bIdx; }}
+          class="flex-1 flex items-center gap-2 cursor-pointer group/div"
+          title={sel
+            ? "Selected - click anywhere in the text to move this split there"
+            : "Select this split, then click in the text to move it"}
+        >
+          <span class="flex-1 h-0.5 rounded {sel ? 'bg-warning' : 'bg-primary/40 group-hover/div:bg-primary'}"></span>
+          <span class="text-[10px] font-ui font-medium uppercase tracking-wide whitespace-nowrap {sel ? 'text-warning' : 'text-on-surface-muted/50 group-hover/div:text-on-surface-muted'}">
+            {sel ? "click text to move" : "select"}
+          </span>
+          <span class="flex-1 h-0.5 rounded {sel ? 'bg-warning' : 'bg-primary/40 group-hover/div:bg-primary'}"></span>
+        </button>
+        <button
+          type="button"
+          onclick={() => removeBoundary(bIdx)}
           class="flex-none text-on-surface-muted hover:text-error cursor-pointer p-0.5"
           title="Remove this split (merge with the part above)"
           aria-label="Remove split"
@@ -250,7 +268,6 @@
             <path stroke-linecap="round" d="M6 18L18 6M6 6l12 12" />
           </svg>
         </button>
-        <div class="flex-1 h-0.5 rounded bg-primary"></div>
       </div>
     {/if}
 
@@ -279,14 +296,14 @@
           {piece.time.replace(/^00:/, "")}{#if piece.estimate}<span class="text-warning ml-1" title="Estimated timestamp">~</span>{/if}
         </span>
       </div>
-      <!-- Part text: click to move the nearest split -->
+      <!-- Part text: with a split selected, click to move that split here -->
       <div
-        class="text-sm text-on-surface leading-relaxed pl-4 whitespace-pre-wrap cursor-text select-none"
+        class="text-sm text-on-surface leading-relaxed pl-4 whitespace-pre-wrap select-none {selectedBoundary !== null ? 'cursor-text' : 'cursor-default'}"
         onclick={(e) => handleTextClick(e, piece.startChar)}
         onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') e.preventDefault(); }}
         role="button"
         tabindex="0"
-        aria-label="Part {i + 1} - click to move the nearest split"
+        aria-label="Part {i + 1} - click to move the selected split here"
       >{piece.text}</div>
     </div>
   {/each}
