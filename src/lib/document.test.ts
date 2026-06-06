@@ -341,3 +341,78 @@ describe("editing a segment that shares (speaker, time) with another", () => {
     expect(reparsed[1].lines).toEqual(["Second half, retimed."]);
   });
 });
+
+describe("splitSegmentMulti replaces one segment with N ordered pieces", () => {
+  // Mirrors DocumentStore.splitSegmentMulti: splice the target segment out and
+  // splice N pieces (placeholder seconds/index) in its place, then serialize +
+  // reparse, which recomputes seconds from each time and indices from order.
+  const body = `
+<!-- speaker: Speaker 1 -->
+00:00:10.0 One two three four five six.
+<!-- speaker: Speaker 2 -->
+00:00:30.0 Later line.
+`;
+
+  function applyMulti(
+    segs: ReturnType<typeof parseTranscript>,
+    targetIndex: number,
+    pieces: { speaker: string; time: string; text: string }[],
+  ) {
+    const newSegs = pieces
+      .map((p) => ({
+        speaker: p.speaker,
+        time: p.time,
+        seconds: 0,
+        lines: p.text.split("\n").filter((l) => l.trim()),
+        index: 0,
+      }))
+      .filter((s) => s.lines.length > 0);
+    segs.splice(targetIndex, 1, ...newSegs);
+  }
+
+  it("produces three consecutive pieces with their own speakers and times", () => {
+    const segs = parseTranscript(body);
+    applyMulti(segs, 0, [
+      { speaker: "Speaker 1", time: "00:00:10.0", text: "One two" },
+      { speaker: "Luigi", time: "00:00:16.7", text: "three four" },
+      { speaker: "Speaker 1", time: "00:00:23.3", text: "five six." },
+    ]);
+    const reparsed = parseTranscript(serializeTranscript(segs));
+
+    expect(reparsed.map((s) => s.speaker)).toEqual([
+      "Speaker 1",
+      "Luigi",
+      "Speaker 1",
+      "Speaker 2",
+    ]);
+    expect(reparsed.map((s) => s.lines.join(" "))).toEqual([
+      "One two",
+      "three four",
+      "five six.",
+      "Later line.",
+    ]);
+    expect(reparsed.map((s) => s.time)).toEqual([
+      "00:00:10.0",
+      "00:00:16.7",
+      "00:00:23.3",
+      "00:00:30.0",
+    ]);
+    // seconds recomputed from the written time, indices made sequential
+    expect(reparsed[1].seconds).toBeCloseTo(16.7, 5);
+    expect(reparsed.map((s) => s.index)).toEqual([0, 1, 2, 3]);
+  });
+
+  it("keeps timestamps monotonic across the new pieces", () => {
+    const segs = parseTranscript(body);
+    applyMulti(segs, 0, [
+      { speaker: "Speaker 1", time: "00:00:10.0", text: "One two" },
+      { speaker: "Luigi", time: "00:00:16.7", text: "three four" },
+      { speaker: "Speaker 1", time: "00:00:23.3", text: "five six." },
+    ]);
+    const reparsed = parseTranscript(serializeTranscript(segs));
+    const seconds = reparsed.map((s) => s.seconds);
+    for (let i = 1; i < seconds.length; i++) {
+      expect(seconds[i]).toBeGreaterThan(seconds[i - 1]);
+    }
+  });
+});
