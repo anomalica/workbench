@@ -4,6 +4,9 @@ import {
   serializeTranscript,
   parseTimeToSeconds,
   secondsToTime,
+  secondsToTimecode,
+  segmentAtTime,
+  nextRelevantSegmentAfter,
   nextSpeakerName,
   speakerColour,
   findActiveSegmentForTime,
@@ -45,6 +48,25 @@ describe("secondsToTime", () => {
 
   it("formats zero", () => {
     expect(secondsToTime(0)).toBe("00:00");
+  });
+});
+
+describe("secondsToTimecode (preserves tenths for write-back)", () => {
+  it("keeps the sub-second tenth that secondsToTime floors away", () => {
+    expect(secondsToTimecode(105.8)).toBe("00:01:45.8");
+    // secondsToTime would lose the .8 entirely:
+    expect(secondsToTime(105.8)).toBe("01:45");
+  });
+
+  it("round-trips through parse without losing precision", () => {
+    const tc = secondsToTimecode(9.3);
+    expect(tc).toBe("00:00:09.3");
+    expect(parseTimeToSeconds(tc)).toBeCloseTo(9.3, 5);
+  });
+
+  it("always includes hours and one decimal", () => {
+    expect(secondsToTimecode(0)).toBe("00:00:00.0");
+    expect(secondsToTimecode(3661.4)).toBe("01:01:01.4");
   });
 });
 
@@ -382,6 +404,82 @@ describe("findActiveSegmentForTime", () => {
     const times = [1.8, 7.6, 44.4, 54.6, 56.3];
     const indices = times.map((t) => findActiveSegmentForTime(segments, t));
     expect(indices).toEqual([0, 1, 2, 3, 4]);
+  });
+});
+
+describe("segmentAtTime", () => {
+  // Unlike findActiveSegmentForTime, this MUST include irrelevant segments -
+  // that's what lets the skip-irrelevant playback effect notice the playhead
+  // has entered an irrelevant block.
+  const body = `
+<!-- speaker: Speaker 1 -->
+00:00:01.8 Relevant opener.
+
+<!-- speaker: [irrelevant] -->
+00:00:10.0 Advert one.
+00:00:20.0 Advert two.
+
+<!-- speaker: Speaker 2 -->
+00:00:30.0 Relevant again.
+`;
+  const segments = parseTranscript(body);
+
+  it("returns null before any segment starts", () => {
+    expect(segmentAtTime(segments, 0)).toBe(null);
+  });
+
+  it("returns the relevant segment that is currently playing", () => {
+    expect(segmentAtTime(segments, 5)?.lines.join(" ")).toBe("Relevant opener.");
+  });
+
+  it("returns an IRRELEVANT segment when the playhead sits inside it", () => {
+    const seg = segmentAtTime(segments, 12);
+    expect(seg?.lines.join(" ")).toBe("Advert one.");
+    expect(seg?.speaker).toBe(SPEAKER_IRRELEVANT);
+  });
+
+  it("advances to the next irrelevant segment past its start", () => {
+    expect(segmentAtTime(segments, 25)?.lines.join(" ")).toBe("Advert two.");
+  });
+
+  it("returns the last segment after its start time", () => {
+    expect(segmentAtTime(segments, 999)?.lines.join(" ")).toBe("Relevant again.");
+  });
+});
+
+describe("nextRelevantSegmentAfter", () => {
+  const body = `
+<!-- speaker: Speaker 1 -->
+00:00:01.8 Relevant opener.
+
+<!-- speaker: [irrelevant] -->
+00:00:10.0 Advert one.
+00:00:20.0 Advert two.
+
+<!-- speaker: Speaker 2 -->
+00:00:30.0 Relevant again.
+`;
+  const segments = parseTranscript(body);
+
+  it("skips past an irrelevant block to the next relevant start", () => {
+    // Playhead at 12s is inside the advert; the next relevant segment is the
+    // Speaker 2 line at 30s, NOT the second advert at 20s.
+    expect(nextRelevantSegmentAfter(segments, 12)?.lines.join(" ")).toBe("Relevant again.");
+  });
+
+  it("only considers segments strictly after t", () => {
+    expect(nextRelevantSegmentAfter(segments, 30)).toBe(null);
+  });
+
+  it("returns null when no relevant segment follows", () => {
+    const trailing = parseTranscript(`
+<!-- speaker: Speaker 1 -->
+00:00:01.8 Keep this.
+
+<!-- speaker: [irrelevant] -->
+00:00:10.0 Trailing advert.
+`);
+    expect(nextRelevantSegmentAfter(trailing, 5)).toBe(null);
   });
 });
 

@@ -310,3 +310,34 @@ describe("change timestamp on single segment", () => {
     expect(reparsed[1].lines).toEqual(["World."]);
   });
 });
+
+describe("editing a segment that shares (speaker, time) with another", () => {
+  // Two segments with the SAME speaker and SAME timestamp - as happens for
+  // the two halves immediately after a split. Identifying by (speaker, time)
+  // would hit the first; identifying by index hits the intended one.
+  const body = `
+<!-- speaker: Speaker 1 -->
+00:00:03.0 First half.
+00:00:03.0 Second half.
+`;
+
+  it("a (speaker, time) lookup is ambiguous - it finds the first", () => {
+    const segs = parseTranscript(body);
+    const bySpeakerTime = segs.findIndex(
+      (s) => s.speaker === "Speaker 1" && s.time === "00:00:03.0",
+    );
+    expect(bySpeakerTime).toBe(0); // wrong segment when we meant the second
+  });
+
+  it("editing by index targets the intended segment, not the first", () => {
+    const segs = parseTranscript(body);
+    const target = segs.find((s) => s.index === 1)!; // the second half
+    target.time = "00:00:04.5";
+    target.lines = ["Second half, retimed."];
+    const reparsed = parseTranscript(serializeTranscript(segs));
+    expect(reparsed[0].time).toBe("00:00:03.0");
+    expect(reparsed[0].lines).toEqual(["First half."]);
+    expect(reparsed[1].time).toBe("00:00:04.5");
+    expect(reparsed[1].lines).toEqual(["Second half, retimed."]);
+  });
+});
