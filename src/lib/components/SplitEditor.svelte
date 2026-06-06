@@ -1,21 +1,51 @@
 <script lang="ts">
   import type { Segment } from "$lib/transcript";
-  import { nextSpeakerName, secondsToTimecode } from "$lib/transcript";
+  import {
+    nextSpeakerName,
+    secondsToTimecode,
+    isSpecialSpeaker,
+    SPEAKER_IRRELEVANT,
+    SPEAKER_NARRATOR,
+    SPEAKER_EXTERNAL_FOOTAGE,
+    SPEAKER_GROUP,
+  } from "$lib/transcript";
   import SpeakerDot from "./SpeakerDot.svelte";
 
   let {
     segment,
     allSegments,
     allSpeakers,
+    namedSpeakers,
     onsplit,
     oncancel,
   }: {
     segment: Segment;
     allSegments: Segment[];
     allSpeakers: string[];
+    /** Frontmatter-declared named speakers, ordered. Included even when they
+     *  have no segment yet - otherwise a brand-new named speaker can't be
+     *  picked for either half of the split. */
+    namedSpeakers: string[];
     onsplit: (charPos: number, aboveSpeaker: string, belowSpeaker: string, belowTime: string) => void;
     oncancel: () => void;
   } = $props();
+
+  // Picker groups, mirroring the per-sentence picker: named speakers (from
+  // frontmatter, so a declared-but-unused name still appears), then all
+  // special speakers, then any remaining "other" speakers that exist in the
+  // body but aren't named or special. The half's current speaker is dropped.
+  const SPECIALS = [SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE, SPEAKER_GROUP];
+  function namedFor(current: string): string[] {
+    return namedSpeakers.filter((s) => s !== current);
+  }
+  function specialsFor(current: string): string[] {
+    return SPECIALS.filter((s) => s !== current);
+  }
+  function othersFor(current: string): string[] {
+    return allSpeakers.filter(
+      (s) => s !== current && !namedSpeakers.includes(s) && !isSpecialSpeaker(s),
+    );
+  }
 
   let fullText = $derived(segment.lines.join("\n"));
 
@@ -109,6 +139,39 @@
   }
 </script>
 
+{#snippet pickerMenu(which: "above" | "below", current: string)}
+  <div class="absolute left-0 top-full mt-1 z-20 bg-surface-raised border border-border rounded shadow-lg py-1 min-w-40 max-h-48 overflow-auto">
+    {#each namedFor(current) as sp}
+      <button onclick={() => selectSpeaker(which, sp)}
+        class="block w-full text-left px-3 py-1.5 text-sm font-ui cursor-pointer hover:bg-primary-container/30 text-on-surface">
+        <SpeakerDot speaker={sp} inline />{sp}
+      </button>
+    {/each}
+    {#if namedFor(current).length > 0 && specialsFor(current).length > 0}
+      <div class="border-t border-border my-1"></div>
+    {/if}
+    {#each specialsFor(current) as sp}
+      <button onclick={() => selectSpeaker(which, sp)}
+        class="block w-full text-left px-3 py-1.5 text-sm font-ui cursor-pointer hover:bg-primary-container/30 text-on-surface-muted italic">
+        <SpeakerDot speaker={sp} inline />{sp}
+      </button>
+    {/each}
+    {#if othersFor(current).length > 0}
+      <div class="border-t border-border my-1"></div>
+      {#each othersFor(current) as sp}
+        <button onclick={() => selectSpeaker(which, sp)}
+          class="block w-full text-left px-3 py-1.5 text-sm font-ui cursor-pointer hover:bg-primary-container/30 text-on-surface-muted">
+          <SpeakerDot speaker={sp} inline />{sp}
+        </button>
+      {/each}
+    {/if}
+    <div class="border-t border-border mt-1 pt-1">
+      <button onclick={() => selectSpeaker(which, nextSpeakerName(allSegments))}
+        class="block w-full text-left px-3 py-1.5 text-sm font-ui cursor-pointer hover:bg-primary-container/30 text-primary">+ New speaker</button>
+    </div>
+  </div>
+{/snippet}
+
 <div class="ring-2 ring-primary/30 rounded-lg overflow-hidden">
   <!-- Top segment -->
   <div class="px-4 pt-3 pb-2">
@@ -124,18 +187,7 @@
           {aboveSpeaker}
         </button>
         {#if showAbovePicker}
-          <div class="absolute left-0 top-full mt-1 z-20 bg-surface-raised border border-border rounded shadow-lg py-1 min-w-40 max-h-48 overflow-auto">
-            {#each allSpeakers as sp}
-              <button onclick={() => selectSpeaker("above", sp)}
-                class="block w-full text-left px-3 py-1.5 text-sm font-ui cursor-pointer hover:bg-primary-container/30 text-on-surface">
-                <SpeakerDot speaker={sp} inline />{sp}
-              </button>
-            {/each}
-            <div class="border-t border-border mt-1 pt-1">
-              <button onclick={() => selectSpeaker("above", nextSpeakerName(allSegments))}
-                class="block w-full text-left px-3 py-1.5 text-sm font-ui cursor-pointer hover:bg-primary-container/30 text-primary">+ New speaker</button>
-            </div>
-          </div>
+          {@render pickerMenu("above", aboveSpeaker)}
         {/if}
       </div>
       <span class="text-xs text-on-surface-muted font-mono">{segment.time.replace(/^00:/, "")}</span>
@@ -170,18 +222,7 @@
           {belowSpeaker}
         </button>
         {#if showBelowPicker}
-          <div class="absolute left-0 top-full mt-1 z-20 bg-surface-raised border border-border rounded shadow-lg py-1 min-w-40 max-h-48 overflow-auto">
-            {#each allSpeakers as sp}
-              <button onclick={() => selectSpeaker("below", sp)}
-                class="block w-full text-left px-3 py-1.5 text-sm font-ui cursor-pointer hover:bg-primary-container/30 text-on-surface">
-                <SpeakerDot speaker={sp} inline />{sp}
-              </button>
-            {/each}
-            <div class="border-t border-border mt-1 pt-1">
-              <button onclick={() => selectSpeaker("below", nextSpeakerName(allSegments))}
-                class="block w-full text-left px-3 py-1.5 text-sm font-ui cursor-pointer hover:bg-primary-container/30 text-primary">+ New speaker</button>
-            </div>
-          </div>
+          {@render pickerMenu("below", belowSpeaker)}
         {/if}
       </div>
       <span class="text-xs font-mono text-on-surface-muted" title={isEstimate ? "Estimated from the split position - check and fine-tune in Edit" : "No following segment to estimate from"}>

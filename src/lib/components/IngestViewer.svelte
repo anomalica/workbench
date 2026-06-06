@@ -2707,6 +2707,7 @@
                       {segment}
                       allSegments={segments}
                       allSpeakers={allSpeakerNames()}
+                      namedSpeakers={namedSpeakersOrdered}
                       onsplit={(charPos, aboveSp, belowSp, belowTime) => {
                         doc.splitSegment(segment.speaker, segment.time, charPos, aboveSp, belowSp, belowTime);
                         splittingIndex = null;
