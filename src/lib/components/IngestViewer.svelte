@@ -2,7 +2,7 @@
   import type { IngestDetail, DigestDocument, User } from "$lib/api";
   import { submitReview } from "$lib/api";
   import { DocumentStore } from "$lib/document.svelte";
-  import { parseTranscript, secondsToTime, findActiveSegmentForTime, extractFrontmatterSpeakers, isSegmentIrrelevant, isSpecialSpeaker, nextSpeakerName, groupSegmentsBySpeaker, orderedNamedSpeakers, SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE, SPEAKER_GROUP } from "$lib/transcript";
+  import { parseTranscript, secondsToTime, findActiveSegmentForTime, segmentAtTime, nextRelevantSegmentAfter, extractFrontmatterSpeakers, isSegmentIrrelevant, isSpecialSpeaker, nextSpeakerName, groupSegmentsBySpeaker, orderedNamedSpeakers, SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE, SPEAKER_GROUP } from "$lib/transcript";
   import { nextSegmentBoundary, singleEndForCurrentTime } from "$lib/playback";
   import type { Segment } from "$lib/transcript";
   import SpeakerManager from "./SpeakerManager.svelte";
@@ -964,6 +964,9 @@
 
   // Prose container ref for page sync
   let proseContainer: HTMLDivElement | undefined = $state();
+  // Component root - focus target when reclaiming keyboard focus from the
+  // YouTube iframe (see reclaimFocusFromVideo).
+  let appRoot: HTMLDivElement | undefined = $state();
 
   // Set up click handler and IntersectionObserver for page markers.
   // Runs as $effect so it re-initialises when content changes.
@@ -1024,6 +1027,41 @@
   }
   let ytId = $derived(youtubeId(ingest.frontmatter.source_url));
 
+  // Theatre mode: lift the video to a full-width band across the top, with
+  // the remaining columns laid out beneath it. Implemented with CSS Grid
+  // named areas rather than moving DOM nodes, so the YouTube player and the
+  // ingest column keep their state (playback position, selection, scroll)
+  // across the toggle. Only meaningful when a video is actually showing.
+  let theatreMode = $state(false);
+  let theatreActive = $derived(theatreMode && !!ytId && visibleCols.source);
+
+  // Columns that sit below the video band in theatre mode, left to right:
+  // the speakers panel (lifted out of the source column), then ingest, then
+  // digest. The video spans the full width above them. Achieved purely by
+  // re-mapping CSS Grid areas, so the YouTube player is never reparented.
+  let belowAreas = $derived(
+    [
+      hasTranscript ? "spk" : null,
+      visibleCols.ingest ? "ing" : null,
+      visibleCols.digest ? "dig" : null,
+    ].filter((a): a is string => a !== null),
+  );
+  let theatreGridStyle = $derived.by(() => {
+    const areas = belowAreas.length ? belowAreas : ["ing"];
+    // Speakers stays narrow (its natural sidebar width); ingest and digest
+    // share the rest.
+    const cols = areas
+      .map((a) => (a === "spk" ? "minmax(12rem, 18rem)" : "1fr"))
+      .join(" ");
+    const top = areas.map(() => "src").join(" ");
+    const bottom = areas.join(" ");
+    return (
+      `grid-template-columns: ${cols};` +
+      ` grid-template-rows: auto minmax(0, 1fr);` +
+      ` grid-template-areas: "${top}" "${bottom}";`
+    );
+  });
+
   // YouTube player
   let ytPlayer: YT.Player | null = null;
   let playerReady = $state(false);
@@ -1031,9 +1069,43 @@
   let activeSegment = $state(-1);
   let timeInterval: ReturnType<typeof setInterval> | null = null;
   let playbackMode = $state<"auto" | "single">("auto");
+  // When on, playback jumps past any segment marked irrelevant to the next
+  // relevant one, so the reviewer never sits through cut content. Default on.
+  let skipIrrelevant = $state(true);
   let singleSegmentEnd = -1; // seconds at which to pause (used in interval as backup)
   let singleCheckEnabled = false; // delayed flag to avoid stale-time false pauses
   let singlePauseTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // Hover-pause: hovering the per-segment action toolbar pauses playback so
+  // the buttons stop drifting out from under the cursor on short sentences.
+  // Leaving resumes - unless the click opened a "next process" (Edit / Split),
+  // which should hold the pause so the reviewer has time to work. Instant
+  // actions (Ignore, Merge up) don't suppress the resume.
+  let hoverPausedPlayback = false;
+  let suppressHoverResume = false;
+
+  // Keyboard seek/segment-nav state.
+  const SEEK_STEP_SECONDS = 5;
+  let lastSegmentNavAt = 0; // throttles up/down sentence jumps
+
+  function onControlsEnter() {
+    // Fresh hover session - clear any leftover suppression from a prior
+    // Edit/Split that didn't emit a mouseleave (e.g. the row unmounted
+    // into the SplitEditor before leave could fire).
+    suppressHoverResume = false;
+    if (ytPlayer && playerReady && ytPlayer.getPlayerState() === 1) {
+      ytPlayer.pauseVideo();
+      hoverPausedPlayback = true;
+    }
+  }
+
+  function onControlsLeave() {
+    if (hoverPausedPlayback && !suppressHoverResume && ytPlayer && playerReady) {
+      ytPlayer.playVideo();
+    }
+    hoverPausedPlayback = false;
+    suppressHoverResume = false;
+  }
 
   function cancelSinglePauseTimer() {
     if (singlePauseTimer) {
@@ -1090,11 +1162,39 @@
     if (prunedSelection.size !== selectedSpeakers.size) selectedSpeakers = prunedSelection;
   });
 
+  // Skip irrelevant: while the video is actually playing, jump past any
+  // segment marked irrelevant to the next relevant one. Reactive on
+  // currentTime (updated every 250ms by the player interval), so it always
+  // sees the live transcript and the current toggle state. The
+  // autoFollowPaused grace means clicking an irrelevant segment to review
+  // it isn't instantly undone.
+  $effect(() => {
+    const t = currentTime; // subscribe to the playback clock
+    if (!skipIrrelevant || !hasTranscript || autoFollowPaused) return;
+    if (!ytPlayer || !playerReady) return;
+    if (ytPlayer.getPlayerState() !== 1) return; // only while playing
+    // segmentAtTime (unlike findActiveSegmentForTime) includes irrelevant
+    // segments, so it can tell us the playhead is inside one - which is the
+    // whole point. The previous skip used findActiveSegmentForTime, which
+    // skips irrelevant segments, so its "is this irrelevant?" check was
+    // never true and the skip never fired.
+    const current = segmentAtTime(segments, t);
+    if (current && isSegmentIrrelevant(current)) {
+      const nextRelevant = nextRelevantSegmentAfter(segments, t);
+      if (nextRelevant) ytPlayer.seekTo(nextRelevant.seconds, true);
+    }
+  });
+
   // Auto-follow: sync the highlighted segment with video playback.
   // In "auto" mode: focus follows continuously, skipping irrelevant segments.
   // In "single" mode: highlight stays on the clicked segment; the interval handles pausing.
   $effect(() => {
     if (!hasTranscript || selected.size > 1 || splittingIndex !== null) return;
+    // Don't let auto-follow move the selection while the edit dialog is open -
+    // previewing a timestamp seeks the video, and otherwise this effect would
+    // re-select whatever segment matches the new time, drifting the selection
+    // out from under the segment being edited.
+    if (editingIndex !== null) return;
     if (view !== "ingest") return;
     if (autoFollowPaused) return;
     if (playbackMode === "single") return;
@@ -1102,15 +1202,11 @@
 
     let best = findActiveSegmentForTime(segments, t);
     if (best >= 0 && best !== activeSegment) {
-      // If the current time falls within an irrelevant segment, skip to the next relevant one
+      // Don't move the selection onto an irrelevant segment - the
+      // skip-irrelevant logic in the playback interval seeks past it, so
+      // following it here would just flicker the highlight.
       const bestSeg = segments.find((s) => s.index === best);
-      if (bestSeg && isSegmentIrrelevant(bestSeg)) {
-        const nextRelevant = segments.find((s) => !isSegmentIrrelevant(s) && s.seconds > t);
-        if (nextRelevant && ytPlayer && playerReady) {
-          ytPlayer.seekTo(nextRelevant.seconds, true);
-          best = nextRelevant.index;
-        }
-      }
+      if (bestSeg && isSegmentIrrelevant(bestSeg) && skipIrrelevant) return;
 
       activeSegment = best;
       selected = new Set([best]);
@@ -1125,7 +1221,14 @@
   // Approve is a no-op empty commit on top of an existing reviewed record,
   // so disable when there are no changes and we already reviewed this one.
   let alreadyApproved = $derived(!doc.dirty && reviewed);
-  let submitDisabled = $derived(submitting || !user || alreadyApproved);
+  // The toolbar button's disabled state. When logged out it must stay
+  // CLICKABLE - its click navigates to the login page, so disabling it
+  // there strands the reviewer ("Log in to submit" that can't be clicked).
+  // Only block it mid-submit or when there's genuinely nothing to do
+  // (logged in, no changes, already reviewed).
+  let submitDisabled = $derived(submitting || (!!user && alreadyApproved));
+  // Used by the `a` keyboard shortcut: only meaningful when logged in.
+  let approveShortcutEnabled = $derived(!!user && !submitting && !alreadyApproved);
   let submitError = $state<string | null>(null);
   let showSubmitForm = $state(false);
   let reviewNotes = $state("");
@@ -1167,6 +1270,20 @@
       .filter((s) => !hideIrrelevant || !isSegmentIrrelevant(s))
       .filter((s) => filteredSpeakers.size === 0 || filteredSpeakers.has(s.speaker)),
   );
+
+  // Indices of segments whose start time is earlier than the segment
+  // immediately before them in document order - i.e. the timeline goes
+  // backwards there. These are almost always a stale split/edit and break
+  // playback's active-segment tracking, so we flag them in the transcript.
+  let nonMonotonicIndices = $derived.by(() => {
+    const bad = new Set<number>();
+    let prev = -Infinity;
+    for (const s of segments) {
+      if (s.seconds < prev) bad.add(s.index);
+      prev = s.seconds;
+    }
+    return bad;
+  });
 
   // Derived: visible segments grouped by consecutive same-speaker runs
   let visibleGroups = $derived(groupSegmentsBySpeaker(visibleSegments));
@@ -1230,6 +1347,16 @@
       (window as any).onYouTubeIframeAPIReady = () => createPlayer(id);
     } else {
       createPlayer(id);
+    }
+  }
+
+  // Seek the (background) player to a time and play, so a reviewer tuning a
+  // timestamp in the edit dialog can immediately hear where it lands. The
+  // video sits behind the modal but its audio is still audible.
+  function previewSeek(seconds: number) {
+    if (ytPlayer && playerReady) {
+      ytPlayer.seekTo(Math.max(0, seconds), true);
+      ytPlayer.playVideo();
     }
   }
 
@@ -1302,6 +1429,20 @@
     return time.replace(/^00:/, "");
   }
 
+  // Remember the last segment the reviewer focused, per record, so coming
+  // back to a record returns to roughly where they left off. Written
+  // explicitly from the click/keyboard handlers (not via a reactive effect)
+  // so navigating between records can't write a stale index to the wrong
+  // record's key. The index is parse-order; if the body was edited since,
+  // restore is best-effort and silently skips when the index no longer
+  // resolves to a segment.
+  function rememberLastSegment(idx: number) {
+    if (idx < 0) return;
+    try {
+      localStorage.setItem(`workbench:lastseg:${ingest.content_hash}`, String(idx));
+    } catch {}
+  }
+
   // Selection handling
   function handleSegmentClick(segment: Segment, e: MouseEvent) {
     if (e.ctrlKey || e.metaKey) {
@@ -1328,6 +1469,7 @@
       selected = new Set([segment.index]);
       lastClicked = segment.index;
     }
+    rememberLastSegment(segment.index);
   }
 
   function markSelectedIrrelevant(irrelevant: boolean) {
@@ -1451,20 +1593,41 @@
       e.preventDefault();
       selected = new Set(visibleSegments.map((s) => s.index));
     } else if ((e.key === "ArrowDown" || e.key === "ArrowUp") && view === "ingest" && hasTranscript) {
+      // Up/Down = jump to the previous/next sentence. Ignore the OS
+      // key-repeat that fires while a key is held, and throttle rapid
+      // double-fires, so one press moves exactly one segment.
       e.preventDefault();
+      if (e.repeat) return;
+      const now = Date.now();
+      if (now - lastSegmentNavAt < 150) return;
+      lastSegmentNavAt = now;
       navigateSegment(e.key === "ArrowDown" ? 1 : -1, e.shiftKey);
+    } else if (
+      (e.key === "ArrowLeft" || e.key === "ArrowRight") &&
+      view === "ingest" &&
+      hasTranscript &&
+      ytId && ytPlayer && playerReady
+    ) {
+      // Left/Right = seek the video by +/- SEEK_STEP. Holding scrubs.
+      // Only in a video transcript; record nav stays on n/p here so the
+      // arrows don't bounce the reviewer between records mid-playback.
+      e.preventDefault();
+      const cur = ytPlayer.getCurrentTime();
+      const delta = e.key === "ArrowRight" ? SEEK_STEP_SECONDS : -SEEK_STEP_SECONDS;
+      ytPlayer.seekTo(Math.max(0, cur + delta), true);
     } else if (e.key === "Delete" && selected.size > 0) {
       toggleSelectedIrrelevance();
-    } else if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key === "n" || e.key === "ArrowRight") && hasNext) {
-      // Next record in the filtered+sorted list view.
+    } else if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key === "n" || (e.key === "ArrowRight" && !hasTranscript)) && hasNext) {
+      // Next record. n is universal; ArrowRight only for non-transcript
+      // records (pdf/web/ebook), where it doesn't collide with seeking.
       e.preventDefault();
       onnext?.();
-    } else if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key === "p" || e.key === "ArrowLeft") && hasPrev) {
+    } else if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key === "p" || (e.key === "ArrowLeft" && !hasTranscript)) && hasPrev) {
       e.preventDefault();
       onprev?.();
-    } else if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === "a" && user && !submitDisabled) {
-      // Open the Approve modal. Same gate as the Submit/Approve toolbar
-      // button - won't fire when already approved-as-is for a clean record.
+    } else if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === "a" && approveShortcutEnabled) {
+      // Open the Approve modal. Won't fire when logged out, mid-submit, or
+      // already approved-as-is for a clean record.
       e.preventDefault();
       submitAndAdvance = e.shiftKey && hasNext;
       showSubmitForm = true;
@@ -1499,11 +1662,42 @@
     activeSegment = nextSegment.index;
     lastClicked = nextSegment.index;
     seekTo(nextSegment.seconds, nextSegment.index);
+    rememberLastSegment(nextSegment.index);
 
     // Scroll the segment into view
     const el = document.querySelector(`[data-segment-index="${nextSegment.index}"]`);
     if (el) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }
+
+  // Restore the remembered segment once per record load. Depends on
+  // segments being parsed (transcript ready) and re-arms when the record
+  // hash changes. Guarded so edits that re-parse segments don't re-trigger
+  // the jump. Scrolls + selects only - does not seek/play the video, so
+  // returning to a record is quiet.
+  let lastRestoredHash = "";
+  $effect(() => {
+    const hash = ingest.content_hash;
+    const segs = segments; // subscribe to parsed segments
+    if (!hasTranscript || segs.length === 0) return;
+    if (hash === lastRestoredHash) return;
+    lastRestoredHash = hash;
+    let idx: number;
+    try {
+      const raw = localStorage.getItem(`workbench:lastseg:${hash}`);
+      if (raw == null) return;
+      idx = parseInt(raw, 10);
+    } catch {
+      return;
+    }
+    if (Number.isNaN(idx) || !segs.some((s) => s.index === idx)) return;
+    selected = new Set([idx]);
+    activeSegment = idx;
+    lastClicked = idx;
+    setTimeout(() => {
+      const el = document.querySelector(`[data-segment-index="${idx}"]`);
+      if (el) el.scrollIntoView({ block: "center", behavior: "auto" });
+    }, 80);
+  });
 
   $effect(() => {
     if (ytId) initYouTubePlayer(ytId);
@@ -1518,9 +1712,38 @@
     window.addEventListener("keydown", handleKeydown);
     return () => window.removeEventListener("keydown", handleKeydown);
   });
+
+  // Keep keyboard focus on the app for video records. Clicking the YouTube
+  // iframe focuses it, after which arrow keys go to YouTube (up/down =
+  // volume) instead of our window handler, so our segment-nav / seek
+  // bindings would only work depending on where the user last clicked.
+  // When the iframe steals focus we hand it straight back to the app root
+  // so the SAME bindings apply everywhere. The click's own play/pause has
+  // already registered by the time focus returns, and blurring doesn't
+  // stop playback - only the keyboard target moves. The cost is that
+  // YouTube's built-in keyboard shortcuts aren't reachable, which is fine
+  // since ours replace them (space = play/pause, arrows = nav/seek).
+  function reclaimFocusFromVideo() {
+    if (!ytId || !appRoot) return;
+    // Defer so document.activeElement reflects the iframe after the click.
+    setTimeout(() => {
+      const active = document.activeElement;
+      if (active && active.tagName === "IFRAME" && active.id === "yt-player") {
+        appRoot?.focus({ preventScroll: true });
+      }
+    }, 0);
+  }
+
+  $effect(() => {
+    if (!ytId) return;
+    window.addEventListener("blur", reclaimFocusFromVideo);
+    return () => window.removeEventListener("blur", reclaimFocusFromVideo);
+  });
 </script>
 
-<div class="flex flex-col h-full"
+<div class="flex flex-col h-full outline-none"
+  bind:this={appRoot}
+  tabindex="-1"
   role="presentation"
   ondragover={(e) => e.preventDefault()}
   ondrop={(e) => e.preventDefault()}>
@@ -1742,12 +1965,63 @@
     </div>
   {/if}
 
-  <div class="flex-1 flex min-h-0">
+  {#snippet speakersPanel()}
+    <details open class="group">
+      <summary class="px-4 py-2 bg-surface-alt cursor-pointer flex items-center gap-2 select-none sticky top-0 z-10">
+        <svg class="w-3 h-3 text-on-surface-muted transition-transform group-open:rotate-90" fill="currentColor" viewBox="0 0 20 20">
+          <path d="M6 4l8 6-8 6V4z" />
+        </svg>
+        <span class="text-xs font-ui font-medium text-on-surface-secondary uppercase">Speakers</span>
+        <span class="text-xs text-on-surface-muted ml-auto">{visibleSpeakerIds.size}</span>
+      </summary>
+      <div class="px-3 py-2">
+        <SpeakerManager
+          {segments}
+          {namedSpeakers}
+          {selectedSpeakers}
+          {filteredSpeakers}
+          onselect={handleSpeakerSelection}
+          onfilter={(id) => {
+            const next = new Set(filteredSpeakers);
+            if (next.has(id)) next.delete(id);
+            else next.add(id);
+            filteredSpeakers = next;
+          }}
+          onsetfilter={(ids) => { filteredSpeakers = new Set(ids); }}
+          onrename={renameSpeaker}
+          onmerge={mergeSpeakers}
+          onaddnamed={addNamedSpeaker}
+          onremovenamed={removeNamedSpeaker}
+          onrenamenamed={renameNamedSpeaker}
+        />
+      </div>
+    </details>
+  {/snippet}
+
+  <div class="flex-1 min-h-0 {theatreActive ? 'grid' : 'flex'}" style={theatreActive ? theatreGridStyle : ''}>
     {#if visibleCols.source}
-      <!-- Source panel -->
-      <div class="{colWidthClass} border-r border-border flex flex-col min-h-0">
+      <!-- Source panel: in theatre it's the full-width video band (header +
+           video only; speakers lift out to their own column below). -->
+      <div
+        class="flex flex-col min-h-0 border-border {theatreActive ? 'border-b' : `${colWidthClass} border-r`}"
+        style={theatreActive ? 'grid-area: src' : ''}
+      >
         <div class="px-3 py-2 bg-surface-alt border-b border-border flex-none flex items-center gap-3">
           <span class="text-xs font-ui font-medium text-on-surface-secondary uppercase flex-none">Original</span>
+          {#if ytId}
+            <button
+              onclick={() => { theatreMode = !theatreMode; }}
+              class="flex-none p-1 rounded transition-colors {theatreMode ? 'text-primary bg-primary/10' : 'text-on-surface-muted hover:text-on-surface hover:bg-surface'}"
+              title={theatreMode ? "Exit theatre mode" : "Theatre mode: video across the top, columns below"}
+              aria-label="Toggle theatre mode"
+            >
+              {#if theatreMode}
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 9H5V5m10 0v4h4M5 15h4v4m6 0v-4h4" /></svg>
+              {:else}
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="1.5" /></svg>
+              {/if}
+            </button>
+          {/if}
           {#if ingest.frontmatter.source_url}
             <a
               href={ingest.frontmatter.source_url}
@@ -1788,16 +2062,27 @@
             onload={() => { loadingFile = false; }}
           ></iframe>
         {:else if ytId}
-          <div class="flex-none p-4">
-            <div id="yt-player" class="w-full aspect-video rounded"></div>
-            <a
-              href={ingest.frontmatter.source_url}
-              target="_blank"
-              rel="noopener"
-              class="text-xs text-on-surface-muted hover:text-primary mt-2 inline-block break-all"
-            >
-              {ingest.frontmatter.source_url}
-            </a>
+          <!-- Container reshapes between modes; #yt-player keeps the exact
+               same classes and parent across the toggle so the YouTube
+               iframe is never reparented (which would reload the video). -->
+          <div
+            class={theatreActive ? "flex-none w-full mx-auto p-2 bg-black rounded" : "flex-none p-4"}
+            style={theatreActive ? "max-width: calc(46vh * 16 / 9)" : ""}
+          >
+            <!-- h-auto overrides the iframe's height="360" attribute so
+                 aspect-video (16:9) actually drives the height instead of
+                 the video being squished to 360px tall at any width. -->
+            <div id="yt-player" class="w-full h-auto aspect-video rounded"></div>
+            {#if !theatreActive}
+              <a
+                href={ingest.frontmatter.source_url}
+                target="_blank"
+                rel="noopener"
+                class="text-xs text-on-surface-muted hover:text-primary mt-2 inline-block break-all"
+              >
+                {ingest.frontmatter.source_url}
+              </a>
+            {/if}
           </div>
         {:else if localSourceUrl && (isAudio || isVideo)}
           <div class="flex-none p-4">
@@ -1853,46 +2138,30 @@
           </div>
         {/if}
 
-        {#if hasTranscript}
+        <!-- Speakers panel. In normal layout it sits below the media in the
+             source column; in theatre it lifts out to its own column beneath
+             the full-width video (rendered as the `spk` grid item below). -->
+        {#if hasTranscript && !theatreActive}
           <div class="flex-1 overflow-auto border-t border-border min-h-0">
-            <details open class="group">
-              <summary class="px-4 py-2 bg-surface-alt cursor-pointer flex items-center gap-2 select-none sticky top-0 z-10">
-                <svg class="w-3 h-3 text-on-surface-muted transition-transform group-open:rotate-90" fill="currentColor" viewBox="0 0 20 20">
-                  <path d="M6 4l8 6-8 6V4z" />
-                </svg>
-                <span class="text-xs font-ui font-medium text-on-surface-secondary uppercase">Speakers</span>
-                <span class="text-xs text-on-surface-muted ml-auto">{visibleSpeakerIds.size}</span>
-              </summary>
-              <div class="px-3 py-2">
-                <SpeakerManager
-                  {segments}
-                  {namedSpeakers}
-                  {selectedSpeakers}
-                  {filteredSpeakers}
-                  onselect={handleSpeakerSelection}
-                  onfilter={(id) => {
-                    const next = new Set(filteredSpeakers);
-                    if (next.has(id)) next.delete(id);
-                    else next.add(id);
-                    filteredSpeakers = next;
-                  }}
-                  onsetfilter={(ids) => { filteredSpeakers = new Set(ids); }}
-                  onrename={renameSpeaker}
-                  onmerge={mergeSpeakers}
-                  onaddnamed={addNamedSpeaker}
-                  onremovenamed={removeNamedSpeaker}
-                  onrenamenamed={renameNamedSpeaker}
-                />
-              </div>
-            </details>
+            {@render speakersPanel()}
           </div>
         {/if}
     </div>
     {/if}
 
+    {#if theatreActive && hasTranscript}
+      <!-- Speakers as its own column beneath the video in theatre mode. -->
+      <div style="grid-area: spk" class="flex flex-col min-h-0 overflow-auto border-r border-border">
+        {@render speakersPanel()}
+      </div>
+    {/if}
+
     {#if visibleCols.ingest}
     <!-- Ingest panel -->
-    <div class="{colWidthClass} flex flex-col {visibleCols.digest ? 'border-r border-border' : ''}">
+    <div
+      class="flex flex-col min-h-0 {theatreActive ? '' : colWidthClass} {visibleCols.digest ? 'border-r border-border' : ''}"
+      style={theatreActive ? 'grid-area: ing' : ''}
+    >
       <!-- Source URL bar shown when the source column is hidden (e.g. for web ingests) -->
       {#if !visibleCols.source && ingest.frontmatter.source_url}
         <div class="px-4 py-2 bg-surface-alt border-b border-border flex items-center gap-2 flex-none">
@@ -1959,6 +2228,25 @@
                 </svg>
               {/if}
               {playbackMode === "single" ? "Single" : "Auto"}
+            </button>
+          {/if}
+
+          <!-- Skip-irrelevant-during-playback toggle -->
+          {#if view === "ingest" && hasTranscript && ytId && irrelevantCount > 0}
+            <button
+              onclick={() => { skipIrrelevant = !skipIrrelevant; }}
+              class="flex items-center gap-1 cursor-pointer px-1.5 py-0.5 rounded-full transition-colors text-xs font-ui font-medium
+                {skipIrrelevant
+                  ? 'bg-primary/10 text-primary'
+                  : 'text-on-surface-muted hover:text-on-surface hover:bg-surface'}"
+              title={skipIrrelevant
+                ? "Skipping irrelevant segments during playback - click to play through them"
+                : "Playing through irrelevant segments - click to skip them"}
+            >
+              <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M4 5v14l8-7zM13 5v14l8-7z" />
+              </svg>
+              Skip
             </button>
           {/if}
 
@@ -2428,10 +2716,13 @@
                   </div>
                 {:else}
                   {@const sentencePickerOpen = speakerPicker?.kind === "sentence" && speakerPicker.key === segment.index}
+                  {@const backwards = nonMonotonicIndices.has(segment.index)}
                   <div
                     data-segment-index={segment.index}
-                    class="px-4 py-1 transition-colors cursor-pointer select-none group/row
-                      {isSelected ? 'bg-primary-container/30' : 'hover:bg-primary-container/10'}"
+                    class="px-4 py-1 border-l-2 transition-colors cursor-pointer select-none group/row
+                      {isSelected
+                        ? 'bg-primary/15 border-primary'
+                        : 'border-transparent hover:bg-primary-container/15'}"
                     role="button"
                     tabindex="0"
                     onclick={(e) => handleSegmentClick(segment, e)}
@@ -2508,9 +2799,27 @@
                           </div>
                         {/if}
                       </div>
+                      <button
+                        onclick={(e) => { e.stopPropagation(); suppressHoverResume = true; editingIndex = segment.index; }}
+                        class="flex-none self-start pt-0.5 text-right font-mono tabular-nums text-[10px] leading-relaxed min-w-[3.25rem] cursor-pointer hover:text-primary transition-colors
+                          {backwards ? 'text-error font-semibold' : 'text-on-surface-muted/45 group-hover/row:text-on-surface-muted'}"
+                        title={backwards
+                          ? `Timestamp goes backwards (${secondsToTime(segment.seconds)}) - the timeline should only move forwards. Click to edit.`
+                          : `${secondsToTime(segment.seconds)} - click to edit timestamp`}
+                      >
+                        {#if backwards}
+                          <span aria-hidden="true">&#9650;</span>
+                        {/if}{secondsToTime(segment.seconds)}
+                      </button>
                       <span class="text-sm text-on-surface leading-relaxed flex-1">{segment.lines.join(" ")}</span>
                       {#if isSingleSelected}
-                        <div class="flex items-center gap-0.5 flex-none pt-0.5">
+                        <div
+                          class="flex items-center gap-0.5 flex-none pt-0.5"
+                          role="toolbar"
+                          tabindex="-1"
+                          onmouseenter={onControlsEnter}
+                          onmouseleave={onControlsLeave}
+                        >
                           <button onclick={(e) => {
                               e.stopPropagation();
                               const wasIrrelevant = isSegmentIrrelevant(segment);
@@ -2535,14 +2844,29 @@
                               <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></svg>
                             {/if}
                           </button>
+                          {#if visibleSegments[0]?.index !== segment.index}
+                            <button onclick={(e) => {
+                                e.stopPropagation();
+                                const pos = visibleSegments.findIndex((s) => s.index === segment.index);
+                                const prev = pos > 0 ? visibleSegments[pos - 1] : null;
+                                if (prev) {
+                                  doc.mergeSegmentInto(segment.speaker, segment.time, prev.speaker, prev.time);
+                                  selected = new Set();
+                                }
+                              }}
+                              class="p-0.5 rounded cursor-pointer text-on-surface-muted/50 hover:text-on-surface hover:bg-surface-alt transition-colors"
+                              title="Merge up: append this segment onto the one above">
+                              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 19V5M5 12l7-7 7 7" /></svg>
+                            </button>
+                          {/if}
                           {#if segment.lines.join("\n").length > 1}
-                            <button onclick={(e) => { e.stopPropagation(); splittingIndex = segment.index; }}
+                            <button onclick={(e) => { e.stopPropagation(); suppressHoverResume = true; splittingIndex = segment.index; }}
                               class="p-0.5 rounded cursor-pointer text-on-surface-muted/50 hover:text-on-surface hover:bg-surface-alt transition-colors"
                               title="Split this segment">
                               <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" d="M12 2v20M2 12h4M18 12h4" /></svg>
                             </button>
                           {/if}
-                          <button onclick={(e) => { e.stopPropagation(); editingIndex = segment.index; }}
+                          <button onclick={(e) => { e.stopPropagation(); suppressHoverResume = true; editingIndex = segment.index; }}
                             class="p-0.5 rounded cursor-pointer text-on-surface-muted/50 hover:text-primary hover:bg-surface-alt transition-colors"
                             title="Edit timestamp and text">
                             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -2581,7 +2905,10 @@
 
     {#if visibleCols.digest && digest}
     <!-- Digest panel -->
-    <div class="{colWidthClass} flex flex-col">
+    <div
+      class="flex flex-col min-h-0 {theatreActive ? '' : colWidthClass}"
+      style={theatreActive ? 'grid-area: dig' : ''}
+    >
       <div class="px-3 py-2 bg-surface-alt border-b border-border flex-none flex items-center gap-3">
         <span class="text-xs font-ui font-medium text-on-surface-secondary uppercase flex-none">Digest</span>
         <span class="text-xs text-on-surface-muted font-ui flex-none">{digest.model}</span>
@@ -2830,9 +3157,22 @@
       allSpeakers={allSpeakerNames()}
       namedSpeakers={namedSpeakersOrdered}
       videoTime={currentTime}
+      canPreview={!!ytId && playerReady}
+      onpreview={previewSeek}
       onsave={(newSpeaker, newTime, newText) => {
-        doc.editSegment(editSegment.speaker, editSegment.time, newSpeaker, newTime, newText);
+        // Target by index, not (speaker, time): the latter isn't unique
+        // (split halves share it), which let edits land on the wrong segment.
+        const idx = editSegment.index;
+        doc.editSegmentByIndex(idx, newSpeaker, newTime, newText);
         editingIndex = null;
+        // Keep the selection on the segment we just edited rather than
+        // letting auto-follow snap it to wherever the preview left the video.
+        selected = new Set([idx]);
+        activeSegment = idx;
+        lastClicked = idx;
+        autoFollowPaused = true;
+        if (autoFollowTimer) clearTimeout(autoFollowTimer);
+        autoFollowTimer = setTimeout(() => { autoFollowPaused = false; }, 1500);
       }}
       oncancel={() => { editingIndex = null; }}
     />
