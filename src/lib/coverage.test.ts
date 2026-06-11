@@ -5,6 +5,11 @@ import {
   editedLineSpans,
   lineToSegmentMap,
   coveredSegmentIndices,
+  segmentLineRanges,
+  markReviewedUpTo,
+  runsToLineSpans,
+  segmentRunsFromLineSpans,
+  spanLineCount,
 } from "./coverage";
 
 describe("bodyOf", () => {
@@ -86,5 +91,102 @@ describe("lineToSegmentMap / coveredSegmentIndices", () => {
   it("collects segments touched by spans", () => {
     expect(coveredSegmentIndices(body, [{ from: 2, to: 5 }])).toEqual(new Set([1, 2]));
     expect(coveredSegmentIndices(body, [{ from: 0, to: 0 }])).toEqual(new Set());
+  });
+
+  it("maps segments back to their owning line ranges", () => {
+    expect(segmentLineRanges(body)).toEqual([
+      { from: 1, to: 1 },
+      { from: 2, to: 4 },
+      { from: 5, to: 5 },
+    ]);
+  });
+
+  it("converts segment runs to merged line spans", () => {
+    expect(runsToLineSpans(body, [{ from: 0, to: 1 }])).toEqual([{ from: 1, to: 4 }]);
+    expect(
+      runsToLineSpans(body, [
+        { from: 0, to: 0 },
+        { from: 2, to: 2 },
+      ]),
+    ).toEqual([
+      { from: 1, to: 1 },
+      { from: 5, to: 5 },
+    ]);
+  });
+
+  it("clamps runs that point past the last segment", () => {
+    expect(runsToLineSpans(body, [{ from: 0, to: 99 }])).toEqual([{ from: 1, to: 5 }]);
+  });
+
+  it("derives segment runs from edited line spans", () => {
+    expect(segmentRunsFromLineSpans(body, [{ from: 2, to: 5 }])).toEqual([{ from: 1, to: 2 }]);
+    expect(segmentRunsFromLineSpans(body, [{ from: 0, to: 0 }])).toEqual([]);
+  });
+});
+
+describe("markReviewedUpTo", () => {
+  it("starts a run at the first clicked segment", () => {
+    expect(markReviewedUpTo([], 4)).toEqual([{ from: 4, to: 4 }]);
+  });
+
+  it("extends the run down to a later click", () => {
+    expect(markReviewedUpTo([{ from: 4, to: 4 }], 9)).toEqual([{ from: 4, to: 9 }]);
+  });
+
+  it("extends the nearest run above when several exist", () => {
+    expect(
+      markReviewedUpTo(
+        [
+          { from: 0, to: 2 },
+          { from: 10, to: 12 },
+        ],
+        15,
+      ),
+    ).toEqual([
+      { from: 0, to: 2 },
+      { from: 10, to: 15 },
+    ]);
+  });
+
+  it("starts a new run on a click above all existing runs", () => {
+    expect(markReviewedUpTo([{ from: 10, to: 12 }], 3)).toEqual([
+      { from: 3, to: 3 },
+      { from: 10, to: 12 },
+    ]);
+  });
+
+  it("merges when an extension reaches the next run", () => {
+    expect(
+      markReviewedUpTo(
+        [
+          { from: 0, to: 2 },
+          { from: 6, to: 8 },
+        ],
+        5,
+      ),
+    ).toEqual([{ from: 0, to: 8 }]);
+  });
+
+  it("truncates a run when clicking inside it", () => {
+    expect(markReviewedUpTo([{ from: 2, to: 9 }], 5)).toEqual([{ from: 2, to: 5 }]);
+  });
+
+  it("truncates to the first segment, then removes on the next click", () => {
+    const truncated = markReviewedUpTo([{ from: 2, to: 9 }], 2);
+    expect(truncated).toEqual([{ from: 2, to: 2 }]);
+    expect(markReviewedUpTo(truncated, 2)).toEqual([]);
+  });
+});
+
+describe("spanLineCount", () => {
+  it("counts lines across merged spans", () => {
+    expect(spanLineCount([])).toBe(0);
+    expect(
+      spanLineCount([
+        { from: 0, to: 4 },
+        { from: 3, to: 6 },
+        { from: 10, to: 10 },
+      ]),
+    ).toBe(8);
   });
 });
