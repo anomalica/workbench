@@ -100,20 +100,38 @@ export async function ingestExists(fullHash: string): Promise<boolean> {
   return res.ok;
 }
 
-/** Submit a review: save changes and commit with reviewer identity. */
+/** Submit a review: save changes and commit with reviewer identity.
+ *  Optional spans are coverage assertions over the body's line indices,
+ *  appended to the record's review-coverage sidecar. */
 export async function submitReview(
   fullHash: string,
   content: string,
   notes: string,
+  spans?: CoverageSpan[],
 ): Promise<{ ok: boolean; error?: string }> {
   const res = await fetch(`/api/ingests/${fullHash}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ content, notes }),
+    body: JSON.stringify({
+      content,
+      notes,
+      ...(spans && spans.length > 0 ? { spans } : {}),
+    }),
   });
   if (res.ok) return { ok: true };
   const data = await res.json().catch(() => ({}));
   return { ok: false, error: data.detail || `Error ${res.status}` };
+}
+
+import type { CoverageSpan, CoverageReview } from "$lib/coverage";
+
+/** Fetch all reviewers' coverage entries for a record. Empty when no
+ *  coverage has been recorded yet. */
+export async function fetchCoverage(hash: string): Promise<CoverageReview[]> {
+  const res = await fetch(`/api/ingests/${hash}/coverage`);
+  if (!res.ok) return [];
+  const data = await res.json().catch(() => ({}));
+  return Array.isArray(data?.reviews) ? data.reviews : [];
 }
 
 export interface User {

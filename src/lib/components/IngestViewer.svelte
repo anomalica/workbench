@@ -1,6 +1,9 @@
 <script lang="ts">
   import type { IngestDetail, DigestDocument, User } from "$lib/api";
-  import { submitReview } from "$lib/api";
+  import { submitReview, fetchCoverage } from "$lib/api";
+  import { bodyOf, editedLineSpans, mergeSpans, coveredSegmentIndices } from "$lib/coverage";
+  import type { CoverageSpan } from "$lib/coverage";
+  import CoverageStrip from "./CoverageStrip.svelte";
   import { DocumentStore } from "$lib/document.svelte";
   import { parseTranscript, secondsToTime, findActiveSegmentForTime, segmentAtTime, nextRelevantSegmentAfter, extractFrontmatterSpeakers, isSegmentIrrelevant, isSpecialSpeaker, nextSpeakerName, groupSegmentsBySpeaker, orderedNamedSpeakers, SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE, SPEAKER_GROUP } from "$lib/transcript";
   import { nextSegmentBoundary, singleEndForCurrentTime } from "$lib/playback";
@@ -1218,17 +1221,17 @@
 
   // Submit review state
   let submitting = $state(false);
-  // Approve is a no-op empty commit on top of an existing reviewed record,
-  // so disable when there are no changes and we already reviewed this one.
+  // Approve is a no-op empty commit on top of an existing reviewed record.
+  // Still informational for labels/titles, but no longer disables submit:
+  // a reviewed record can take a fresh zero-edit submission carrying
+  // coverage spans ("looked, all fine").
   let alreadyApproved = $derived(!doc.dirty && reviewed);
   // The toolbar button's disabled state. When logged out it must stay
   // CLICKABLE - its click navigates to the login page, so disabling it
   // there strands the reviewer ("Log in to submit" that can't be clicked).
-  // Only block it mid-submit or when there's genuinely nothing to do
-  // (logged in, no changes, already reviewed).
-  let submitDisabled = $derived(submitting || (!!user && alreadyApproved));
+  let submitDisabled = $derived(submitting);
   // Used by the `a` keyboard shortcut: only meaningful when logged in.
-  let approveShortcutEnabled = $derived(!!user && !submitting && !alreadyApproved);
+  let approveShortcutEnabled = $derived(!!user && !submitting);
   let submitError = $state<string | null>(null);
   let showSubmitForm = $state(false);
   let reviewNotes = $state("");
@@ -1237,15 +1240,55 @@
   // automatically. Reset on every modal open.
   let submitAndAdvance = $state(false);
 
+  // Coverage spans: line ranges of the body the reviewer asserts they
+  // checked this session. Seeded from the line-level diff when the modal
+  // opens; adjustable in the strip. `myCoverageSpans` is their own prior
+  // coverage from the sidecar, shown in the strip and the editor gutter.
+  let selectedSpans = $state<CoverageSpan[]>([]);
+  let myCoverageSpans = $state<CoverageSpan[]>([]);
+  let bodyLineCount = $derived(currentBody().split("\n").length);
+  let coveredSegments = $derived(coveredSegmentIndices(currentBody(), myCoverageSpans));
+  let selectedLineCount = $derived(
+    selectedSpans.reduce((acc, s) => acc + (s.to - s.from + 1), 0),
+  );
+
+  $effect(() => {
+    const hash = ingest.content_hash;
+    const email = user?.email;
+    if (!email) {
+      myCoverageSpans = [];
+      return;
+    }
+    fetchCoverage(hash).then((reviews) => {
+      if (ingest.content_hash !== hash) return;
+      myCoverageSpans = mergeSpans(
+        reviews.filter((r) => r.by === email).flatMap((r) => r.spans),
+      );
+    });
+  });
+
+  // Pre-seed the strip with spans bounding the lines edited this session.
+  $effect(() => {
+    if (!showSubmitForm) return;
+    selectedSpans = editedLineSpans(bodyOf(doc.original), currentBody());
+  });
+
   async function handleSubmit() {
     if (!user) return;
     submitting = true;
     submitError = null;
-    const result = await submitReview(ingest.content_hash, doc.current, reviewNotes);
+    const result = await submitReview(
+      ingest.content_hash,
+      doc.current,
+      reviewNotes,
+      selectedSpans,
+    );
     submitting = false;
     if (result.ok) {
       showSubmitForm = false;
       reviewNotes = "";
+      myCoverageSpans = mergeSpans([...myCoverageSpans, ...selectedSpans]);
+      selectedSpans = [];
       // Set the submitted content as the new baseline without resetting position
       doc.original = doc.current;
       doc.past = [];
@@ -1932,6 +1975,36 @@
               text-on-surface outline-none focus:border-primary placeholder:text-on-surface-muted/50 resize-none"
           ></textarea>
         {/if}
+
+        <div class="mt-3">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="text-xs font-ui text-on-surface-secondary">Coverage</span>
+            <span class="text-[10px] text-on-surface-muted font-ui">
+              {selectedSpans.length === 0
+                ? "none selected"
+                : `${selectedLineCount} line${selectedLineCount === 1 ? "" : "s"} in ${selectedSpans.length} span${selectedSpans.length === 1 ? "" : "s"}`}
+            </span>
+            <div class="flex-1"></div>
+            <button
+              onclick={() => { selectedSpans = [{ from: 0, to: Math.max(0, bodyLineCount - 1) }]; }}
+              class="text-[10px] font-ui text-primary cursor-pointer hover:underline"
+            >All</button>
+            <button
+              onclick={() => { selectedSpans = []; }}
+              class="text-[10px] font-ui text-on-surface-muted cursor-pointer hover:text-on-surface"
+            >Clear</button>
+          </div>
+          <CoverageStrip
+            lineCount={bodyLineCount}
+            spans={selectedSpans}
+            previous={myCoverageSpans}
+            onchange={(s) => { selectedSpans = s; }}
+          />
+          <p class="text-[10px] text-on-surface-muted mt-1 font-ui">
+            Drag to mark line ranges you checked (green edge = your previous coverage).
+            Submitting with no edits but spans selected records "looked, all fine".
+          </p>
+        </div>
 
         {#if submitError}
           <p class="text-xs text-error mt-2">{submitError}</p>
@@ -2720,7 +2793,7 @@
                   {@const backwards = nonMonotonicIndices.has(segment.index)}
                   <div
                     data-segment-index={segment.index}
-                    class="px-4 py-1 border-l-2 transition-colors cursor-pointer select-none group/row
+                    class="relative px-4 py-1 border-l-2 transition-colors cursor-pointer select-none group/row
                       {isSelected
                         ? 'bg-primary/15 border-primary'
                         : 'border-transparent hover:bg-primary-container/15'}"
@@ -2729,6 +2802,12 @@
                     onclick={(e) => handleSegmentClick(segment, e)}
                     onkeydown={(e) => { if (e.key === 'Enter') handleSegmentClick(segment, e as unknown as MouseEvent); }}
                   >
+                    {#if coveredSegments.has(segment.index)}
+                      <div
+                        class="absolute left-0.5 inset-y-0.5 w-0.5 rounded bg-success/70 pointer-events-none"
+                        title="Inside your previous review coverage"
+                      ></div>
+                    {/if}
                     <div class="flex items-start gap-2">
                       <!-- Per-sentence speaker picker: muted chevron, aligned with group dot -->
                       <div class="relative flex-none w-4 flex items-start justify-center pt-0.5">
