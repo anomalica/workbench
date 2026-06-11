@@ -1,7 +1,17 @@
 <script lang="ts">
   import type { IngestDetail, DigestDocument, User } from "$lib/api";
   import { submitReview, fetchCoverage } from "$lib/api";
-  import { bodyOf, editedLineSpans, mergeSpans, coveredSegmentIndices } from "$lib/coverage";
+  import {
+    bodyOf,
+    editedLineSpans,
+    mergeSpans,
+    coveredSegmentIndices,
+    markReviewedUpTo,
+    runsToLineSpans,
+    segmentRunsFromLineSpans,
+    spanLineCount,
+    lineToSegmentMap,
+  } from "$lib/coverage";
   import type { CoverageSpan } from "$lib/coverage";
   import CoverageStrip from "./CoverageStrip.svelte";
   import { DocumentStore } from "$lib/document.svelte";
@@ -15,6 +25,7 @@
   import DiffViewer from "./DiffViewer.svelte";
   import MilkdownEditor from "./MilkdownEditor.svelte";
   import EpubViewer from "./EpubViewer.svelte";
+  import { untrack } from "svelte";
   import { marked } from "marked";
   import yaml from "js-yaml";
 
@@ -1240,17 +1251,109 @@
   // automatically. Reset on every modal open.
   let submitAndAdvance = $state(false);
 
-  // Coverage spans: line ranges of the body the reviewer asserts they
-  // checked this session. Seeded from the line-level diff when the modal
-  // opens; adjustable in the strip. `myCoverageSpans` is their own prior
-  // coverage from the sidecar, shown in the strip and the editor gutter.
-  let selectedSpans = $state<CoverageSpan[]>([]);
+  // Review coverage, "reading bookmark" model. `pendingRuns` are
+  // segment-index runs the reviewer marked while reading (amber in the
+  // gutter); they become the line-span payload on submit. Lines edited
+  // this session are merged in automatically. `myCoverageSpans` is their
+  // own prior coverage from the sidecar (green in the gutter).
+  let pendingRuns = $state<CoverageSpan[]>([]);
   let myCoverageSpans = $state<CoverageSpan[]>([]);
   let bodyLineCount = $derived(currentBody().split("\n").length);
   let coveredSegments = $derived(coveredSegmentIndices(currentBody(), myCoverageSpans));
-  let selectedLineCount = $derived(
-    selectedSpans.reduce((acc, s) => acc + (s.to - s.from + 1), 0),
+  let pendingSegments = $derived.by(() => {
+    const out = new Set<number>();
+    for (const r of pendingRuns) for (let i = r.from; i <= r.to; i++) out.add(i);
+    return out;
+  });
+  // The submit payload: pending runs as line spans, plus the lines edited
+  // this session (edits always count as coverage even if unmarked).
+  let pendingLineSpans = $derived(
+    mergeSpans([
+      ...runsToLineSpans(currentBody(), pendingRuns),
+      ...editedLineSpans(bodyOf(doc.original), currentBody()),
+    ]),
   );
+  let pendingSpanLineCount = $derived(spanLineCount(pendingLineSpans));
+
+  function coverageStorageKey(hash: string): string {
+    return `workbench:coverage:${hash}`;
+  }
+
+  // Restore pending runs when the record changes, then pre-seed with the
+  // segments touched by edits restored from the document draft.
+  let coverageRestoredHash = "";
+  $effect(() => {
+    const hash = ingest.content_hash;
+    if (hash === coverageRestoredHash) return;
+    coverageRestoredHash = hash;
+    let restored: CoverageSpan[] = [];
+    try {
+      const raw = localStorage.getItem(coverageStorageKey(hash));
+      if (raw) restored = JSON.parse(raw);
+    } catch {
+      restored = [];
+    }
+    pendingRuns = Array.isArray(restored) ? restored : [];
+  });
+
+  // Pre-seed: segments edited this session automatically become pending
+  // runs. Reads pendingRuns untracked so its own write doesn't loop.
+  $effect(() => {
+    const edited = segmentRunsFromLineSpans(
+      currentBody(),
+      editedLineSpans(bodyOf(doc.original), currentBody()),
+    );
+    if (edited.length === 0) return;
+    untrack(() => {
+      const merged = mergeSpans([...pendingRuns, ...edited]);
+      if (JSON.stringify(merged) !== JSON.stringify(pendingRuns)) pendingRuns = merged;
+    });
+  });
+
+  // Persist pending runs alongside the document draft.
+  $effect(() => {
+    const hash = ingest.content_hash;
+    const runs = pendingRuns;
+    if (hash !== coverageRestoredHash) return;
+    try {
+      if (runs.length === 0) localStorage.removeItem(coverageStorageKey(hash));
+      else localStorage.setItem(coverageStorageKey(hash), JSON.stringify(runs));
+    } catch {
+      // best-effort persistence
+    }
+  });
+
+  function markReviewedUpToSegment(segIndex: number) {
+    pendingRuns = markReviewedUpTo(pendingRuns, segIndex);
+  }
+
+  // The `r` shortcut target: the active/last-clicked segment if there is
+  // one, otherwise the segment row nearest the viewport centre.
+  function reviewShortcutTarget(): number {
+    const idx = activeSegment >= 0 ? activeSegment : lastClicked;
+    if (idx >= 0) return idx;
+    const mid = window.innerHeight / 2;
+    let best = -1;
+    let bestDist = Infinity;
+    for (const el of document.querySelectorAll<HTMLElement>("[data-segment-index]")) {
+      const rect = el.getBoundingClientRect();
+      if (rect.bottom < 0 || rect.top > window.innerHeight) continue;
+      const dist = Math.abs((rect.top + rect.bottom) / 2 - mid);
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = parseInt(el.dataset.segmentIndex ?? "-1", 10);
+      }
+    }
+    return best;
+  }
+
+  function scrollToBodyLine(line: number) {
+    const map = lineToSegmentMap(currentBody());
+    const seg = map[Math.min(line, map.length - 1)];
+    if (seg === undefined || seg < 0) return;
+    const el = document.querySelector(`[data-segment-index="${seg}"]`);
+    if (el) el.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
 
   $effect(() => {
     const hash = ingest.content_hash;
@@ -1267,28 +1370,19 @@
     });
   });
 
-  // Pre-seed the strip with spans bounding the lines edited this session.
-  $effect(() => {
-    if (!showSubmitForm) return;
-    selectedSpans = editedLineSpans(bodyOf(doc.original), currentBody());
-  });
-
   async function handleSubmit() {
     if (!user) return;
     submitting = true;
     submitError = null;
-    const result = await submitReview(
-      ingest.content_hash,
-      doc.current,
-      reviewNotes,
-      selectedSpans,
-    );
+    const spans = pendingLineSpans;
+    const result = await submitReview(ingest.content_hash, doc.current, reviewNotes, spans);
     submitting = false;
     if (result.ok) {
       showSubmitForm = false;
       reviewNotes = "";
-      myCoverageSpans = mergeSpans([...myCoverageSpans, ...selectedSpans]);
-      selectedSpans = [];
+      myCoverageSpans = mergeSpans([...myCoverageSpans, ...spans]);
+      pendingRuns = [];
+      localStorage.removeItem(coverageStorageKey(ingest.content_hash));
       // Set the submitted content as the new baseline without resetting position
       doc.original = doc.current;
       doc.past = [];
@@ -1668,6 +1762,12 @@
     } else if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key === "p" || (e.key === "ArrowLeft" && !hasTranscript)) && hasPrev) {
       e.preventDefault();
       onprev?.();
+    } else if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key === "r" && view === "ingest" && hasTranscript) {
+      // Reading bookmark: mark coverage up to the active segment (or the
+      // one nearest the viewport centre when nothing is selected).
+      e.preventDefault();
+      const target = reviewShortcutTarget();
+      if (target >= 0) markReviewedUpToSegment(target);
     } else if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === "a" && approveShortcutEnabled) {
       // Open the Approve modal. Won't fire when logged out, mid-submit, or
       // already approved-as-is for a clean record.
@@ -1980,29 +2080,21 @@
           <div class="flex items-center gap-2 mb-1">
             <span class="text-xs font-ui text-on-surface-secondary">Coverage</span>
             <span class="text-[10px] text-on-surface-muted font-ui">
-              {selectedSpans.length === 0
-                ? "none selected"
-                : `${selectedLineCount} line${selectedLineCount === 1 ? "" : "s"} in ${selectedSpans.length} span${selectedSpans.length === 1 ? "" : "s"}`}
+              {pendingLineSpans.length === 0
+                ? "none marked"
+                : `${pendingLineSpans.length} range${pendingLineSpans.length === 1 ? "" : "s"}, ${pendingSpanLineCount} line${pendingSpanLineCount === 1 ? "" : "s"}`}
             </span>
-            <div class="flex-1"></div>
-            <button
-              onclick={() => { selectedSpans = [{ from: 0, to: Math.max(0, bodyLineCount - 1) }]; }}
-              class="text-[10px] font-ui text-primary cursor-pointer hover:underline"
-            >All</button>
-            <button
-              onclick={() => { selectedSpans = []; }}
-              class="text-[10px] font-ui text-on-surface-muted cursor-pointer hover:text-on-surface"
-            >Clear</button>
           </div>
           <CoverageStrip
             lineCount={bodyLineCount}
-            spans={selectedSpans}
+            pending={pendingLineSpans}
             previous={myCoverageSpans}
-            onchange={(s) => { selectedSpans = s; }}
+            onjump={scrollToBodyLine}
           />
           <p class="text-[10px] text-on-surface-muted mt-1 font-ui">
-            Drag to mark line ranges you checked (green edge = your previous coverage).
-            Submitting with no edits but spans selected records "looked, all fine".
+            Amber = marked this session (gutter ticks or "r" while reading);
+            green = your previous coverage. Submitting with no edits but
+            coverage marked records "looked, all fine".
           </p>
         </div>
 
@@ -2802,12 +2894,32 @@
                     onclick={(e) => handleSegmentClick(segment, e)}
                     onkeydown={(e) => { if (e.key === 'Enter') handleSegmentClick(segment, e as unknown as MouseEvent); }}
                   >
-                    {#if coveredSegments.has(segment.index)}
+                    {#if pendingSegments.has(segment.index)}
+                      <div
+                        class="absolute left-0.5 inset-y-0.5 w-0.5 rounded bg-warning/80 pointer-events-none"
+                        title="Pending review coverage (unsubmitted)"
+                      ></div>
+                    {:else if coveredSegments.has(segment.index)}
                       <div
                         class="absolute left-0.5 inset-y-0.5 w-0.5 rounded bg-success/70 pointer-events-none"
                         title="Inside your previous review coverage"
                       ></div>
                     {/if}
+                    <button
+                      onclick={(e) => {
+                        e.stopPropagation();
+                        markReviewedUpToSegment(segment.index);
+                      }}
+                      class="absolute left-0 top-1/2 -translate-y-1/2 w-4 h-4 items-center justify-center
+                        rounded text-warning/70 hover:text-warning hover:bg-warning/15 cursor-pointer
+                        hidden group-hover/row:flex"
+                      title="Reviewed up to here (r)"
+                      aria-label="Mark reviewed up to this line"
+                    >
+                      <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+                      </svg>
+                    </button>
                     <div class="flex items-start gap-2">
                       <!-- Per-sentence speaker picker: muted chevron, aligned with group dot -->
                       <div class="relative flex-none w-4 flex items-start justify-center pt-0.5">

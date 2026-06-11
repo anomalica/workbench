@@ -97,6 +97,75 @@ export function lineToSegmentMap(body: string): number[] {
   return map;
 }
 
+/** Per-segment body line ranges, indexed by parse-order segment index.
+ *  A segment owns its timestamped line plus any following lines up to the
+ *  next timestamped line. */
+export function segmentLineRanges(body: string): CoverageSpan[] {
+  const map = lineToSegmentMap(body);
+  const ranges: CoverageSpan[] = [];
+  for (let line = 0; line < map.length; line++) {
+    const seg = map[line];
+    if (seg < 0) continue;
+    if (!ranges[seg]) ranges[seg] = { from: line, to: line };
+    else ranges[seg].to = line;
+  }
+  return ranges;
+}
+
+/**
+ * "Reading bookmark" update. `runs` are pending coverage runs over
+ * SEGMENT indices; `seg` is the segment the reviewer marked as
+ * "reviewed up to here". Rules:
+ * - click inside an existing run truncates it to that segment;
+ *   clicking a run's first segment when it is already a single
+ *   segment removes the run
+ * - click below an existing run extends the nearest run above it
+ *   down to the clicked segment
+ * - click with no run above (or only non-adjacent runs below) starts
+ *   a new single-segment run
+ */
+export function markReviewedUpTo(runs: CoverageSpan[], seg: number): CoverageSpan[] {
+  const sorted = mergeSpans(runs);
+  const hit = sorted.find((r) => seg >= r.from && seg <= r.to);
+  if (hit) {
+    if (seg === hit.from) {
+      // Truncate to the first segment; a second click removes the run.
+      if (hit.from === hit.to) return sorted.filter((r) => r !== hit);
+      return sorted.map((r) => (r === hit ? { from: r.from, to: r.from } : r));
+    }
+    return sorted.map((r) => (r === hit ? { from: r.from, to: seg } : r));
+  }
+  const above = [...sorted].reverse().find((r) => r.to < seg);
+  if (above) {
+    return mergeSpans(sorted.map((r) => (r === above ? { from: r.from, to: seg } : r)));
+  }
+  return mergeSpans([...sorted, { from: seg, to: seg }]);
+}
+
+/** Convert segment-index runs to body line spans. */
+export function runsToLineSpans(body: string, runs: CoverageSpan[]): CoverageSpan[] {
+  const ranges = segmentLineRanges(body);
+  const out: CoverageSpan[] = [];
+  for (const r of runs) {
+    const from = ranges[r.from]?.from;
+    const to = ranges[Math.min(r.to, ranges.length - 1)]?.to;
+    if (from === undefined || to === undefined) continue;
+    out.push({ from, to });
+  }
+  return mergeSpans(out);
+}
+
+/** Convert body line spans to runs over segment indices, used to
+ *  pre-seed pending runs from the lines edited this session. */
+export function segmentRunsFromLineSpans(body: string, spans: CoverageSpan[]): CoverageSpan[] {
+  return mergeSpans([...coveredSegmentIndices(body, spans)].map((seg) => ({ from: seg, to: seg })));
+}
+
+/** Total number of lines covered by a (merged) span list. */
+export function spanLineCount(spans: CoverageSpan[]): number {
+  return mergeSpans(spans).reduce((acc, s) => acc + (s.to - s.from + 1), 0);
+}
+
 /** Segment indices that fall (even partially) inside the given spans. */
 export function coveredSegmentIndices(body: string, spans: CoverageSpan[]): Set<number> {
   const map = lineToSegmentMap(body);
