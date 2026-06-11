@@ -32,6 +32,8 @@ FULL_HASH_LENGTH = 64
 PUBLIC_HASH_LENGTH = 56
 FULL_HASH_PATTERN = re.compile(r"^[a-f0-9]{64}$")
 
+COVERAGE_SCHEMA = "anomalica/review-coverage/0"
+
 CHALLENGES_PER_SESSION = 10
 PASS_RATIO = 0.8
 MIN_POOL_FOR_CLOZE_GATE = 5
@@ -125,6 +127,21 @@ class IngestSource(ABC):
     @abstractmethod
     def load_verification(self, full_hash: str) -> dict | None:
         """Load the verification sidecar for a record, or None if absent."""
+
+    @abstractmethod
+    def load_coverage(self, full_hash: str) -> dict | None:
+        """Load the review-coverage sidecar for a record, or None if absent."""
+
+    @abstractmethod
+    def append_coverage(
+        self,
+        full_hash: str,
+        email: str,
+        spans: list[dict],
+        notes: str,
+    ) -> bool:
+        """Append one review entry to the coverage sidecar (creating it if
+        missing). Returns True on success."""
 
     @abstractmethod
     def reviewed_by_email(self, email: str) -> dict[str, str]:
@@ -254,8 +271,14 @@ class LocalIngestSource(IngestSource):
         }
 
         repo_dir = self.store.parent
+        paths = [str(md_path.relative_to(repo_dir))]
+        # Review-coverage sidecar travels in the same commit as the review
+        # it belongs to, so the audit trail stays one-commit-per-review.
+        coverage_path = self._coverage_path(full_hash)
+        if coverage_path.exists():
+            paths.append(str(coverage_path.relative_to(repo_dir)))
         subprocess.run(
-            ["git", "add", str(md_path.relative_to(repo_dir))],
+            ["git", "add", *paths],
             cwd=repo_dir,
             check=True,
             env=env,
@@ -481,6 +504,64 @@ class LocalIngestSource(IngestSource):
         with open(path) as f:
             return json.load(f)
 
+    def _coverage_path(self, full_hash: str) -> Path:
+        return self.store / f"{full_hash}.review.json"
+
+    def load_coverage(self, full_hash: str) -> dict | None:
+        path = self._coverage_path(full_hash)
+        if not path.exists():
+            return None
+        with open(path) as f:
+            return json.load(f)
+
+    def append_coverage(
+        self,
+        full_hash: str,
+        email: str,
+        spans: list[dict],
+        notes: str,
+    ) -> bool:
+        """Append one review entry to `{hash}.review.json`. Spans anchor to
+        line indices of the record body at submission time; `parent_commit`
+        records the repo HEAD before the review commit so the anchors can be
+        migrated to permanent line identifiers later."""
+        import subprocess
+        from datetime import datetime, timezone
+
+        if self._scan().get(full_hash) is None:
+            return False
+
+        sidecar = self.load_coverage(full_hash) or {
+            "schema": COVERAGE_SCHEMA,
+            "reviews": [],
+        }
+
+        repo_dir = self.store.parent
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_dir,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        parent_commit = head.stdout.strip() if head.returncode == 0 else None
+
+        entry: dict = {
+            "by": email,
+            "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "spans": [{"from": s["from"], "to": s["to"]} for s in spans],
+        }
+        if notes:
+            entry["notes"] = notes
+        if parent_commit:
+            entry["parent_commit"] = parent_commit
+        sidecar["reviews"].append(entry)
+
+        with open(self._coverage_path(full_hash), "w") as f:
+            json.dump(sidecar, f, indent=2)
+            f.write("\n")
+        return True
+
 
 class GitHubIngestSource(IngestSource):
     """Fetches ingests from a private GitHub repository via the API.
@@ -506,6 +587,14 @@ class GitHubIngestSource(IngestSource):
         raise NotImplementedError("GitHubIngestSource is not yet implemented")
 
     def load_verification(self, full_hash: str) -> dict | None:
+        raise NotImplementedError("GitHubIngestSource is not yet implemented")
+
+    def load_coverage(self, full_hash: str) -> dict | None:
+        raise NotImplementedError("GitHubIngestSource is not yet implemented")
+
+    def append_coverage(
+        self, full_hash: str, email: str, spans: list[dict], notes: str
+    ) -> bool:
         raise NotImplementedError("GitHubIngestSource is not yet implemented")
 
     def reviewed_by_email(self, email: str) -> dict[str, str]:
@@ -1186,11 +1275,49 @@ def get_record_media(full_hash: str, filename: str) -> FileResponse:
     return FileResponse(file_path, media_type=media_type)
 
 
+def _validate_spans(raw: object) -> list[dict]:
+    """Validate an optional spans payload: a list of {"from": int, "to": int}
+    with 0 <= from <= to. Raises 400 on malformed input; None/missing -> []."""
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise HTTPException(status_code=400, detail="spans must be a list")
+    out: list[dict] = []
+    for s in raw:
+        if not isinstance(s, dict):
+            raise HTTPException(status_code=400, detail="Malformed span")
+        frm, to = s.get("from"), s.get("to")
+        if (
+            not isinstance(frm, int)
+            or not isinstance(to, int)
+            or isinstance(frm, bool)
+            or isinstance(to, bool)
+            or frm < 0
+            or to < frm
+        ):
+            raise HTTPException(status_code=400, detail="Malformed span")
+        out.append({"from": frm, "to": to})
+    return out
+
+
+@app.get("/api/ingests/{full_hash}/coverage")
+def get_coverage(full_hash: str) -> JSONResponse:
+    """Return the review-coverage sidecar's reviews (all reviewers).
+    Empty list when no coverage has been recorded yet."""
+    if not FULL_HASH_PATTERN.match(full_hash):
+        raise HTTPException(status_code=404, detail="Not found")
+    sidecar = source.load_coverage(full_hash)
+    return JSONResponse({"reviews": (sidecar or {}).get("reviews", [])})
+
+
 @app.put("/api/ingests/{full_hash}")
 def submit_review(full_hash: str, body: dict, request: Request) -> JSONResponse:
     """Submit a review: save changes and commit with reviewer identity.
 
-    Expects {"content": "...", "notes": "..."}.
+    Expects {"content": "...", "notes": "...", "spans": [{"from": 0, "to": 4}]}.
+    `spans` is optional: contiguous line ranges of the record body (at
+    submission time) the reviewer asserts they checked. Appended to the
+    `{hash}.review.json` sidecar and committed with the review.
     Requires authentication.
     """
     user = request.session.get("user")
@@ -1205,9 +1332,18 @@ def submit_review(full_hash: str, body: dict, request: Request) -> JSONResponse:
         raise HTTPException(status_code=400, detail="Missing content")
 
     notes = body.get("notes", "").strip()
+    spans = _validate_spans(body.get("spans"))
 
     if not source.save_ingest(full_hash, content):
         raise HTTPException(status_code=404, detail="Not found")
+
+    if spans:
+        source.append_coverage(
+            full_hash=full_hash,
+            email=user["email"],
+            spans=spans,
+            notes=notes,
+        )
 
     # Git commit with reviewer as author
     source.commit_review(
