@@ -112,34 +112,10 @@ export function segmentLineRanges(body: string): CoverageSpan[] {
   return ranges;
 }
 
-/**
- * "Reading bookmark" update. `runs` are pending coverage runs over
- * SEGMENT indices; `seg` is the segment the reviewer marked as
- * "reviewed up to here". Rules:
- * - click inside an existing run truncates it to that segment;
- *   clicking a run's first segment when it is already a single
- *   segment removes the run
- * - click below an existing run extends the nearest run above it
- *   down to the clicked segment
- * - click with no run above (or only non-adjacent runs below) starts
- *   a new single-segment run
- */
-export function markReviewedUpTo(runs: CoverageSpan[], seg: number): CoverageSpan[] {
-  const sorted = mergeSpans(runs);
-  const hit = sorted.find((r) => seg >= r.from && seg <= r.to);
-  if (hit) {
-    if (seg === hit.from) {
-      // Truncate to the first segment; a second click removes the run.
-      if (hit.from === hit.to) return sorted.filter((r) => r !== hit);
-      return sorted.map((r) => (r === hit ? { from: r.from, to: r.from } : r));
-    }
-    return sorted.map((r) => (r === hit ? { from: r.from, to: seg } : r));
-  }
-  const above = [...sorted].reverse().find((r) => r.to < seg);
-  if (above) {
-    return mergeSpans(sorted.map((r) => (r === above ? { from: r.from, to: seg } : r)));
-  }
-  return mergeSpans([...sorted, { from: seg, to: seg }]);
+/** Add the given segment indices to the pending runs as observed.
+ *  Overlapping and index-adjacent runs coalesce into one. */
+export function markObserved(runs: CoverageSpan[], indices: Iterable<number>): CoverageSpan[] {
+  return mergeSpans([...runs, ...[...indices].map((i) => ({ from: i, to: i }))]);
 }
 
 /** Convert segment-index runs to body line spans. */

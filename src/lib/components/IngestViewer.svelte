@@ -6,7 +6,7 @@
     editedLineSpans,
     mergeSpans,
     coveredSegmentIndices,
-    markReviewedUpTo,
+    markObserved,
     runsToLineSpans,
     segmentRunsFromLineSpans,
     spanLineCount,
@@ -1265,6 +1265,18 @@
     for (const r of pendingRuns) for (let i = r.from; i <= r.to; i++) out.add(i);
     return out;
   });
+  // Segments touched by edits this session. Used for the gutter's
+  // observed-then-edited variant: a segment inside pending or submitted
+  // coverage that has since been edited renders distinctly.
+  let editedSegments = $derived.by(() => {
+    const out = new Set<number>();
+    const runs = segmentRunsFromLineSpans(
+      currentBody(),
+      editedLineSpans(bodyOf(doc.original), currentBody()),
+    );
+    for (const r of runs) for (let i = r.from; i <= r.to; i++) out.add(i);
+    return out;
+  });
   // The submit payload: pending runs as line spans, plus the lines edited
   // this session (edits always count as coverage even if unmarked).
   let pendingLineSpans = $derived(
@@ -1323,28 +1335,13 @@
     }
   });
 
-  function markReviewedUpToSegment(segIndex: number) {
-    pendingRuns = markReviewedUpTo(pendingRuns, segIndex);
-  }
-
-  // The `r` shortcut target: the active/last-clicked segment if there is
-  // one, otherwise the segment row nearest the viewport centre.
-  function reviewShortcutTarget(): number {
-    const idx = activeSegment >= 0 ? activeSegment : lastClicked;
-    if (idx >= 0) return idx;
-    const mid = window.innerHeight / 2;
-    let best = -1;
-    let bestDist = Infinity;
-    for (const el of document.querySelectorAll<HTMLElement>("[data-segment-index]")) {
-      const rect = el.getBoundingClientRect();
-      if (rect.bottom < 0 || rect.top > window.innerHeight) continue;
-      const dist = Math.abs((rect.top + rect.bottom) / 2 - mid);
-      if (dist < bestDist) {
-        bestDist = dist;
-        best = parseInt(el.dataset.segmentIndex ?? "-1", 10);
-      }
-    }
-    return best;
+  // Mark the current segment selection as observed coverage. Overlapping
+  // and index-adjacent runs coalesce; the selection clears afterwards,
+  // matching the other selection actions.
+  function markSelectedObserved() {
+    if (selected.size === 0) return;
+    pendingRuns = markObserved(pendingRuns, selected);
+    selected = new Set();
   }
 
   function scrollToBodyLine(line: number) {
@@ -1762,12 +1759,6 @@
     } else if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key === "p" || (e.key === "ArrowLeft" && !hasTranscript)) && hasPrev) {
       e.preventDefault();
       onprev?.();
-    } else if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key === "r" && view === "ingest" && hasTranscript) {
-      // Reading bookmark: mark coverage up to the active segment (or the
-      // one nearest the viewport centre when nothing is selected).
-      e.preventDefault();
-      const target = reviewShortcutTarget();
-      if (target >= 0) markReviewedUpToSegment(target);
     } else if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === "a" && approveShortcutEnabled) {
       // Open the Approve modal. Won't fire when logged out, mid-submit, or
       // already approved-as-is for a clean record.
@@ -2092,7 +2083,7 @@
             onjump={scrollToBodyLine}
           />
           <p class="text-[10px] text-on-surface-muted mt-1 font-ui">
-            Amber = marked this session (gutter ticks or "r" while reading);
+            Amber = marked observed this session (select segments, then Mark observed);
             green = your previous coverage. Submitting with no edits but
             coverage marked records "looked, all fine".
           </p>
@@ -2750,6 +2741,14 @@
                   Mark irrelevant
                 </button>
               {/if}
+              <!-- Mark observed: add the selected range to pending coverage -->
+              <button
+                onclick={markSelectedObserved}
+                class="text-xs font-ui px-2 py-1 rounded cursor-pointer text-on-surface-secondary hover:bg-warning/15 hover:text-warning"
+                title="Mark all selected segments as observed (pending coverage)"
+              >
+                Mark observed
+              </button>
               <button
                 onclick={() => { selected = new Set(); }}
                 class="text-xs text-on-surface-muted cursor-pointer hover:text-on-surface px-1"
@@ -2895,31 +2894,32 @@
                     onkeydown={(e) => { if (e.key === 'Enter') handleSegmentClick(segment, e as unknown as MouseEvent); }}
                   >
                     {#if pendingSegments.has(segment.index)}
-                      <div
-                        class="absolute left-0.5 inset-y-0.5 w-0.5 rounded bg-warning/80 pointer-events-none"
-                        title="Pending review coverage (unsubmitted)"
-                      ></div>
+                      {#if editedSegments.has(segment.index)}
+                        <div
+                          class="absolute left-0.5 inset-y-0.5 w-0.5 rounded pointer-events-none"
+                          style="background: repeating-linear-gradient(to bottom, var(--color-warning) 0 4px, transparent 4px 7px)"
+                          title="Marked observed, then edited (unsubmitted)"
+                        ></div>
+                      {:else}
+                        <div
+                          class="absolute left-0.5 inset-y-0.5 w-0.5 rounded bg-warning/80 pointer-events-none"
+                          title="Pending review coverage (unsubmitted)"
+                        ></div>
+                      {/if}
                     {:else if coveredSegments.has(segment.index)}
-                      <div
-                        class="absolute left-0.5 inset-y-0.5 w-0.5 rounded bg-success/70 pointer-events-none"
-                        title="Inside your previous review coverage"
-                      ></div>
+                      {#if editedSegments.has(segment.index)}
+                        <div
+                          class="absolute left-0.5 inset-y-0.5 w-0.5 rounded pointer-events-none"
+                          style="background: repeating-linear-gradient(to bottom, var(--color-success) 0 4px, transparent 4px 7px)"
+                          title="Inside your previous coverage, edited since"
+                        ></div>
+                      {:else}
+                        <div
+                          class="absolute left-0.5 inset-y-0.5 w-0.5 rounded bg-success/70 pointer-events-none"
+                          title="Inside your previous review coverage"
+                        ></div>
+                      {/if}
                     {/if}
-                    <button
-                      onclick={(e) => {
-                        e.stopPropagation();
-                        markReviewedUpToSegment(segment.index);
-                      }}
-                      class="absolute left-0 top-1/2 -translate-y-1/2 w-4 h-4 items-center justify-center
-                        rounded text-warning/70 hover:text-warning hover:bg-warning/15 cursor-pointer
-                        hidden group-hover/row:flex"
-                      title="Reviewed up to here (r)"
-                      aria-label="Mark reviewed up to this line"
-                    >
-                      <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
-                      </svg>
-                    </button>
                     <div class="flex items-start gap-2">
                       <!-- Per-sentence speaker picker: muted chevron, aligned with group dot -->
                       <div class="relative flex-none w-4 flex items-start justify-center pt-0.5">
@@ -3012,6 +3012,14 @@
                           onmouseenter={onControlsEnter}
                           onmouseleave={onControlsLeave}
                         >
+                          <button onclick={(e) => { e.stopPropagation(); markSelectedObserved(); }}
+                            class="p-0.5 rounded cursor-pointer text-on-surface-muted/50 hover:text-warning hover:bg-warning/15 transition-colors"
+                            title="Mark observed (pending coverage)"
+                            aria-label="Mark this segment as observed">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                              <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+                            </svg>
+                          </button>
                           <button onclick={(e) => {
                               e.stopPropagation();
                               const wasIrrelevant = isSegmentIrrelevant(segment);

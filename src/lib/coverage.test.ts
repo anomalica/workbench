@@ -6,7 +6,7 @@ import {
   lineToSegmentMap,
   coveredSegmentIndices,
   segmentLineRanges,
-  markReviewedUpTo,
+  markObserved,
   runsToLineSpans,
   segmentRunsFromLineSpans,
   spanLineCount,
@@ -124,57 +124,44 @@ describe("lineToSegmentMap / coveredSegmentIndices", () => {
   });
 });
 
-describe("markReviewedUpTo", () => {
-  it("starts a run at the first clicked segment", () => {
-    expect(markReviewedUpTo([], 4)).toEqual([{ from: 4, to: 4 }]);
+describe("markObserved", () => {
+  it("starts a run from a single selected segment", () => {
+    expect(markObserved([], [4])).toEqual([{ from: 4, to: 4 }]);
   });
 
-  it("extends the run down to a later click", () => {
-    expect(markReviewedUpTo([{ from: 4, to: 4 }], 9)).toEqual([{ from: 4, to: 9 }]);
+  it("adds a contiguous selection as one run", () => {
+    expect(markObserved([], [3, 4, 5])).toEqual([{ from: 3, to: 5 }]);
   });
 
-  it("extends the nearest run above when several exist", () => {
-    expect(
-      markReviewedUpTo(
-        [
-          { from: 0, to: 2 },
-          { from: 10, to: 12 },
-        ],
-        15,
-      ),
-    ).toEqual([
-      { from: 0, to: 2 },
-      { from: 10, to: 15 },
+  it("keeps non-adjacent selections as separate runs", () => {
+    expect(markObserved([], [1, 5])).toEqual([
+      { from: 1, to: 1 },
+      { from: 5, to: 5 },
     ]);
   });
 
-  it("starts a new run on a click above all existing runs", () => {
-    expect(markReviewedUpTo([{ from: 10, to: 12 }], 3)).toEqual([
-      { from: 3, to: 3 },
-      { from: 10, to: 12 },
-    ]);
+  it("merges into an overlapping existing run", () => {
+    expect(markObserved([{ from: 2, to: 4 }], [3, 4, 5])).toEqual([{ from: 2, to: 5 }]);
   });
 
-  it("merges when an extension reaches the next run", () => {
+  it("coalesces with an index-adjacent existing run", () => {
+    expect(markObserved([{ from: 0, to: 2 }], [3])).toEqual([{ from: 0, to: 3 }]);
+  });
+
+  it("bridges two existing runs when the selection joins them", () => {
     expect(
-      markReviewedUpTo(
+      markObserved(
         [
           { from: 0, to: 2 },
           { from: 6, to: 8 },
         ],
-        5,
+        [3, 4, 5],
       ),
     ).toEqual([{ from: 0, to: 8 }]);
   });
 
-  it("truncates a run when clicking inside it", () => {
-    expect(markReviewedUpTo([{ from: 2, to: 9 }], 5)).toEqual([{ from: 2, to: 5 }]);
-  });
-
-  it("truncates to the first segment, then removes on the next click", () => {
-    const truncated = markReviewedUpTo([{ from: 2, to: 9 }], 2);
-    expect(truncated).toEqual([{ from: 2, to: 2 }]);
-    expect(markReviewedUpTo(truncated, 2)).toEqual([]);
+  it("is idempotent for already-observed segments", () => {
+    expect(markObserved([{ from: 2, to: 5 }], [3, 4])).toEqual([{ from: 2, to: 5 }]);
   });
 });
 
