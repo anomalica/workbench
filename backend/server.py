@@ -549,7 +549,14 @@ class LocalIngestSource(IngestSource):
         entry: dict = {
             "by": email,
             "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "spans": [{"from": s["from"], "to": s["to"]} for s in spans],
+            "spans": [
+                {
+                    "from": s["from"],
+                    "to": s["to"],
+                    "kind": s.get("kind", "observed"),
+                }
+                for s in spans
+            ],
         }
         if notes:
             entry["notes"] = notes
@@ -1276,8 +1283,10 @@ def get_record_media(full_hash: str, filename: str) -> FileResponse:
 
 
 def _validate_spans(raw: object) -> list[dict]:
-    """Validate an optional spans payload: a list of {"from": int, "to": int}
-    with 0 <= from <= to. Raises 400 on malformed input; None/missing -> []."""
+    """Validate an optional spans payload: a list of {"from": int, "to": int,
+    "kind": "played"|"observed"} with 0 <= from <= to. `kind` is optional and
+    defaults to "observed" for back-compatibility. Raises 400 on malformed
+    input; None/missing -> []."""
     if raw is None:
         return []
     if not isinstance(raw, list):
@@ -1287,6 +1296,7 @@ def _validate_spans(raw: object) -> list[dict]:
         if not isinstance(s, dict):
             raise HTTPException(status_code=400, detail="Malformed span")
         frm, to = s.get("from"), s.get("to")
+        kind = s.get("kind", "observed")
         if (
             not isinstance(frm, int)
             or not isinstance(to, int)
@@ -1294,9 +1304,10 @@ def _validate_spans(raw: object) -> list[dict]:
             or isinstance(to, bool)
             or frm < 0
             or to < frm
+            or kind not in ("played", "observed")
         ):
             raise HTTPException(status_code=400, detail="Malformed span")
-        out.append({"from": frm, "to": to})
+        out.append({"from": frm, "to": to, "kind": kind})
     return out
 
 
@@ -1314,9 +1325,12 @@ def get_coverage(full_hash: str) -> JSONResponse:
 def submit_review(full_hash: str, body: dict, request: Request) -> JSONResponse:
     """Submit a review: save changes and commit with reviewer identity.
 
-    Expects {"content": "...", "notes": "...", "spans": [{"from": 0, "to": 4}]}.
+    Expects {"content": "...", "notes": "...",
+    "spans": [{"from": 0, "to": 4, "kind": "played"|"observed"}]}.
     `spans` is optional: contiguous line ranges of the record body (at
-    submission time) the reviewer asserts they checked. Appended to the
+    submission time) the reviewer covered. `kind` distinguishes weak
+    auto-recorded playback coverage ("played") from asserted coverage
+    ("observed", the default). Appended to the
     `{hash}.review.json` sidecar and committed with the review.
     Requires authentication.
     """

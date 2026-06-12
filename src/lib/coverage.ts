@@ -12,10 +12,19 @@ export interface CoverageSpan {
   to: number;
 }
 
+/** Coverage tiers. "played" is weak coverage recorded automatically while
+ *  media plays through a segment; "observed" is strong coverage the
+ *  reviewer asserted (manual mark or an edit). */
+export type CoverageKind = "played" | "observed";
+
+export interface KindedSpan extends CoverageSpan {
+  kind: CoverageKind;
+}
+
 export interface CoverageReview {
   by: string;
   at: string;
-  spans: CoverageSpan[];
+  spans: (CoverageSpan & { kind?: CoverageKind })[];
   notes?: string;
   parent_commit?: string;
 }
@@ -38,6 +47,82 @@ export function mergeSpans(spans: CoverageSpan[]): CoverageSpan[] {
       out.push({ ...s });
     }
   }
+  return out;
+}
+
+/** Remove every index covered by `remove` from `spans`. Both inputs may be
+ *  unsorted/overlapping; output is merged and sorted. */
+export function subtractSpans(spans: CoverageSpan[], remove: CoverageSpan[]): CoverageSpan[] {
+  const rem = mergeSpans(remove);
+  const out: CoverageSpan[] = [];
+  for (const s of mergeSpans(spans)) {
+    let cur: CoverageSpan | null = { ...s };
+    for (const r of rem) {
+      if (!cur || r.from > cur.to) break;
+      if (r.to < cur.from) continue;
+      if (r.from <= cur.from && r.to >= cur.to) {
+        cur = null;
+      } else if (r.from > cur.from && r.to < cur.to) {
+        out.push({ from: cur.from, to: r.from - 1 });
+        cur = { from: r.to + 1, to: cur.to };
+      } else if (r.from <= cur.from) {
+        cur = { from: r.to + 1, to: cur.to };
+      } else {
+        cur = { from: cur.from, to: r.from - 1 };
+      }
+    }
+    if (cur) out.push(cur);
+  }
+  return out;
+}
+
+/** Merge the two pending tiers into one kinded span list. Observed wins
+ *  wherever the tiers overlap; played keeps only its remainder. */
+export function mergeTiers(observed: CoverageSpan[], played: CoverageSpan[]): KindedSpan[] {
+  const obs: KindedSpan[] = mergeSpans(observed).map((s) => ({ ...s, kind: "observed" }));
+  const ply: KindedSpan[] = subtractSpans(played, observed).map((s) => ({ ...s, kind: "played" }));
+  return [...obs, ...ply].sort((a, b) => a.from - b.from);
+}
+
+/** A window of continuous playback: media played from `start` seconds to
+ *  `end` seconds without seeking away or pausing. */
+export interface PlayWindow {
+  start: number;
+  end: number;
+}
+
+/** Fold a playback-clock sample into a continuous-play window. A jump of
+ *  more than `maxStep` seconds forwards (seek/skip) or any move backwards
+ *  starts a fresh window - skipped material must not count as played. */
+export function advancePlayWindow(win: PlayWindow | null, time: number, maxStep = 2): PlayWindow {
+  if (!win || time < win.end || time > win.end + maxStep) {
+    return { start: time, end: time };
+  }
+  return { start: win.start, end: time };
+}
+
+/** True when a segment spanning [segStart, segEnd] was played through
+ *  end-to-end inside one continuous-play window. */
+export function playedThrough(window: PlayWindow, segStart: number, segEnd: number): boolean {
+  return window.start <= segStart && window.end >= segEnd;
+}
+
+/** Per-segment [start, end) bounds from sorted segment start times. The
+ *  last segment ends at `duration` when known, otherwise it can only
+ *  complete when playback reaches Infinity (i.e. never). */
+export function segmentBounds(starts: number[], duration?: number): PlayWindow[] {
+  return starts.map((start, i) => ({
+    start,
+    end: i + 1 < starts.length ? starts[i + 1] : (duration ?? Infinity),
+  }));
+}
+
+/** Parse-order positions of segments fully played through by the window. */
+export function playedSegmentPositions(window: PlayWindow, bounds: PlayWindow[]): number[] {
+  const out: number[] = [];
+  bounds.forEach((b, i) => {
+    if (b.end > b.start && playedThrough(window, b.start, b.end)) out.push(i);
+  });
   return out;
 }
 

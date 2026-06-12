@@ -107,7 +107,7 @@ export async function submitReview(
   fullHash: string,
   content: string,
   notes: string,
-  spans?: CoverageSpan[],
+  spans?: KindedSpan[],
 ): Promise<{ ok: boolean; error?: string }> {
   const res = await fetch(`/api/ingests/${fullHash}`, {
     method: "PUT",
@@ -123,7 +123,7 @@ export async function submitReview(
   return { ok: false, error: data.detail || `Error ${res.status}` };
 }
 
-import type { CoverageSpan, CoverageReview } from "$lib/coverage";
+import type { KindedSpan, CoverageReview } from "$lib/coverage";
 
 /** Fetch all reviewers' coverage entries for a record. Empty when no
  *  coverage has been recorded yet. */

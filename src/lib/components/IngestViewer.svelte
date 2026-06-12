@@ -11,8 +11,13 @@
     segmentRunsFromLineSpans,
     spanLineCount,
     lineToSegmentMap,
+    subtractSpans,
+    mergeTiers,
+    advancePlayWindow,
+    segmentBounds,
+    playedSegmentPositions,
   } from "$lib/coverage";
-  import type { CoverageSpan } from "$lib/coverage";
+  import type { CoverageSpan, KindedSpan, PlayWindow } from "$lib/coverage";
   import CoverageStrip from "./CoverageStrip.svelte";
   import { DocumentStore } from "$lib/document.svelte";
   import { parseTranscript, secondsToTime, findActiveSegmentForTime, segmentAtTime, nextRelevantSegmentAfter, extractFrontmatterSpeakers, isSegmentIrrelevant, isSpecialSpeaker, nextSpeakerName, groupSegmentsBySpeaker, orderedNamedSpeakers, SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE, SPEAKER_GROUP } from "$lib/transcript";
@@ -1251,41 +1256,40 @@
   // automatically. Reset on every modal open.
   let submitAndAdvance = $state(false);
 
-  // Review coverage, "reading bookmark" model. `pendingRuns` are
-  // segment-index runs the reviewer marked while reading (amber in the
-  // gutter); they become the line-span payload on submit. Lines edited
-  // this session are merged in automatically. `myCoverageSpans` is their
-  // own prior coverage from the sidecar (green in the gutter).
+  // Review coverage, two pending tiers. `pendingRuns` (observed, strong)
+  // are segment-index runs the reviewer marked or edited - solid amber in
+  // the gutter. `playedRuns` (played, weak) are segments auto-recorded as
+  // continuously played through - dotted amber. Observed wins over played
+  // wherever they overlap. `myObservedSpans` / `myPlayedSpans` are their
+  // own prior submitted coverage from the sidecar (green, solid/dotted).
   let pendingRuns = $state<CoverageSpan[]>([]);
-  let myCoverageSpans = $state<CoverageSpan[]>([]);
+  let playedRuns = $state<CoverageSpan[]>([]);
+  let myObservedSpans = $state<CoverageSpan[]>([]);
+  let myPlayedSpans = $state<CoverageSpan[]>([]);
   let bodyLineCount = $derived(currentBody().split("\n").length);
-  let coveredSegments = $derived(coveredSegmentIndices(currentBody(), myCoverageSpans));
-  let pendingSegments = $derived.by(() => {
+  let coveredSegments = $derived(coveredSegmentIndices(currentBody(), myObservedSpans));
+  let playedCoveredSegments = $derived(coveredSegmentIndices(currentBody(), myPlayedSpans));
+  function runsToSet(runs: CoverageSpan[]): Set<number> {
     const out = new Set<number>();
-    for (const r of pendingRuns) for (let i = r.from; i <= r.to; i++) out.add(i);
-    return out;
-  });
-  // Segments touched by edits this session. Used for the gutter's
-  // observed-then-edited variant: a segment inside pending or submitted
-  // coverage that has since been edited renders distinctly.
-  let editedSegments = $derived.by(() => {
-    const out = new Set<number>();
-    const runs = segmentRunsFromLineSpans(
-      currentBody(),
-      editedLineSpans(bodyOf(doc.original), currentBody()),
-    );
     for (const r of runs) for (let i = r.from; i <= r.to; i++) out.add(i);
     return out;
-  });
-  // The submit payload: pending runs as line spans, plus the lines edited
-  // this session (edits always count as coverage even if unmarked).
+  }
+  let pendingSegments = $derived(runsToSet(pendingRuns));
+  let playedSegments = $derived(runsToSet(playedRuns));
+  // Observed line spans: pending runs plus the lines edited this session
+  // (edits always count as observed coverage even if unmarked).
   let pendingLineSpans = $derived(
     mergeSpans([
       ...runsToLineSpans(currentBody(), pendingRuns),
       ...editedLineSpans(bodyOf(doc.original), currentBody()),
     ]),
   );
-  let pendingSpanLineCount = $derived(spanLineCount(pendingLineSpans));
+  // The submit payload: both tiers as kinded line spans, observed winning
+  // over played on overlap.
+  let pendingKindedSpans = $derived<KindedSpan[]>(
+    mergeTiers(pendingLineSpans, runsToLineSpans(currentBody(), playedRuns)),
+  );
+  let pendingSpanLineCount = $derived(spanLineCount(pendingKindedSpans));
 
   function coverageStorageKey(hash: string): string {
     return `workbench:coverage:${hash}`;
@@ -1298,14 +1302,26 @@
     const hash = ingest.content_hash;
     if (hash === coverageRestoredHash) return;
     coverageRestoredHash = hash;
-    let restored: CoverageSpan[] = [];
+    playWindow = null;
+    let observed: CoverageSpan[] = [];
+    let played: CoverageSpan[] = [];
     try {
       const raw = localStorage.getItem(coverageStorageKey(hash));
-      if (raw) restored = JSON.parse(raw);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          observed = parsed; // legacy single-tier format
+        } else if (parsed && typeof parsed === "object") {
+          if (Array.isArray(parsed.observed)) observed = parsed.observed;
+          if (Array.isArray(parsed.played)) played = parsed.played;
+        }
+      }
     } catch {
-      restored = [];
+      observed = [];
+      played = [];
     }
-    pendingRuns = Array.isArray(restored) ? restored : [];
+    pendingRuns = observed;
+    playedRuns = played;
   });
 
   // Pre-seed: segments edited this session automatically become pending
@@ -1322,14 +1338,21 @@
     });
   });
 
-  // Persist pending runs alongside the document draft.
+  // Persist both pending tiers alongside the document draft.
   $effect(() => {
     const hash = ingest.content_hash;
-    const runs = pendingRuns;
+    const observed = pendingRuns;
+    const played = playedRuns;
     if (hash !== coverageRestoredHash) return;
     try {
-      if (runs.length === 0) localStorage.removeItem(coverageStorageKey(hash));
-      else localStorage.setItem(coverageStorageKey(hash), JSON.stringify(runs));
+      if (observed.length === 0 && played.length === 0) {
+        localStorage.removeItem(coverageStorageKey(hash));
+      } else {
+        localStorage.setItem(
+          coverageStorageKey(hash),
+          JSON.stringify({ observed, played }),
+        );
+      }
     } catch {
       // best-effort persistence
     }
@@ -1337,11 +1360,38 @@
 
   // Mark the current segment selection as observed coverage. Overlapping
   // and index-adjacent runs coalesce; the selection clears afterwards,
-  // matching the other selection actions.
+  // matching the other selection actions. Played segments inside the
+  // selection upgrade to observed (observed wins on overlap).
   function markSelectedObserved() {
     if (selected.size === 0) return;
     pendingRuns = markObserved(pendingRuns, selected);
     selected = new Set();
+  }
+
+  // Remove pending marks - both tiers - from the selected segments.
+  // Submitted (green) coverage is untouched.
+  function clearSelectedMarks() {
+    if (selected.size === 0) return;
+    const sel = [...selected].map((i) => ({ from: i, to: i }));
+    pendingRuns = subtractSpans(pendingRuns, sel);
+    playedRuns = subtractSpans(playedRuns, sel);
+    selected = new Set();
+  }
+
+  // Hands-free "played" tracking. While media plays, fold each playback
+  // clock sample into a continuous-play window; any segment whose whole
+  // time range sits inside that window was played end-to-end. Seeks and
+  // jumps (a sample more than 2 s past the last, or backwards) start a
+  // fresh window, so skipped segments never count. Records without media
+  // never call this - manual marking only.
+  let playWindow: PlayWindow | null = null;
+  function trackPlayback(t: number, duration?: number) {
+    playWindow = advancePlayWindow(playWindow, t);
+    const bounds = segmentBounds(segments.map((s) => s.seconds), duration);
+    const positions = playedSegmentPositions(playWindow, bounds);
+    if (positions.length === 0) return;
+    const merged = mergeSpans([...playedRuns, ...positions.map((i) => ({ from: i, to: i }))]);
+    if (JSON.stringify(merged) !== JSON.stringify(playedRuns)) playedRuns = merged;
   }
 
   function scrollToBodyLine(line: number) {
@@ -1356,13 +1406,19 @@
     const hash = ingest.content_hash;
     const email = user?.email;
     if (!email) {
-      myCoverageSpans = [];
+      myObservedSpans = [];
+      myPlayedSpans = [];
       return;
     }
     fetchCoverage(hash).then((reviews) => {
       if (ingest.content_hash !== hash) return;
-      myCoverageSpans = mergeSpans(
-        reviews.filter((r) => r.by === email).flatMap((r) => r.spans),
+      const mine = reviews.filter((r) => r.by === email).flatMap((r) => r.spans);
+      // Spans without a kind predate the tiers - treat as observed.
+      const observed = mergeSpans(mine.filter((s) => (s.kind ?? "observed") === "observed"));
+      myObservedSpans = observed;
+      myPlayedSpans = subtractSpans(
+        mine.filter((s) => s.kind === "played"),
+        observed,
       );
     });
   });
@@ -1371,14 +1427,22 @@
     if (!user) return;
     submitting = true;
     submitError = null;
-    const spans = pendingLineSpans;
+    const spans = pendingKindedSpans;
     const result = await submitReview(ingest.content_hash, doc.current, reviewNotes, spans);
     submitting = false;
     if (result.ok) {
       showSubmitForm = false;
       reviewNotes = "";
-      myCoverageSpans = mergeSpans([...myCoverageSpans, ...spans]);
+      myObservedSpans = mergeSpans([
+        ...myObservedSpans,
+        ...spans.filter((s) => s.kind === "observed"),
+      ]);
+      myPlayedSpans = subtractSpans(
+        [...myPlayedSpans, ...spans.filter((s) => s.kind === "played")],
+        myObservedSpans,
+      );
       pendingRuns = [];
+      playedRuns = [];
       localStorage.removeItem(coverageStorageKey(ingest.content_hash));
       // Set the submitted content as the new baseline without resetting position
       doc.original = doc.current;
@@ -1505,6 +1569,11 @@
             if (!ytPlayer) return;
             const t = ytPlayer.getCurrentTime();
             currentTime = t;
+            // Played-coverage tracking: only sample while actually playing,
+            // so pauses don't extend the continuous-play window.
+            if (ytPlayer.getPlayerState() === 1) {
+              trackPlayback(t, ytPlayer.getDuration() || undefined);
+            }
             // Single-mode pause: check directly against the live player time
             if (singleCheckEnabled && singleSegmentEnd > 0 && t >= singleSegmentEnd) {
               ytPlayer.pauseVideo();
@@ -2071,19 +2140,19 @@
           <div class="flex items-center gap-2 mb-1">
             <span class="text-xs font-ui text-on-surface-secondary">Coverage</span>
             <span class="text-[10px] text-on-surface-muted font-ui">
-              {pendingLineSpans.length === 0
+              {pendingKindedSpans.length === 0
                 ? "none marked"
-                : `${pendingLineSpans.length} range${pendingLineSpans.length === 1 ? "" : "s"}, ${pendingSpanLineCount} line${pendingSpanLineCount === 1 ? "" : "s"}`}
+                : `${pendingKindedSpans.length} range${pendingKindedSpans.length === 1 ? "" : "s"}, ${pendingSpanLineCount} line${pendingSpanLineCount === 1 ? "" : "s"}`}
             </span>
           </div>
           <CoverageStrip
             lineCount={bodyLineCount}
-            pending={pendingLineSpans}
-            previous={myCoverageSpans}
+            pending={pendingKindedSpans}
+            previous={mergeSpans([...myObservedSpans, ...myPlayedSpans])}
             onjump={scrollToBodyLine}
           />
           <p class="text-[10px] text-on-surface-muted mt-1 font-ui">
-            Amber = marked observed this session (select segments, then Mark observed);
+            Amber = coverage this session (solid observed, dotted played);
             green = your previous coverage. Submitting with no edits but
             coverage marked records "looked, all fine".
           </p>
@@ -2242,7 +2311,19 @@
           </div>
         {:else if localSourceUrl && (isAudio || isVideo)}
           <div class="flex-none p-4">
-            <video controls src={localSourceUrl} class="w-full rounded">
+            <video
+              controls
+              src={localSourceUrl}
+              class="w-full rounded"
+              ontimeupdate={(e) => {
+                const el = e.currentTarget;
+                currentTime = el.currentTime;
+                if (!el.paused) {
+                  trackPlayback(el.currentTime, Number.isFinite(el.duration) ? el.duration : undefined);
+                }
+              }}
+              onseeking={() => { playWindow = null; }}
+            >
               <track kind="captions" />
             </video>
           </div>
@@ -2749,6 +2830,15 @@
               >
                 Mark observed
               </button>
+              <!-- Clear marks: remove played/observed pending marks from the
+                   selection. Submitted (green) coverage is untouched. -->
+              <button
+                onclick={clearSelectedMarks}
+                class="text-xs font-ui px-2 py-1 rounded cursor-pointer text-on-surface-secondary hover:bg-surface-alt hover:text-on-surface"
+                title="Remove pending played/observed marks from the selected segments"
+              >
+                Clear marks
+              </button>
               <button
                 onclick={() => { selected = new Set(); }}
                 class="text-xs text-on-surface-muted cursor-pointer hover:text-on-surface px-1"
@@ -2894,31 +2984,27 @@
                     onkeydown={(e) => { if (e.key === 'Enter') handleSegmentClick(segment, e as unknown as MouseEvent); }}
                   >
                     {#if pendingSegments.has(segment.index)}
-                      {#if editedSegments.has(segment.index)}
-                        <div
-                          class="absolute left-0.5 inset-y-0.5 w-0.5 rounded pointer-events-none"
-                          style="background: repeating-linear-gradient(to bottom, var(--color-warning) 0 4px, transparent 4px 7px)"
-                          title="Marked observed, then edited (unsubmitted)"
-                        ></div>
-                      {:else}
-                        <div
-                          class="absolute left-0.5 inset-y-0.5 w-0.5 rounded bg-warning/80 pointer-events-none"
-                          title="Pending review coverage (unsubmitted)"
-                        ></div>
-                      {/if}
+                      <div
+                        class="absolute left-0.5 inset-y-0.5 w-0.5 rounded bg-warning/80 pointer-events-none"
+                        title="Observed - marked or edited (unsubmitted)"
+                      ></div>
+                    {:else if playedSegments.has(segment.index)}
+                      <div
+                        class="absolute left-0.5 inset-y-0.5 w-0.5 rounded pointer-events-none"
+                        style="background: repeating-linear-gradient(to bottom, var(--color-warning) 0 3px, transparent 3px 6px)"
+                        title="Played through during this session (unsubmitted)"
+                      ></div>
                     {:else if coveredSegments.has(segment.index)}
-                      {#if editedSegments.has(segment.index)}
-                        <div
-                          class="absolute left-0.5 inset-y-0.5 w-0.5 rounded pointer-events-none"
-                          style="background: repeating-linear-gradient(to bottom, var(--color-success) 0 4px, transparent 4px 7px)"
-                          title="Inside your previous coverage, edited since"
-                        ></div>
-                      {:else}
-                        <div
-                          class="absolute left-0.5 inset-y-0.5 w-0.5 rounded bg-success/70 pointer-events-none"
-                          title="Inside your previous review coverage"
-                        ></div>
-                      {/if}
+                      <div
+                        class="absolute left-0.5 inset-y-0.5 w-0.5 rounded bg-success/70 pointer-events-none"
+                        title="Inside your previous review coverage (observed)"
+                      ></div>
+                    {:else if playedCoveredSegments.has(segment.index)}
+                      <div
+                        class="absolute left-0.5 inset-y-0.5 w-0.5 rounded pointer-events-none"
+                        style="background: repeating-linear-gradient(to bottom, var(--color-success) 0 3px, transparent 3px 6px)"
+                        title="Inside your previous review coverage (played)"
+                      ></div>
                     {/if}
                     <div class="flex items-start gap-2">
                       <!-- Per-sentence speaker picker: muted chevron, aligned with group dot -->
@@ -3020,6 +3106,16 @@
                               <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
                             </svg>
                           </button>
+                          {#if pendingSegments.has(segment.index) || playedSegments.has(segment.index)}
+                            <button onclick={(e) => { e.stopPropagation(); clearSelectedMarks(); }}
+                              class="p-0.5 rounded cursor-pointer text-on-surface-muted/50 hover:text-on-surface hover:bg-surface-alt transition-colors"
+                              title="Clear pending played/observed marks on this segment"
+                              aria-label="Clear pending coverage marks on this segment">
+                              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M3 7l4-4 14 14-4 4L3 7zM14 4l6 6M5 19l4-4" />
+                              </svg>
+                            </button>
+                          {/if}
                           <button onclick={(e) => {
                               e.stopPropagation();
                               const wasIrrelevant = isSegmentIrrelevant(segment);
