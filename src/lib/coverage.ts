@@ -238,3 +238,23 @@ export function coveredSegmentIndices(body: string, spans: CoverageSpan[]): Set<
   }
   return out;
 }
+
+/** How much of a segment-index selection the pending tiers already cover.
+ *  A segment counts as covered if any observed or played run includes it.
+ *  Drives the observed toggle: "all-covered" means the toggle clears,
+ *  anything else means it marks. */
+export function selectionCoverageState(
+  selection: Iterable<number>,
+  observedRuns: CoverageSpan[],
+  playedRuns: CoverageSpan[],
+): "all-covered" | "partial" | "none" {
+  const runs = mergeSpans([...observedRuns, ...playedRuns]);
+  let covered = 0;
+  let total = 0;
+  for (const i of selection) {
+    total++;
+    if (runs.some((r) => i >= r.from && i <= r.to)) covered++;
+  }
+  if (total === 0 || covered === 0) return "none";
+  return covered === total ? "all-covered" : "partial";
+}

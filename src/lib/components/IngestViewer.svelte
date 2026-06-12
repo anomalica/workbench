@@ -7,6 +7,7 @@
     mergeSpans,
     coveredSegmentIndices,
     markObserved,
+    selectionCoverageState,
     runsToLineSpans,
     segmentRunsFromLineSpans,
     spanLineCount,
@@ -1378,6 +1379,17 @@
     selected = new Set();
   }
 
+  // The observed toggle: clear when every selected segment already carries
+  // a pending mark (either tier), otherwise mark observed. Submitted
+  // coverage and the [irrelevant] speaker tag are never touched.
+  let selectionAllMarked = $derived(
+    selectionCoverageState(selected, pendingRuns, playedRuns) === "all-covered",
+  );
+  function toggleSelectedObserved() {
+    if (selectionAllMarked) clearSelectedMarks();
+    else markSelectedObserved();
+  }
+
   // Hands-free "played" tracking. While media plays, fold each playback
   // clock sample into a continuous-play window; any segment whose whole
   // time range sits inside that window was played end-to-end. Seeks and
@@ -2719,6 +2731,19 @@
           {@const multiPickerOpen = speakerPicker?.kind === "multi"}
           <div class="px-4 py-2 bg-surface-alt border-b border-border flex items-center gap-2 flex-none">
             <span class="text-xs font-ui text-on-surface-secondary">{selected.size} segments selected</span>
+            <div class="w-px h-4 bg-border mx-1" aria-hidden="true"></div>
+            <!-- Observed toggle: personal review-tracking, not a content edit.
+                 Clears both pending tiers when the whole selection is marked;
+                 never touches submitted coverage or the irrelevant tag. -->
+            <button
+              onclick={toggleSelectedObserved}
+              class="text-xs font-ui px-2 py-1 rounded cursor-pointer border border-transparent text-on-surface-muted hover:border-border hover:text-warning"
+              title={selectionAllMarked
+                ? "Remove pending played/observed marks from the selected segments"
+                : "Mark all selected segments as observed (pending coverage)"}
+            >
+              {selectionAllMarked ? "Clear observed" : "Mark observed"}
+            </button>
             <div class="ml-auto flex items-center gap-1">
               <!-- Change speaker (extract into a different or new speaker) -->
               <div class="relative">
@@ -2822,23 +2847,6 @@
                   Mark irrelevant
                 </button>
               {/if}
-              <!-- Mark observed: add the selected range to pending coverage -->
-              <button
-                onclick={markSelectedObserved}
-                class="text-xs font-ui px-2 py-1 rounded cursor-pointer text-on-surface-secondary hover:bg-warning/15 hover:text-warning"
-                title="Mark all selected segments as observed (pending coverage)"
-              >
-                Mark observed
-              </button>
-              <!-- Clear marks: remove played/observed pending marks from the
-                   selection. Submitted (green) coverage is untouched. -->
-              <button
-                onclick={clearSelectedMarks}
-                class="text-xs font-ui px-2 py-1 rounded cursor-pointer text-on-surface-secondary hover:bg-surface-alt hover:text-on-surface"
-                title="Remove pending played/observed marks from the selected segments"
-              >
-                Clear marks
-              </button>
               <button
                 onclick={() => { selected = new Set(); }}
                 class="text-xs text-on-surface-muted cursor-pointer hover:text-on-surface px-1"
@@ -3098,24 +3106,6 @@
                           onmouseenter={onControlsEnter}
                           onmouseleave={onControlsLeave}
                         >
-                          <button onclick={(e) => { e.stopPropagation(); markSelectedObserved(); }}
-                            class="p-0.5 rounded cursor-pointer text-on-surface-muted/50 hover:text-warning hover:bg-warning/15 transition-colors"
-                            title="Mark observed (pending coverage)"
-                            aria-label="Mark this segment as observed">
-                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                              <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
-                            </svg>
-                          </button>
-                          {#if pendingSegments.has(segment.index) || playedSegments.has(segment.index)}
-                            <button onclick={(e) => { e.stopPropagation(); clearSelectedMarks(); }}
-                              class="p-0.5 rounded cursor-pointer text-on-surface-muted/50 hover:text-on-surface hover:bg-surface-alt transition-colors"
-                              title="Clear pending played/observed marks on this segment"
-                              aria-label="Clear pending coverage marks on this segment">
-                              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" d="M3 7l4-4 14 14-4 4L3 7zM14 4l6 6M5 19l4-4" />
-                              </svg>
-                            </button>
-                          {/if}
                           <button onclick={(e) => {
                               e.stopPropagation();
                               const wasIrrelevant = isSegmentIrrelevant(segment);
@@ -3169,6 +3159,26 @@
                               <path stroke-linecap="round" stroke-linejoin="round" d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
                               <path stroke-linecap="round" stroke-linejoin="round" d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
                             </svg>
+                          </button>
+                          <div class="w-px h-3.5 bg-border mx-0.5" aria-hidden="true"></div>
+                          <!-- Observed toggle: review tracking, kept apart from the edit actions -->
+                          <button onclick={(e) => { e.stopPropagation(); toggleSelectedObserved(); }}
+                            class="p-0.5 rounded cursor-pointer text-on-surface-muted/50 hover:text-warning hover:bg-warning/15 transition-colors"
+                            title={selectionAllMarked
+                              ? "Clear pending played/observed marks on this segment"
+                              : "Mark this segment as observed (pending coverage)"}
+                            aria-label={selectionAllMarked
+                              ? "Clear pending coverage marks on this segment"
+                              : "Mark this segment as observed"}>
+                            {#if selectionAllMarked}
+                              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M3 7l4-4 14 14-4 4L3 7zM14 4l6 6M5 19l4-4" />
+                              </svg>
+                            {:else}
+                              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+                              </svg>
+                            {/if}
                           </button>
                         </div>
                       {/if}

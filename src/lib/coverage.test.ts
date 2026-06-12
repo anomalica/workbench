@@ -7,6 +7,7 @@ import {
   coveredSegmentIndices,
   segmentLineRanges,
   markObserved,
+  selectionCoverageState,
   runsToLineSpans,
   segmentRunsFromLineSpans,
   spanLineCount,
@@ -290,5 +291,37 @@ describe("segmentBounds / playedSegmentPositions", () => {
   it("ignores zero or negative-width bounds from non-monotonic timestamps", () => {
     const bounds = segmentBounds([0, 10, 5], 40);
     expect(playedSegmentPositions({ start: 0, end: 40 }, bounds)).toEqual([0, 2]);
+  });
+});
+
+describe("selectionCoverageState", () => {
+  it("returns none for an empty selection", () => {
+    expect(selectionCoverageState([], [{ from: 0, to: 5 }], [])).toBe("none");
+  });
+
+  it("returns none when no selected segment is covered", () => {
+    expect(selectionCoverageState([3, 4], [{ from: 0, to: 1 }], [{ from: 7, to: 9 }])).toBe("none");
+  });
+
+  it("returns all-covered when observed runs cover everything", () => {
+    expect(selectionCoverageState([2, 3], [{ from: 1, to: 4 }], [])).toBe("all-covered");
+  });
+
+  it("counts played runs as coverage", () => {
+    expect(selectionCoverageState([2, 3], [], [{ from: 2, to: 3 }])).toBe("all-covered");
+  });
+
+  it("combines tiers - observed plus played covering the whole selection", () => {
+    expect(selectionCoverageState([1, 2, 3], [{ from: 1, to: 1 }], [{ from: 2, to: 3 }])).toBe(
+      "all-covered",
+    );
+  });
+
+  it("returns partial when only some segments are covered", () => {
+    expect(selectionCoverageState([1, 2, 5], [{ from: 1, to: 2 }], [])).toBe("partial");
+  });
+
+  it("works with a Set selection", () => {
+    expect(selectionCoverageState(new Set([0]), [{ from: 0, to: 0 }], [])).toBe("all-covered");
   });
 });
