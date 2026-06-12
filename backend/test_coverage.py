@@ -56,7 +56,7 @@ def test_append_coverage_creates_sidecar(ingests_repo):
     assert len(sidecar["reviews"]) == 1
     entry = sidecar["reviews"][0]
     assert entry["by"] == "reviewer@example.invalid"
-    assert entry["spans"] == [{"from": 0, "to": 2}]
+    assert entry["spans"] == [{"from": 0, "to": 2, "kind": "observed"}]
     assert entry["notes"] == "looked, all fine"
     assert entry["at"].endswith("Z")
     assert len(entry["parent_commit"]) == 40
@@ -123,7 +123,7 @@ def test_coverage_endpoint_returns_all_reviewers(client, ingests_repo):
     assert res.status_code == 200
     reviews = res.json()["reviews"]
     assert [r["by"] for r in reviews] == ["a@example.invalid", "b@example.invalid"]
-    assert reviews[1]["spans"] == [{"from": 2, "to": 4}]
+    assert reviews[1]["spans"] == [{"from": 2, "to": 4, "kind": "observed"}]
 
 
 def test_coverage_endpoint_bad_hash(client):
@@ -134,7 +134,9 @@ def test_validate_spans():
     from fastapi import HTTPException
 
     assert server._validate_spans(None) == []
-    assert server._validate_spans([{"from": 0, "to": 0}]) == [{"from": 0, "to": 0}]
+    assert server._validate_spans([{"from": 0, "to": 0}]) == [
+        {"from": 0, "to": 0, "kind": "observed"}
+    ]
     for bad in [
         "x",
         [{"from": -1, "to": 2}],
@@ -144,3 +146,39 @@ def test_validate_spans():
     ]:
         with pytest.raises(HTTPException):
             server._validate_spans(bad)
+
+
+def test_validate_spans_kind():
+    from fastapi import HTTPException
+
+    # Explicit kinds pass through; missing kind defaults to observed.
+    assert server._validate_spans([{"from": 0, "to": 1, "kind": "played"}]) == [
+        {"from": 0, "to": 1, "kind": "played"}
+    ]
+    assert server._validate_spans([{"from": 0, "to": 1, "kind": "observed"}]) == [
+        {"from": 0, "to": 1, "kind": "observed"}
+    ]
+    assert server._validate_spans([{"from": 0, "to": 1}]) == [
+        {"from": 0, "to": 1, "kind": "observed"}
+    ]
+    for bad_kind in ["watched", "", 1, None]:
+        with pytest.raises(HTTPException):
+            server._validate_spans([{"from": 0, "to": 1, "kind": bad_kind}])
+
+
+def test_append_coverage_stores_kind(ingests_repo):
+    src = LocalIngestSource(ingests_repo)
+    src.append_coverage(
+        CONTENT_HASH,
+        email="reviewer@example.invalid",
+        spans=[
+            {"from": 0, "to": 1, "kind": "played"},
+            {"from": 3, "to": 5},  # legacy caller without kind
+        ],
+        notes="",
+    )
+    spans = src.load_coverage(CONTENT_HASH)["reviews"][0]["spans"]
+    assert spans == [
+        {"from": 0, "to": 1, "kind": "played"},
+        {"from": 3, "to": 5, "kind": "observed"},
+    ]
