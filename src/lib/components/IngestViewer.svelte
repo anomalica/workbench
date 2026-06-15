@@ -1094,6 +1094,13 @@
   let ytPlayer: YT.Player | null = null;
   let playerReady = $state(false);
   let currentTime = $state(0);
+  let playbackRate = $state(1);
+  const playbackRates = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
+
+  function setPlaybackRate(rate: number) {
+    playbackRate = rate;
+    if (ytPlayer && playerReady) ytPlayer.setPlaybackRate(rate);
+  }
   let activeSegment = $state(-1);
   let timeInterval: ReturnType<typeof setInterval> | null = null;
   let playbackMode = $state<"auto" | "single">("auto");
@@ -1585,6 +1592,7 @@
       events: {
         onReady: () => {
           playerReady = true;
+          ytPlayer?.setPlaybackRate(playbackRate);
           timeInterval = setInterval(() => {
             if (!ytPlayer) return;
             const t = ytPlayer.getCurrentTime();
@@ -2325,6 +2333,21 @@
                  aspect-video (16:9) actually drives the height instead of
                  the video being squished to 360px tall at any width. -->
             <div id="yt-player" class="w-full h-auto aspect-video rounded"></div>
+            <div class="flex items-center gap-1 mt-2 {theatreActive ? 'justify-center' : ''}">
+              <span class="text-xs font-ui text-on-surface-muted mr-1">Speed</span>
+              {#each playbackRates as rate (rate)}
+                <button
+                  onclick={() => setPlaybackRate(rate)}
+                  class="text-xs font-ui rounded px-1.5 py-0.5 tabular-nums transition-colors cursor-pointer
+                    {playbackRate === rate
+                    ? 'bg-primary/20 text-primary font-medium'
+                    : 'text-on-surface-muted hover:bg-surface-raised hover:text-on-surface'}"
+                  title="Set playback speed to {rate}x"
+                >
+                  {rate}x
+                </button>
+              {/each}
+            </div>
             {#if !theatreActive}
               <a
                 href={ingest.frontmatter.source_url}
