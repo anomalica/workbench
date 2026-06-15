@@ -126,19 +126,34 @@ export class DocumentStore {
    *  don't corrupt other fields. */
   updateFrontmatterSpeakers(speakers: string[]) {
     const [rawFm, body] = splitFrontmatter(this.current);
-    // Strip the --- delimiters to get just the YAML content
-    const fmContent = rawFm.replace(/^---\n/, "").replace(/---\n$/, "");
-    const doc = (yaml.load(fmContent) as Record<string, unknown>) ?? {};
-    doc.speakers = speakers.length > 0 ? speakers : undefined;
-    const newFmContent = yaml.dump(doc, {
-      lineWidth: -1,
-      quotingType: '"',
-      forceQuotes: false,
-      sortKeys: false,
-    });
-    const newFm = `---\n${newFmContent}---\n`;
-    const result = newFm + body;
+    const result = rewriteFrontmatterSpeakers(rawFm, speakers) + body;
     if (result !== this.current) this.pushEdit(result);
+  }
+
+  /** Serialise edited word runs back into a body AND reconcile the frontmatter
+   *  `speakers:` list to the named speakers now present in those runs, returning
+   *  the combined frontmatter + body. A single pushEdit of this result keeps the
+   *  body change and the frontmatter reconcile in one undo step. */
+  private serialiseWithReconcile(
+    fm: string,
+    parsed: ReturnType<typeof parseWords>,
+    newRuns: ReturnType<typeof reassignSpeaker>,
+  ): string {
+    const newBody = serializeWords(
+      parsed.words,
+      newRuns,
+      parsed.lineEndWords,
+      parsed.linePrefixes,
+      parsed.preamble,
+    );
+    // Only rewrite the frontmatter when the set of named speakers actually
+    // changed, so a word reassignment between defaults leaves it byte-for-byte.
+    const newNamed = namedSpeakersInOrder(newRuns);
+    const currentNamed = extractFrontmatterSpeakers(fm);
+    const sameNamed =
+      newNamed.length === currentNamed.length && newNamed.every((n, i) => n === currentNamed[i]);
+    const newFm = sameNamed ? fm : rewriteFrontmatterSpeakers(fm, newNamed);
+    return newFm + newBody;
   }
 
   /** Replace the entire document content (frontmatter + body). */
@@ -189,10 +204,21 @@ export class DocumentStore {
    *  within a single speaker run. */
   reassignWords(fromGIndex: number, toGIndex: number, newSpeaker: string) {
     const [fm, body] = splitFrontmatter(this.current);
-    const { words, runs, lineEndWords, linePrefixes, preamble } = parseWords(body);
-    const newRuns = reassignSpeaker(runs, fromGIndex, toGIndex, newSpeaker);
-    const newBody = serializeWords(words, newRuns, lineEndWords, linePrefixes, preamble);
-    const result = fm + newBody;
+    const parsed = parseWords(body);
+    const newRuns = reassignSpeaker(parsed.runs, fromGIndex, toGIndex, newSpeaker);
+    const result = this.serialiseWithReconcile(fm, parsed, newRuns);
+    if (result !== this.current) this.pushEdit(result);
+  }
+
+  /** Rename a speaker everywhere in a PWTS body to `newName` (all their turns),
+   *  merging with any existing speaker of that name, then reconcile the
+   *  frontmatter - all in one undo step. No-op when empty or unchanged. */
+  renameWordSpeaker(oldName: string, newName: string) {
+    if (!newName || oldName === newName) return;
+    const [fm, body] = splitFrontmatter(this.current);
+    const parsed = parseWords(body);
+    const newRuns = renameSpeakerInRuns(parsed.runs, oldName, newName);
+    const result = this.serialiseWithReconcile(fm, parsed, newRuns);
     if (result !== this.current) this.pushEdit(result);
   }
 
@@ -376,14 +402,36 @@ function escapeRegex(s: string): string {
 
 // --- Helpers for structural editing ---
 
-import { parseTranscript, serializeTranscript } from "$lib/transcript";
+import { parseTranscript, serializeTranscript, extractFrontmatterSpeakers } from "$lib/transcript";
 import type { Segment } from "$lib/transcript";
-import { parseWords, serializeWords, reassignSpeaker } from "$lib/transcript-words";
+import {
+  parseWords,
+  serializeWords,
+  reassignSpeaker,
+  renameSpeakerInRuns,
+  namedSpeakersInOrder,
+} from "$lib/transcript-words";
 
 function splitFrontmatter(doc: string): [string, string] {
   const match = doc.match(/^(---\n[\s\S]*?\n---\n)([\s\S]*)$/);
   if (!match) return ["", doc];
   return [match[1], match[2]];
+}
+
+/** Rewrite (or remove) the `speakers:` key in a `---`-delimited frontmatter
+ *  block via js-yaml, leaving every other key untouched. An empty list drops
+ *  the key entirely. */
+function rewriteFrontmatterSpeakers(rawFm: string, speakers: string[]): string {
+  const fmContent = rawFm.replace(/^---\n/, "").replace(/---\n$/, "");
+  const doc = (yaml.load(fmContent) as Record<string, unknown>) ?? {};
+  doc.speakers = speakers.length > 0 ? speakers : undefined;
+  const newFmContent = yaml.dump(doc, {
+    lineWidth: -1,
+    quotingType: '"',
+    forceQuotes: false,
+    sortKeys: false,
+  });
+  return `---\n${newFmContent}---\n`;
 }
 
 function parseTranscriptForEdit(body: string): Segment[] {

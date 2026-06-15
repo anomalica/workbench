@@ -32,6 +32,8 @@ export interface ParsedWords {
   preamble: string;
 }
 
+import { isSpecialSpeaker } from "$lib/transcript";
+
 // <!-- speaker: Name -->
 const INLINE_SPEAKER = /^<!--\s*speaker:\s*(.+?)\s*-->$/;
 // {{t:12.34}}word  -> capture the start seconds and the glued word text.
@@ -203,9 +205,13 @@ export function reassignSpeaker(
     }
   }
 
-  // Merge adjacent same-speaker runs.
+  return mergeAdjacentRuns(result);
+}
+
+/** Merge consecutive runs that share a speaker and are word-contiguous. */
+function mergeAdjacentRuns(runs: SpeakerRun[]): SpeakerRun[] {
   const merged: SpeakerRun[] = [];
-  for (const run of result) {
+  for (const run of runs) {
     const prev = merged[merged.length - 1];
     if (prev && prev.speaker === run.speaker && prev.endWord + 1 === run.startWord) {
       prev.endWord = run.endWord;
@@ -213,6 +219,41 @@ export function reassignSpeaker(
       merged.push({ ...run });
     }
   }
-
   return merged;
+}
+
+/** Rename every run owned by `oldName` to `newName`, then merge any adjacent
+ *  same-speaker runs that the rename produced (so renaming to a neighbouring
+ *  speaker - or to an existing speaker elsewhere - coalesces the turns). No-op
+ *  when the names match. */
+export function renameSpeakerInRuns(
+  runs: SpeakerRun[],
+  oldName: string,
+  newName: string,
+): SpeakerRun[] {
+  if (oldName === newName) return runs.map((r) => ({ ...r }));
+  const renamed = runs.map((r) => ({
+    speaker: r.speaker === oldName ? newName : r.speaker,
+    startWord: r.startWord,
+    endWord: r.endWord,
+  }));
+  return mergeAdjacentRuns(renamed);
+}
+
+/** Distinct run speakers that are real named people - i.e. not a default
+ *  `Speaker N` cluster id and not a special token ([irrelevant], [narrator],
+ *  ...) - in first-appearance order. This is the set the frontmatter
+ *  `speakers:` list must mirror. */
+export function namedSpeakersInOrder(runs: SpeakerRun[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const run of runs) {
+    const name = run.speaker;
+    if (seen.has(name)) continue;
+    if (/^Speaker \d+$/i.test(name)) continue;
+    if (isSpecialSpeaker(name)) continue;
+    seen.add(name);
+    out.push(name);
+  }
+  return out;
 }

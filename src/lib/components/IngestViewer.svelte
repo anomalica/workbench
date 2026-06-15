@@ -1713,7 +1713,10 @@
 
   // Edit operations
   function renameSpeaker(oldId: string, newName: string) {
-    doc.renameSpeaker(oldId, newName);
+    // Word records must keep their per-word timestamps, so rename through the
+    // word-aware path (the segment serialiser would strip the {{t:}} markers).
+    if (isWordRecord) doc.renameWordSpeaker(oldId, newName);
+    else doc.renameSpeaker(oldId, newName);
     // If the renamed speaker was selected, follow it to the new name
     if (selectedSpeakers.has(oldId)) {
       const next = new Set(selectedSpeakers);
@@ -1724,7 +1727,9 @@
   }
 
   function mergeSpeakers(sourceIds: string[], targetName: string) {
-    doc.mergeSpeakers(sourceIds, targetName);
+    // Word records: merge via the word-aware rename so {{t:}} markers survive.
+    if (isWordRecord) for (const id of sourceIds) doc.renameWordSpeaker(id, targetName);
+    else doc.mergeSpeakers(sourceIds, targetName);
     // Replace the merged speakers with just the target in the selection
     const next = new Set<string>();
     next.add(targetName);

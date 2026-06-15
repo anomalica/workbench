@@ -351,8 +351,8 @@
           {isSelected ? 'bg-primary-container/30 ring-1 ring-primary/30' : 'hover:bg-surface-alt'}"
         role="button"
         tabindex="0"
-        onclick={(e) => { if (assigningId !== row.id) onselect(row.id, e); }}
-        onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onselect(row.id); } }}
+        onclick={(e) => { if (assigningId !== row.id && editingId !== row.id) onselect(row.id, e); }}
+        onkeydown={(e) => { if (editingId !== row.id && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onselect(row.id); } }}
       >
         <button
           onclick={(e) => { e.stopPropagation(); onfilter(row.id); }}
@@ -361,7 +361,29 @@
         >
           <SpeakerDot speaker={row.id} size="md" ring={filteredSpeakers.has(row.id)} />
         </button>
-        <span class="flex-1 text-sm font-ui text-on-surface-muted truncate">{row.id}</span>
+        {#if editingId === row.id}
+          <input
+            bind:this={editInputEl}
+            type="text"
+            bind:value={editingValue}
+            onblur={commitEdit}
+            onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitEdit(); } else if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); } }}
+            onclick={(e) => e.stopPropagation()}
+            class="flex-1 min-w-0 bg-surface text-sm font-ui text-on-surface outline-none px-1 py-0.5 rounded border border-primary"
+          />
+        {:else}
+          <span class="flex-1 min-w-0 text-sm font-ui text-on-surface-muted truncate">{row.id}</span>
+          <button
+            onclick={(e) => { e.stopPropagation(); startEdit(row.id); }}
+            class="opacity-0 group-hover:opacity-100 cursor-pointer p-0.5 text-on-surface-muted hover:text-primary transition-opacity"
+            title="Rename this speaker everywhere"
+          >
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+              <path stroke-linecap="round" stroke-linejoin="round" d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+            </svg>
+          </button>
+        {/if}
 
         <!-- Assign to named speaker -->
         <div class="relative">
