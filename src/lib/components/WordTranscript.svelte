@@ -177,10 +177,11 @@
     });
   });
 
-  // Keep the actively-playing word in view: when the karaoke cursor nears an
-  // edge of the transcript it scrolls back to ~35% from the top, leaving
-  // reading runway. Only fires as activeWord changes (i.e. during playback),
-  // so it doesn't fight manual scrolling while paused.
+  // Keep the actively-playing word in view: when the karaoke cursor reaches the
+  // bottom 10% of the transcript (or scrolls off the top) it re-centres the
+  // word, so it never rides the very bottom edge and has runway both ways. Only
+  // fires as activeWord changes (i.e. during playback), so it doesn't fight
+  // manual scrolling while paused.
   $effect(() => {
     const g = activeWord;
     untrack(() => {
@@ -190,9 +191,10 @@
         if (!el || !scrollEl) return;
         const view = scrollEl.getBoundingClientRect();
         const word = el.getBoundingClientRect();
-        const edge = 24;
-        if (word.top < view.top + edge || word.bottom > view.bottom - edge) {
-          const target = scrollEl.scrollTop + (word.top - view.top) - view.height * 0.35;
+        const topMargin = 24;
+        const bottomZone = view.height * 0.1;
+        if (word.top < view.top + topMargin || word.bottom > view.bottom - bottomZone) {
+          const target = scrollEl.scrollTop + (word.top - view.top) - view.height * 0.5;
           scrollEl.scrollTo({ top: Math.max(0, target), behavior: "smooth" });
         }
       });
