@@ -15,6 +15,7 @@
   let {
     body,
     namedSpeakers = [],
+    currentTime = 0,
     onreassign,
     onseek,
   }: {
@@ -23,6 +24,8 @@
     body: string;
     /** Named speakers from the frontmatter, for picker ordering. */
     namedSpeakers?: string[];
+    /** Current media playback position in seconds, for karaoke highlighting. */
+    currentTime?: number;
     /** Reassign the inclusive word range [from, to] to `speaker`. */
     onreassign: (from: number, to: number, speaker: string) => void;
     /** Seek the media to `seconds` (optional). */
@@ -32,6 +35,26 @@
   let parsed = $derived(parseWords(body));
   let words = $derived(parsed.words);
   let runs = $derived(parsed.runs);
+
+  // The word currently being spoken: the last word whose start time is at or
+  // before the playback clock (each word runs until the next word's start).
+  // Word starts are monotonic, so binary-search. -1 before the first word.
+  let activeWord = $derived.by(() => {
+    if (words.length === 0 || currentTime < words[0].start) return -1;
+    let lo = 0;
+    let hi = words.length - 1;
+    let ans = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (words[mid].start <= currentTime) {
+        ans = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    return ans;
+  });
 
   // Map each word gIndex to the run that owns it, so a click can clamp the
   // selection to a single speaker turn.
@@ -301,7 +324,11 @@
               onpointerdown={(e) => onWordPointerDown(e, g)}
               onpointerenter={() => onWordPointerEnter(g)}
               class="cursor-text rounded-sm px-px transition-colors
-                {isSelected(g) ? 'bg-primary/30 text-on-surface' : 'hover:bg-primary-container/30'}"
+                {isSelected(g)
+                ? 'bg-primary/30 text-on-surface'
+                : g === activeWord
+                  ? 'bg-amber-400/40 text-on-surface'
+                  : 'hover:bg-primary-container/30'}"
             >{words[g].text}</span>{" "}
           {/each}
         </p>

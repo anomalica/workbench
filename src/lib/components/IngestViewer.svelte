@@ -2728,6 +2728,7 @@
           <WordTranscript
             body={currentBody()}
             namedSpeakers={namedSpeakersOrdered}
+            {currentTime}
             onreassign={(from, to, speaker) => doc.reassignWords(from, to, speaker)}
             onseek={(seconds) => {
               if (ytPlayer && playerReady) {
