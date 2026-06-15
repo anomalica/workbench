@@ -5,6 +5,7 @@ import {
   SPEAKER_IRRELEVANT,
   isSegmentIrrelevant,
 } from "./transcript";
+import { parseWords, serializeWords, reassignSpeaker } from "./transcript-words";
 
 // We can't test the Svelte $state-based DocumentStore directly in Vitest
 // (it needs the Svelte runtime). Instead we test the parse-modify-serialize
@@ -414,5 +415,58 @@ describe("splitSegmentMulti replaces one segment with N ordered pieces", () => {
     for (let i = 1; i < seconds.length; i++) {
       expect(seconds[i]).toBeGreaterThan(seconds[i - 1]);
     }
+  });
+});
+
+describe("reassignWords preserves frontmatter, preamble and line prefixes", () => {
+  // Mirrors DocumentStore.reassignWords exactly: split off the YAML block,
+  // parse the remaining body (preamble + transcript) into words/runs, reassign,
+  // serialise, then concatenate fm + newBody. Reproduces the two verified
+  // round-trip failures end-to-end (preamble dropped, prefix recomputed wrong).
+  const SPLIT_FM = /^(---\n[\s\S]*?\n---\n)([\s\S]*)$/;
+
+  const doc =
+    "---\n" +
+    "schema: anomalica/record/2\n" +
+    'title: "PWTS Example"\n' +
+    "word_timestamps: true\n" +
+    "---\n" +
+    "\n" +
+    "# PWTS Example\n" +
+    "\n" +
+    "*Published 2023-07-28*\n" +
+    "\n" +
+    "<!-- speaker: Speaker 1 -->\n" +
+    "00:07:02.4 {{t:422.50}}I {{t:422.58}}think {{t:422.76}}it's {{t:422.92}}great.\n";
+
+  function reassignWords(current: string, from: number, to: number, newSpeaker: string): string {
+    const match = current.match(SPLIT_FM);
+    const fm = match ? match[1] : "";
+    const body = match ? match[2] : current;
+    const { words, runs, lineEndWords, linePrefixes, preamble } = parseWords(body);
+    const newRuns = reassignSpeaker(runs, from, to, newSpeaker);
+    return fm + serializeWords(words, newRuns, lineEndWords, linePrefixes, preamble);
+  }
+
+  it("keeps the title and published line after a reassign", () => {
+    const result = reassignWords(doc, 2, 3, "Speaker 2");
+    expect(result).toContain("# PWTS Example");
+    expect(result).toContain("*Published 2023-07-28*");
+    expect(result).toContain('title: "PWTS Example"');
+  });
+
+  it("keeps the verbatim line prefix the token would round up", () => {
+    // Reassign the whole line to a new speaker: the line stays one block so its
+    // first word keeps the verbatim 07:02.4 prefix rather than recomputing it to
+    // the (wrong) floored 07:02.5 the 2dp token would yield.
+    const result = reassignWords(doc, 0, 3, "Speaker 2");
+    expect(result).toContain("00:07:02.4 {{t:422.50}}I");
+    expect(result).not.toContain("00:07:02.5");
+  });
+
+  it("round-trips identically when the reassign is a no-op", () => {
+    // Reassigning the whole run to its own speaker yields the original doc.
+    const result = reassignWords(doc, 0, 3, "Speaker 1");
+    expect(result).toBe(doc);
   });
 });
