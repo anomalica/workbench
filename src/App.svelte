@@ -15,6 +15,7 @@
   import FileDropZone from "$lib/components/FileDropZone.svelte";
   import IngestList from "$lib/components/IngestList.svelte";
   import IngestViewer from "$lib/components/IngestViewer.svelte";
+  import { carryoverState } from "$lib/carryover";
   import { themeState } from "$lib/theme.svelte";
 
   let user = $state<User | null>(null);
@@ -41,6 +42,20 @@
   let filterReviewed = $state<"all" | "pending" | "reviewed">("all");
   let reviewedTimes = $state<Record<string, string>>({});
   let reviewedHashes = $derived(new Set(Object.keys(reviewedTimes)));
+  // Records whose review was carried over from a re-ingest and not yet
+  // re-verified - they must read as "verify", never "reviewed", even though a
+  // stale review trailer exists for the (hash-stable) record.
+  let needsVerifyHashes = $derived(
+    new Set(
+      ingests
+        .filter(
+          (i) =>
+            carryoverState(i.review_carryover?.at, reviewedTimes[i.content_hash]) ===
+            "needs_verify",
+        )
+        .map((i) => i.content_hash),
+    ),
+  );
   let sortBy = $state<"date" | "title" | "type" | "publisher" | "author" | "copyright">("date");
   let sortAsc = $state(false);
   // Which date the date column shows (and what "Date" sort uses).
@@ -95,8 +110,12 @@
     ingests
       .filter((i) => {
         if (filterType !== "all" && i.source_type !== filterType) return false;
-        if (filterReviewed === "reviewed" && !reviewedHashes.has(i.content_hash)) return false;
-        if (filterReviewed === "pending" && reviewedHashes.has(i.content_hash)) return false;
+        // A carried-over record awaiting verification counts as pending, not
+        // reviewed, even though a stale trailer marks its hash reviewed.
+        const isReviewed =
+          reviewedHashes.has(i.content_hash) && !needsVerifyHashes.has(i.content_hash);
+        if (filterReviewed === "reviewed" && !isReviewed) return false;
+        if (filterReviewed === "pending" && isReviewed) return false;
         if (searchQuery.trim()) {
           const q = searchQuery.toLowerCase();
           return (
@@ -307,7 +326,9 @@
         digest={selectedDigest}
         {sourceFile}
         {user}
-        reviewed={reviewedHashes.has(selectedIngest.content_hash)}
+        reviewed={reviewedHashes.has(selectedIngest.content_hash) &&
+          !needsVerifyHashes.has(selectedIngest.content_hash)}
+        needsVerify={needsVerifyHashes.has(selectedIngest.content_hash)}
         {hasNext}
         {hasPrev}
         onnext={goNext}
@@ -409,6 +430,7 @@
               {sortBy}
               {sortAsc}
               {reviewedHashes}
+              {needsVerifyHashes}
               {reviewedTimes}
               {dateField}
               onsort={(field) => {

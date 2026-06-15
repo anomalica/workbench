@@ -212,6 +212,21 @@ class LocalIngestSource(IngestSource):
                     "copyright_status": frontmatter.get(
                         "copyright.status", "restricted"
                     ),
+                    # Present when the ingester carried a prior review onto a
+                    # re-ingested record; the workbench shows it as
+                    # "carried over, verify" rather than fresh or reviewed.
+                    "review_carryover": (
+                        {
+                            "at": frontmatter.get("review_carryover.at", ""),
+                            "from": frontmatter.get("review_carryover.from", ""),
+                            "had_text_edits": frontmatter.get(
+                                "review_carryover.had_text_edits"
+                            )
+                            in (True, "true", "True"),
+                        }
+                        if frontmatter.get("review_carryover.at")
+                        else None
+                    ),
                 }
             )
         ingests.sort(key=lambda x: (x.get("date", ""), x.get("title", "")))

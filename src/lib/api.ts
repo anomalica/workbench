@@ -1,3 +1,5 @@
+import type { ReviewCarryover } from "./carryover";
+
 export type CopyrightStatus =
   | "public_domain"
   | "open_licence"
@@ -18,6 +20,9 @@ export interface IngestSummary {
   source_url: string;
   publisher: string;
   copyright_status: CopyrightStatus;
+  /** Present when the ingester carried a prior review onto this re-ingested
+   *  record; null/absent otherwise. */
+  review_carryover?: ReviewCarryover | null;
 }
 
 export interface IngestDetail {

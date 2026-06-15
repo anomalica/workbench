@@ -43,6 +43,7 @@
     sourceFile,
     user,
     reviewed = false,
+    needsVerify = false,
     hasNext = false,
     hasPrev = false,
     onnext,
@@ -55,6 +56,8 @@
     sourceFile: File | null;
     user: User | null;
     reviewed?: boolean;
+    /** Review carried from a re-ingest, not yet re-verified - show a banner. */
+    needsVerify?: boolean;
     /** Whether there is a record after this one in the current
      *  filtered+sorted list - drives the Next button enabled state and
      *  the n/ArrowRight keyboard shortcut. */
@@ -2108,6 +2111,16 @@
           <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
         </svg>
         Reviewed
+      </span>
+    {:else if needsVerify}
+      <span
+        class="flex items-center gap-1.5 text-xs font-ui font-medium text-warning flex-none"
+        title="Speakers were carried over from your earlier review of this record. Verify them and submit to confirm."
+      >
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v6h6M20 20v-6h-6M20 9a8 8 0 0 0-14-3M4 15a8 8 0 0 0 14 3" />
+        </svg>
+        Carried over - verify
       </span>
     {/if}
   </div>

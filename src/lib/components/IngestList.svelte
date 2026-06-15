@@ -6,6 +6,7 @@
     sortBy,
     sortAsc,
     reviewedHashes = new Set(),
+    needsVerifyHashes = new Set(),
     reviewedTimes = {},
     dateField = "published",
     onsort,
@@ -15,6 +16,7 @@
     sortBy: string;
     sortAsc: boolean;
     reviewedHashes?: Set<string>;
+    needsVerifyHashes?: Set<string>;
     reviewedTimes?: Record<string, string>;
     dateField?: "published" | "ingested" | "reviewed";
     onsort: (field: string) => void;
@@ -82,9 +84,15 @@
       <div class="flex items-baseline gap-0">
         <span
           class="w-6 flex-none text-center text-sm leading-none"
-          title={reviewedHashes.has(ingest.content_hash) ? "Reviewed" : "Not yet reviewed"}
+          title={needsVerifyHashes.has(ingest.content_hash)
+            ? "Review carried over - verify"
+            : reviewedHashes.has(ingest.content_hash)
+              ? "Reviewed"
+              : "Not yet reviewed"}
         >
-          {#if reviewedHashes.has(ingest.content_hash)}
+          {#if needsVerifyHashes.has(ingest.content_hash)}
+            <span class="text-warning" aria-label="Carried over - verify">&#x21bb;</span>
+          {:else if reviewedHashes.has(ingest.content_hash)}
             <span class="text-success" aria-label="Reviewed">&#x2713;</span>
           {:else}
             <span class="text-on-surface-muted/40" aria-label="Not yet reviewed">&#x2022;</span>
