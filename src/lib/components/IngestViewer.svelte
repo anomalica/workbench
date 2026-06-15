@@ -31,6 +31,8 @@
   import DiffViewer from "./DiffViewer.svelte";
   import MilkdownEditor from "./MilkdownEditor.svelte";
   import EpubViewer from "./EpubViewer.svelte";
+  import WordTranscript from "./WordTranscript.svelte";
+  import { hasWordTimestamps } from "$lib/transcript-words";
   import { untrack } from "svelte";
   import { marked } from "marked";
   import yaml from "js-yaml";
@@ -100,6 +102,12 @@
   });
   let segments = $derived(parseTranscript(currentBody()));
   let hasTranscript = $derived(segments.length > 0 && segments[0].speaker !== "");
+
+  // Per-word-timestamp (PWTS) records carry `{{t:N.N}}` markers and a
+  // `word_timestamps: true` frontmatter flag. They get the isolated
+  // word-level editor instead of the segment editor; v1 records are
+  // untouched. Detect from the live body so the toggle survives edits.
+  let isWordRecord = $derived(hasTranscript && hasWordTimestamps(currentBody()));
 
   // View mode for the ingest column's sub-tabs (rendered/edit/raw/diff).
   // Digest is no longer a sub-tab; it lives in its own column.
@@ -2148,27 +2156,29 @@
           ></textarea>
         {/if}
 
-        <div class="mt-3">
-          <div class="flex items-center gap-2 mb-1">
-            <span class="text-xs font-ui text-on-surface-secondary">Coverage</span>
-            <span class="text-[10px] text-on-surface-muted font-ui">
-              {pendingKindedSpans.length === 0
-                ? "none marked"
-                : `${pendingKindedSpans.length} range${pendingKindedSpans.length === 1 ? "" : "s"}, ${pendingSpanLineCount} line${pendingSpanLineCount === 1 ? "" : "s"}`}
-            </span>
+        {#if !isWordRecord}
+          <div class="mt-3">
+            <div class="flex items-center gap-2 mb-1">
+              <span class="text-xs font-ui text-on-surface-secondary">Coverage</span>
+              <span class="text-[10px] text-on-surface-muted font-ui">
+                {pendingKindedSpans.length === 0
+                  ? "none marked"
+                  : `${pendingKindedSpans.length} range${pendingKindedSpans.length === 1 ? "" : "s"}, ${pendingSpanLineCount} line${pendingSpanLineCount === 1 ? "" : "s"}`}
+              </span>
+            </div>
+            <CoverageStrip
+              lineCount={bodyLineCount}
+              pending={pendingKindedSpans}
+              previous={mergeSpans([...myObservedSpans, ...myPlayedSpans])}
+              onjump={scrollToBodyLine}
+            />
+            <p class="text-[10px] text-on-surface-muted mt-1 font-ui">
+              Amber = coverage this session (solid observed, dotted played);
+              green = your previous coverage. Submitting with no edits but
+              coverage marked records "looked, all fine".
+            </p>
           </div>
-          <CoverageStrip
-            lineCount={bodyLineCount}
-            pending={pendingKindedSpans}
-            previous={mergeSpans([...myObservedSpans, ...myPlayedSpans])}
-            onjump={scrollToBodyLine}
-          />
-          <p class="text-[10px] text-on-surface-muted mt-1 font-ui">
-            Amber = coverage this session (solid observed, dotted played);
-            green = your previous coverage. Submitting with no edits but
-            coverage marked records "looked, all fine".
-          </p>
-        </div>
+        {/if}
 
         {#if submitError}
           <p class="text-xs text-error mt-2">{submitError}</p>
@@ -2709,6 +2719,23 @@
               p-4 font-mono outline-none border-none"
             spellcheck="false"
           ></textarea>
+        </div>
+
+      {:else if isWordRecord}
+        <!-- Per-word-timestamp record: isolated word-level editor. No
+             coverage gutter or mark-observed wiring in this view by design. -->
+        <div class="relative flex-1 flex flex-col min-h-0">
+          <WordTranscript
+            body={currentBody()}
+            namedSpeakers={namedSpeakersOrdered}
+            onreassign={(from, to, speaker) => doc.reassignWords(from, to, speaker)}
+            onseek={(seconds) => {
+              if (ytPlayer && playerReady) {
+                ytPlayer.seekTo(Math.max(0, seconds), true);
+                ytPlayer.playVideo();
+              }
+            }}
+          />
         </div>
 
       {:else if hasTranscript}

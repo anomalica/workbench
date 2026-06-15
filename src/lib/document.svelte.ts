@@ -180,6 +180,22 @@ export class DocumentStore {
     });
   }
 
+  /** Reassign a contiguous run of timestamped words [fromGIndex, toGIndex]
+   *  to `newSpeaker` in a per-word-timestamp (PWTS) body, then write the
+   *  result back through the same undo/history/draft funnel as segment edits.
+   *  The whole point of PWTS is to keep every word's `{{t:N.N}}` marker, so
+   *  serializeWords retains them; the original line-break structure is
+   *  reproduced from `lineEndWords`. The caller guarantees the range lies
+   *  within a single speaker run. */
+  reassignWords(fromGIndex: number, toGIndex: number, newSpeaker: string) {
+    const [fm, body] = splitFrontmatter(this.current);
+    const { words, runs, lineEndWords, linePrefixes, preamble } = parseWords(body);
+    const newRuns = reassignSpeaker(runs, fromGIndex, toGIndex, newSpeaker);
+    const newBody = serializeWords(words, newRuns, lineEndWords, linePrefixes, preamble);
+    const result = fm + newBody;
+    if (result !== this.current) this.pushEdit(result);
+  }
+
   // --- All structural operations use parse-modify-serialize ---
 
   private editSegments(fn: (segs: Segment[]) => boolean) {
@@ -362,6 +378,7 @@ function escapeRegex(s: string): string {
 
 import { parseTranscript, serializeTranscript } from "$lib/transcript";
 import type { Segment } from "$lib/transcript";
+import { parseWords, serializeWords, reassignSpeaker } from "$lib/transcript-words";
 
 function splitFrontmatter(doc: string): [string, string] {
   const match = doc.match(/^(---\n[\s\S]*?\n---\n)([\s\S]*)$/);
