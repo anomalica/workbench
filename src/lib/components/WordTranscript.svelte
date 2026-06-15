@@ -118,6 +118,56 @@
   let editValue = $state("");
   let editWordEl = $state<HTMLInputElement>();
 
+  // Floating selection bar: positioned just above (or below) the first
+  // selected word, in the offsetParent's coordinate space.
+  let scrollEl = $state<HTMLElement>();
+  let barEl = $state<HTMLElement>();
+  let barStyle = $state("");
+
+  function positionBar() {
+    if (!range || !scrollEl || !barEl) return;
+    const wordEl = scrollEl.querySelector<HTMLElement>(`[data-word-index="${range.from}"]`);
+    const parent = barEl.offsetParent as HTMLElement | null;
+    if (!wordEl || !parent) return;
+
+    const word = wordEl.getBoundingClientRect();
+    const base = parent.getBoundingClientRect();
+    const view = scrollEl.getBoundingClientRect();
+    const barW = barEl.offsetWidth;
+    const barH = barEl.offsetHeight;
+    const gap = 8;
+    const margin = 4;
+
+    // Left-align to the word, clamped within the visible scroll area.
+    let left = word.left - base.left;
+    const minLeft = view.left - base.left + margin;
+    const maxLeft = view.right - base.left - barW - margin;
+    if (maxLeft >= minLeft) left = Math.max(minLeft, Math.min(left, maxLeft));
+    else left = minLeft;
+
+    // Vertical clamp: keep the anchoring word's edge within the visible area
+    // so the bar never floats off-screen when the word is scrolled away.
+    const wordTop = Math.max(view.top, Math.min(word.top, view.bottom));
+    const wordBottom = Math.max(view.top, Math.min(word.bottom, view.bottom));
+
+    // Prefer above; flip below if there isn't room.
+    let top = wordTop - base.top - gap - barH;
+    if (top < margin) top = wordBottom - base.top + gap;
+
+    barStyle = `top:${Math.round(top)}px;left:${Math.round(left)}px`;
+  }
+
+  function schedulePositionBar() {
+    requestAnimationFrame(positionBar);
+  }
+
+  $effect(() => {
+    // Track selection and edit mode (bar width changes when editing).
+    void range;
+    void editingWord;
+    if (range) schedulePositionBar();
+  });
+
   function clampToRun(a: number, b: number): { from: number; to: number } | null {
     const run = runOfWord.get(a);
     if (!run) return null;
@@ -205,7 +255,7 @@
   }
 </script>
 
-<svelte:window onpointerup={stopDrag} />
+<svelte:window onpointerup={stopDrag} onresize={() => range && schedulePositionBar()} />
 
 {#snippet speakerMenu(currentSpeaker: string | null, onChoose: (name: string) => void)}
   {@const named = namedSpeakersOrdered.filter((s) => s !== currentSpeaker)}
@@ -270,14 +320,16 @@
   </div>
 {/snippet}
 
-<!-- Selection action bar, docked at the top of the transcript pane, shown when
-     a word range is selected. -->
+<!-- Selection action bar, floating just above (or below) the first selected
+     word, shown when a word range is selected. -->
 {#if range}
   {@const count = range.to - range.from + 1}
   {@const single = range.from === range.to}
   {@const selectedSpeaker = runOfWord.get(range.from)?.speaker ?? null}
   <div
-    class="absolute top-2 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2
+    bind:this={barEl}
+    style={barStyle}
+    class="absolute z-30 flex items-center gap-2
       bg-surface-raised border border-border rounded-full shadow-lg px-3 py-1.5"
   >
     {#if editingWord}
@@ -360,7 +412,12 @@
   </div>
 {/if}
 
-<div class="flex-1 overflow-auto" data-scroll-sync>
+<div
+  bind:this={scrollEl}
+  onscroll={() => range && schedulePositionBar()}
+  class="flex-1 overflow-auto"
+  data-scroll-sync
+>
   <div class="select-none">
     {#each visibleRuns as run (run.startWord)}
       <div class="border-b border-border/50 px-4 pt-3 pb-2">
