@@ -6,8 +6,29 @@ import {
   reassignSpeaker,
   renameSpeakerInRuns,
   namedSpeakersInOrder,
+  wordsInTimeRange,
   type SpeakerRun,
+  type Word,
 } from "./transcript-words";
+
+const W: Word[] = [
+  { text: "a", start: 1.0, gIndex: 0 },
+  { text: "b", start: 1.5, gIndex: 1 },
+  { text: "c", start: 2.0, gIndex: 2 },
+  { text: "d", start: 3.0, gIndex: 3 },
+];
+
+describe("wordsInTimeRange", () => {
+  it("returns words whose start is in (from, to]", () => {
+    expect(wordsInTimeRange(W, 1.0, 2.0)).toEqual([1, 2]);
+  });
+  it("excludes the lower bound, includes the upper", () => {
+    expect(wordsInTimeRange(W, 0, 1.0)).toEqual([0]);
+  });
+  it("is empty when the clock did not advance", () => {
+    expect(wordsInTimeRange(W, 2.0, 2.0)).toEqual([]);
+  });
+});
 
 // A real multi-speaker chunk lifted verbatim from a v2 (per-word-timestamp)
 // record: store/079bb44a...v2.md, body lines 47-72. Five speakers, with
