@@ -2751,6 +2751,7 @@
             {currentTime}
             {filteredSpeakers}
             onreassign={(from, to, speaker) => doc.reassignWords(from, to, speaker)}
+            onedit={(gIndex, text) => doc.editWord(gIndex, text)}
             onseek={(seconds) => {
               if (ytPlayer && playerReady) {
                 ytPlayer.seekTo(Math.max(0, seconds), true);

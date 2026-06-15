@@ -18,6 +18,7 @@
     currentTime = 0,
     filteredSpeakers = new Set<string>(),
     onreassign,
+    onedit,
     onseek,
   }: {
     /** Transcript body (everything after the frontmatter) using `{{t:N.N}}`
@@ -31,6 +32,8 @@
     filteredSpeakers?: Set<string>;
     /** Reassign the inclusive word range [from, to] to `speaker`. */
     onreassign: (from: number, to: number, speaker: string) => void;
+    /** Replace the text of a single word (keeps its timestamp). */
+    onedit: (gIndex: number, text: string) => void;
     /** Seek the media to `seconds` (optional). */
     onseek?: (seconds: number) => void;
   } = $props();
@@ -110,6 +113,10 @@
   // startWord of the run whose header picker is open (header click reassigns
   // the whole turn), or null.
   let headerPicker = $state<number | null>(null);
+  // Single-word text edit state.
+  let editingWord = $state(false);
+  let editValue = $state("");
+  let editWordEl = $state<HTMLInputElement>();
 
   function clampToRun(a: number, b: number): { from: number; to: number } | null {
     const run = runOfWord.get(a);
@@ -160,10 +167,27 @@
     anchor = null;
     range = null;
     pickerOpen = false;
+    editingWord = false;
   }
 
   function chooseSpeaker(name: string) {
     if (range) onreassign(range.from, range.to, name);
+    clearSelection();
+  }
+
+  function startEditWord() {
+    if (!range || range.from !== range.to) return;
+    editValue = words[range.from].text;
+    pickerOpen = false;
+    editingWord = true;
+    setTimeout(() => {
+      editWordEl?.focus();
+      editWordEl?.select();
+    }, 0);
+  }
+
+  function commitEditWord() {
+    if (range && editingWord) onedit(range.from, editValue);
     clearSelection();
   }
 
@@ -250,43 +274,89 @@
      a word range is selected. -->
 {#if range}
   {@const count = range.to - range.from + 1}
+  {@const single = range.from === range.to}
   {@const selectedSpeaker = runOfWord.get(range.from)?.speaker ?? null}
   <div
     class="absolute top-2 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2
       bg-surface-raised border border-border rounded-full shadow-lg px-3 py-1.5"
   >
-    <span class="text-xs font-ui text-on-surface-secondary tabular-nums">
-      {count} word{count === 1 ? "" : "s"}
-    </span>
-    <div class="w-px h-4 bg-border" aria-hidden="true"></div>
-    <div class="relative">
-      <button
-        onclick={(e) => {
-          e.stopPropagation();
-          pickerOpen = !pickerOpen;
+    {#if editingWord}
+      <input
+        bind:this={editWordEl}
+        type="text"
+        bind:value={editValue}
+        onkeydown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            commitEditWord();
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            clearSelection();
+          }
         }}
-        class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline flex items-center gap-1"
-        title="Assign these words to a speaker"
+        class="text-sm font-ui bg-surface border border-primary rounded px-2 py-0.5 text-on-surface outline-none min-w-32"
+      />
+      <button
+        onclick={commitEditWord}
+        class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
+        title="Save (Enter)"
       >
-        Assign speaker
-        <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+        Save
+      </button>
+      <button
+        onclick={clearSelection}
+        class="p-0.5 rounded cursor-pointer text-on-surface-muted/60 hover:text-on-surface hover:bg-surface-alt transition-colors"
+        title="Cancel (Esc)"
+        aria-label="Cancel"
+      >
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" d="M6 18L18 6M6 6l12 12" />
         </svg>
       </button>
-      {#if pickerOpen}
-        {@render speakerMenu(selectedSpeaker, chooseSpeaker)}
+    {:else}
+      <span class="text-xs font-ui text-on-surface-secondary tabular-nums">
+        {count} word{count === 1 ? "" : "s"}
+      </span>
+      <div class="w-px h-4 bg-border" aria-hidden="true"></div>
+      <div class="relative">
+        <button
+          onclick={(e) => {
+            e.stopPropagation();
+            pickerOpen = !pickerOpen;
+          }}
+          class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline flex items-center gap-1"
+          title="Assign these words to a speaker"
+        >
+          Assign speaker
+          <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+          </svg>
+        </button>
+        {#if pickerOpen}
+          {@render speakerMenu(selectedSpeaker, chooseSpeaker)}
+        {/if}
+      </div>
+      {#if single}
+        <div class="w-px h-4 bg-border" aria-hidden="true"></div>
+        <button
+          onclick={startEditWord}
+          class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
+          title="Edit this word's text"
+        >
+          Edit word
+        </button>
       {/if}
-    </div>
-    <button
-      onclick={clearSelection}
-      class="p-0.5 rounded cursor-pointer text-on-surface-muted/60 hover:text-on-surface hover:bg-surface-alt transition-colors"
-      title="Clear selection"
-      aria-label="Clear selection"
-    >
-      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-        <path stroke-linecap="round" d="M6 18L18 6M6 6l12 12" />
-      </svg>
-    </button>
+      <button
+        onclick={clearSelection}
+        class="p-0.5 rounded cursor-pointer text-on-surface-muted/60 hover:text-on-surface hover:bg-surface-alt transition-colors"
+        title="Clear selection"
+        aria-label="Clear selection"
+      >
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" d="M6 18L18 6M6 6l12 12" />
+        </svg>
+      </button>
+    {/if}
   </div>
 {/if}
 
