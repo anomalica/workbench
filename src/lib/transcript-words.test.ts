@@ -30,6 +30,19 @@ describe("wordsInTimeRange", () => {
   });
 });
 
+describe("multi-word units (a space inside one timestamped unit)", () => {
+  it("captures text up to the next marker, spaces kept", () => {
+    const p = parseWords("<!-- speaker: A -->\n00:00:01.0 {{t:1.00}}Hey there {{t:1.50}}friend");
+    expect(p.words.map((w) => w.text)).toEqual(["Hey there", "friend"]);
+    expect(p.words.map((w) => w.start)).toEqual([1.0, 1.5]);
+  });
+  it("round-trips a multi-word unit byte-for-byte", () => {
+    const body = "<!-- speaker: A -->\n00:00:01.0 {{t:1.00}}Hey there {{t:1.50}}friend\n";
+    const p = parseWords(body);
+    expect(serializeWords(p.words, p.runs, p.lineEndWords, p.linePrefixes, p.preamble)).toBe(body);
+  });
+});
+
 // A real multi-speaker chunk lifted verbatim from a v2 (per-word-timestamp)
 // record: store/079bb44a...v2.md, body lines 47-72. Five speakers, with
 // Speaker 1 and Speaker 3 recurring, and a mix of multi-line and single-line
