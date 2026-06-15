@@ -118,6 +118,14 @@
     assigningId = null;
   }
 
+  // Merge a named speaker into another speaker (all their turns become it).
+  let mergingId = $state<string | null>(null);
+
+  function mergeInto(sourceId: string, targetId: string) {
+    if (sourceId !== targetId) onmerge([sourceId], targetId);
+    mergingId = null;
+  }
+
   // All named-speaker IDs currently present in segments (excludes unassigned).
   let namedIds = $derived(named.map((r) => r.id));
   let unnamedIds = $derived(unnamed.map((r) => r.id));
@@ -168,7 +176,7 @@
         {isSelected ? 'bg-primary-container/30 ring-1 ring-primary/30' : 'hover:bg-surface-alt'}"
       role="button"
       tabindex="0"
-      onclick={(e) => { if (editingId !== row.id) onselect(row.id, e); }}
+      onclick={(e) => { if (editingId !== row.id && mergingId !== row.id) onselect(row.id, e); }}
       onkeydown={(e) => { if (editingId !== row.id && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onselect(row.id); } }}
     >
       <button
@@ -200,6 +208,55 @@
             <path stroke-linecap="round" stroke-linejoin="round" d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
           </svg>
         </button>
+
+        <!-- Merge this speaker into another -->
+        {#if speakerRows().length > 1}
+          <div class="relative">
+            <button
+              onclick={(e) => { e.stopPropagation(); mergingId = mergingId === row.id ? null : row.id; }}
+              class="text-xs font-ui text-on-surface-muted hover:text-primary cursor-pointer flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+              title="Merge this speaker into another (their turns become the one you pick)"
+            >
+              Merge
+              <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+            {#if mergingId === row.id}
+              <div class="absolute right-0 top-full mt-1 z-20 bg-surface-raised border border-border rounded shadow-lg py-1 min-w-40 max-h-48 overflow-auto">
+                {#each named.filter((n) => n.id !== row.id) as t}
+                  <button
+                    onclick={(e) => { e.stopPropagation(); mergeInto(row.id, t.id); }}
+                    class="block w-full text-left px-3 py-1.5 text-sm font-ui cursor-pointer hover:bg-primary-container/30 text-on-surface"
+                  >
+                    <SpeakerDot speaker={t.id} inline />
+                    {t.id}
+                  </button>
+                {/each}
+                {#each unnamed as t}
+                  <button
+                    onclick={(e) => { e.stopPropagation(); mergeInto(row.id, t.id); }}
+                    class="block w-full text-left px-3 py-1.5 text-sm font-ui cursor-pointer hover:bg-primary-container/30 text-on-surface-muted"
+                  >
+                    <SpeakerDot speaker={t.id} inline />
+                    {t.id}
+                  </button>
+                {/each}
+                <div class="border-t border-border mt-1 pt-1">
+                  {#each [SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE, SPEAKER_GROUP] as specialName}
+                    <button
+                      onclick={(e) => { e.stopPropagation(); mergeInto(row.id, specialName); }}
+                      class="block w-full text-left px-3 py-1.5 text-sm font-ui cursor-pointer hover:bg-primary-container/30 text-on-surface-muted italic"
+                    >
+                      <SpeakerDot speaker={specialName} inline />
+                      {specialName}
+                    </button>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+          </div>
+        {/if}
       {/if}
       <button
         onclick={(e) => { e.stopPropagation(); onfilter(row.id); }}
