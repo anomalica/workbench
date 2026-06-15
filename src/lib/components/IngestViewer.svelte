@@ -2729,11 +2729,27 @@
       {:else if isWordRecord}
         <!-- Per-word-timestamp record: isolated word-level editor. No
              coverage gutter or mark-observed wiring in this view by design. -->
+        {#if filteredSpeakers.size > 0}
+          <div class="px-3 py-1.5 bg-primary-container/20 border-b border-border flex items-center gap-2 flex-wrap flex-none">
+            <span class="text-xs font-ui text-on-surface-secondary">Filtered to:</span>
+            {#each [...filteredSpeakers] as speakerId}
+              <span class="text-xs font-ui font-medium text-primary inline-flex items-center gap-1">
+                <SpeakerDot speaker={speakerId} />
+                {speakerId}
+              </span>
+            {/each}
+            <button
+              onclick={clearSpeakerFilter}
+              class="text-xs text-on-surface-muted hover:text-on-surface cursor-pointer ml-auto"
+            >clear</button>
+          </div>
+        {/if}
         <div class="relative flex-1 flex flex-col min-h-0">
           <WordTranscript
             body={currentBody()}
             namedSpeakers={namedSpeakersOrdered}
             {currentTime}
+            {filteredSpeakers}
             onreassign={(from, to, speaker) => doc.reassignWords(from, to, speaker)}
             onseek={(seconds) => {
               if (ytPlayer && playerReady) {

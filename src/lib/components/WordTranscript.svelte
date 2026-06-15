@@ -16,6 +16,7 @@
     body,
     namedSpeakers = [],
     currentTime = 0,
+    filteredSpeakers = new Set<string>(),
     onreassign,
     onseek,
   }: {
@@ -26,6 +27,8 @@
     namedSpeakers?: string[];
     /** Current media playback position in seconds, for karaoke highlighting. */
     currentTime?: number;
+    /** When non-empty, only these speakers' turns are shown. */
+    filteredSpeakers?: Set<string>;
     /** Reassign the inclusive word range [from, to] to `speaker`. */
     onreassign: (from: number, to: number, speaker: string) => void;
     /** Seek the media to `seconds` (optional). */
@@ -35,6 +38,12 @@
   let parsed = $derived(parseWords(body));
   let words = $derived(parsed.words);
   let runs = $derived(parsed.runs);
+
+  // Speaker filter: when active, only matching turns are rendered. Selection
+  // and karaoke still index the full word array, so they stay correct.
+  let visibleRuns = $derived(
+    filteredSpeakers.size === 0 ? runs : runs.filter((r) => filteredSpeakers.has(r.speaker)),
+  );
 
   // The word currently being spoken: the last word whose start time is at or
   // before the playback clock (each word runs until the next word's start).
@@ -283,7 +292,7 @@
 
 <div class="flex-1 overflow-auto" data-scroll-sync>
   <div class="select-none">
-    {#each runs as run (run.startWord)}
+    {#each visibleRuns as run (run.startWord)}
       <div class="border-b border-border/50 px-4 pt-3 pb-2">
         <!-- Clickable speaker chip: reassigns the whole turn. -->
         <div class="relative inline-block pb-1">
