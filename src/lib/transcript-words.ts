@@ -257,3 +257,15 @@ export function namedSpeakersInOrder(runs: SpeakerRun[]): string[] {
   }
   return out;
 }
+
+/** gIndices of words whose start falls in the half-open interval
+ *  (fromTime, toTime]. Used to mark words observed as playback advances past
+ *  them - the caller only calls this for a continuous forward step (it ignores
+ *  seeks/jumps), so skipped words are never marked. */
+export function wordsInTimeRange(words: Word[], fromTime: number, toTime: number): number[] {
+  const out: number[] = [];
+  for (const w of words) {
+    if (w.start > fromTime && w.start <= toTime) out.push(w.gIndex);
+  }
+  return out;
+}

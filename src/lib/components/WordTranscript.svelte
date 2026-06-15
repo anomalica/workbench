@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { parseWords } from "$lib/transcript-words";
+  import { untrack } from "svelte";
+  import { parseWords, wordsInTimeRange } from "$lib/transcript-words";
   import type { SpeakerRun } from "$lib/transcript-words";
   import {
     orderedNamedSpeakers,
@@ -17,6 +18,7 @@
     namedSpeakers = [],
     currentTime = 0,
     filteredSpeakers = new Set<string>(),
+    storageKey = "",
     onreassign,
     onedit,
     onseek,
@@ -30,6 +32,8 @@
     currentTime?: number;
     /** When non-empty, only these speakers' turns are shown. */
     filteredSpeakers?: Set<string>;
+    /** localStorage key for persisting which words have been observed. */
+    storageKey?: string;
     /** Reassign the inclusive word range [from, to] to `speaker`. */
     onreassign: (from: number, to: number, speaker: string) => void;
     /** Replace the text of a single word (keeps its timestamp). */
@@ -123,6 +127,90 @@
   let scrollEl = $state<HTMLElement>();
   let barEl = $state<HTMLElement>();
   let barStyle = $state("");
+
+  // Observation tracking: word gIndices that have been "seen" - auto-filled as
+  // playback passes each word, or marked manually. Unobserved words render
+  // faded; the set persists per record in localStorage. Always reassigned (not
+  // mutated) so reactivity fires regardless of Set-proxy behaviour.
+  let observed = $state(new Set<number>());
+  let lastPlayTime = -1;
+
+  // Load persisted observation when the record (storageKey) changes.
+  $effect(() => {
+    const key = storageKey;
+    let restored: number[] = [];
+    if (key) {
+      try {
+        restored = JSON.parse(localStorage.getItem(key) ?? "[]");
+      } catch {
+        restored = [];
+      }
+    }
+    untrack(() => {
+      lastPlayTime = -1;
+      observed = new Set(restored);
+    });
+  });
+
+  // Persist on change.
+  $effect(() => {
+    const arr = [...observed];
+    if (storageKey) localStorage.setItem(storageKey, JSON.stringify(arr));
+  });
+
+  // Auto-observe: mark words the playhead passes during continuous forward
+  // playback. Seeks and backward jumps (gap > 2s or negative) are ignored, so
+  // skipped content is never silently marked seen.
+  $effect(() => {
+    const t = currentTime;
+    void words.length;
+    untrack(() => {
+      const prev = lastPlayTime;
+      lastPlayTime = t;
+      if (prev < 0 || t - prev <= 0 || t - prev > 2) return;
+      const fresh = wordsInTimeRange(words, prev, t).filter((g) => !observed.has(g));
+      if (fresh.length) {
+        const next = new Set(observed);
+        for (const g of fresh) next.add(g);
+        observed = next;
+      }
+    });
+  });
+
+  function isObserved(g: number): boolean {
+    return observed.has(g);
+  }
+
+  function rangeAllObserved(): boolean {
+    if (!range) return false;
+    for (let g = range.from; g <= range.to; g++) if (!observed.has(g)) return false;
+    return true;
+  }
+
+  function toggleSeen() {
+    if (!range) return;
+    const all = rangeAllObserved();
+    const next = new Set(observed);
+    for (let g = range.from; g <= range.to; g++) {
+      if (all) next.delete(g);
+      else next.add(g);
+    }
+    observed = next;
+  }
+
+  function observedInRun(run: SpeakerRun): number {
+    let n = 0;
+    for (let g = run.startWord; g <= run.endWord; g++) if (observed.has(g)) n++;
+    return n;
+  }
+
+  function selectBlock(run: SpeakerRun) {
+    headerPicker = null;
+    pickerOpen = false;
+    editingWord = false;
+    anchor = run.startWord;
+    range = { from: run.startWord, to: run.endWord };
+  }
 
   function positionBar() {
     if (!range || !scrollEl || !barEl) return;
@@ -390,6 +478,17 @@
           {@render speakerMenu(selectedSpeaker, chooseSpeaker)}
         {/if}
       </div>
+      <div class="w-px h-4 bg-border" aria-hidden="true"></div>
+      <button
+        onclick={toggleSeen}
+        class="text-xs font-ui font-medium cursor-pointer hover:underline
+          {rangeAllObserved() ? 'text-on-surface-muted' : 'text-primary'}"
+        title={rangeAllObserved()
+          ? "Mark these words as not yet observed"
+          : "Mark these words as observed"}
+      >
+        {rangeAllObserved() ? "Mark unseen" : "Mark seen"}
+      </button>
       {#if single}
         <div class="w-px h-4 bg-border" aria-hidden="true"></div>
         <button
@@ -424,36 +523,54 @@
        first line, and never has to flip below it. -->
   <div class="select-none pt-12">
     {#each visibleRuns as run (run.startWord)}
+      {@const obs = observedInRun(run)}
+      {@const total = run.endWord - run.startWord + 1}
       <div class="border-b border-border/50 px-4 pt-3 pb-2">
-        <!-- Clickable speaker chip: reassigns the whole turn. -->
-        <div class="relative inline-block pb-1">
-          <button
-            onclick={(e) => {
-              e.stopPropagation();
-              toggleHeaderPicker(run);
-            }}
-            class="group flex items-center gap-2 cursor-pointer rounded px-1 -mx-1 hover:bg-primary-container/30 transition-colors"
-            title="Change this speaker"
-          >
-            <div class="w-4 flex-none flex items-center justify-center">
-              <SpeakerDot speaker={run.speaker} />
-            </div>
-            <span class="text-xs font-ui font-medium text-primary group-hover:underline">
-              {run.speaker}
-            </span>
-            <svg
-              class="w-3 h-3 text-on-surface-muted/60"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              viewBox="0 0 24 24"
+        <div class="flex items-center justify-between gap-2 pb-1">
+          <!-- Clickable speaker chip: reassigns the whole turn. -->
+          <div class="relative inline-block">
+            <button
+              onclick={(e) => {
+                e.stopPropagation();
+                toggleHeaderPicker(run);
+              }}
+              class="group flex items-center gap-2 cursor-pointer rounded px-1 -mx-1 hover:bg-primary-container/30 transition-colors"
+              title="Change this speaker"
             >
-              <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
-            </svg>
+              <div class="w-4 flex-none flex items-center justify-center">
+                <SpeakerDot speaker={run.speaker} />
+              </div>
+              <span class="text-xs font-ui font-medium text-primary group-hover:underline">
+                {run.speaker}
+              </span>
+              <svg
+                class="w-3 h-3 text-on-surface-muted/60"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                viewBox="0 0 24 24"
+              >
+                <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+            {#if headerPicker === run.startWord}
+              {@render speakerMenu(run.speaker, (name) => chooseRunSpeaker(run, name))}
+            {/if}
+          </div>
+          <!-- Observation progress for this turn. Clicking selects the turn so
+               it can be marked seen deliberately (no one-click mark-all). -->
+          <button
+            onclick={() => selectBlock(run)}
+            class="flex-none text-[10px] font-mono tabular-nums px-1.5 py-0.5 rounded cursor-pointer transition-colors
+              {obs >= total
+              ? 'text-primary hover:bg-primary-container/30'
+              : 'text-on-surface-muted/60 hover:bg-surface-alt hover:text-on-surface'}"
+            title={obs >= total
+              ? "This turn is fully observed - click to select it"
+              : `${obs} of ${total} words observed - click to select this turn, then Mark seen`}
+          >
+            {obs}/{total}
           </button>
-          {#if headerPicker === run.startWord}
-            {@render speakerMenu(run.speaker, (name) => chooseRunSpeaker(run, name))}
-          {/if}
         </div>
         <p class="pl-6 text-sm text-on-surface leading-relaxed">
           {#each Array.from({ length: run.endWord - run.startWord + 1 }, (_, k) => run.startWord + k) as g (g)}
@@ -468,7 +585,9 @@
                 ? 'bg-primary/30 text-on-surface'
                 : g === activeWord
                   ? 'bg-amber-400/40 text-on-surface'
-                  : 'hover:bg-primary-container/30'}"
+                  : isObserved(g)
+                    ? 'hover:bg-primary-container/30'
+                    : 'text-on-surface-muted/40 hover:bg-primary-container/30'}"
             >{words[g].text}</span>{" "}
           {/each}
         </p>
