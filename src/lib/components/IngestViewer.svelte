@@ -1828,6 +1828,17 @@
     } else if ((e.ctrlKey || e.metaKey) && e.key === "a" && view === "ingest" && hasTranscript) {
       e.preventDefault();
       selected = new Set(visibleSegments.map((s) => s.index));
+    } else if ((e.key === "ArrowDown" || e.key === "ArrowUp") && view === "ingest" && isWordRecord) {
+      // Word editor has no segment nav, so Up/Down step playback speed
+      // (up = faster). One step per press; ignore OS key-repeat.
+      e.preventDefault();
+      if (e.repeat) return;
+      const cur = Math.max(0, playbackRates.indexOf(playbackRate));
+      const next =
+        e.key === "ArrowUp"
+          ? Math.min(cur + 1, playbackRates.length - 1)
+          : Math.max(cur - 1, 0);
+      setPlaybackRate(playbackRates[next]);
     } else if ((e.key === "ArrowDown" || e.key === "ArrowUp") && view === "ingest" && hasTranscript) {
       // Up/Down = jump to the previous/next sentence. Ignore the OS
       // key-repeat that fires while a key is held, and throttle rapid
