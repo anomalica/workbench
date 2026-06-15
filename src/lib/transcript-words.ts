@@ -36,8 +36,11 @@ import { isSpecialSpeaker } from "$lib/transcript";
 
 // <!-- speaker: Name -->
 const INLINE_SPEAKER = /^<!--\s*speaker:\s*(.+?)\s*-->$/;
-// {{t:12.34}}word  -> capture the start seconds and the glued word text.
-const WORD_TOKEN = /\{\{t:(\d+(?:\.\d+)?)\}\}(\S+)/g;
+// {{t:12.34}}text  -> capture the start seconds, then all text up to the next
+// marker or end of line. The text may contain spaces: a reviewer can split a
+// mis-recognised word into several words that share one timestamp, so a unit
+// is not restricted to a single token.
+const WORD_TOKEN = /\{\{t:(\d+(?:\.\d+)?)\}\}([\s\S]*?)(?=\{\{t:|$)/g;
 // Leading HH:MM:SS.D timecode prefix of a word line.
 const LINE_PREFIX = /^(\d{2}:\d{2}:\d{2}\.\d)\s+/;
 
@@ -87,18 +90,24 @@ export function parseWords(body: string): ParsedWords {
     WORD_TOKEN.lastIndex = 0;
     let m = WORD_TOKEN.exec(line);
     while (m !== null) {
-      const start = parseFloat(m[1]);
-      words.push({ text: m[2], start, gIndex });
+      // The capture includes the single space that joins it to the next unit;
+      // trim that off (internal spaces, if any, are kept). Skip empty captures
+      // defensively (adjacent markers with no text between them).
+      const text = m[2].trim();
+      if (text) {
+        const start = parseFloat(m[1]);
+        words.push({ text, start, gIndex });
 
-      const lastRun = runs[runs.length - 1];
-      if (lastRun && lastRun.speaker === currentSpeaker) {
-        lastRun.endWord = gIndex;
-      } else {
-        runs.push({ speaker: currentSpeaker, startWord: gIndex, endWord: gIndex });
+        const lastRun = runs[runs.length - 1];
+        if (lastRun && lastRun.speaker === currentSpeaker) {
+          lastRun.endWord = gIndex;
+        } else {
+          runs.push({ speaker: currentSpeaker, startWord: gIndex, endWord: gIndex });
+        }
+
+        lastOnLine = gIndex;
+        gIndex++;
       }
-
-      lastOnLine = gIndex;
-      gIndex++;
       m = WORD_TOKEN.exec(line);
     }
     if (lastOnLine >= 0) {

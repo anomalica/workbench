@@ -223,11 +223,12 @@ export class DocumentStore {
   }
 
   /** Replace a single word's text in a PWTS body, keeping its `{{t:N.N}}`
-   *  marker, line position and speaker. Whitespace is stripped so the edit
-   *  stays one token (the parser keys words off the non-whitespace run after
-   *  each marker, so an embedded space would drop the tail on reparse). */
+   *  marker, line position and speaker. Spaces are allowed - the unit may hold
+   *  several words sharing one timestamp - so we only collapse whitespace runs
+   *  and trim; braces are stripped because they would corrupt the marker
+   *  grammar. The unit count is unchanged, so word ordering stays stable. */
   editWord(gIndex: number, text: string) {
-    const clean = text.replace(/\s+/g, "");
+    const clean = text.replace(/[{}]/g, "").replace(/\s+/g, " ").trim();
     if (!clean) return;
     const [fm, body] = splitFrontmatter(this.current);
     const parsed = parseWords(body);
