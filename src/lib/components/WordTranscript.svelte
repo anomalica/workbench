@@ -145,14 +145,16 @@
     if (maxLeft >= minLeft) left = Math.max(minLeft, Math.min(left, maxLeft));
     else left = minLeft;
 
-    // Vertical clamp: keep the anchoring word's edge within the visible area
+    // Vertical clamp: keep the anchoring word's top within the visible area
     // so the bar never floats off-screen when the word is scrolled away.
     const wordTop = Math.max(view.top, Math.min(word.top, view.bottom));
-    const wordBottom = Math.max(view.top, Math.min(word.bottom, view.bottom));
 
-    // Prefer above; flip below if there isn't room.
-    let top = wordTop - base.top - gap - barH;
-    if (top < margin) top = wordBottom - base.top + gap;
+    // Always sit ABOVE the word (playback runs left-to-right under the line, so
+    // a bar below would cover what's being read). The transcript has top
+    // headroom so the first line has room; if a scrolled word still has none,
+    // pin to the top of the visible area rather than flipping below.
+    const minTop = view.top - base.top + margin;
+    const top = Math.max(minTop, wordTop - base.top - gap - barH);
 
     barStyle = `top:${Math.round(top)}px;left:${Math.round(left)}px`;
   }
@@ -320,8 +322,8 @@
   </div>
 {/snippet}
 
-<!-- Selection action bar, floating just above (or below) the first selected
-     word, shown when a word range is selected. -->
+<!-- Selection action bar, floating just above the first selected word, shown
+     when a word range is selected. -->
 {#if range}
   {@const count = range.to - range.from + 1}
   {@const single = range.from === range.to}
@@ -330,7 +332,7 @@
     bind:this={barEl}
     style={barStyle}
     class="absolute z-30 flex items-center gap-2
-      bg-surface-raised border border-border rounded-full shadow-lg px-3 py-1.5"
+      bg-surface-raised border border-primary/60 ring-2 ring-primary/25 rounded-full shadow-xl px-3 py-1.5"
   >
     {#if editingWord}
       <input
@@ -418,7 +420,9 @@
   class="flex-1 overflow-auto"
   data-scroll-sync
 >
-  <div class="select-none">
+  <!-- Top headroom so the selection bar always has room to sit above even the
+       first line, and never has to flip below it. -->
+  <div class="select-none pt-12">
     {#each visibleRuns as run (run.startWord)}
       <div class="border-b border-border/50 px-4 pt-3 pb-2">
         <!-- Clickable speaker chip: reassigns the whole turn. -->
