@@ -4,6 +4,8 @@ import {
   parseWords,
   serializeWords,
   reassignSpeaker,
+  renameSpeakerInRuns,
+  namedSpeakersInOrder,
   type SpeakerRun,
 } from "./transcript-words";
 
@@ -276,5 +278,94 @@ describe("reassignSpeaker", () => {
     expect(body).toContain("00:07:02.5 {{t:422.58}}think");
     // The reassigned word became its own run.
     expect(body).toContain("<!-- speaker: Speaker 2 -->");
+  });
+});
+
+describe("renameSpeakerInRuns", () => {
+  it("renames every run owned by the speaker", () => {
+    const runs: SpeakerRun[] = [
+      { speaker: "Speaker 1", startWord: 0, endWord: 4 },
+      { speaker: "Speaker 2", startWord: 5, endWord: 9 },
+      { speaker: "Speaker 1", startWord: 10, endWord: 14 },
+    ];
+    const out = renameSpeakerInRuns(runs, "Speaker 1", "Ed Leedskalnin");
+    expect(out.map((r) => r.speaker)).toEqual(["Ed Leedskalnin", "Speaker 2", "Ed Leedskalnin"]);
+    // Word coverage unchanged.
+    expect(out.map((r) => [r.startWord, r.endWord])).toEqual([
+      [0, 4],
+      [5, 9],
+      [10, 14],
+    ]);
+  });
+
+  it("merges adjacent runs when the new name matches a neighbour", () => {
+    const runs: SpeakerRun[] = [
+      { speaker: "Speaker 1", startWord: 0, endWord: 4 },
+      { speaker: "Speaker 2", startWord: 5, endWord: 9 },
+    ];
+    // Rename Speaker 2 to Speaker 1 - the two runs are now contiguous and share
+    // a speaker, so they coalesce into one.
+    const out = renameSpeakerInRuns(runs, "Speaker 2", "Speaker 1");
+    expect(out).toEqual([{ speaker: "Speaker 1", startWord: 0, endWord: 9 }]);
+  });
+
+  it("merges to an existing non-adjacent speaker, collapsing only the contiguous parts", () => {
+    const runs: SpeakerRun[] = [
+      { speaker: "A", startWord: 0, endWord: 2 },
+      { speaker: "B", startWord: 3, endWord: 5 },
+      { speaker: "A", startWord: 6, endWord: 8 },
+      { speaker: "B", startWord: 9, endWord: 11 },
+    ];
+    // Rename every B to A. Runs 0-1 become A,A (merge) and runs 2-3 become A,A
+    // (merge), so the whole thing collapses to a single A run.
+    const out = renameSpeakerInRuns(runs, "B", "A");
+    expect(out).toEqual([{ speaker: "A", startWord: 0, endWord: 11 }]);
+  });
+
+  it("is a no-op when old and new names match", () => {
+    const runs: SpeakerRun[] = [
+      { speaker: "A", startWord: 0, endWord: 4 },
+      { speaker: "B", startWord: 5, endWord: 9 },
+    ];
+    const out = renameSpeakerInRuns(runs, "A", "A");
+    expect(out).toEqual(runs);
+  });
+
+  it("round-trips through serialise, coalescing the renamed turns", () => {
+    const { words, runs, lineEndWords, linePrefixes, preamble } = parseWords(FIXTURE);
+    // Rename Speaker 3 to Speaker 4. The second Speaker 3 run (index 4) is
+    // immediately followed by Speaker 4 (index 5), so they merge.
+    const out = renameSpeakerInRuns(runs, "Speaker 3", "Speaker 4");
+    const body = serializeWords(words, out, lineEndWords, linePrefixes, preamble);
+    expect(body).not.toContain("<!-- speaker: Speaker 3 -->");
+    // The previously separate Speaker 3 / Speaker 4 turns are now one run; the
+    // word that opened the old Speaker 4 turn keeps its token.
+    expect(body).toContain("{{t:44.21}}The");
+  });
+});
+
+describe("namedSpeakersInOrder", () => {
+  it("excludes Speaker N clusters and special tokens, in appearance order", () => {
+    const runs: SpeakerRun[] = [
+      { speaker: "Speaker 2", startWord: 0, endWord: 1 },
+      { speaker: "Ed", startWord: 2, endWord: 3 },
+      { speaker: "[irrelevant]", startWord: 4, endWord: 5 },
+      { speaker: "Marjorie", startWord: 6, endWord: 7 },
+      { speaker: "[narrator]", startWord: 8, endWord: 9 },
+      { speaker: "Ed", startWord: 10, endWord: 11 },
+      { speaker: "Speaker 10", startWord: 12, endWord: 13 },
+    ];
+    // Ed before Marjorie (first appearance), each only once; Speaker N and the
+    // special tokens dropped.
+    expect(namedSpeakersInOrder(runs)).toEqual(["Ed", "Marjorie"]);
+  });
+
+  it("returns an empty list when only defaults and specials are present", () => {
+    const runs: SpeakerRun[] = [
+      { speaker: "Speaker 1", startWord: 0, endWord: 1 },
+      { speaker: "[external footage]", startWord: 2, endWord: 3 },
+      { speaker: "[group]", startWord: 4, endWord: 5 },
+    ];
+    expect(namedSpeakersInOrder(runs)).toEqual([]);
   });
 });

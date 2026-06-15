@@ -5,7 +5,14 @@ import {
   SPEAKER_IRRELEVANT,
   isSegmentIrrelevant,
 } from "./transcript";
-import { parseWords, serializeWords, reassignSpeaker } from "./transcript-words";
+import {
+  parseWords,
+  serializeWords,
+  reassignSpeaker,
+  renameSpeakerInRuns,
+  namedSpeakersInOrder,
+} from "./transcript-words";
+import yaml from "js-yaml";
 
 // We can't test the Svelte $state-based DocumentStore directly in Vitest
 // (it needs the Svelte runtime). Instead we test the parse-modify-serialize
@@ -468,5 +475,159 @@ describe("reassignWords preserves frontmatter, preamble and line prefixes", () =
     // Reassigning the whole run to its own speaker yields the original doc.
     const result = reassignWords(doc, 0, 3, "Speaker 1");
     expect(result).toBe(doc);
+  });
+});
+
+describe("renameWordSpeaker / reassignWords reconcile the frontmatter speakers list", () => {
+  // Mirrors DocumentStore.serialiseWithReconcile + renameWordSpeaker /
+  // reassignWords: split off the YAML block, parse the body, mutate the runs,
+  // serialise the body AND rewrite the frontmatter `speakers:` to the named
+  // speakers now present - both in one combined string (one undo step). The
+  // frontmatter rewrite reuses the exact js-yaml options the store uses.
+  const SPLIT_FM = /^(---\n[\s\S]*?\n---\n)([\s\S]*)$/;
+
+  function rewriteFrontmatterSpeakers(rawFm: string, speakers: string[]): string {
+    const fmContent = rawFm.replace(/^---\n/, "").replace(/---\n$/, "");
+    const fmDoc = (yaml.load(fmContent) as Record<string, unknown>) ?? {};
+    fmDoc.speakers = speakers.length > 0 ? speakers : undefined;
+    const newFmContent = yaml.dump(fmDoc, {
+      lineWidth: -1,
+      quotingType: '"',
+      forceQuotes: false,
+      sortKeys: false,
+    });
+    return `---\n${newFmContent}---\n`;
+  }
+
+  function split(current: string): [string, string] {
+    const match = current.match(SPLIT_FM);
+    return match ? [match[1], match[2]] : ["", current];
+  }
+
+  function renameWordSpeaker(current: string, oldName: string, newName: string): string {
+    if (!newName || oldName === newName) return current;
+    const [fm, body] = split(current);
+    const parsed = parseWords(body);
+    const newRuns = renameSpeakerInRuns(parsed.runs, oldName, newName);
+    const newBody = serializeWords(
+      parsed.words,
+      newRuns,
+      parsed.lineEndWords,
+      parsed.linePrefixes,
+      parsed.preamble,
+    );
+    return rewriteFrontmatterSpeakers(fm, namedSpeakersInOrder(newRuns)) + newBody;
+  }
+
+  function reassignWords(current: string, from: number, to: number, newSpeaker: string): string {
+    const [fm, body] = split(current);
+    const parsed = parseWords(body);
+    const newRuns = reassignSpeaker(parsed.runs, from, to, newSpeaker);
+    const newBody = serializeWords(
+      parsed.words,
+      newRuns,
+      parsed.lineEndWords,
+      parsed.linePrefixes,
+      parsed.preamble,
+    );
+    return rewriteFrontmatterSpeakers(fm, namedSpeakersInOrder(newRuns)) + newBody;
+  }
+
+  const doc =
+    "---\n" +
+    "schema: anomalica/record/2\n" +
+    'title: "PWTS Example"\n' +
+    "word_timestamps: true\n" +
+    "speakers:\n" +
+    '  - "Speaker 1"\n' +
+    "---\n" +
+    "\n" +
+    "# PWTS Example\n" +
+    "\n" +
+    "*Published 2023-07-28*\n" +
+    "\n" +
+    "<!-- speaker: Speaker 1 -->\n" +
+    "00:07:02.4 {{t:422.50}}I {{t:422.58}}think {{t:422.76}}it's {{t:422.92}}great.\n" +
+    "\n" +
+    "<!-- speaker: Speaker 2 -->\n" +
+    "00:00:13.0 {{t:13.02}}He {{t:13.12}}was {{t:13.28}}brave.\n" +
+    "\n" +
+    "<!-- speaker: Speaker 1 -->\n" +
+    "00:00:21.0 {{t:21.02}}They {{t:21.20}}agree.\n";
+
+  function fmSpeakers(current: string): string[] {
+    const [rawFm] = split(current);
+    const fmContent = rawFm.replace(/^---\n/, "").replace(/---\n$/, "");
+    const fmDoc = (yaml.load(fmContent) as Record<string, unknown>) ?? {};
+    return (fmDoc.speakers as string[] | undefined) ?? [];
+  }
+
+  it("renameWordSpeaker preserves word times, line prefixes and preamble", () => {
+    const result = renameWordSpeaker(doc, "Speaker 1", "Ed Leedskalnin");
+    // Preamble untouched.
+    expect(result).toContain("# PWTS Example");
+    expect(result).toContain("*Published 2023-07-28*");
+    // Verbatim prefix and every word token survive; only the speaker comment
+    // changed. 422.50 must NOT recompute to 07:02.5.
+    expect(result).toContain("00:07:02.4 {{t:422.50}}I {{t:422.58}}think {{t:422.76}}it's");
+    expect(result).not.toContain("00:07:02.5");
+    expect(result).toContain("{{t:21.02}}They {{t:21.20}}agree.");
+    // Speaker comments renamed everywhere, other speaker untouched.
+    expect(result).toContain("<!-- speaker: Ed Leedskalnin -->");
+    expect(result).not.toContain("<!-- speaker: Speaker 1 -->");
+    expect(result).toContain("<!-- speaker: Speaker 2 -->");
+  });
+
+  it("renameWordSpeaker reconciles the frontmatter to the named speakers in body order", () => {
+    // Speaker 1 (a default) was wrongly listed; renaming it to a real name puts
+    // exactly that name in the list, and Speaker 2 stays out (still a default).
+    const result = renameWordSpeaker(doc, "Speaker 1", "Ed Leedskalnin");
+    expect(fmSpeakers(result)).toEqual(["Ed Leedskalnin"]);
+  });
+
+  it("renaming to an existing name merges the turns and lists the name once", () => {
+    // First give Speaker 2 a real name, then rename Speaker 1 to that same name:
+    // the two should merge and appear once in the frontmatter.
+    const step1 = renameWordSpeaker(doc, "Speaker 2", "Marjorie");
+    expect(fmSpeakers(step1)).toEqual(["Marjorie"]);
+    const step2 = renameWordSpeaker(step1, "Speaker 1", "Marjorie");
+    // One speaker across the whole body now.
+    const [, body] = split(step2);
+    const comments = [...body.matchAll(/<!-- speaker: (.+?) -->/g)].map((m) => m[1]);
+    expect(new Set(comments)).toEqual(new Set(["Marjorie"]));
+    expect(fmSpeakers(step2)).toEqual(["Marjorie"]);
+  });
+
+  it("reassignWords adds a typed new name to the frontmatter", () => {
+    // Word layout: "I think it's great." = 0-3, "He was brave." = 4-6,
+    // "They agree." = 7-8. Assign the Speaker 2 turn (4-6) to a typed name.
+    const result = reassignWords(doc, 4, 6, "Marjorie");
+    expect(result).toContain("<!-- speaker: Marjorie -->");
+    expect(fmSpeakers(result)).toEqual(["Marjorie"]);
+  });
+
+  it("reassignWords removing the last occurrence of a name drops it from the frontmatter", () => {
+    // Start from a doc where Speaker 1 is named "Ed"; reassign Ed's only-named
+    // appearances back to a default, leaving no named speakers. Ed owns the
+    // first turn (0-3) and the third turn (7-8); Speaker 2 sits between.
+    const named = renameWordSpeaker(doc, "Speaker 1", "Ed");
+    expect(fmSpeakers(named)).toEqual(["Ed"]);
+    const step1 = reassignWords(named, 0, 3, "Speaker 9");
+    const step2 = reassignWords(step1, 7, 8, "Speaker 9");
+    expect(step2).not.toContain("<!-- speaker: Ed -->");
+    expect(fmSpeakers(step2)).toEqual([]);
+  });
+
+  it("dropping the last named speaker removes the speakers key entirely", () => {
+    const named = renameWordSpeaker(doc, "Speaker 1", "Ed");
+    const step1 = reassignWords(named, 0, 3, "Speaker 9");
+    const step2 = reassignWords(step1, 7, 8, "Speaker 9");
+    const [rawFm] = split(step2);
+    expect(rawFm).not.toContain("speakers:");
+    // Other frontmatter keys are intact. js-yaml re-dumps with forceQuotes:false,
+    // so the title's value survives but its now-redundant quotes are dropped.
+    expect(rawFm).toContain("schema: anomalica/record/2");
+    expect(rawFm).toContain("title: PWTS Example");
+    expect(rawFm).toContain("word_timestamps: true");
   });
 });
