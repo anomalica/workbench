@@ -1,3 +1,4 @@
+import { createSHA256 } from "hash-wasm";
 import type { ReviewCarryover } from "./carryover";
 
 export type CopyrightStatus =
@@ -154,10 +155,19 @@ export async function fetchCurrentUser(): Promise<User | null> {
 }
 
 export async function hashFile(file: File): Promise<string> {
-  const buffer = await file.arrayBuffer();
-  const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+  // Stream the file through an incremental SHA-256 in chunks. The old
+  // file.arrayBuffer() + crypto.subtle.digest loaded the whole file into
+  // memory at once, which crashed the tab on multi-GB videos. WebCrypto has no
+  // streaming digest, so we use hash-wasm. Still hashed locally, never uploaded.
+  const hasher = await createSHA256();
+  hasher.init();
+  const reader = file.stream().getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) hasher.update(value);
+  }
+  return hasher.digest("hex");
 }
 
 /** Fetch a map of {content_hash: latest_review_iso} for the current user.
