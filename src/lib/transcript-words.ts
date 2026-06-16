@@ -186,6 +186,68 @@ export function serializeWords(
   return preamble + transcript;
 }
 
+/** Split the word at `gIndex` into one word per `pieces` entry, inside the same
+ *  speaker run and line. Each new piece gets a start evenly spaced in the gap
+ *  before the next word; the first piece keeps the original start. With a
+ *  single piece it just replaces the word's text. Turns missed/merged speech a
+ *  reviewer types into a word (e.g. "right? yes") into separate, separately-
+ *  timestamped, reassignable words. */
+export function splitWord(
+  parsed: ParsedWords,
+  gIndex: number,
+  pieces: string[],
+  mediaDuration?: number,
+): ParsedWords {
+  const { words, runs, lineEndWords, linePrefixes, preamble } = parsed;
+  if (gIndex < 0 || gIndex >= words.length) return parsed;
+  if (pieces.length <= 1) {
+    if (pieces.length === 1 && words[gIndex].text !== pieces[0]) {
+      const w = [...words];
+      w[gIndex] = { ...w[gIndex], text: pieces[0] };
+      return { ...parsed, words: w };
+    }
+    return parsed;
+  }
+
+  const k = pieces.length;
+  const start = words[gIndex].start;
+  const nextStart =
+    gIndex + 1 < words.length ? words[gIndex + 1].start : (mediaDuration ?? start + 1);
+  const span = Math.max(0, nextStart - start);
+
+  const newWords: Word[] = [];
+  for (let i = 0; i < words.length; i++) {
+    if (i === gIndex) {
+      for (let p = 0; p < k; p++) {
+        newWords.push({ text: pieces[p], start: start + (span * p) / k, gIndex: newWords.length });
+      }
+    } else {
+      newWords.push({ ...words[i], gIndex: newWords.length });
+    }
+  }
+
+  // Everything after the split shifts right by k-1; the split word's own line
+  // and run absorb the extra pieces.
+  const shift = (idx: number) => (idx > gIndex ? idx + (k - 1) : idx);
+  const newRuns: SpeakerRun[] = runs.map((r) => ({
+    speaker: r.speaker,
+    startWord: shift(r.startWord),
+    endWord: gIndex >= r.startWord && gIndex <= r.endWord ? r.endWord + (k - 1) : shift(r.endWord),
+  }));
+  const newLineEndWords = new Set<number>();
+  for (const e of lineEndWords) newLineEndWords.add(e === gIndex ? gIndex + (k - 1) : shift(e));
+  const newLinePrefixes = new Map<number, string>();
+  for (const [key, val] of linePrefixes) newLinePrefixes.set(shift(key), val);
+
+  return {
+    words: newWords,
+    runs: newRuns,
+    lineEndWords: newLineEndWords,
+    linePrefixes: newLinePrefixes,
+    preamble,
+  };
+}
+
 /** Reassign the inclusive word range [fromGIndex, toGIndex] to `newSpeaker`,
  *  splitting the single containing run into up to three (before / reassigned /
  *  after) and merging any resulting adjacent same-speaker runs. The caller

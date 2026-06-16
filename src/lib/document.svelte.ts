@@ -228,25 +228,24 @@ export class DocumentStore {
     if (result !== this.current) this.pushEdit(result);
   }
 
-  /** Replace a single word's text in a PWTS body, keeping its `{{t:N.N}}`
-   *  marker, line position and speaker. Spaces are allowed - the unit may hold
-   *  several words sharing one timestamp - so we only collapse whitespace runs
-   *  and trim; braces are stripped because they would corrupt the marker
-   *  grammar. The unit count is unchanged, so word ordering stays stable. */
+  /** Edit a single word's text in a PWTS body. A SPACE splits it into several
+   *  words - each new piece gets a start evenly spaced in the gap before the
+   *  next word (the first keeps the original start), so missed/merged speech
+   *  the reviewer types in (e.g. "right? yes") becomes separate, separately-
+   *  timestamped, reassignable words. With no space it just replaces the text.
+   *  Braces are stripped (they'd corrupt the {{t:}} grammar). */
   editWord(gIndex: number, text: string) {
     const clean = text.replace(/[{}]/g, "").replace(/\s+/g, " ").trim();
     if (!clean) return;
     const [fm, body] = splitFrontmatter(this.current);
     const parsed = parseWords(body);
-    if (gIndex < 0 || gIndex >= parsed.words.length) return;
-    if (parsed.words[gIndex].text === clean) return;
-    parsed.words[gIndex] = { ...parsed.words[gIndex], text: clean };
+    const next = splitWord(parsed, gIndex, clean.split(" "));
     const newBody = serializeWords(
-      parsed.words,
-      parsed.runs,
-      parsed.lineEndWords,
-      parsed.linePrefixes,
-      parsed.preamble,
+      next.words,
+      next.runs,
+      next.lineEndWords,
+      next.linePrefixes,
+      next.preamble,
     );
     const result = fm + newBody;
     if (result !== this.current) this.pushEdit(result);
@@ -445,6 +444,7 @@ import {
   reassignSpeaker,
   renameSpeakerInRuns,
   namedSpeakersInOrder,
+  splitWord,
 } from "$lib/transcript-words";
 
 function splitFrontmatter(doc: string): [string, string] {

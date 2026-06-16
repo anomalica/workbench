@@ -610,6 +610,7 @@
             clearSelection();
           }
         }}
+        title="Type a space to split into separate, separately-timestamped words"
         class="text-sm font-ui bg-surface border border-primary rounded px-2 py-0.5 text-on-surface outline-none min-w-32"
       />
       <button
@@ -668,7 +669,7 @@
         <button
           onclick={startEditWord}
           class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
-          title="Edit this word's text"
+          title="Edit this word's text (type a space to split it into separate words)"
         >
           Edit word
         </button>
