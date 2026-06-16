@@ -44,6 +44,22 @@ DEFAULT_SOURCES_PATH = Path(__file__).resolve().parents[2] / "sources"
 DEFAULT_DIGESTS_PATH = Path(__file__).resolve().parents[2] / "digests"
 
 
+def _unquote(value: str) -> str:
+    """Strip surrounding YAML quotes and unescape a double-quoted scalar, so a
+    title like '"He said \\"hi\\""' renders with real quotes, not backslashes."""
+    value = value.strip()
+    if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+        return (
+            value[1:-1]
+            .replace("\\\\", "\x00")
+            .replace('\\"', '"')
+            .replace("\x00", "\\")
+        )
+    if len(value) >= 2 and value[0] == "'" and value[-1] == "'":
+        return value[1:-1].replace("''", "'")
+    return value
+
+
 def parse_frontmatter(text: str) -> tuple[dict, str, str]:
     """Extract YAML frontmatter and body from a markdown file.
 
@@ -71,7 +87,7 @@ def parse_frontmatter(text: str) -> tuple[dict, str, str]:
         # Top-level key with inline value
         if ":" in line and not line.startswith(" "):
             key, _, value = line.partition(":")
-            value = value.strip().strip('"').strip("'")
+            value = _unquote(value)
             key = key.strip()
             if value:
                 frontmatter[key] = value
@@ -83,7 +99,7 @@ def parse_frontmatter(text: str) -> tuple[dict, str, str]:
         elif (
             line.startswith("  ") and current_parent and line.lstrip().startswith("- ")
         ):
-            item = line.lstrip()[2:].strip().strip('"').strip("'")
+            item = _unquote(line.lstrip()[2:])
             if item and ":" not in item:
                 existing = frontmatter.setdefault(current_parent, [])
                 if isinstance(existing, list):
@@ -92,7 +108,7 @@ def parse_frontmatter(text: str) -> tuple[dict, str, str]:
         elif line.startswith("  ") and ":" in line and current_parent:
             nested_line = line.strip()
             key, _, value = nested_line.partition(":")
-            value = value.strip().strip('"').strip("'")
+            value = _unquote(value)
             frontmatter[f"{current_parent}.{key.strip()}"] = value
 
     return frontmatter, body, raw_frontmatter
