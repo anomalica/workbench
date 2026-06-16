@@ -40,6 +40,9 @@
   let searchQuery = $state("");
   let filterType = $state<string>("all");
   let filterReviewed = $state<"all" | "pending" | "reviewed">("all");
+  // Click-to-filter on a creator or publisher value (empty = no filter).
+  let filterCreator = $state<string>("");
+  let filterPublisher = $state<string>("");
   let reviewedTimes = $state<Record<string, string>>({});
   let reviewedHashes = $derived(new Set(Object.keys(reviewedTimes)));
   // Records whose review was carried over from a re-ingest and not yet
@@ -56,7 +59,7 @@
         .map((i) => i.content_hash),
     ),
   );
-  let sortBy = $state<"date" | "title" | "type" | "publisher" | "author" | "copyright">("date");
+  let sortBy = $state<"date" | "title" | "type" | "publisher" | "creator" | "copyright">("date");
   let sortAsc = $state(false);
   // Which date the date column shows (and what "Date" sort uses).
   // Lives in the toolbar above the list as a separate selector;
@@ -110,6 +113,8 @@
     ingests
       .filter((i) => {
         if (filterType !== "all" && i.source_type !== filterType) return false;
+        if (filterCreator && !i.creators.includes(filterCreator)) return false;
+        if (filterPublisher && i.publisher !== filterPublisher) return false;
         // A carried-over record awaiting verification counts as pending, not
         // reviewed, even though a stale trailer marks its hash reviewed.
         const isReviewed =
@@ -121,7 +126,8 @@
           return (
             i.title.toLowerCase().includes(q) ||
             i.date.includes(q) ||
-            i.publisher.toLowerCase().includes(q)
+            i.publisher.toLowerCase().includes(q) ||
+            i.creators.some((c) => c.toLowerCase().includes(q))
           );
         }
         return true;
@@ -142,9 +148,9 @@
         else if (sortBy === "title") { va = a.title.toLowerCase(); vb = b.title.toLowerCase(); }
         else if (sortBy === "type") { va = a.source_type; vb = b.source_type; }
         else if (sortBy === "publisher") { va = a.publisher || "zzz"; vb = b.publisher || "zzz"; }
-        else if (sortBy === "author") {
-          va = (a.authors[0] || "zzz").toLowerCase();
-          vb = (b.authors[0] || "zzz").toLowerCase();
+        else if (sortBy === "creator") {
+          va = (a.creators[0] || "zzz").toLowerCase();
+          vb = (b.creators[0] || "zzz").toLowerCase();
         }
         else { va = a.copyright_status; vb = b.copyright_status; }
         const cmp = va < vb ? -1 : va > vb ? 1 : 0;
@@ -409,6 +415,27 @@
             {/if}
           </div>
 
+          {#if filterCreator}
+            <button
+              onclick={() => { filterCreator = ""; }}
+              class="text-xs font-ui px-2 py-1 rounded cursor-pointer bg-primary/10 text-primary hover:bg-primary/20 flex items-center gap-1"
+              title="Clear creator filter"
+            >
+              {filterCreator}
+              <span aria-hidden="true">&#x2715;</span>
+            </button>
+          {/if}
+          {#if filterPublisher}
+            <button
+              onclick={() => { filterPublisher = ""; }}
+              class="text-xs font-ui px-2 py-1 rounded cursor-pointer bg-primary/10 text-primary hover:bg-primary/20 flex items-center gap-1"
+              title="Clear publisher filter"
+            >
+              {filterPublisher}
+              <span aria-hidden="true">&#x2715;</span>
+            </button>
+          {/if}
+
           <span class="text-xs text-on-surface-muted">
             {filteredIngests.length}{filteredIngests.length !== ingests.length ? ` of ${ingests.length}` : ''} records
           </span>
@@ -435,11 +462,13 @@
               {dateField}
               onsort={(field) => {
                 if (sortBy === field) { sortAsc = !sortAsc; }
-                else { sortBy = field as typeof sortBy; sortAsc = field === "title" || field === "author"; }
+                else { sortBy = field as typeof sortBy; sortAsc = field === "title" || field === "creator"; }
               }}
               onselect={(hash) => selectIngest(hash)}
+              onfiltercreator={(c) => { filterCreator = filterCreator === c ? "" : c; }}
+              onfilterpublisher={(p) => { filterPublisher = filterPublisher === p ? "" : p; }}
             />
-          {:else if searchQuery || filterType !== "all"}
+          {:else if searchQuery || filterType !== "all" || filterCreator || filterPublisher}
             <p class="text-on-surface-muted text-sm p-6">No ingests match your search.</p>
           {:else}
             <p class="text-on-surface-muted text-sm p-6">No ingests found.</p>

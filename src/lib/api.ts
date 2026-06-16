@@ -12,7 +12,8 @@ export interface IngestSummary {
   content_hash: string;
   public_hash: string;
   title: string;
-  authors: string[];
+  /** Spec field `creators` (was `authors`); UI labels it "Authors / Creators". */
+  creators: string[];
   /** date_published from frontmatter. */
   date: string;
   /** date_extracted (falls back to date_accessed) - when ingestion ran. */
@@ -30,7 +31,7 @@ export interface IngestDetail {
   content_hash: string;
   public_hash: string;
   copyright_status: CopyrightStatus;
-  authors: string[];
+  creators: string[];
   frontmatter: Record<string, string>;
   raw_frontmatter: string;
   body: string;

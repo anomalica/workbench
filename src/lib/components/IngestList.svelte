@@ -11,6 +11,8 @@
     dateField = "published",
     onsort,
     onselect,
+    onfiltercreator,
+    onfilterpublisher,
   }: {
     ingests: IngestSummary[];
     sortBy: string;
@@ -21,6 +23,8 @@
     dateField?: "published" | "ingested" | "reviewed";
     onsort: (field: string) => void;
     onselect: (hash: string) => void;
+    onfiltercreator?: (creator: string) => void;
+    onfilterpublisher?: (publisher: string) => void;
   } = $props();
 
   function dateValueFor(i: IngestSummary): string {
@@ -66,20 +70,29 @@
   <button onclick={() => onsort("title")} class="flex-1 cursor-pointer hover:text-on-surface text-left pr-3" title="Sort by title">
     Title {sortBy === "title" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
   </button>
-  <button onclick={() => onsort("author")} class="w-40 flex-none cursor-pointer hover:text-on-surface text-left" title="Sort by author">
-    Author {sortBy === "author" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
+  <button onclick={() => onsort("creator")} class="w-40 flex-none cursor-pointer hover:text-on-surface text-left" title="Sort by creator">
+    Authors / Creators {sortBy === "creator" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
   </button>
   <button onclick={() => onsort("copyright")} class="w-32 flex-none cursor-pointer hover:text-on-surface text-right" title="Sort by access">
     {sortBy === "copyright" ? (sortAsc ? "\u25B2" : "\u25BC") : ""} Access
   </button>
 </div>
 
-<!-- Rows -->
+<!-- Rows. The row is a role="button" div (not a <button>) so the publisher and
+     creator values inside it can be their own click-to-filter buttons. -->
 <div>
   {#each ingests as ingest}
-    <button
+    <div
+      role="button"
+      tabindex="0"
       class="w-full text-left px-6 py-2.5 border-b border-border/50 hover:bg-surface-alt transition-colors cursor-pointer"
       onclick={() => onselect(ingest.content_hash)}
+      onkeydown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onselect(ingest.content_hash);
+        }
+      }}
     >
       <div class="flex items-baseline gap-0">
         <span
@@ -108,16 +121,28 @@
           {dateValueFor(ingest).slice(0, 10) || "—"}
         </span>
         <span class="text-xs text-on-surface-secondary w-28 flex-none truncate">
-          {ingest.publisher || ""}
+          {#if ingest.publisher}
+            <button
+              onclick={(e) => { e.stopPropagation(); onfilterpublisher?.(ingest.publisher); }}
+              class="inline hover:text-primary hover:underline cursor-pointer"
+              title={`Show only ${ingest.publisher}`}
+            >{ingest.publisher}</button>
+          {/if}
         </span>
         <p class="text-sm text-on-surface truncate flex-1 pr-3">{ingest.title}</p>
         <span class="text-xs text-on-surface-secondary w-40 flex-none truncate">
-          {ingest.authors?.join(", ") ?? ""}
+          {#each ingest.creators ?? [] as creator, idx}
+            <button
+              onclick={(e) => { e.stopPropagation(); onfiltercreator?.(creator); }}
+              class="inline hover:text-primary hover:underline cursor-pointer"
+              title={`Show only ${creator}`}
+            >{creator}</button>{#if idx < ingest.creators.length - 1}, {/if}
+          {/each}
         </span>
         <span class="text-xs font-ui w-32 flex-none text-right {copyrightColours[ingest.copyright_status] ?? 'text-on-surface-muted'}">
           {copyrightLabels[ingest.copyright_status] ?? ingest.copyright_status}
         </span>
       </div>
-    </button>
+    </div>
   {/each}
 </div>
