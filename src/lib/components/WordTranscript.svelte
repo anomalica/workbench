@@ -18,6 +18,7 @@
     namedSpeakers = [],
     currentTime = 0,
     filteredSpeakers = new Set<string>(),
+    hideIrrelevant = true,
     storageKey = "",
     notesStorageKey = "",
     onreassign,
@@ -35,6 +36,9 @@
     currentTime?: number;
     /** When non-empty, only these speakers' turns are shown. */
     filteredSpeakers?: Set<string>;
+    /** Hide turns assigned to the `[irrelevant]` speaker (mirrors the segment
+     *  view's eye toggle). Irrelevant words are also excluded from coverage. */
+    hideIrrelevant?: boolean;
     /** localStorage key for persisting which words have been observed. */
     storageKey?: string;
     /** localStorage key for persisting time-anchored visual notes. */
@@ -62,11 +66,29 @@
   let words = $derived(parsed.words);
   let runs = $derived(parsed.runs);
 
-  // Speaker filter: when active, only matching turns are rendered. Selection
-  // and karaoke still index the full word array, so they stay correct.
+  // Speaker filter + irrelevant-hiding: when a filter is active only matching
+  // turns render, and `[irrelevant]` turns hide unless the eye toggle is off.
+  // Selection and karaoke still index the full word array, so they stay correct.
   let visibleRuns = $derived(
-    filteredSpeakers.size === 0 ? runs : runs.filter((r) => filteredSpeakers.has(r.speaker)),
+    runs.filter((r) => {
+      if (hideIrrelevant && r.speaker === SPEAKER_IRRELEVANT) return false;
+      if (filteredSpeakers.size > 0 && !filteredSpeakers.has(r.speaker)) return false;
+      return true;
+    }),
   );
+
+  // Word indices inside `[irrelevant]` turns. Excluded from coverage entirely:
+  // not observed, not counted in the denominator. Marking a block irrelevant is
+  // a deliberate "this doesn't need reviewing" signal.
+  let irrelevantWords = $derived.by(() => {
+    const s = new Set<number>();
+    for (const run of runs) {
+      if (run.speaker === SPEAKER_IRRELEVANT) {
+        for (let g = run.startWord; g <= run.endWord; g++) s.add(g);
+      }
+    }
+    return s;
+  });
 
   // The word currently being spoken: the last word whose start time is at or
   // before the playback clock (each word runs until the next word's start).
@@ -228,8 +250,12 @@
   // word count. Reported to the parent so a review submit persists it to the
   // sidecar (where the digester's gate reads observed_coverage + digestible).
   let coverageVerdict = $derived.by(() => {
-    const total = words.length;
-    const obs = [...observed].filter((g) => g >= 0 && g < total).sort((a, b) => a - b);
+    // The denominator is the relevant words only - turns marked `[irrelevant]`
+    // never need observing, so they count neither as observed nor as a target.
+    const total = words.length - irrelevantWords.size;
+    const obs = [...observed]
+      .filter((g) => g >= 0 && g < words.length && !irrelevantWords.has(g))
+      .sort((a, b) => a - b);
     const spans: { from: number; to: number }[] = [];
     for (const g of obs) {
       const last = spans[spans.length - 1];
