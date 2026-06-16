@@ -7,9 +7,34 @@ import {
   renameSpeakerInRuns,
   namedSpeakersInOrder,
   wordsInTimeRange,
+  splitWord,
   type SpeakerRun,
   type Word,
 } from "./transcript-words";
+
+describe("splitWord", () => {
+  const body = "<!-- speaker: A -->\n00:00:10.0 {{t:10.00}}right? {{t:10.80}}that {{t:11.00}}seems";
+  it("splits a word into separately-timestamped words in the gap", () => {
+    const p = parseWords(body);
+    const sp = splitWord(p, 0, ["right?", "yes"]);
+    expect(sp.words.map((w) => w.text)).toEqual(["right?", "yes", "that", "seems"]);
+    expect(sp.words[0].start).toBe(10.0); // first piece keeps its time
+    expect(sp.words[1].start).toBeCloseTo(10.4, 5); // midpoint to next (10.8)
+    expect(sp.runs).toEqual([{ speaker: "A", startWord: 0, endWord: 3 }]);
+  });
+  it("a single piece just replaces the text, no insert", () => {
+    const sp = splitWord(parseWords(body), 0, ["Right?"]);
+    expect(sp.words.map((w) => w.text)).toEqual(["Right?", "that", "seems"]);
+  });
+  it("round-trips a split through serialise then parse", () => {
+    const p = parseWords(body);
+    const sp = splitWord(p, 0, ["right?", "yes"]);
+    const out = serializeWords(sp.words, sp.runs, sp.lineEndWords, sp.linePrefixes, sp.preamble);
+    const re = parseWords(out);
+    expect(re.words.map((w) => w.text)).toEqual(["right?", "yes", "that", "seems"]);
+    expect(re.words[1].start).toBeCloseTo(10.4, 1);
+  });
+});
 
 const W: Word[] = [
   { text: "a", start: 1.0, gIndex: 0 },
