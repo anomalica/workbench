@@ -715,3 +715,97 @@ describe("setWordTime clamps a word's start between its neighbours", () => {
     expect(result).toContain("{{t:500.00}}great.");
   });
 });
+
+describe("updateFrontmatter writes creators/publisher, preserving other keys", () => {
+  // Mirrors DocumentStore.updateFrontmatter -> rewriteFrontmatterFields: split
+  // off the YAML block, set the given top-level keys via js-yaml ("" / [] drop
+  // the key), trimming items, and leave every other key (incl. nested blocks)
+  // intact. Reuses the exact js-yaml options the store uses.
+  const SPLIT_FM = /^(---\n[\s\S]*?\n---\n)([\s\S]*)$/;
+
+  function rewriteFrontmatterFields(
+    rawFm: string,
+    fields: Record<string, string | string[]>,
+  ): string {
+    const fmContent = rawFm.replace(/^---\n/, "").replace(/---\n$/, "");
+    const fmDoc = (yaml.load(fmContent) as Record<string, unknown>) ?? {};
+    for (const [key, value] of Object.entries(fields)) {
+      if (Array.isArray(value)) {
+        const items = value.map((v) => v.trim()).filter((v) => v !== "");
+        fmDoc[key] = items.length > 0 ? items : undefined;
+      } else {
+        const trimmed = value.trim();
+        fmDoc[key] = trimmed !== "" ? trimmed : undefined;
+      }
+    }
+    const newFmContent = yaml.dump(fmDoc, {
+      lineWidth: -1,
+      quotingType: '"',
+      forceQuotes: false,
+      sortKeys: false,
+    });
+    return `---\n${newFmContent}---\n`;
+  }
+
+  function updateFrontmatter(current: string, fields: Record<string, string | string[]>): string {
+    const match = current.match(SPLIT_FM);
+    const fm = match ? match[1] : "";
+    const body = match ? match[2] : current;
+    return rewriteFrontmatterFields(fm, fields) + body;
+  }
+
+  const doc =
+    "---\n" +
+    "schema: anomalica/record/1\n" +
+    "content_hash: abc123\n" +
+    'title: "Rep. Burlison Welcomes Witness"\n' +
+    "publisher: Representative Burlison\n" +
+    "source_type: video\n" +
+    "copyright:\n" +
+    "  status: publicly_accessible\n" +
+    "  holder: US House\n" +
+    "---\n" +
+    "Body line one.\n";
+
+  function reparse(result: string): Record<string, unknown> {
+    const fm = result
+      .match(SPLIT_FM)![1]
+      .replace(/^---\n/, "")
+      .replace(/---\n$/, "");
+    return yaml.load(fm) as Record<string, unknown>;
+  }
+
+  it("reclassifies a person from publisher into creators in one edit", () => {
+    const result = updateFrontmatter(doc, {
+      publisher: "",
+      creators: ["Burlison, Eric"],
+    });
+    const fm = reparse(result);
+    expect(fm.creators).toEqual(["Burlison, Eric"]);
+    // Empty publisher drops the key.
+    expect("publisher" in fm).toBe(false);
+  });
+
+  it("preserves content_hash, title and the nested copyright block", () => {
+    const result = updateFrontmatter(doc, { creators: ["Doe, Jane"] });
+    const fm = reparse(result);
+    expect(fm.content_hash).toBe("abc123");
+    expect(fm.title).toBe("Rep. Burlison Welcomes Witness");
+    expect(fm.copyright).toEqual({ status: "publicly_accessible", holder: "US House" });
+  });
+
+  it("leaves the body untouched", () => {
+    const result = updateFrontmatter(doc, { creators: ["Doe, Jane"] });
+    expect(result.endsWith("Body line one.\n")).toBe(true);
+  });
+
+  it("trims items and drops empties", () => {
+    const result = updateFrontmatter(doc, { creators: ["  Smith, Al  ", "", "   "] });
+    expect(reparse(result).creators).toEqual(["Smith, Al"]);
+  });
+
+  it("dropping all creators removes the key", () => {
+    const result = updateFrontmatter(doc, { creators: [] });
+    expect("creators" in reparse(result)).toBe(false);
+  });
+});
