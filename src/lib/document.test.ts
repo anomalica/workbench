@@ -651,3 +651,67 @@ describe("renameWordSpeaker / reassignWords reconcile the frontmatter speakers l
     expect(fmSpeakers(result)).not.toContain("Speaker 1");
   });
 });
+
+describe("setWordTime clamps a word's start between its neighbours", () => {
+  // Mirrors DocumentStore.setWordTime: split off the YAML block, parse the body,
+  // clamp the requested start to [prevStart, nextStart], no-op within 5 ms, then
+  // serialise. A word's timestamp must never cross its neighbours' (kept in order).
+  const SPLIT_FM = /^(---\n[\s\S]*?\n---\n)([\s\S]*)$/;
+
+  const doc =
+    "---\n" +
+    "schema: anomalica/record/2\n" +
+    "word_timestamps: true\n" +
+    "---\n" +
+    "<!-- speaker: Speaker 1 -->\n" +
+    "00:07:02.4 {{t:422.50}}I {{t:422.58}}think {{t:422.76}}it's {{t:422.92}}great.\n";
+
+  function setWordTime(current: string, gIndex: number, start: number): string {
+    const match = current.match(SPLIT_FM);
+    const fm = match ? match[1] : "";
+    const body = match ? match[2] : current;
+    const parsed = parseWords(body);
+    if (gIndex < 0 || gIndex >= parsed.words.length) return current;
+    const prev = gIndex > 0 ? parsed.words[gIndex - 1].start : 0;
+    const next = gIndex + 1 < parsed.words.length ? parsed.words[gIndex + 1].start : start + 1;
+    const clamped = Math.max(prev, Math.min(next, start));
+    if (Math.abs(clamped - parsed.words[gIndex].start) < 0.005) return current;
+    parsed.words[gIndex] = { ...parsed.words[gIndex], start: clamped };
+    return (
+      fm +
+      serializeWords(
+        parsed.words,
+        parsed.runs,
+        parsed.lineEndWords,
+        parsed.linePrefixes,
+        parsed.preamble,
+      )
+    );
+  }
+
+  it("nudges a word later within its window", () => {
+    const result = setWordTime(doc, 1, 422.68); // 'think', between 422.50 and 422.76
+    expect(result).toContain("{{t:422.68}}think");
+    expect(result).toContain("{{t:422.50}}I");
+    expect(result).toContain("{{t:422.76}}it's");
+  });
+
+  it("clamps to the previous word's start, never crossing it", () => {
+    const result = setWordTime(doc, 1, 400.0); // way before 'I' at 422.50
+    expect(result).toContain("{{t:422.50}}think");
+  });
+
+  it("clamps to the next word's start, never crossing it", () => {
+    const result = setWordTime(doc, 1, 999.0); // way past 'it's' at 422.76
+    expect(result).toContain("{{t:422.76}}think");
+  });
+
+  it("is a no-op within 5 ms of the current start", () => {
+    expect(setWordTime(doc, 1, 422.582)).toBe(doc);
+  });
+
+  it("lets the last word move past the end (no next neighbour caps it)", () => {
+    const result = setWordTime(doc, 3, 500.0); // 'great.' is last
+    expect(result).toContain("{{t:500.00}}great.");
+  });
+});
