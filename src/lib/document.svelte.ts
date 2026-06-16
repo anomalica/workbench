@@ -146,13 +146,19 @@ export class DocumentStore {
       parsed.linePrefixes,
       parsed.preamble,
     );
-    // Only rewrite the frontmatter when the set of named speakers actually
-    // changed, so a word reassignment between defaults leaves it byte-for-byte.
-    const newNamed = namedSpeakersInOrder(newRuns);
+    // Reconcile the frontmatter speakers: KEEP real names the reviewer curated,
+    // even when they have no body occurrences (a name added before assigning,
+    // or un-named from the body) - only the user removes named speakers; auto-
+    // pruning empties was the bug. DROP stray default "Speaker N" entries (those
+    // are auto-removable). ADD real names now present in the body. Rewrite only
+    // when the list actually changes, so unaffected edits stay byte-for-byte.
     const currentNamed = extractFrontmatterSpeakers(fm);
-    const sameNamed =
-      newNamed.length === currentNamed.length && newNamed.every((n, i) => n === currentNamed[i]);
-    const newFm = sameNamed ? fm : rewriteFrontmatterSpeakers(fm, newNamed);
+    const bodyNamed = namedSpeakersInOrder(newRuns);
+    const kept = currentNamed.filter((n) => !isDefaultSpeakerName(n));
+    const merged = [...kept, ...bodyNamed.filter((n) => !kept.includes(n))];
+    const same =
+      merged.length === currentNamed.length && merged.every((n, i) => n === currentNamed[i]);
+    const newFm = same ? fm : rewriteFrontmatterSpeakers(fm, merged);
     return newFm + newBody;
   }
 
@@ -426,7 +432,12 @@ function escapeRegex(s: string): string {
 
 // --- Helpers for structural editing ---
 
-import { parseTranscript, serializeTranscript, extractFrontmatterSpeakers } from "$lib/transcript";
+import {
+  parseTranscript,
+  serializeTranscript,
+  extractFrontmatterSpeakers,
+  isDefaultSpeakerName,
+} from "$lib/transcript";
 import type { Segment } from "$lib/transcript";
 import {
   parseWords,

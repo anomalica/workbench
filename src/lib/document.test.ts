@@ -516,7 +516,11 @@ describe("renameWordSpeaker / reassignWords reconcile the frontmatter speakers l
       parsed.linePrefixes,
       parsed.preamble,
     );
-    return rewriteFrontmatterSpeakers(fm, namedSpeakersInOrder(newRuns)) + newBody;
+    const currentNamed = fmSpeakers(current);
+    const bodyNamed = namedSpeakersInOrder(newRuns);
+    const kept = currentNamed.filter((n) => !/^Speaker \d+$/i.test(n));
+    const merged = [...kept, ...bodyNamed.filter((n) => !kept.includes(n))];
+    return rewriteFrontmatterSpeakers(fm, merged) + newBody;
   }
 
   function reassignWords(current: string, from: number, to: number, newSpeaker: string): string {
@@ -530,7 +534,11 @@ describe("renameWordSpeaker / reassignWords reconcile the frontmatter speakers l
       parsed.linePrefixes,
       parsed.preamble,
     );
-    return rewriteFrontmatterSpeakers(fm, namedSpeakersInOrder(newRuns)) + newBody;
+    const currentNamed = fmSpeakers(current);
+    const bodyNamed = namedSpeakersInOrder(newRuns);
+    const kept = currentNamed.filter((n) => !/^Speaker \d+$/i.test(n));
+    const merged = [...kept, ...bodyNamed.filter((n) => !kept.includes(n))];
+    return rewriteFrontmatterSpeakers(fm, merged) + newBody;
   }
 
   const doc =
@@ -606,28 +614,40 @@ describe("renameWordSpeaker / reassignWords reconcile the frontmatter speakers l
     expect(fmSpeakers(result)).toEqual(["Marjorie"]);
   });
 
-  it("reassignWords removing the last occurrence of a name drops it from the frontmatter", () => {
-    // Start from a doc where Speaker 1 is named "Ed"; reassign Ed's only-named
-    // appearances back to a default, leaving no named speakers. Ed owns the
-    // first turn (0-3) and the third turn (7-8); Speaker 2 sits between.
+  it("keeps a named speaker after its last body occurrence is reassigned away (only the user removes named speakers)", () => {
+    // Name Speaker 1 "Ed"; reassign Ed's only appearances (turns 0-3 and 7-8)
+    // to a default, leaving Ed with no body occurrences.
     const named = renameWordSpeaker(doc, "Speaker 1", "Ed");
     expect(fmSpeakers(named)).toEqual(["Ed"]);
     const step1 = reassignWords(named, 0, 3, "Speaker 9");
     const step2 = reassignWords(step1, 7, 8, "Speaker 9");
+    // Ed no longer appears in the body...
     expect(step2).not.toContain("<!-- speaker: Ed -->");
-    expect(fmSpeakers(step2)).toEqual([]);
+    // ...but is NOT auto-dropped from the frontmatter - the reviewer removes it.
+    expect(fmSpeakers(step2)).toEqual(["Ed"]);
   });
 
-  it("dropping the last named speaker removes the speakers key entirely", () => {
+  it("keeps the speakers key (with the named speaker) after its occurrences are reassigned away", () => {
     const named = renameWordSpeaker(doc, "Speaker 1", "Ed");
     const step1 = reassignWords(named, 0, 3, "Speaker 9");
     const step2 = reassignWords(step1, 7, 8, "Speaker 9");
     const [rawFm] = split(step2);
-    expect(rawFm).not.toContain("speakers:");
-    // Other frontmatter keys are intact. js-yaml re-dumps with forceQuotes:false,
-    // so the title's value survives but its now-redundant quotes are dropped.
+    expect(rawFm).toContain("speakers:");
+    expect(rawFm).toContain("Ed");
     expect(rawFm).toContain("schema: anomalica/record/2");
-    expect(rawFm).toContain("title: PWTS Example");
     expect(rawFm).toContain("word_timestamps: true");
+  });
+
+  it("preserves a named speaker added to the frontmatter but not yet in the body", () => {
+    // Mark's scenario: a reviewer adds a real name, then edits before assigning
+    // it. The unassigned real name must survive; the stray default drops.
+    const withUnassigned = doc.replace(
+      '  - "Speaker 1"\n',
+      '  - "Speaker 1"\n  - "Pending Guest"\n',
+    );
+    const result = reassignWords(withUnassigned, 4, 6, "Marjorie");
+    expect(fmSpeakers(result)).toContain("Pending Guest");
+    expect(fmSpeakers(result)).toContain("Marjorie");
+    expect(fmSpeakers(result)).not.toContain("Speaker 1");
   });
 });
