@@ -32,6 +32,7 @@
   import MilkdownEditor from "./MilkdownEditor.svelte";
   import EpubViewer from "./EpubViewer.svelte";
   import WordTranscript from "./WordTranscript.svelte";
+  import ReadableText from "./ReadableText.svelte";
   import { hasWordTimestamps } from "$lib/transcript-words";
   import { untrack } from "svelte";
   import { marked } from "marked";
@@ -114,6 +115,15 @@
   // Latest observation verdict reported by the word editor (word-index spans +
   // coverage fraction + digestible + total words), persisted on review submit.
   let wordVerdict = $state<{
+    spans: { from: number; to: number }[];
+    observed_coverage: number;
+    digestible: boolean;
+    total_units: number;
+  } | null>(null);
+
+  // Same verdict shape reported by the readable-text coverage view (web/ebook
+  // records), which has no playback signal so coverage is marked explicitly.
+  let textVerdict = $state<{
     spans: { from: number; to: number }[];
     observed_coverage: number;
     digestible: boolean;
@@ -534,6 +544,9 @@
   let isAudio = $derived(ingest.frontmatter.source_type === "audio");
   let isVideo = $derived(ingest.frontmatter.source_type === "video");
   let isEbook = $derived(ingest.frontmatter.source_type === "ebook");
+  // Text records (no playback signal) get explicit block-level read coverage
+  // in the rendered prose view. PDFs keep the plain render for now (page sync).
+  let isTextRecord = $derived(isWeb || isEbook);
 
   // Copyright: public/accessible records can show everything freely
   let isPublic = $derived(
@@ -1466,19 +1479,19 @@
     submitting = true;
     submitError = null;
     // Word records submit their word-index observation + a verdict the
-    // digester's gate reads; segment records submit the line-span coverage.
-    const spans =
-      isWordRecord && wordVerdict
-        ? wordVerdict.spans.map((s) => ({ from: s.from, to: s.to, kind: "observed" as const }))
-        : pendingKindedSpans;
-    const verdict =
-      isWordRecord && wordVerdict
-        ? {
-            observed_coverage: wordVerdict.observed_coverage,
-            digestible: wordVerdict.digestible,
-            total_units: wordVerdict.total_units,
-          }
-        : undefined;
+    // digester's gate reads; text records (web/ebook) submit their read
+    // line-spans + the same verdict; segment records submit line-span coverage.
+    const recordVerdict = isWordRecord ? wordVerdict : isTextRecord ? textVerdict : null;
+    const spans = recordVerdict
+      ? recordVerdict.spans.map((s) => ({ from: s.from, to: s.to, kind: "observed" as const }))
+      : pendingKindedSpans;
+    const verdict = recordVerdict
+      ? {
+          observed_coverage: recordVerdict.observed_coverage,
+          digestible: recordVerdict.digestible,
+          total_units: recordVerdict.total_units,
+        }
+      : undefined;
     const result = await submitReview(ingest.content_hash, doc.current, reviewNotes, spans, verdict);
     submitting = false;
     if (result.ok) {
@@ -2214,7 +2227,7 @@
           ></textarea>
         {/if}
 
-        {#if !isWordRecord}
+        {#if !isWordRecord && !isTextRecord}
           <div class="mt-3">
             <div class="flex items-center gap-2 mb-1">
               <span class="text-xs font-ui text-on-surface-secondary">Coverage</span>
@@ -2235,6 +2248,16 @@
               green = your previous coverage. Submitting with no edits but
               coverage marked records "looked, all fine".
             </p>
+          </div>
+        {:else if isTextRecord && textVerdict}
+          <div class="mt-3 flex items-center gap-2">
+            <span class="text-xs font-ui text-on-surface-secondary">Read coverage</span>
+            <span class="text-xs font-ui font-medium text-on-surface tabular-nums">
+              {Math.round(textVerdict.observed_coverage * 100)}%
+            </span>
+            {#if textVerdict.digestible}
+              <span class="text-[10px] font-ui text-success">fully read</span>
+            {/if}
           </div>
         {/if}
 
@@ -3314,20 +3337,32 @@
         </div>
 
       {:else}
-        {@const processedBody = preprocessAnnotations(currentBody())}
-        {@const renderedHtml = renderRedactions(marked.parse(processedBody) as string)}
-        <div
-          bind:this={proseContainer}
-          data-scroll-sync
-          onscroll={handleContentScroll}
-          class="flex-1 overflow-auto px-8 py-6 prose
-            {singleColumn ? 'mx-auto' : 'max-w-none'}
-            text-on-surface prose-headings:text-on-surface prose-a:text-primary
-            prose-img:rounded prose-img:max-w-full prose-hr:border-border
-            prose-p:leading-relaxed prose-li:leading-relaxed"
-        >
-          {@html renderedHtml}
-        </div>
+        {#if isTextRecord}
+          <ReadableText
+            body={currentBody()}
+            renderBlock={(src) => renderRedactions(marked.parse(preprocessAnnotations(src)) as string)}
+            previousObserved={myObservedSpans}
+            storageKey={`workbench:read:${ingest.content_hash}`}
+            bind:containerEl={proseContainer}
+            onscroll={handleContentScroll}
+            onverdict={(v) => (textVerdict = v)}
+          />
+        {:else}
+          {@const processedBody = preprocessAnnotations(currentBody())}
+          {@const renderedHtml = renderRedactions(marked.parse(processedBody) as string)}
+          <div
+            bind:this={proseContainer}
+            data-scroll-sync
+            onscroll={handleContentScroll}
+            class="flex-1 overflow-auto px-8 py-6 prose
+              {singleColumn ? 'mx-auto' : 'max-w-none'}
+              text-on-surface prose-headings:text-on-surface prose-a:text-primary
+              prose-img:rounded prose-img:max-w-full prose-hr:border-border
+              prose-p:leading-relaxed prose-li:leading-relaxed"
+          >
+            {@html renderedHtml}
+          </div>
+        {/if}
       {/if}
     </div>
     {/if}
