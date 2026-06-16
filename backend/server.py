@@ -33,6 +33,10 @@ PUBLIC_HASH_LENGTH = 56
 FULL_HASH_PATTERN = re.compile(r"^[a-f0-9]{64}$")
 
 COVERAGE_SCHEMA = "anomalica/review-coverage/0"
+# /1 adds a reviewer-computed verdict at the sidecar top level
+# (observed_coverage, digestible, total_units) that the digester's gate reads
+# instead of recomputing from spans.
+COVERAGE_SCHEMA_V1 = "anomalica/review-coverage/1"
 
 CHALLENGES_PER_SESSION = 10
 PASS_RATIO = 0.8
@@ -551,11 +555,17 @@ class LocalIngestSource(IngestSource):
         email: str,
         spans: list[dict],
         notes: str,
+        observed_coverage: float | None = None,
+        digestible: bool | None = None,
+        total_units: int | None = None,
     ) -> bool:
         """Append one review entry to `{hash}.review.json`. Spans anchor to
-        line indices of the record body at submission time; `parent_commit`
-        records the repo HEAD before the review commit so the anchors can be
-        migrated to permanent line identifiers later."""
+        line indices (segment records) or word indices (word records) of the
+        body at submission time; `parent_commit` records the repo HEAD before
+        the review commit. When `observed_coverage` is supplied, the reviewer's
+        verdict (observed_coverage, digestible, total_units) is stored at the
+        sidecar top level and the schema bumped to /1 - the digester's gate
+        reads that verdict rather than recomputing from the spans."""
         import subprocess
         from datetime import datetime, timezone
 
@@ -595,6 +605,13 @@ class LocalIngestSource(IngestSource):
             entry["parent_commit"] = parent_commit
         sidecar["reviews"].append(entry)
 
+        if observed_coverage is not None:
+            sidecar["schema"] = COVERAGE_SCHEMA_V1
+            sidecar["observed_coverage"] = observed_coverage
+            sidecar["digestible"] = bool(digestible)
+            if total_units is not None:
+                sidecar["total_units"] = total_units
+
         with open(self._coverage_path(full_hash), "w") as f:
             json.dump(sidecar, f, indent=2)
             f.write("\n")
@@ -630,9 +647,7 @@ class GitHubIngestSource(IngestSource):
     def load_coverage(self, full_hash: str) -> dict | None:
         raise NotImplementedError("GitHubIngestSource is not yet implemented")
 
-    def append_coverage(
-        self, full_hash: str, email: str, spans: list[dict], notes: str
-    ) -> bool:
+    def append_coverage(self, **kwargs: object) -> bool:
         raise NotImplementedError("GitHubIngestSource is not yet implemented")
 
     def reviewed_by_email(self, email: str) -> dict[str, str]:
@@ -1342,6 +1357,26 @@ def _validate_spans(raw: object) -> list[dict]:
     return out
 
 
+def _validate_verdict(raw: object) -> tuple[float | None, bool | None, int | None]:
+    """Validate an optional reviewer verdict {"observed_coverage": 0..1,
+    "digestible": bool, "total_units": int}. Returns (observed_coverage,
+    digestible, total_units) or (None, None, None) when absent. Raises 400 on
+    malformed input."""
+    if raw is None:
+        return (None, None, None)
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=400, detail="verdict must be an object")
+    oc = raw.get("observed_coverage")
+    if isinstance(oc, bool) or not isinstance(oc, (int, float)) or not (0 <= oc <= 1):
+        raise HTTPException(
+            status_code=400, detail="Malformed verdict observed_coverage"
+        )
+    tu = raw.get("total_units")
+    if tu is not None and (isinstance(tu, bool) or not isinstance(tu, int) or tu < 0):
+        raise HTTPException(status_code=400, detail="Malformed verdict total_units")
+    return (float(oc), bool(raw.get("digestible")), tu if isinstance(tu, int) else None)
+
+
 @app.get("/api/ingests/{full_hash}/coverage")
 def get_coverage(full_hash: str) -> JSONResponse:
     """Return the review-coverage sidecar's reviews (all reviewers).
@@ -1378,16 +1413,20 @@ def submit_review(full_hash: str, body: dict, request: Request) -> JSONResponse:
 
     notes = body.get("notes", "").strip()
     spans = _validate_spans(body.get("spans"))
+    obs_cov, digestible_flag, total_units = _validate_verdict(body.get("verdict"))
 
     if not source.save_ingest(full_hash, content):
         raise HTTPException(status_code=404, detail="Not found")
 
-    if spans:
+    if spans or obs_cov is not None:
         source.append_coverage(
             full_hash=full_hash,
             email=user["email"],
             spans=spans,
             notes=notes,
+            observed_coverage=obs_cov,
+            digestible=digestible_flag,
+            total_units=total_units,
         )
 
     # Git commit with reviewer as author

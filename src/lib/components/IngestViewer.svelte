@@ -111,6 +111,14 @@
   // word-level editor instead of the segment editor; v1 records are
   // untouched. Detect from the live body so the toggle survives edits.
   let isWordRecord = $derived(hasTranscript && hasWordTimestamps(currentBody()));
+  // Latest observation verdict reported by the word editor (word-index spans +
+  // coverage fraction + digestible + total words), persisted on review submit.
+  let wordVerdict = $state<{
+    spans: { from: number; to: number }[];
+    observed_coverage: number;
+    digestible: boolean;
+    total_units: number;
+  } | null>(null);
 
   // View mode for the ingest column's sub-tabs (rendered/edit/raw/diff).
   // Digest is no longer a sub-tab; it lives in its own column.
@@ -1457,8 +1465,21 @@
     if (!user) return;
     submitting = true;
     submitError = null;
-    const spans = pendingKindedSpans;
-    const result = await submitReview(ingest.content_hash, doc.current, reviewNotes, spans);
+    // Word records submit their word-index observation + a verdict the
+    // digester's gate reads; segment records submit the line-span coverage.
+    const spans =
+      isWordRecord && wordVerdict
+        ? wordVerdict.spans.map((s) => ({ from: s.from, to: s.to, kind: "observed" as const }))
+        : pendingKindedSpans;
+    const verdict =
+      isWordRecord && wordVerdict
+        ? {
+            observed_coverage: wordVerdict.observed_coverage,
+            digestible: wordVerdict.digestible,
+            total_units: wordVerdict.total_units,
+          }
+        : undefined;
+    const result = await submitReview(ingest.content_hash, doc.current, reviewNotes, spans, verdict);
     submitting = false;
     if (result.ok) {
       showSubmitForm = false;
@@ -2807,6 +2828,7 @@
                 ytPlayer.playVideo();
               }
             }}
+            onverdict={(v) => (wordVerdict = v)}
           />
         </div>
 

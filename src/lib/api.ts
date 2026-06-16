@@ -114,6 +114,7 @@ export async function submitReview(
   content: string,
   notes: string,
   spans?: KindedSpan[],
+  verdict?: { observed_coverage: number; digestible: boolean; total_units: number },
 ): Promise<{ ok: boolean; error?: string }> {
   const res = await fetch(`/api/ingests/${fullHash}`, {
     method: "PUT",
@@ -122,6 +123,7 @@ export async function submitReview(
       content,
       notes,
       ...(spans && spans.length > 0 ? { spans } : {}),
+      ...(verdict ? { verdict } : {}),
     }),
   });
   if (res.ok) return { ok: true };

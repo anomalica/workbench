@@ -23,6 +23,7 @@
     onreassign,
     onedit,
     onseek,
+    onverdict,
   }: {
     /** Transcript body (everything after the frontmatter) using `{{t:N.N}}`
      *  per-word markers. */
@@ -43,6 +44,15 @@
     onedit: (gIndex: number, text: string) => void;
     /** Seek the media to `seconds` (optional). */
     onseek?: (seconds: number) => void;
+    /** Report the observation verdict (observed word-index spans + the
+     *  coverage fraction + digestible + total words) whenever it changes, so
+     *  the submit can persist it to the sidecar. */
+    onverdict?: (v: {
+      spans: { from: number; to: number }[];
+      observed_coverage: number;
+      digestible: boolean;
+      total_units: number;
+    }) => void;
   } = $props();
 
   let parsed = $derived(parseWords(body));
@@ -207,6 +217,32 @@
   function isObserved(g: number): boolean {
     return observed.has(g);
   }
+
+  // The observation verdict for this record: observed word-index spans, the
+  // coverage fraction, the digestible flag (observed-only 100%), and the total
+  // word count. Reported to the parent so a review submit persists it to the
+  // sidecar (where the digester's gate reads observed_coverage + digestible).
+  let coverageVerdict = $derived.by(() => {
+    const total = words.length;
+    const obs = [...observed].filter((g) => g >= 0 && g < total).sort((a, b) => a - b);
+    const spans: { from: number; to: number }[] = [];
+    for (const g of obs) {
+      const last = spans[spans.length - 1];
+      if (last && g === last.to + 1) last.to = g;
+      else spans.push({ from: g, to: g });
+    }
+    return {
+      spans,
+      observed_coverage: total > 0 ? obs.length / total : 0,
+      digestible: total > 0 && obs.length === total,
+      total_units: total,
+    };
+  });
+
+  $effect(() => {
+    const v = coverageVerdict;
+    untrack(() => onverdict?.(v));
+  });
 
   function rangeAllObserved(): boolean {
     if (!range) return false;
