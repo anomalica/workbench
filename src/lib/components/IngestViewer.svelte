@@ -2798,6 +2798,7 @@
             {currentTime}
             {filteredSpeakers}
             storageKey={`workbench:observed:${ingest.content_hash}`}
+            notesStorageKey={`workbench:notes:${ingest.content_hash}`}
             onreassign={(from, to, speaker) => doc.reassignWords(from, to, speaker)}
             onedit={(gIndex, text) => doc.editWord(gIndex, text)}
             onseek={(seconds) => {

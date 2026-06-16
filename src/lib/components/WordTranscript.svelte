@@ -19,6 +19,7 @@
     currentTime = 0,
     filteredSpeakers = new Set<string>(),
     storageKey = "",
+    notesStorageKey = "",
     onreassign,
     onedit,
     onseek,
@@ -34,6 +35,8 @@
     filteredSpeakers?: Set<string>;
     /** localStorage key for persisting which words have been observed. */
     storageKey?: string;
+    /** localStorage key for persisting time-anchored visual notes. */
+    notesStorageKey?: string;
     /** Reassign the inclusive word range [from, to] to `speaker`. */
     onreassign: (from: number, to: number, speaker: string) => void;
     /** Replace the text of a single word (keeps its timestamp). */
@@ -236,6 +239,113 @@
     range = { from: run.startWord, to: run.endWord };
   }
 
+  // --- Time-anchored visual notes (reviewer observations of the video's visual
+  // channel, anchored to a moment, not a word). Persisted locally for now; the
+  // committed {hash}.visual-notes.json sidecar is the follow-up. ---
+  interface VisualNote {
+    id: string;
+    at: number;
+    text: string;
+  }
+
+  let notes = $state<VisualNote[]>([]);
+  let editingNoteId = $state<string | null>(null);
+  let noteInputEl = $state<HTMLTextAreaElement>();
+
+  $effect(() => {
+    const key = notesStorageKey;
+    let restored: VisualNote[] = [];
+    if (key) {
+      try {
+        const raw = JSON.parse(localStorage.getItem(key) ?? "[]");
+        if (Array.isArray(raw)) restored = raw;
+      } catch {
+        restored = [];
+      }
+    }
+    untrack(() => {
+      notes = restored;
+    });
+  });
+
+  $effect(() => {
+    const serialised = JSON.stringify(notes);
+    if (notesStorageKey) localStorage.setItem(notesStorageKey, serialised);
+  });
+
+  let sortedNotes = $derived([...notes].sort((a, b) => a.at - b.at));
+
+  // Each note renders inline after the last word whose start is at or before
+  // its time (so it sits "between words" at that moment). Notes before the
+  // first word anchor to word 0.
+  let notesByAnchorWord = $derived.by(() => {
+    const m = new Map<number, VisualNote[]>();
+    if (words.length === 0) return m;
+    for (const note of sortedNotes) {
+      let lo = 0;
+      let hi = words.length - 1;
+      let g = 0;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (words[mid].start <= note.at) {
+          g = mid;
+          lo = mid + 1;
+        } else {
+          hi = mid - 1;
+        }
+      }
+      const list = m.get(g) ?? [];
+      list.push(note);
+      m.set(g, list);
+    }
+    return m;
+  });
+
+  function addNoteAt(at: number) {
+    const note: VisualNote = { id: crypto.randomUUID(), at, text: "" };
+    notes = [...notes, note];
+    editingNoteId = note.id;
+    setTimeout(() => noteInputEl?.focus(), 0);
+  }
+
+  /** Add a note at the current playback position. Called from the toolbar
+   *  button and the `v` keyboard shortcut. */
+  function addNoteAtCurrentTime() {
+    addNoteAt(currentTime);
+  }
+
+  function onWindowKeydown(e: KeyboardEvent) {
+    if (e.key !== "v" || e.ctrlKey || e.metaKey || e.altKey) return;
+    const t = e.target;
+    if (
+      t instanceof HTMLInputElement ||
+      t instanceof HTMLTextAreaElement ||
+      (t instanceof HTMLElement && t.isContentEditable)
+    )
+      return;
+    e.preventDefault();
+    addNoteAtCurrentTime();
+  }
+
+  function commitNote(id: string) {
+    // Drop a note left empty (e.g. opened then dismissed without typing).
+    notes = notes.filter((n) => n.id !== id || n.text.trim() !== "");
+    editingNoteId = null;
+  }
+
+  function deleteNote(id: string) {
+    notes = notes.filter((n) => n.id !== id);
+    if (editingNoteId === id) editingNoteId = null;
+  }
+
+  function secondsToClock(s: number): string {
+    const t = Math.max(0, Math.floor(s));
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const h = Math.floor(t / 3600);
+    const m = Math.floor((t % 3600) / 60);
+    return h > 0 ? `${h}:${pad(m)}:${pad(t % 60)}` : `${m}:${pad(t % 60)}`;
+  }
+
   function positionBar() {
     if (!range || !scrollEl || !barEl) return;
     const wordEl = scrollEl.querySelector<HTMLElement>(`[data-word-index="${range.from}"]`);
@@ -369,7 +479,11 @@
   }
 </script>
 
-<svelte:window onpointerup={stopDrag} onresize={() => range && schedulePositionBar()} />
+<svelte:window
+  onpointerup={stopDrag}
+  onresize={() => range && schedulePositionBar()}
+  onkeydown={onWindowKeydown}
+/>
 
 {#snippet speakerMenu(currentSpeaker: string | null, onChoose: (name: string) => void)}
   {@const named = namedSpeakersOrdered.filter((s) => s !== currentSpeaker)}
@@ -523,6 +637,16 @@
           Edit word
         </button>
       {/if}
+      <div class="w-px h-4 bg-border" aria-hidden="true"></div>
+      <button
+        onclick={() => {
+          if (range && words[range.from]) addNoteAt(words[range.from].start);
+        }}
+        class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
+        title="Add a visual note at this word's moment"
+      >
+        Add note
+      </button>
       <button
         onclick={clearSelection}
         class="p-0.5 rounded cursor-pointer text-on-surface-muted/60 hover:text-on-surface hover:bg-surface-alt transition-colors"
@@ -536,6 +660,24 @@
     {/if}
   </div>
 {/if}
+
+<!-- Top toolbar: drop a time-anchored visual note at the current playback
+     moment (also bound to the `v` key, handled in IngestViewer). -->
+<div class="flex-none flex items-center gap-2 px-4 py-1.5 border-b border-border bg-surface-alt">
+  <button
+    onclick={() => addNoteAtCurrentTime()}
+    class="flex items-center gap-1.5 text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
+    title="Add a visual note at the current playback time (v)"
+  >
+    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M3 7h2l2-3h10l2 3h2v12H3z" />
+      <circle cx="12" cy="13" r="3.5" />
+    </svg>
+    Add visual note
+  </button>
+  <span class="text-xs font-ui text-on-surface-muted tabular-nums">at {secondsToClock(currentTime)}</span>
+  <span class="text-xs font-ui text-on-surface-muted/60 ml-auto">{notes.length} note{notes.length === 1 ? "" : "s"}</span>
+</div>
 
 <div
   bind:this={scrollEl}
@@ -613,6 +755,74 @@
                     ? 'hover:bg-primary-container/30'
                     : 'text-on-surface-muted/40 hover:bg-primary-container/30'}"
             >{words[g].text}</span>{" "}
+            {#each notesByAnchorWord.get(g) ?? [] as note (note.id)}
+              <!-- Reviewer visual note: rendered inline at its moment but
+                   clearly markup, not speech (playback ignores it - it isn't a
+                   word). display:block breaks it onto its own line. -->
+              <span
+                style="display:flex"
+                class="my-1.5 items-start gap-1.5 rounded border border-warning/50 bg-warning-container/20 px-2 py-1 text-xs not-italic text-on-surface select-text"
+              >
+                <svg
+                  class="w-3.5 h-3.5 flex-none mt-0.5 text-warning"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  viewBox="0 0 24 24"
+                >
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M3 7h2l2-3h10l2 3h2v12H3z" />
+                  <circle cx="12" cy="13" r="3.5" />
+                </svg>
+                {#if editingNoteId === note.id}
+                  <textarea
+                    bind:this={noteInputEl}
+                    bind:value={note.text}
+                    onblur={() => commitNote(note.id)}
+                    onkeydown={(e) => {
+                      if (e.key === "Escape") {
+                        e.preventDefault();
+                        commitNote(note.id);
+                      }
+                    }}
+                    rows="2"
+                    placeholder="What's on screen at this moment..."
+                    class="flex-1 min-w-0 bg-surface border border-primary rounded px-1.5 py-1 text-xs text-on-surface outline-none resize-y"
+                  ></textarea>
+                  <button
+                    onclick={() => commitNote(note.id)}
+                    class="flex-none text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
+                  >Save</button>
+                {:else}
+                  <button
+                    onclick={() => onseek?.(note.at)}
+                    class="flex-none font-mono tabular-nums text-warning/90 hover:underline cursor-pointer"
+                    title="Jump to this moment"
+                  >{secondsToClock(note.at)}</button>
+                  <span class="flex-1 min-w-0 whitespace-pre-wrap">{note.text}</span>
+                  <button
+                    onclick={() => (editingNoteId = note.id)}
+                    class="flex-none text-on-surface-muted/70 hover:text-primary cursor-pointer"
+                    title="Edit note"
+                    aria-label="Edit note"
+                  >
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                    </svg>
+                  </button>
+                  <button
+                    onclick={() => deleteNote(note.id)}
+                    class="flex-none text-on-surface-muted/70 hover:text-error cursor-pointer"
+                    title="Delete note"
+                    aria-label="Delete note"
+                  >
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                {/if}
+              </span>
+            {/each}
           {/each}
         </p>
       </div>
