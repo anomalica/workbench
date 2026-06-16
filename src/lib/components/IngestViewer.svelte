@@ -33,6 +33,7 @@
   import EpubViewer from "./EpubViewer.svelte";
   import WordTranscript from "./WordTranscript.svelte";
   import ReadableText from "./ReadableText.svelte";
+  import EditableMetadata from "./EditableMetadata.svelte";
   import { hasWordTimestamps } from "$lib/transcript-words";
   import { untrack } from "svelte";
   import { marked } from "marked";
@@ -103,6 +104,28 @@
   let currentBody = $derived(() => {
     const match = doc.current.match(/^---\n[\s\S]*?\n---\n([\s\S]*)$/);
     return match ? match[1] : doc.current;
+  });
+  // Live frontmatter parsed from the working document, so edited fields
+  // (creators, publisher) reflect immediately rather than the stale fetch.
+  let currentFrontmatterObj = $derived.by<Record<string, unknown>>(() => {
+    const match = doc.current.match(/^---\n([\s\S]*?)\n---\n/);
+    if (!match) return {};
+    try {
+      return (yaml.load(match[1]) as Record<string, unknown>) ?? {};
+    } catch {
+      return {};
+    }
+  });
+  let liveCreators = $derived.by<string[]>(() => {
+    const c = currentFrontmatterObj.creators ?? currentFrontmatterObj.authors;
+    return Array.isArray(c) ? c.map(String) : [];
+  });
+  let livePublisher = $derived(
+    typeof currentFrontmatterObj.publisher === "string" ? currentFrontmatterObj.publisher : "",
+  );
+  let currentRawFrontmatter = $derived.by(() => {
+    const m = doc.current.match(/^---\n([\s\S]*?)\n---\n/);
+    return m ? m[1].trim() : "";
   });
   let segments = $derived(parseTranscript(currentBody()));
   let hasTranscript = $derived(segments.length > 0 && segments[0].speaker !== "");
@@ -2077,9 +2100,9 @@
       <h2 class="font-ui font-semibold text-on-surface truncate">
         {ingest.frontmatter.title ?? "Untitled"}
       </h2>
-      {#if ingest.creators && ingest.creators.length > 0}
+      {#if liveCreators.length > 0}
         <p class="text-xs text-on-surface-muted truncate">
-          {ingest.creators.join(", ")}
+          {liveCreators.join(", ")}
         </p>
       {/if}
       <div class="flex gap-3 mt-1 text-xs text-on-surface-muted font-ui">
@@ -2703,8 +2726,20 @@
 
       <!-- Metadata panel (collapsible, shown in any view) -->
       {#if showMetadata}
-        <div class="border-b border-border bg-surface-alt/50 px-4 py-3 flex-none">
-          <pre class="text-xs font-mono text-on-surface whitespace-pre-wrap">{ingest.raw_frontmatter.replace(/^---\n/, "").replace(/---\n$/, "").trim()}</pre>
+        <div class="border-b border-border bg-surface-alt/50 px-4 py-3 flex-none flex flex-col gap-3">
+          <EditableMetadata
+            publisher={livePublisher}
+            creators={liveCreators}
+            canEdit={!!user}
+            onsave={({ publisher, creators }) =>
+              doc.updateFrontmatter({ publisher, creators })}
+          />
+          <details class="text-xs">
+            <summary class="cursor-pointer text-on-surface-muted hover:text-on-surface select-none">
+              Raw frontmatter
+            </summary>
+            <pre class="mt-2 font-mono text-on-surface whitespace-pre-wrap">{currentRawFrontmatter}</pre>
+          </details>
         </div>
       {/if}
 

@@ -130,6 +130,15 @@ export class DocumentStore {
     if (result !== this.current) this.pushEdit(result);
   }
 
+  /** Set one or more top-level frontmatter fields in a single undo step. A
+   *  value of "" or [] drops the key. Used for editable metadata (creators,
+   *  publisher); commits back to ingests through the normal submit path. */
+  updateFrontmatter(fields: Record<string, string | string[]>) {
+    const [rawFm, body] = splitFrontmatter(this.current);
+    const result = rewriteFrontmatterFields(rawFm, fields) + body;
+    if (result !== this.current) this.pushEdit(result);
+  }
+
   /** Serialise edited word runs back into a body AND reconcile the frontmatter
    *  `speakers:` list to the named speakers now present in those runs, returning
    *  the combined frontmatter + body. A single pushEdit of this result keeps the
@@ -480,9 +489,27 @@ function splitFrontmatter(doc: string): [string, string] {
  *  block via js-yaml, leaving every other key untouched. An empty list drops
  *  the key entirely. */
 function rewriteFrontmatterSpeakers(rawFm: string, speakers: string[]): string {
+  return rewriteFrontmatterFields(rawFm, { speakers });
+}
+
+/** Set top-level frontmatter keys via js-yaml, leaving every other key (and
+ *  nested blocks like `copyright:`) untouched. A value of "" or [] drops the
+ *  key entirely. Trims string values and list items, dropping empty items. */
+function rewriteFrontmatterFields(
+  rawFm: string,
+  fields: Record<string, string | string[]>,
+): string {
   const fmContent = rawFm.replace(/^---\n/, "").replace(/---\n$/, "");
   const doc = (yaml.load(fmContent) as Record<string, unknown>) ?? {};
-  doc.speakers = speakers.length > 0 ? speakers : undefined;
+  for (const [key, value] of Object.entries(fields)) {
+    if (Array.isArray(value)) {
+      const items = value.map((v) => v.trim()).filter((v) => v !== "");
+      doc[key] = items.length > 0 ? items : undefined;
+    } else {
+      const trimmed = value.trim();
+      doc[key] = trimmed !== "" ? trimmed : undefined;
+    }
+  }
   const newFmContent = yaml.dump(doc, {
     lineWidth: -1,
     quotingType: '"',
