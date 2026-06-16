@@ -511,7 +511,10 @@
   });
 
   function nudgeTime(deltaSec: number) {
-    if (timeBounds) onsettime(timeBounds.g, timeBounds.cur + deltaSec);
+    if (!timeBounds) return;
+    const target = Math.max(timeBounds.prev, Math.min(timeBounds.next, timeBounds.cur + deltaSec));
+    onsettime(timeBounds.g, target);
+    onseek?.(target);
   }
 
   function sliderTime(fraction: number) {
