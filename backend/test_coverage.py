@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import backend.server as server
-from backend.server import COVERAGE_SCHEMA, LocalIngestSource
+from backend.server import COVERAGE_SCHEMA, COVERAGE_SCHEMA_V1, LocalIngestSource
 
 CONTENT_HASH = "a" * 64
 
@@ -60,6 +60,33 @@ def test_append_coverage_creates_sidecar(ingests_repo):
     assert entry["notes"] == "looked, all fine"
     assert entry["at"].endswith("Z")
     assert len(entry["parent_commit"]) == 40
+
+
+def test_append_coverage_stores_verdict_at_v1(ingests_repo):
+    src = LocalIngestSource(ingests_repo)
+    ok = src.append_coverage(
+        CONTENT_HASH,
+        "a@example.invalid",
+        [{"from": 0, "to": 9, "kind": "observed"}],
+        "",
+        observed_coverage=1.0,
+        digestible=True,
+        total_units=10,
+    )
+    assert ok
+    sidecar = src.load_coverage(CONTENT_HASH)
+    assert sidecar["schema"] == COVERAGE_SCHEMA_V1
+    assert sidecar["observed_coverage"] == 1.0
+    assert sidecar["digestible"] is True
+    assert sidecar["total_units"] == 10
+
+
+def test_append_coverage_without_verdict_stays_v0(ingests_repo):
+    src = LocalIngestSource(ingests_repo)
+    src.append_coverage(CONTENT_HASH, "a@example.invalid", [{"from": 0, "to": 1}], "")
+    sidecar = src.load_coverage(CONTENT_HASH)
+    assert sidecar["schema"] == COVERAGE_SCHEMA
+    assert "observed_coverage" not in sidecar
 
 
 def test_append_coverage_is_append_only(ingests_repo):
