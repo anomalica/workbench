@@ -22,6 +22,7 @@
     notesStorageKey = "",
     onreassign,
     onedit,
+    onsettime,
     onseek,
     onverdict,
   }: {
@@ -42,6 +43,8 @@
     onreassign: (from: number, to: number, speaker: string) => void;
     /** Replace the text of a single word (keeps its timestamp). */
     onedit: (gIndex: number, text: string) => void;
+    /** Set a single word's start time (clamped between its neighbours). */
+    onsettime: (gIndex: number, start: number) => void;
     /** Seek the media to `seconds` (optional). */
     onseek?: (seconds: number) => void;
     /** Report the observation verdict (observed word-index spans + the
@@ -134,6 +137,8 @@
   let editingWord = $state(false);
   let editValue = $state("");
   let editWordEl = $state<HTMLInputElement>();
+  // Single-word time-adjust mode.
+  let adjustingTime = $state(false);
 
   // Floating selection bar: positioned just above (or below) the first
   // selected word, in the offsetParent's coordinate space.
@@ -351,6 +356,12 @@
   }
 
   function onWindowKeydown(e: KeyboardEvent) {
+    // Esc backs out of the time-adjust mode (the slider can hold focus).
+    if (e.key === "Escape" && adjustingTime) {
+      e.preventDefault();
+      clearSelection();
+      return;
+    }
     if (e.key !== "v" || e.ctrlKey || e.metaKey || e.altKey) return;
     const t = e.target;
     if (
@@ -380,6 +391,13 @@
     const h = Math.floor(t / 3600);
     const m = Math.floor((t % 3600) / 60);
     return h > 0 ? `${h}:${pad(m)}:${pad(t % 60)}` : `${m}:${pad(t % 60)}`;
+  }
+
+  // Clock with two decimals, for the millisecond-level time-adjust readout.
+  function secondsToClockMs(s: number): string {
+    const cs = Math.round(Math.max(0, s) * 100);
+    const frac = String(cs % 100).padStart(2, "0");
+    return `${secondsToClock(Math.floor(cs / 100))}.${frac}`;
   }
 
   function positionBar() {
@@ -478,6 +496,26 @@
     range = null;
     pickerOpen = false;
     editingWord = false;
+    adjustingTime = false;
+  }
+
+  // Time-adjust bounds for the single selected word: its current start and the
+  // neighbours' starts it can't pass (so it stays in order).
+  let timeBounds = $derived.by(() => {
+    if (!range || range.from !== range.to || !words[range.from]) return null;
+    const g = range.from;
+    const cur = words[g].start;
+    const prev = g > 0 ? words[g - 1].start : 0;
+    const next = g + 1 < words.length ? words[g + 1].start : cur + 2;
+    return { g, cur, prev, next };
+  });
+
+  function nudgeTime(deltaSec: number) {
+    if (timeBounds) onsettime(timeBounds.g, timeBounds.cur + deltaSec);
+  }
+
+  function sliderTime(fraction: number) {
+    if (timeBounds) onsettime(timeBounds.g, timeBounds.prev + fraction * (timeBounds.next - timeBounds.prev));
   }
 
   function chooseSpeaker(name: string) {
@@ -630,6 +668,82 @@
           <path stroke-linecap="round" d="M6 18L18 6M6 6l12 12" />
         </svg>
       </button>
+    {:else if adjustingTime && timeBounds}
+      <span
+        class="text-xs font-ui font-medium text-on-surface tabular-nums whitespace-nowrap"
+        title="Start time of this word"
+      >
+        {secondsToClockMs(timeBounds.cur)}
+      </span>
+      <input
+        type="range"
+        min="0"
+        max="1"
+        step="0.001"
+        value={(timeBounds.cur - timeBounds.prev) / (timeBounds.next - timeBounds.prev || 1)}
+        oninput={(e) => sliderTime(Number(e.currentTarget.value))}
+        class="w-28 accent-primary cursor-pointer"
+        title="Drag between the previous and next word's start"
+        aria-label="Word start time"
+      />
+      <div class="flex items-center gap-0.5 font-ui tabular-nums">
+        <button
+          onclick={() => nudgeTime(-1)}
+          class="text-xs font-medium text-primary cursor-pointer hover:bg-surface-alt rounded px-1 py-0.5"
+          title="Earlier by 1 second"
+        >
+          -1s
+        </button>
+        <button
+          onclick={() => nudgeTime(-0.1)}
+          class="text-xs font-medium text-primary cursor-pointer hover:bg-surface-alt rounded px-1 py-0.5"
+          title="Earlier by 100 ms"
+        >
+          -100
+        </button>
+        <button
+          onclick={() => nudgeTime(-0.01)}
+          class="text-xs font-medium text-primary cursor-pointer hover:bg-surface-alt rounded px-1 py-0.5"
+          title="Earlier by 10 ms"
+        >
+          -10
+        </button>
+        <button
+          onclick={() => nudgeTime(0.01)}
+          class="text-xs font-medium text-primary cursor-pointer hover:bg-surface-alt rounded px-1 py-0.5"
+          title="Later by 10 ms"
+        >
+          +10
+        </button>
+        <button
+          onclick={() => nudgeTime(0.1)}
+          class="text-xs font-medium text-primary cursor-pointer hover:bg-surface-alt rounded px-1 py-0.5"
+          title="Later by 100 ms"
+        >
+          +100
+        </button>
+        <button
+          onclick={() => nudgeTime(1)}
+          class="text-xs font-medium text-primary cursor-pointer hover:bg-surface-alt rounded px-1 py-0.5"
+          title="Later by 1 second"
+        >
+          +1s
+        </button>
+      </div>
+      <button
+        onclick={() => onseek?.(timeBounds.cur)}
+        class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
+        title="Play from this word's start"
+      >
+        Play
+      </button>
+      <button
+        onclick={clearSelection}
+        class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
+        title="Done (Esc)"
+      >
+        Done
+      </button>
     {:else}
       <span class="text-xs font-ui text-on-surface-secondary tabular-nums">
         {count} word{count === 1 ? "" : "s"}
@@ -672,6 +786,17 @@
           title="Edit this word's text (type a space to split it into separate words)"
         >
           Edit word
+        </button>
+        <div class="w-px h-4 bg-border" aria-hidden="true"></div>
+        <button
+          onclick={() => {
+            pickerOpen = false;
+            adjustingTime = true;
+          }}
+          class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
+          title="Adjust when this word starts"
+        >
+          Adjust time
         </button>
       {/if}
       <div class="w-px h-4 bg-border" aria-hidden="true"></div>

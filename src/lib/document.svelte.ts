@@ -251,6 +251,29 @@ export class DocumentStore {
     if (result !== this.current) this.pushEdit(result);
   }
 
+  /** Set a single word's start time, clamped between its neighbours' starts so
+   *  word order stays monotonic (the time can't pass the word before or after
+   *  it). Used by the time-nudge / slider controls. */
+  setWordTime(gIndex: number, start: number) {
+    const [fm, body] = splitFrontmatter(this.current);
+    const parsed = parseWords(body);
+    if (gIndex < 0 || gIndex >= parsed.words.length) return;
+    const prev = gIndex > 0 ? parsed.words[gIndex - 1].start : 0;
+    const next = gIndex + 1 < parsed.words.length ? parsed.words[gIndex + 1].start : start + 1;
+    const clamped = Math.max(prev, Math.min(next, start));
+    if (Math.abs(clamped - parsed.words[gIndex].start) < 0.005) return;
+    parsed.words[gIndex] = { ...parsed.words[gIndex], start: clamped };
+    const newBody = serializeWords(
+      parsed.words,
+      parsed.runs,
+      parsed.lineEndWords,
+      parsed.linePrefixes,
+      parsed.preamble,
+    );
+    const result = fm + newBody;
+    if (result !== this.current) this.pushEdit(result);
+  }
+
   // --- All structural operations use parse-modify-serialize ---
 
   private editSegments(fn: (segs: Segment[]) => boolean) {
