@@ -306,37 +306,44 @@
     <div class="mx-auto max-w-3xl flex flex-col">
       {#each renderedBlocks as { block, html } (block.index)}
         {@const state = blockState(block.index)}
+        {@const structural = block.contentLines.length === 0}
         <!-- Drag-to-select is a pointer enhancement; keyboard users mark via the
              gutter button and toolbar actions, which are real buttons. -->
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div
           class="group flex gap-2 rounded transition-colors
-            {inSelection(block.index) ? 'bg-primary/10' : 'hover:bg-surface-alt/40'}"
+            {inSelection(block.index) && !structural ? 'bg-primary/10' : 'hover:bg-surface-alt/40'}"
           data-block-index={block.index}
-          onpointerdown={(e) => onBlockPointerDown(e, block.index)}
+          onpointerdown={(e) => !structural && onBlockPointerDown(e, block.index)}
           onpointerenter={() => onBlockPointerEnter(block.index)}
         >
-          <!-- Coverage gutter: click toggles just this block -->
-          <button
-            onclick={() => toggleBlock(block.index)}
-            class="flex-none w-1.5 rounded-full my-1 cursor-pointer transition-colors
-              {state === 'session'
-                ? 'bg-primary'
-                : state === 'prior'
-                  ? 'bg-success'
-                  : 'bg-border/50 hover:bg-on-surface-muted'}"
-            title={state === "none"
-              ? "Mark this block as read"
-              : state === "session"
-                ? "Marked read this session - click to unmark"
-                : "Read in a previous review"}
-            aria-label="Toggle read"
-          ></button>
+          <!-- Coverage gutter: click toggles just this block. Structural blocks
+               (page markers, redaction notes - no readable units) get a plain
+               spacer instead, so they read as dividers, not coverage targets. -->
+          {#if structural}
+            <span class="flex-none w-1.5" aria-hidden="true"></span>
+          {:else}
+            <button
+              onclick={() => toggleBlock(block.index)}
+              class="flex-none w-1.5 rounded-full my-1 cursor-pointer transition-colors
+                {state === 'session'
+                  ? 'bg-primary'
+                  : state === 'prior'
+                    ? 'bg-success'
+                    : 'bg-border/50 hover:bg-on-surface-muted'}"
+              title={state === "none"
+                ? "Mark this block as read"
+                : state === "session"
+                  ? "Marked read this session - click to unmark"
+                  : "Read in a previous review"}
+              aria-label="Toggle read"
+            ></button>
+          {/if}
           <div
             class="prose prose-sm max-w-none flex-1 py-1 select-none
               text-on-surface prose-headings:text-on-surface prose-a:text-primary
               prose-img:rounded prose-img:max-w-full prose-hr:border-border
-              {state === 'none' ? 'opacity-70' : ''}"
+              {state === 'none' && !structural ? 'opacity-70' : ''}"
           >
             <!-- eslint-disable-next-line svelte/no-at-html-tags -->
             {@html html}

@@ -584,8 +584,10 @@
   let isVideo = $derived(ingest.frontmatter.source_type === "video");
   let isEbook = $derived(ingest.frontmatter.source_type === "ebook");
   // Text records (no playback signal) get explicit block-level read coverage
-  // in the rendered prose view. PDFs keep the plain render for now (page sync).
-  let isTextRecord = $derived(isWeb || isEbook);
+  // in the rendered prose view. PDFs are included: their page markers render as
+  // zero-unit blocks inside ReadableText's container, so the page-sync observer
+  // (bound to that container via proseContainer) keeps working.
+  let isTextRecord = $derived(isWeb || isEbook || isPdf);
 
   // Copyright: public/accessible records can show everything freely
   let isPublic = $derived(
