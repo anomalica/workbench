@@ -1,5 +1,17 @@
 import { describe, it, expect } from "vitest";
-import { provenanceOf } from "./api";
+import { provenanceOf, isPubliclyViewable } from "./api";
+
+describe("isPubliclyViewable", () => {
+  it("is true for freely-viewable statuses", () => {
+    expect(isPubliclyViewable("public_domain")).toBe(true);
+    expect(isPubliclyViewable("open_licence")).toBe(true);
+    expect(isPubliclyViewable("publicly_accessible")).toBe(true);
+  });
+  it("is false for gated statuses", () => {
+    expect(isPubliclyViewable("licensed")).toBe(false);
+    expect(isPubliclyViewable("restricted")).toBe(false);
+  });
+});
 
 describe("provenanceOf", () => {
   it("treats an http source_url as the traceable origin", () => {

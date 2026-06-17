@@ -31,9 +31,19 @@ export interface IngestSummary {
   digestible: boolean;
   /** Observed fraction (0..1) of the record's content units. */
   observed_coverage: number;
+  /** True when a digest has been built for this record. */
+  digested: boolean;
   /** Present when the ingester carried a prior review onto this re-ingested
    *  record; null/absent otherwise. */
   review_carryover?: ReviewCarryover | null;
+}
+
+/** Whether a record's copyright status allows free public viewing (vs gated
+ *  licensed/restricted material). Drives the compact "Public" list column. */
+export function isPubliclyViewable(status: CopyrightStatus): boolean {
+  return (
+    status === "public_domain" || status === "open_licence" || status === "publicly_accessible"
+  );
 }
 
 export type ProvenanceKind = "url" | "file" | "unknown" | "none";

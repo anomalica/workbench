@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { type IngestSummary, provenanceOf } from "$lib/api";
+  import { type IngestSummary, provenanceOf, isPubliclyViewable } from "$lib/api";
 
   let {
     ingests,
@@ -46,13 +46,6 @@
     publicly_accessible: "publicly accessible",
     restricted: "restricted",
   };
-
-  const copyrightColours: Record<string, string> = {
-    public_domain: "text-success",
-    open_licence: "text-success",
-    publicly_accessible: "text-primary",
-    restricted: "text-on-surface-muted",
-  };
 </script>
 
 <!-- Column headers -->
@@ -70,14 +63,17 @@
   <button onclick={() => onsort("title")} class="flex-1 cursor-pointer hover:text-on-surface text-left pr-3" title="Sort by title">
     Title {sortBy === "title" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
   </button>
-  <button onclick={() => onsort("creator")} class="w-40 flex-none cursor-pointer hover:text-on-surface text-left" title="Sort by creator">
+  <button onclick={() => onsort("creator")} class="w-36 flex-none cursor-pointer hover:text-on-surface text-left" title="Sort by creator">
     Authors / Creators {sortBy === "creator" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
   </button>
-  <button onclick={() => onsort("digestible")} class="w-24 flex-none cursor-pointer hover:text-on-surface text-left" title="Sort by digestibility (how much has been observed)">
+  <button onclick={() => onsort("digestible")} class="w-20 flex-none cursor-pointer hover:text-on-surface text-left" title="Sort by digestibility (how much has been observed)">
     Digestible {sortBy === "digestible" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
   </button>
-  <button onclick={() => onsort("copyright")} class="w-32 flex-none cursor-pointer hover:text-on-surface text-right" title="Sort by access">
-    {sortBy === "copyright" ? (sortAsc ? "\u25B2" : "\u25BC") : ""} Access
+  <button onclick={() => onsort("digested")} class="w-20 flex-none cursor-pointer hover:text-on-surface text-left" title="Sort by whether a digest has been built">
+    Digested {sortBy === "digested" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
+  </button>
+  <button onclick={() => onsort("copyright")} class="w-16 flex-none cursor-pointer hover:text-on-surface text-left" title="Sort by access (publicly viewable?)">
+    Public {sortBy === "copyright" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
   </button>
 </div>
 
@@ -137,7 +133,7 @@
             <span class="text-warning" title="Untraceable: no recoverable source/origin">&#9888;</span>
           {/if}{ingest.title}
         </p>
-        <span class="text-xs text-on-surface-secondary w-40 flex-none truncate">
+        <span class="text-xs text-on-surface-secondary w-36 flex-none truncate">
           {#each ingest.creators ?? [] as creator, idx}
             <button
               onclick={(e) => { e.stopPropagation(); onfiltercreator?.(creator); }}
@@ -146,7 +142,7 @@
             >{creator}</button>{#if idx < ingest.creators.length - 1}, {/if}
           {/each}
         </span>
-        <span class="w-24 flex-none text-xs font-ui">
+        <span class="w-20 flex-none text-xs font-ui">
           {#if ingest.digestible}
             <span class="font-medium text-success" title="100% of content observed">Yes</span>
           {:else}
@@ -156,8 +152,20 @@
             >No</span>
           {/if}
         </span>
-        <span class="text-xs font-ui w-32 flex-none text-right {copyrightColours[ingest.copyright_status] ?? 'text-on-surface-muted'}">
-          {copyrightLabels[ingest.copyright_status] ?? ingest.copyright_status}
+        <span class="w-20 flex-none text-xs font-ui">
+          {#if ingest.digested}
+            <span class="text-on-surface" title="A digest has been built">Yes</span>
+          {:else if ingest.digestible}
+            <span class="font-medium text-primary" title="Digestible but not yet digested">No</span>
+          {:else}
+            <span class="text-on-surface-muted" title="Not digested">No</span>
+          {/if}
+        </span>
+        <span
+          class="w-16 flex-none text-xs font-ui {isPubliclyViewable(ingest.copyright_status) ? 'text-success' : 'text-on-surface-muted'}"
+          title={copyrightLabels[ingest.copyright_status] ?? ingest.copyright_status}
+        >
+          {isPubliclyViewable(ingest.copyright_status) ? "Yes" : "No"}
         </span>
       </div>
     </div>

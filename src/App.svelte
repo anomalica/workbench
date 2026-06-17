@@ -65,7 +65,14 @@
     ),
   );
   let sortBy = $state<
-    "date" | "title" | "type" | "publisher" | "creator" | "digestible" | "copyright"
+    | "date"
+    | "title"
+    | "type"
+    | "publisher"
+    | "creator"
+    | "digestible"
+    | "digested"
+    | "copyright"
   >("date");
   let sortAsc = $state(false);
   // Which date the date column shows (and what "Date" sort uses).
@@ -153,6 +160,10 @@
               : a.observed_coverage > b.observed_coverage
                 ? 1
                 : 0;
+          return sortAsc ? cmp : -cmp;
+        }
+        if (sortBy === "digested") {
+          const cmp = Number(a.digested) - Number(b.digested);
           return sortAsc ? cmp : -cmp;
         }
         if (sortBy === "date") {

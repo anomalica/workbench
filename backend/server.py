@@ -223,8 +223,31 @@ class LocalIngestSource(IngestSource):
 
         return index
 
+    def _digested_content_hashes(self) -> set[str]:
+        """content_hashes that have a digest. The digest YAML is named by the
+        friendly records/ symlink slug, so walk the symlinks once and only read
+        a record's frontmatter when its digest actually exists."""
+        digested: set[str] = set()
+        records_dir = self.store.parent / "records"
+        digest_records = digests_path / "records"
+        if not (records_dir.exists() and digest_records.exists()):
+            return digested
+        for symlink in records_dir.glob("*.md"):
+            if not (digest_records / f"{symlink.stem}.yaml").exists():
+                continue
+            try:
+                with open(symlink.resolve()) as f:
+                    fm, _, _ = parse_frontmatter(f.read())
+            except OSError:
+                continue
+            ch = normalise_hash(fm.get("content_hash"))
+            if ch:
+                digested.add(ch)
+        return digested
+
     def list_ingests(self) -> list[dict]:
         ingests: list[dict] = []
+        digested_hashes = self._digested_content_hashes()
         for content_hash, (md_path, frontmatter) in self._scan().items():
             # The spec field is `creators`; older records used `authors`.
             creators = frontmatter.get("creators") or frontmatter.get("authors") or []
@@ -245,6 +268,7 @@ class LocalIngestSource(IngestSource):
                     "creators": creators,
                     "digestible": verdict.digestible,
                     "observed_coverage": verdict.observed_coverage,
+                    "digested": content_hash in digested_hashes,
                     "date": frontmatter.get(
                         "date_published", frontmatter.get("date", "")
                     ),
