@@ -2372,26 +2372,14 @@
       <!-- Source panel: in theatre it's the full-width video band (header +
            video only; speakers lift out to their own column below). -->
       <div
-        class="flex flex-col min-h-0 border-border {theatreActive ? 'border-b' : `${colWidthClass} border-r`}"
+        class="flex flex-col min-h-0 border-border {theatreActive ? 'border-b bg-black' : `${colWidthClass} border-r`}"
         style={theatreActive ? 'grid-area: src' : ''}
       >
         <div class="px-3 py-2 bg-surface-alt border-b border-border flex-none flex items-center gap-3">
           <span class="text-xs font-ui font-medium text-on-surface-secondary uppercase flex-none">Original</span>
-          {#if ytId}
-            <button
-              onclick={() => { theatreMode = !theatreMode; }}
-              class="flex-none p-1 rounded transition-colors {theatreMode ? 'text-primary bg-primary/10' : 'text-on-surface-muted hover:text-on-surface hover:bg-surface'}"
-              title={theatreMode ? "Exit theatre mode" : "Theatre mode: video across the top, columns below"}
-              aria-label="Toggle theatre mode"
-            >
-              {#if theatreMode}
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 9H5V5m10 0v4h4M5 15h4v4m6 0v-4h4" /></svg>
-              {:else}
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="1.5" /></svg>
-              {/if}
-            </button>
-          {/if}
-          {#if ingest.frontmatter.source_url}
+          {#if ingest.frontmatter.source_url && !ytId}
+            <!-- For YouTube videos the source link lives in the player's
+                 control bar, so it isn't duplicated in this header. -->
             <a
               href={ingest.frontmatter.source_url}
               target="_blank"
@@ -2434,39 +2422,72 @@
           <!-- Container reshapes between modes; #yt-player keeps the exact
                same classes and parent across the toggle so the YouTube
                iframe is never reparented (which would reload the video). -->
+          <!-- The whole video area is black (theatre field). The outer wrapper's
+               classes change between modes but the inner #yt-player parent stays
+               the same element, so the iframe never reparents/reloads. h-auto
+               overrides the iframe's height="360" so aspect-video drives it. -->
           <div
-            class={theatreActive ? "flex-none w-full mx-auto p-2 bg-black rounded" : "flex-none p-4"}
+            class={theatreActive
+              ? "flex-none w-full mx-auto bg-black"
+              : "flex-none bg-black"}
             style={theatreActive ? "max-width: calc(46vh * 16 / 9)" : ""}
           >
-            <!-- h-auto overrides the iframe's height="360" attribute so
-                 aspect-video (16:9) actually drives the height instead of
-                 the video being squished to 360px tall at any width. -->
-            <div id="yt-player" class="w-full h-auto aspect-video rounded"></div>
-            <div class="flex items-center gap-1 mt-2 {theatreActive ? 'justify-center' : ''}">
-              <span class="text-xs font-ui text-on-surface-muted mr-1">Speed</span>
-              {#each playbackRates as rate (rate)}
-                <button
-                  onclick={() => setPlaybackRate(rate)}
-                  class="text-xs font-ui rounded px-1.5 py-0.5 tabular-nums transition-colors cursor-pointer
-                    {playbackRate === rate
-                    ? 'bg-primary/20 text-primary font-medium'
-                    : 'text-on-surface-muted hover:bg-surface-raised hover:text-on-surface'}"
-                  title="Set playback speed to {rate}x"
-                >
-                  {rate}x
-                </button>
-              {/each}
+            <div class="w-full">
+              <div id="yt-player" class="w-full h-auto aspect-video"></div>
+              <div class="flex items-center gap-1 px-3 py-2">
+                <span class="text-[10px] font-ui uppercase tracking-wide text-white/40 mr-1 flex-none">Speed</span>
+                {#each playbackRates as rate (rate)}
+                  <button
+                    onclick={() => setPlaybackRate(rate)}
+                    class="text-xs font-ui rounded px-1.5 py-0.5 tabular-nums transition-colors cursor-pointer
+                      {playbackRate === rate
+                      ? 'bg-white/15 text-white font-medium'
+                      : 'text-white/50 hover:bg-white/10 hover:text-white'}"
+                    title="Set playback speed to {rate}x"
+                  >
+                    {rate}x
+                  </button>
+                {/each}
+                <div class="ml-auto flex items-center gap-1 flex-none">
+                  <button
+                    onclick={() => { theatreMode = !theatreMode; }}
+                    class="p-1 rounded transition-colors {theatreMode ? 'bg-white/15 text-white' : 'text-white/60 hover:bg-white/10 hover:text-white'}"
+                    title={theatreMode ? "Exit theatre mode" : "Theatre mode: video across the top, columns below"}
+                    aria-label="Toggle theatre mode"
+                  >
+                    {#if theatreMode}
+                      <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 9H5V5m10 0v4h4M5 15h4v4m6 0v-4h4" /></svg>
+                    {:else}
+                      <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="1.5" /></svg>
+                    {/if}
+                  </button>
+                  {#if ingest.frontmatter.source_url}
+                    <a
+                      href={ingest.frontmatter.source_url}
+                      target="_blank"
+                      rel="noopener"
+                      class="p-1 rounded text-white/70 hover:bg-white/10 transition-colors flex items-center"
+                      title={ytId ? "Watch on YouTube" : "Open the source video"}
+                      aria-label={ytId ? "Watch on YouTube" : "Open the source video"}
+                    >
+                      {#if ytId}
+                        <!-- YouTube logo -->
+                        <svg class="w-6 h-6" viewBox="0 0 24 24" aria-hidden="true">
+                          <path fill="#FF0000" d="M23.5 6.2a3 3 0 0 0-2.1-2.1C19.5 3.6 12 3.6 12 3.6s-7.5 0-9.4.5A3 3 0 0 0 .5 6.2 31 31 0 0 0 0 12a31 31 0 0 0 .5 5.8 3 3 0 0 0 2.1 2.1c1.9.5 9.4.5 9.4.5s7.5 0 9.4-.5a3 3 0 0 0 2.1-2.1A31 31 0 0 0 24 12a31 31 0 0 0-.5-5.8z" />
+                          <path fill="#fff" d="M9.6 15.6V8.4l6.2 3.6z" />
+                        </svg>
+                      {:else}
+                        <!-- Generic video-source icon for an unrecognised platform -->
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                          <rect x="2" y="4" width="20" height="16" rx="2" />
+                          <path stroke-linecap="round" stroke-linejoin="round" d="M10 9l5 3-5 3z" />
+                        </svg>
+                      {/if}
+                    </a>
+                  {/if}
+                </div>
+              </div>
             </div>
-            {#if !theatreActive}
-              <a
-                href={ingest.frontmatter.source_url}
-                target="_blank"
-                rel="noopener"
-                class="text-xs text-on-surface-muted hover:text-primary mt-2 inline-block break-all"
-              >
-                {ingest.frontmatter.source_url}
-              </a>
-            {/if}
           </div>
         {:else if localSourceUrl && (isAudio || isVideo)}
           <div class="flex-none p-4">
