@@ -43,6 +43,8 @@
   // Click-to-filter on a creator or publisher value (empty = no filter).
   let filterCreator = $state<string>("");
   let filterPublisher = $state<string>("");
+  // Show only records that are currently digestible (100% observed).
+  let filterDigestible = $state(false);
   let reviewedTimes = $state<Record<string, string>>({});
   let reviewedHashes = $derived(new Set(Object.keys(reviewedTimes)));
   // Records whose review was carried over from a re-ingest and not yet
@@ -59,7 +61,9 @@
         .map((i) => i.content_hash),
     ),
   );
-  let sortBy = $state<"date" | "title" | "type" | "publisher" | "creator" | "copyright">("date");
+  let sortBy = $state<
+    "date" | "title" | "type" | "publisher" | "creator" | "digestible" | "copyright"
+  >("date");
   let sortAsc = $state(false);
   // Which date the date column shows (and what "Date" sort uses).
   // Lives in the toolbar above the list as a separate selector;
@@ -115,6 +119,7 @@
         if (filterType !== "all" && i.source_type !== filterType) return false;
         if (filterCreator && !i.creators.includes(filterCreator)) return false;
         if (filterPublisher && i.publisher !== filterPublisher) return false;
+        if (filterDigestible && !i.digestible) return false;
         // A carried-over record awaiting verification counts as pending, not
         // reviewed, even though a stale trailer marks its hash reviewed.
         const isReviewed =
@@ -135,6 +140,17 @@
       .sort((a, b) => {
         let va: string;
         let vb: string;
+        if (sortBy === "digestible") {
+          // Numeric on observed coverage, so partially-covered records order
+          // sensibly between fully digestible and untouched.
+          const cmp =
+            a.observed_coverage < b.observed_coverage
+              ? -1
+              : a.observed_coverage > b.observed_coverage
+                ? 1
+                : 0;
+          return sortAsc ? cmp : -cmp;
+        }
         if (sortBy === "date") {
           const ad = dateValueFor(a);
           const bd = dateValueFor(b);
@@ -379,6 +395,15 @@
             </div>
           {/if}
 
+          <div class="flex items-center gap-1 border-l border-border pl-3">
+            <button
+              onclick={() => { filterDigestible = !filterDigestible; }}
+              class="text-xs font-ui px-2 py-1 rounded cursor-pointer transition-colors
+                {filterDigestible ? 'bg-success/20 text-success' : 'text-on-surface-secondary hover:bg-surface'}"
+              title="Show only records that are digestible (100% observed)"
+            >Digestible</button>
+          </div>
+
           <!-- Date-field selector: what value the Date column shows
                and what "Date" sort uses. Lives in the toolbar so the
                column header itself stays a plain sort-direction toggle. -->
@@ -468,7 +493,7 @@
               onfiltercreator={(c) => { filterCreator = filterCreator === c ? "" : c; }}
               onfilterpublisher={(p) => { filterPublisher = filterPublisher === p ? "" : p; }}
             />
-          {:else if searchQuery || filterType !== "all" || filterCreator || filterPublisher}
+          {:else if searchQuery || filterType !== "all" || filterCreator || filterPublisher || filterDigestible}
             <p class="text-on-surface-muted text-sm p-6">No ingests match your search.</p>
           {:else}
             <p class="text-on-surface-muted text-sm p-6">No ingests found.</p>

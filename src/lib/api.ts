@@ -22,6 +22,11 @@ export interface IngestSummary {
   source_url: string;
   publisher: string;
   copyright_status: CopyrightStatus;
+  /** True when a reviewer has observed 100% of the record's content units
+   *  (the digester gate's rule). See observed_coverage for the fraction. */
+  digestible: boolean;
+  /** Observed fraction (0..1) of the record's content units. */
+  observed_coverage: number;
   /** Present when the ingester carried a prior review onto this re-ingested
    *  record; null/absent otherwise. */
   review_carryover?: ReviewCarryover | null;
