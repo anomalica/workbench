@@ -26,6 +26,8 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 
+from anomalica_common.review_gate import digestibility
+
 from backend.auth import setup_auth
 
 FULL_HASH_LENGTH = 64
@@ -118,72 +120,17 @@ def parse_frontmatter(text: str) -> tuple[dict, str, str]:
     return frontmatter, body, raw_frontmatter
 
 
-# Digestibility mirrors digester/review_gate.py (the authoritative gate): a
-# record is digestible only when a reviewer has OBSERVED 100% of its content
-# units. Prefer the workbench-computed verdict in the sidecar (schema /1); fall
-# back to recomputing observed line-coverage from raw spans for legacy /0.
-_TS_LINE = re.compile(r"^[0-9]{2}:[0-9]{2}:[0-9]{2}")
-DIGESTIBLE_THRESHOLD = 1.0
-
-
-def _content_line_numbers(record_text: str) -> list[int]:
-    """1-indexed line numbers of reviewable content: transcript sentence lines
-    for audio/video, else any non-blank, non-comment, non-frontmatter line."""
-    lines = record_text.splitlines()
-    body_start = 0
-    if lines and lines[0].strip() == "---":
-        for i in range(1, len(lines)):
-            if lines[i].strip() == "---":
-                body_start = i + 1
-                break
-    ts_lines = [
-        i
-        for i in range(body_start + 1, len(lines) + 1)
-        if _TS_LINE.match(lines[i - 1].strip())
-    ]
-    if ts_lines:
-        return ts_lines
-    return [
-        i
-        for i in range(body_start + 1, len(lines) + 1)
-        if lines[i - 1].strip() and not lines[i - 1].strip().startswith("<!--")
-    ]
-
-
-def _observed_line_set(sidecar: dict) -> set[int]:
-    obs: set[int] = set()
-    for review in sidecar.get("reviews") or []:
-        for span in review.get("spans") or []:
-            if span.get("kind") == "observed":
-                obs.update(range(span.get("from", 0), span.get("to", -1) + 1))
-    return obs
-
-
-def compute_digestibility(
-    record_text: str | None, sidecar: dict | None
-) -> tuple[bool, float]:
-    """Return (digestible, observed_coverage in 0..1) for a record, mirroring
-    review_gate.digestibility at the 100%-observed threshold. `record_text` may
-    be None to skip the legacy recompute (a verdict-less /0 sidecar then reads
-    as 0%)."""
-    if sidecar is None:
-        return (False, 0.0)
-    cov = sidecar.get("observed_coverage")
-    if cov is not None:
-        cov = float(cov)
-        return (cov >= DIGESTIBLE_THRESHOLD, round(cov, 4))
-    if "digestible" in sidecar:
-        digestible = bool(sidecar["digestible"])
-        return (digestible, 1.0 if digestible else 0.0)
-    if record_text is None:
-        return (False, 0.0)
-    content = _content_line_numbers(record_text)
-    if not content:
-        return (False, 0.0)
-    observed = _observed_line_set(sidecar)
-    obs = sum(1 for i in content if i in observed)
-    cov = obs / len(content)
-    return (cov >= DIGESTIBLE_THRESHOLD, round(cov, 4))
+# Digestibility (the digester gate's rule: 100% of content units observed) is
+# single-sourced in anomalica_common.review_gate.digestibility - imported above
+# so the workbench's browse-list flag and the digester's gate never drift. The
+# `_needs_body_for_digestibility` helper avoids reading a record body when the
+# sidecar already carries a verdict (the only case the pure rule needs the text).
+def _needs_body_for_digestibility(sidecar: dict | None) -> bool:
+    return (
+        sidecar is not None
+        and "observed_coverage" not in sidecar
+        and "digestible" not in sidecar
+    )
 
 
 class IngestSource(ABC):
@@ -286,21 +233,18 @@ class LocalIngestSource(IngestSource):
             # Digestibility: read the coverage sidecar; only read the record
             # body when the legacy recompute path needs it (no stored verdict).
             sidecar = self.load_coverage(content_hash)
-            needs_body = (
-                sidecar is not None
-                and "observed_coverage" not in sidecar
-                and "digestible" not in sidecar
+            record_text = (
+                md_path.read_text() if _needs_body_for_digestibility(sidecar) else None
             )
-            record_text = md_path.read_text() if needs_body else None
-            digestible, observed_coverage = compute_digestibility(record_text, sidecar)
+            verdict = digestibility(record_text, sidecar)
             ingests.append(
                 {
                     "content_hash": content_hash,
                     "public_hash": content_hash[:PUBLIC_HASH_LENGTH],
                     "title": frontmatter.get("title", "Untitled"),
                     "creators": creators,
-                    "digestible": digestible,
-                    "observed_coverage": observed_coverage,
+                    "digestible": verdict.digestible,
+                    "observed_coverage": verdict.observed_coverage,
                     "date": frontmatter.get(
                         "date_published", frontmatter.get("date", "")
                     ),
