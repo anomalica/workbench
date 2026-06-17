@@ -1,68 +1,106 @@
 #!/usr/bin/env python3
-"""compute_digestibility mirrors the digester gate at the 100%-observed rule."""
+"""list_ingests surfaces the digestibility flag, using the shared review_gate.
 
-from backend.server import compute_digestibility
-
-TRANSCRIPT = """---
-title: T
----
-00:00:01 Line one.
-00:00:05 Line two.
-00:00:10 Line three.
+The pure digestibility rule lives in anomalica_common.review_gate (tested there);
+this covers the workbench integration: reading the sidecar, reading the body only
+for the legacy recompute path, and exposing digestible + observed_coverage.
 """
 
-TEXT = """---
-title: T
----
-First para.
+import json
+import subprocess
 
-<!-- comment -->
-Second para.
-"""
+import pytest
 
+from backend.server import LocalIngestSource
 
-def test_no_sidecar_is_not_digestible():
-    assert compute_digestibility(TEXT, None) == (False, 0.0)
-
-
-def test_prefers_stored_verdict_fraction():
-    # Schema /1 verdict: the fraction is authoritative; 100% -> digestible.
-    assert compute_digestibility(None, {"observed_coverage": 1.0}) == (True, 1.0)
-    assert compute_digestibility(None, {"observed_coverage": 0.5}) == (False, 0.5)
+VERDICT_FULL = "a" * 64
+VERDICT_PARTIAL = "b" * 64
+LEGACY_TRANSCRIPT = "c" * 64
+NO_SIDECAR = "d" * 64
 
 
-def test_uses_digestible_bool_when_no_fraction():
-    assert compute_digestibility(None, {"digestible": True}) == (True, 1.0)
-    assert compute_digestibility(None, {"digestible": False}) == (False, 0.0)
+def _record(content_hash: str, body: str) -> str:
+    return f"---\nschema: anomalica/record/1\ncontent_hash: {content_hash}\ntitle: T\n---\n{body}"
 
 
-def test_legacy_recompute_over_transcript_lines():
-    # Content units are the three timestamped lines (1-indexed 4..6).
-    all_observed = {"reviews": [{"spans": [{"from": 4, "to": 6, "kind": "observed"}]}]}
-    assert compute_digestibility(TRANSCRIPT, all_observed) == (True, 1.0)
+@pytest.fixture
+def ingests_repo(tmp_path):
+    repo = tmp_path / "ingests"
+    store = repo / "store"
+    store.mkdir(parents=True)
 
-    two_of_three = {"reviews": [{"spans": [{"from": 4, "to": 5, "kind": "observed"}]}]}
-    digestible, cov = compute_digestibility(TRANSCRIPT, two_of_three)
-    assert digestible is False
-    assert round(cov, 2) == 0.67
+    (store / "full.md").write_text(_record(VERDICT_FULL, "Body.\n"))
+    (store / "partial.md").write_text(_record(VERDICT_PARTIAL, "Body.\n"))
+    (store / "legacy.md").write_text(
+        _record(LEGACY_TRANSCRIPT, "00:00:01 One.\n00:00:05 Two.\n")
+    )
+    (store / "none.md").write_text(_record(NO_SIDECAR, "Body.\n"))
+
+    # /1 verdict sidecars: the fraction is authoritative.
+    (store / f"{VERDICT_FULL}.review.json").write_text(
+        json.dumps(
+            {
+                "schema": "anomalica/review-coverage/1",
+                "reviews": [
+                    {"by": "x", "spans": [{"from": 5, "to": 5, "kind": "observed"}]}
+                ],
+                "observed_coverage": 1.0,
+                "digestible": True,
+                "total_units": 1,
+            }
+        )
+    )
+    (store / f"{VERDICT_PARTIAL}.review.json").write_text(
+        json.dumps(
+            {
+                "schema": "anomalica/review-coverage/1",
+                "reviews": [{"by": "x", "spans": []}],
+                "observed_coverage": 0.5,
+                "digestible": False,
+                "total_units": 2,
+            }
+        )
+    )
+    # Legacy /0 sidecar: no verdict, so digestibility recomputes from spans over
+    # the transcript's two content lines (1-indexed 6 and 7 in the full record).
+    (store / f"{LEGACY_TRANSCRIPT}.review.json").write_text(
+        json.dumps(
+            {
+                "schema": "anomalica/review-coverage/0",
+                "reviews": [
+                    {"by": "x", "spans": [{"from": 6, "to": 7, "kind": "observed"}]}
+                ],
+            }
+        )
+    )
+
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "t@example.invalid"], cwd=repo, check=True
+    )
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=repo, check=True)
+    return repo
 
 
-def test_legacy_recompute_ignores_blank_and_comment_lines():
-    # TEXT has two content lines (4 and 7); 5 is blank, 6 is a comment.
-    both = {"reviews": [{"spans": [{"from": 4, "to": 7, "kind": "observed"}]}]}
-    assert compute_digestibility(TEXT, both) == (True, 1.0)
+def test_list_ingests_exposes_digestibility(ingests_repo):
+    by_hash = {
+        i["content_hash"]: i for i in LocalIngestSource(ingests_repo).list_ingests()
+    }
 
-    one = {"reviews": [{"spans": [{"from": 4, "to": 4, "kind": "observed"}]}]}
-    assert compute_digestibility(TEXT, one) == (False, 0.5)
+    # /1 verdict at 100% -> digestible.
+    assert by_hash[VERDICT_FULL]["digestible"] is True
+    assert by_hash[VERDICT_FULL]["observed_coverage"] == 1.0
 
+    # /1 verdict below threshold -> not digestible, fraction surfaced.
+    assert by_hash[VERDICT_PARTIAL]["digestible"] is False
+    assert by_hash[VERDICT_PARTIAL]["observed_coverage"] == 0.5
 
-def test_played_spans_do_not_count_as_observed():
-    # Only "observed" spans count toward the gate; "played" is weak coverage.
-    played = {"reviews": [{"spans": [{"from": 4, "to": 6, "kind": "played"}]}]}
-    assert compute_digestibility(TRANSCRIPT, played) == (False, 0.0)
+    # Legacy /0 recompute over the body (both transcript lines observed).
+    assert by_hash[LEGACY_TRANSCRIPT]["digestible"] is True
+    assert by_hash[LEGACY_TRANSCRIPT]["observed_coverage"] == 1.0
 
-
-def test_legacy_recompute_skipped_without_body():
-    # Without the record text, a verdict-less /0 sidecar reads as 0%.
-    spans_only = {"reviews": [{"spans": [{"from": 4, "to": 6, "kind": "observed"}]}]}
-    assert compute_digestibility(None, spans_only) == (False, 0.0)
+    # No sidecar -> unreviewed, not digestible.
+    assert by_hash[NO_SIDECAR]["digestible"] is False
+    assert by_hash[NO_SIDECAR]["observed_coverage"] == 0.0
