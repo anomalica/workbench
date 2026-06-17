@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { IngestDetail, DigestDocument, User } from "$lib/api";
-  import { submitReview, fetchCoverage } from "$lib/api";
+  import { submitReview, fetchCoverage, provenanceOf } from "$lib/api";
   import {
     bodyOf,
     editedLineSpans,
@@ -122,6 +122,22 @@
   });
   let livePublisher = $derived(
     typeof currentFrontmatterObj.publisher === "string" ? currentFrontmatterObj.publisher : "",
+  );
+  let liveProvenance = $derived(
+    provenanceOf({
+      source_url:
+        typeof currentFrontmatterObj.source_url === "string"
+          ? currentFrontmatterObj.source_url
+          : "",
+      source_file:
+        typeof currentFrontmatterObj.source_file === "string"
+          ? currentFrontmatterObj.source_file
+          : "",
+      provenance:
+        typeof currentFrontmatterObj.provenance === "string"
+          ? currentFrontmatterObj.provenance
+          : "",
+    }),
   );
   let currentRawFrontmatter = $derived.by(() => {
     const m = doc.current.match(/^---\n([\s\S]*?)\n---\n/);
@@ -2734,6 +2750,27 @@
             onsave={({ publisher, creators }) =>
               doc.updateFrontmatter({ publisher, creators })}
           />
+          <!-- Acquisition provenance: where this record came from. -->
+          <div class="flex items-baseline gap-2 text-xs font-ui">
+            <span class="text-on-surface-muted w-32 flex-none">Origin</span>
+            {#if liveProvenance.kind === "url"}
+              <a
+                href={liveProvenance.label}
+                target="_blank"
+                rel="noopener noreferrer"
+                class="text-primary hover:underline truncate"
+                title={liveProvenance.label}
+              >{liveProvenance.label}</a>
+            {:else if liveProvenance.kind === "file"}
+              <span class="text-on-surface" title="Local source file">
+                {liveProvenance.label} <span class="text-on-surface-muted">(local file)</span>
+              </span>
+            {:else}
+              <span class="text-warning font-medium" title="Acquisition origin is unrecoverable">
+                {liveProvenance.label}
+              </span>
+            {/if}
+          </div>
           <details class="text-xs">
             <summary class="cursor-pointer text-on-surface-muted hover:text-on-surface select-none">
               Raw frontmatter

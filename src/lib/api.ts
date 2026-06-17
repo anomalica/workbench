@@ -20,6 +20,10 @@ export interface IngestSummary {
   date_ingested: string;
   source_type: string;
   source_url: string;
+  /** Local-file origin filename (PDFs ingested from disk). */
+  source_file: string;
+  /** "unknown" when the acquisition origin is unrecoverable. */
+  provenance: string;
   publisher: string;
   copyright_status: CopyrightStatus;
   /** True when a reviewer has observed 100% of the record's content units
@@ -30,6 +34,23 @@ export interface IngestSummary {
   /** Present when the ingester carried a prior review onto this re-ingested
    *  record; null/absent otherwise. */
   review_carryover?: ReviewCarryover | null;
+}
+
+export type ProvenanceKind = "url" | "file" | "unknown" | "none";
+
+/** Where a record came from, derived from its acquisition fields. `traceable`
+ *  is false for records whose origin is unknown or absent - the ones worth
+ *  flagging when browsing. Works on an IngestSummary or a frontmatter dict. */
+export function provenanceOf(r: {
+  source_url?: string;
+  source_file?: string;
+  provenance?: string;
+}): { kind: ProvenanceKind; label: string; traceable: boolean } {
+  if (r.source_url) return { kind: "url", label: r.source_url, traceable: true };
+  if (r.source_file) return { kind: "file", label: r.source_file, traceable: true };
+  if (r.provenance === "unknown")
+    return { kind: "unknown", label: "Origin unknown", traceable: false };
+  return { kind: "none", label: "No source recorded", traceable: false };
 }
 
 export interface IngestDetail {

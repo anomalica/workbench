@@ -5,6 +5,7 @@
     fetchDigest,
     fetchCurrentUser,
     fetchReviewedHashes,
+    provenanceOf,
   } from "$lib/api";
   import type {
     IngestSummary,
@@ -45,6 +46,8 @@
   let filterPublisher = $state<string>("");
   // Show only records that are currently digestible (100% observed).
   let filterDigestible = $state(false);
+  // Show only records whose acquisition origin is untraceable.
+  let filterUntraceable = $state(false);
   let reviewedTimes = $state<Record<string, string>>({});
   let reviewedHashes = $derived(new Set(Object.keys(reviewedTimes)));
   // Records whose review was carried over from a re-ingest and not yet
@@ -120,6 +123,7 @@
         if (filterCreator && !i.creators.includes(filterCreator)) return false;
         if (filterPublisher && i.publisher !== filterPublisher) return false;
         if (filterDigestible && !i.digestible) return false;
+        if (filterUntraceable && provenanceOf(i).traceable) return false;
         // A carried-over record awaiting verification counts as pending, not
         // reviewed, even though a stale trailer marks its hash reviewed.
         const isReviewed =
@@ -402,6 +406,12 @@
                 {filterDigestible ? 'bg-success/20 text-success' : 'text-on-surface-secondary hover:bg-surface'}"
               title="Show only records that are digestible (100% observed)"
             >Digestible</button>
+            <button
+              onclick={() => { filterUntraceable = !filterUntraceable; }}
+              class="text-xs font-ui px-2 py-1 rounded cursor-pointer transition-colors
+                {filterUntraceable ? 'bg-warning/20 text-warning' : 'text-on-surface-secondary hover:bg-surface'}"
+              title="Show only records with no recoverable source/origin"
+            >Untraceable</button>
           </div>
 
           <!-- Date-field selector: what value the Date column shows
@@ -493,7 +503,7 @@
               onfiltercreator={(c) => { filterCreator = filterCreator === c ? "" : c; }}
               onfilterpublisher={(p) => { filterPublisher = filterPublisher === p ? "" : p; }}
             />
-          {:else if searchQuery || filterType !== "all" || filterCreator || filterPublisher || filterDigestible}
+          {:else if searchQuery || filterType !== "all" || filterCreator || filterPublisher || filterDigestible || filterUntraceable}
             <p class="text-on-surface-muted text-sm p-6">No ingests match your search.</p>
           {:else}
             <p class="text-on-surface-muted text-sm p-6">No ingests found.</p>

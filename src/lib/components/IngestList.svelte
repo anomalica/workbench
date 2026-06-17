@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { IngestSummary } from "$lib/api";
+  import { type IngestSummary, provenanceOf } from "$lib/api";
 
   let {
     ingests,
@@ -132,7 +132,11 @@
             >{ingest.publisher}</button>
           {/if}
         </span>
-        <p class="text-sm text-on-surface truncate flex-1 pr-3">{ingest.title}</p>
+        <p class="text-sm text-on-surface truncate flex-1 pr-3">
+          {#if !provenanceOf(ingest).traceable}
+            <span class="text-warning" title="Untraceable: no recoverable source/origin">&#9888;</span>
+          {/if}{ingest.title}
+        </p>
         <span class="text-xs text-on-surface-secondary w-40 flex-none truncate">
           {#each ingest.creators ?? [] as creator, idx}
             <button
