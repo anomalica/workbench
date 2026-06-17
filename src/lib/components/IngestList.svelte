@@ -73,8 +73,8 @@
   <button onclick={() => onsort("creator")} class="w-40 flex-none cursor-pointer hover:text-on-surface text-left" title="Sort by creator">
     Authors / Creators {sortBy === "creator" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
   </button>
-  <button onclick={() => onsort("digestible")} class="w-24 flex-none cursor-pointer hover:text-on-surface text-left" title="Sort by digestibility (observed coverage)">
-    Digest {sortBy === "digestible" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
+  <button onclick={() => onsort("digestible")} class="w-24 flex-none cursor-pointer hover:text-on-surface text-left" title="Sort by digestibility (how much has been observed)">
+    Digestible {sortBy === "digestible" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
   </button>
   <button onclick={() => onsort("copyright")} class="w-32 flex-none cursor-pointer hover:text-on-surface text-right" title="Sort by access">
     {sortBy === "copyright" ? (sortAsc ? "\u25B2" : "\u25BC") : ""} Access
@@ -142,24 +142,14 @@
             >{creator}</button>{#if idx < ingest.creators.length - 1}, {/if}
           {/each}
         </span>
-        <span class="w-24 flex-none text-xs">
+        <span class="w-24 flex-none text-xs font-ui">
           {#if ingest.digestible}
+            <span class="font-medium text-success" title="100% of content observed">Yes</span>
+          {:else}
             <span
-              class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-success/15 text-success font-ui font-medium"
-              title="Digestible: 100% of content observed"
-            >
-              <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
-              </svg>
-              ready
-            </span>
-          {:else if ingest.observed_coverage > 0}
-            <span
-              class="text-on-surface-muted tabular-nums"
+              class="text-on-surface-muted"
               title={`${Math.floor(ingest.observed_coverage * 100)}% observed - not yet digestible`}
-            >
-              {Math.floor(ingest.observed_coverage * 100)}%
-            </span>
+            >No</span>
           {/if}
         </span>
         <span class="text-xs font-ui w-32 flex-none text-right {copyrightColours[ingest.copyright_status] ?? 'text-on-surface-muted'}">

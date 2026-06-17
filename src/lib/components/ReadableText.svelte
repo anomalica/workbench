@@ -205,6 +205,32 @@
   function inSelection(i: number): boolean {
     return !!range && i >= range.from && i <= range.to;
   }
+
+  // Scroll to the first block the reviewer hasn't read yet (a content block not
+  // covered by this session's marks or their prior committed coverage).
+  function jumpToFirstUnread() {
+    for (const { block } of renderedBlocks) {
+      if (block.contentLines.length === 0) continue;
+      if (sessionBlocks.has(block.index) || priorBlocks.has(block.index)) continue;
+      if (!containerEl?.querySelector(`[data-block-index="${block.index}"]`)) continue;
+      anchor = block.index;
+      range = { from: block.index, to: block.index };
+      // Scroll next frame so the range-change re-render doesn't cancel it;
+      // scroll the container directly (scrollIntoView targets the wrong ancestor).
+      const idx = block.index;
+      requestAnimationFrame(() => {
+        const el = containerEl?.querySelector<HTMLElement>(`[data-block-index="${idx}"]`);
+        if (!el || !containerEl) return;
+        const view = containerEl.getBoundingClientRect();
+        const b = el.getBoundingClientRect();
+        const target = containerEl.scrollTop + (b.top - view.top) - view.height * 0.4;
+        // Instant, not smooth (smooth scrollTo is a no-op in some Chromium
+        // profiles, and a jump reads fine landing immediately).
+        containerEl.scrollTo({ top: Math.max(0, target) });
+      });
+      return;
+    }
+  }
 </script>
 
 <svelte:window onpointerup={onWindowPointerUp} onkeydown={onWindowKeydown} />
@@ -218,6 +244,15 @@
     <div class="flex-1 h-1.5 rounded-full bg-surface overflow-hidden max-w-xs">
       <div class="h-full bg-primary transition-all" style="width:{pct}%"></div>
     </div>
+    {#if pct < 100}
+      <button
+        onclick={jumpToFirstUnread}
+        class="font-medium text-primary cursor-pointer hover:underline whitespace-nowrap"
+        title="Scroll to the first block you haven't read yet"
+      >
+        Jump to unread
+      </button>
+    {/if}
 
     {#if range}
       {@const n = range.to - range.from + 1}

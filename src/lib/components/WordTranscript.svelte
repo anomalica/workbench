@@ -568,6 +568,34 @@
     clearSelection();
   }
 
+  let observedPct = $derived(Math.floor(coverageVerdict.observed_coverage * 100));
+
+  // Scroll to the first word the reviewer hasn't observed yet (skipping
+  // irrelevant words, which never need observing, and words hidden by a filter).
+  function jumpToFirstUnobserved() {
+    for (let g = 0; g < words.length; g++) {
+      if (observed.has(g) || irrelevantWords.has(g)) continue;
+      if (!scrollEl?.querySelector(`[data-word-index="${g}"]`)) continue;
+      anchor = g;
+      range = { from: g, to: g };
+      // Scroll in the next frame so the range-change re-render doesn't cancel
+      // it. Centre scrollEl directly (mirrors the follow-scroll effect);
+      // scrollIntoView targets the wrong nested ancestor in this layout.
+      requestAnimationFrame(() => {
+        const el = scrollEl?.querySelector<HTMLElement>(`[data-word-index="${g}"]`);
+        if (!el || !scrollEl) return;
+        const view = scrollEl.getBoundingClientRect();
+        const word = el.getBoundingClientRect();
+        const target = scrollEl.scrollTop + (word.top - view.top) - view.height * 0.5;
+        // Instant, not smooth: smooth scrollTo is a no-op in some Chromium
+        // profiles, and a "jump" reads fine landing immediately.
+        scrollEl.scrollTo({ top: Math.max(0, target) });
+      });
+      schedulePositionBar();
+      return;
+    }
+  }
+
   function toggleHeaderPicker(run: SpeakerRun) {
     // Opening a header picker deselects any word range to avoid two live menus.
     anchor = null;
@@ -867,7 +895,22 @@
     Add visual note
   </button>
   <span class="text-xs font-ui text-on-surface-muted tabular-nums">at {secondsToClock(currentTime)}</span>
-  <span class="text-xs font-ui text-on-surface-muted/60 ml-auto">{notes.length} note{notes.length === 1 ? "" : "s"}</span>
+  <span
+    class="ml-auto text-xs font-ui font-medium tabular-nums {observedPct >= 100 ? 'text-success' : 'text-on-surface-secondary'}"
+    title="Share of this record's words you've observed"
+  >
+    {observedPct}% observed
+  </span>
+  {#if observedPct < 100}
+    <button
+      onclick={jumpToFirstUnobserved}
+      class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
+      title="Scroll to the first word you haven't observed yet"
+    >
+      Jump to unobserved
+    </button>
+  {/if}
+  <span class="text-xs font-ui text-on-surface-muted/60">{notes.length} note{notes.length === 1 ? "" : "s"}</span>
 </div>
 
 <div
