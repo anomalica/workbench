@@ -7,6 +7,7 @@
     blocksCoveredBySpans,
     unitsInSpans,
   } from "$lib/text-blocks";
+  import { safeLocalSet } from "$lib/storage";
 
   let {
     body,
@@ -74,11 +75,14 @@
     const key = restoredKey;
     const spans = observedSpans;
     if (!key) return;
-    try {
-      if (spans.length === 0) localStorage.removeItem(key);
-      else localStorage.setItem(key, JSON.stringify(spans));
-    } catch {
-      // best-effort
+    if (spans.length === 0) {
+      try {
+        localStorage.removeItem(key);
+      } catch {
+        // best-effort
+      }
+    } else {
+      safeLocalSet(key, JSON.stringify(spans));
     }
   });
 

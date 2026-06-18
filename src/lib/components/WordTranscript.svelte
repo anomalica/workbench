@@ -12,6 +12,41 @@
     SPEAKER_GROUP,
   } from "$lib/transcript";
   import SpeakerDot from "./SpeakerDot.svelte";
+  import { safeLocalSet } from "$lib/storage";
+
+  // The observed set is persisted as run-length spans [[from,to],...] rather
+  // than a flat index array: on a long record (tens of thousands of words) the
+  // flat array is hundreds of KB and is rewritten on every playback tick, which
+  // is both slow and a fast route to filling localStorage. `decodeObserved`
+  // also reads the old flat-array drafts so existing saves still restore.
+  function decodeObserved(raw: string | null): number[] {
+    if (!raw) return [];
+    try {
+      const data = JSON.parse(raw);
+      if (!Array.isArray(data)) return [];
+      if (data.length === 0) return [];
+      if (typeof data[0] === "number") return data as number[]; // legacy flat array
+      const out: number[] = [];
+      for (const span of data as [number, number][]) {
+        if (!Array.isArray(span)) continue;
+        for (let i = span[0]; i <= span[1]; i++) out.push(i);
+      }
+      return out;
+    } catch {
+      return [];
+    }
+  }
+
+  function encodeObserved(set: Set<number>): string {
+    const sorted = [...set].sort((a, b) => a - b);
+    const spans: [number, number][] = [];
+    for (const g of sorted) {
+      const last = spans[spans.length - 1];
+      if (last && g === last[1] + 1) last[1] = g;
+      else spans.push([g, g]);
+    }
+    return JSON.stringify(spans);
+  }
 
   let {
     body,
@@ -195,14 +230,7 @@
   // never rebuilds the set or resets the playback cursor mid-playback.
   $effect(() => {
     const key = storageKey;
-    let restored: number[] = [];
-    if (key) {
-      try {
-        restored = JSON.parse(localStorage.getItem(key) ?? "[]");
-      } catch {
-        restored = [];
-      }
-    }
+    const restored = key ? decodeObserved(localStorage.getItem(key)) : [];
     untrack(() => {
       lastPlayTime = -1;
       resumeWord = null;
@@ -230,10 +258,12 @@
     });
   });
 
-  // Persist on change.
+  // Persist on change. Best-effort: a full localStorage must never throw here,
+  // or the abort would tear down this component's render and kill all
+  // per-word highlighting.
   $effect(() => {
-    const arr = [...observed];
-    if (storageKey) localStorage.setItem(storageKey, JSON.stringify(arr));
+    const serialised = encodeObserved(observed);
+    if (storageKey) safeLocalSet(storageKey, serialised);
   });
 
   // Auto-observe: mark words the playhead passes during continuous forward
@@ -375,7 +405,7 @@
 
   $effect(() => {
     const serialised = JSON.stringify(notes);
-    if (notesStorageKey) localStorage.setItem(notesStorageKey, serialised);
+    if (notesStorageKey) safeLocalSet(notesStorageKey, serialised);
   });
 
   let sortedNotes = $derived([...notes].sort((a, b) => a.at - b.at));

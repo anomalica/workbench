@@ -21,6 +21,7 @@
   import type { CoverageSpan, KindedSpan, PlayWindow } from "$lib/coverage";
   import CoverageStrip from "./CoverageStrip.svelte";
   import { DocumentStore } from "$lib/document.svelte";
+  import { safeLocalSet } from "$lib/storage";
   import { parseTranscript, secondsToTime, findActiveSegmentForTime, segmentAtTime, nextRelevantSegmentAfter, extractFrontmatterSpeakers, isSegmentIrrelevant, isSpecialSpeaker, nextSpeakerName, groupSegmentsBySpeaker, orderedNamedSpeakers, SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE, SPEAKER_GROUP } from "$lib/transcript";
   import { nextSegmentBoundary, singleEndForCurrentTime } from "$lib/playback";
   import type { Segment } from "$lib/transcript";
@@ -1437,17 +1438,14 @@
     const observed = pendingRuns;
     const played = playedRuns;
     if (hash !== coverageRestoredHash) return;
-    try {
-      if (observed.length === 0 && played.length === 0) {
+    if (observed.length === 0 && played.length === 0) {
+      try {
         localStorage.removeItem(coverageStorageKey(hash));
-      } else {
-        localStorage.setItem(
-          coverageStorageKey(hash),
-          JSON.stringify({ observed, played }),
-        );
+      } catch {
+        // best-effort
       }
-    } catch {
-      // best-effort persistence
+    } else {
+      safeLocalSet(coverageStorageKey(hash), JSON.stringify({ observed, played }));
     }
   });
 
