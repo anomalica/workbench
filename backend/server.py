@@ -796,7 +796,12 @@ def _hash_to_digest_path(full_hash: str) -> Path | None:
             continue
         content_hash = normalise_hash(frontmatter.get("content_hash"))
         if content_hash == full_hash:
-            yaml_path = digests_path / "records" / f"{symlink.stem}.yaml"
+            # The ingester's records/ symlinks carry a version suffix for v2+
+            # records (``<name>.v2.md`` -> stem ``<name>.v2``), but the digester
+            # writes ``<name>.yaml`` with no suffix. Strip it so v2 audio/video
+            # records resolve to their digest instead of 404ing.
+            stem = re.sub(r"\.v\d+$", "", symlink.stem)
+            yaml_path = digests_path / "records" / f"{stem}.yaml"
             if yaml_path.exists():
                 return yaml_path
             return None
