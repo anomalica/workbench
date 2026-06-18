@@ -51,6 +51,11 @@ const amberIndex = () => {
   );
   return el ? Number(el.dataset.wordIndex) : -1;
 };
+const claimIndices = () =>
+  [...document.querySelectorAll<HTMLElement>("[data-word-index]")]
+    .filter((e) => /ring-yellow/.test(e.className))
+    .map((e) => Number(e.dataset.wordIndex))
+    .sort((a, b) => a - b);
 const observedFromVerdict = (v: Verdict | null) =>
   new Set(
     (v?.spans ?? []).flatMap((s) =>
@@ -174,6 +179,26 @@ describe("word coverage recall + playback highlight", () => {
       });
       unmount();
     }
+  });
+
+  it("highlights the words inside a deep-linked claim's time range", async () => {
+    // Words are at t = 1.0, 1.5, 2.0, 2.5, 3.0 (indices 0..4). A claim spanning
+    // 1.5-2.5s covers words 1, 2, 3; words 0 and 4 stay unhighlighted.
+    render(WordTranscript, {
+      props: { ...props(0, []), claimHighlight: { start: 1.5, end: 2.5, seq: 1 } },
+    });
+    await waitFor(() => expect(document.querySelector("[data-word-index]")).not.toBeNull());
+    expect(claimIndices()).toEqual([1, 2, 3]);
+  });
+
+  it("clears the claim highlight when the range is removed", async () => {
+    const base = props(0, []);
+    const { rerender } = render(WordTranscript, {
+      props: { ...base, claimHighlight: { start: 1.5, end: 2.5, seq: 1 } },
+    });
+    await waitFor(() => expect(claimIndices()).toEqual([1, 2, 3]));
+    await rerender({ ...base, claimHighlight: null });
+    await waitFor(() => expect(claimIndices()).toEqual([]));
   });
 
   it("Jump to unobserved marks the last OBSERVED word before the gap, leaving the target untouched", async () => {
