@@ -495,7 +495,7 @@
         <!-- Ingest list -->
         <div class="flex-1 overflow-auto">
           {#if error}
-            <div class="mx-6 mt-4 bg-error-container text-on-error-container px-4 py-3 rounded text-sm">
+            <div class="mx-6 my-4 bg-error-container text-on-error-container px-4 py-3 rounded-lg text-sm leading-relaxed">
               {error}
             </div>
           {/if}

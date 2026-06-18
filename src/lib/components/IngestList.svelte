@@ -49,7 +49,7 @@
 </script>
 
 <!-- Column headers -->
-<div class="flex items-center px-6 py-2 border-b border-border bg-surface-alt text-xs font-ui text-on-surface-muted select-none sticky top-0 z-10">
+<div class="flex items-center gap-3 px-6 py-2 border-b border-border bg-surface-alt text-xs font-ui text-on-surface-muted select-none sticky top-0 z-10">
   <span class="w-6 flex-none" aria-hidden="true"></span>
   <button onclick={() => onsort("type")} class="w-12 flex-none cursor-pointer hover:text-on-surface text-left" title="Sort by type">
     Type {sortBy === "type" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
@@ -60,7 +60,7 @@
   <button onclick={() => onsort("publisher")} class="w-28 flex-none cursor-pointer hover:text-on-surface text-left" title="Sort by publisher">
     Publisher {sortBy === "publisher" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
   </button>
-  <button onclick={() => onsort("title")} class="flex-1 cursor-pointer hover:text-on-surface text-left pr-3" title="Sort by title">
+  <button onclick={() => onsort("title")} class="flex-1 min-w-0 cursor-pointer hover:text-on-surface text-left" title="Sort by title">
     Title {sortBy === "title" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
   </button>
   <button onclick={() => onsort("creator")} class="w-36 flex-none cursor-pointer hover:text-on-surface text-left" title="Sort by creator">
@@ -93,7 +93,7 @@
         }
       }}
     >
-      <div class="flex items-baseline gap-0">
+      <div class="flex items-baseline gap-3">
         <span
           class="w-6 flex-none text-center text-sm leading-none"
           title={needsVerifyHashes.has(ingest.content_hash)
@@ -128,11 +128,12 @@
             >{ingest.publisher}</button>
           {/if}
         </span>
-        <p class="text-sm text-on-surface truncate flex-1 pr-3">
+        <div class="flex items-baseline gap-1.5 flex-1 min-w-0">
           {#if !provenanceOf(ingest).traceable}
-            <span class="text-warning" title="Untraceable: no recoverable source/origin">&#9888;</span>
-          {/if}{ingest.title}
-        </p>
+            <span class="text-warning flex-none" title="Untraceable: no recoverable source/origin">&#9888;</span>
+          {/if}
+          <span class="text-sm text-on-surface truncate">{ingest.title}</span>
+        </div>
         <span class="text-xs text-on-surface-secondary w-36 flex-none truncate">
           {#each ingest.creators ?? [] as creator, idx}
             <button
