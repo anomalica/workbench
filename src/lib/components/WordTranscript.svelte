@@ -21,6 +21,7 @@
     hideIrrelevant = true,
     storageKey = "",
     notesStorageKey = "",
+    serverObserved = [],
     onreassign,
     onedit,
     onsettime,
@@ -43,6 +44,11 @@
     storageKey?: string;
     /** localStorage key for persisting time-anchored visual notes. */
     notesStorageKey?: string;
+    /** Word indices this reviewer already submitted as observed (from the
+     *  server coverage sidecar). Merged into the local observation set so a
+     *  reopened record restores previously-submitted coverage, not just the
+     *  localStorage draft (which submit clears). */
+    serverObserved?: number[];
     /** Reassign the inclusive word range [from, to] to `speaker`. */
     onreassign: (from: number, to: number, speaker: string) => void;
     /** Replace the text of a single word (keeps its timestamp). */
@@ -175,9 +181,16 @@
   let observed = $state(new Set<number>());
   let lastPlayTime = -1;
 
-  // Load persisted observation when the record (storageKey) changes.
+  // Load persisted observation when the record (storageKey) changes OR when the
+  // server-submitted coverage arrives (fetched async after mount). The observed
+  // set is the union of the localStorage draft and the server coverage, so a
+  // reopened record restores previously-submitted words even though submit
+  // clears the localStorage draft. Session marks survive because they are
+  // persisted to localStorage before the async server coverage lands, so
+  // re-reading localStorage here still includes them.
   $effect(() => {
     const key = storageKey;
+    const server = serverObserved;
     let restored: number[] = [];
     if (key) {
       try {
@@ -188,7 +201,7 @@
     }
     untrack(() => {
       lastPlayTime = -1;
-      observed = new Set(restored);
+      observed = new Set([...restored, ...server]);
     });
   });
 

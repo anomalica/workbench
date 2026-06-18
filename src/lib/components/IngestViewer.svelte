@@ -1351,6 +1351,16 @@
   let myPlayedSpans = $state<CoverageSpan[]>([]);
   let bodyLineCount = $derived(currentBody().split("\n").length);
   let coveredSegments = $derived(coveredSegmentIndices(currentBody(), myObservedSpans));
+  // For word/video records the submitted spans are word indices (not line
+  // spans), so expand this reviewer's server coverage into a word-index list
+  // and feed it to the word editor - otherwise a reopened record (or a fresh
+  // session, after submit clears the localStorage draft) shows nothing observed.
+  let serverObservedWords = $derived.by<number[]>(() => {
+    if (!isWordRecord) return [];
+    const out: number[] = [];
+    for (const s of myObservedSpans) for (let i = s.from; i <= s.to; i++) out.push(i);
+    return out;
+  });
   let playedCoveredSegments = $derived(coveredSegmentIndices(currentBody(), myPlayedSpans));
   function runsToSet(runs: CoverageSpan[]): Set<number> {
     const out = new Set<number>();
@@ -2302,6 +2312,19 @@
               <span class="text-[10px] font-ui text-success">fully read</span>
             {/if}
           </div>
+        {:else if isWordRecord && wordVerdict}
+          <div class="mt-3 flex items-center gap-2">
+            <span class="text-xs font-ui text-on-surface-secondary">Observed</span>
+            <span class="text-xs font-ui font-medium text-on-surface tabular-nums">
+              {Math.round(wordVerdict.observed_coverage * 100)}%
+            </span>
+            <span class="text-[10px] font-ui text-on-surface-muted">
+              of {wordVerdict.total_units} words
+            </span>
+            {#if wordVerdict.digestible}
+              <span class="text-[10px] font-ui text-success">fully observed</span>
+            {/if}
+          </div>
         {/if}
 
         {#if submitError}
@@ -2941,6 +2964,7 @@
             {hideIrrelevant}
             storageKey={`workbench:observed:${ingest.content_hash}`}
             notesStorageKey={`workbench:notes:${ingest.content_hash}`}
+            serverObserved={serverObservedWords}
             onreassign={(from, to, speaker) => doc.reassignWords(from, to, speaker)}
             onedit={(gIndex, text) => doc.editWord(gIndex, text)}
             onsettime={(gIndex, start) => doc.setWordTime(gIndex, start)}
