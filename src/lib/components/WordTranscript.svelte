@@ -57,6 +57,7 @@
     storageKey = "",
     notesStorageKey = "",
     serverObserved = [],
+    claimHighlight = null,
     onreassign,
     onedit,
     onsettime,
@@ -85,6 +86,12 @@
      *  reopened record restores previously-submitted coverage, not just the
      *  localStorage draft (which submit clears). */
     serverObserved?: number[];
+    /** A claim's source time range (seconds) to highlight and scroll to, set
+     *  when arriving via a `#claim-<id>` deep link. Words whose start falls in
+     *  [start, end] get a distinct claim highlight; the view scrolls to the
+     *  first of them. `seq` is bumped per navigation so re-linking the same
+     *  claim re-triggers the scroll. */
+    claimHighlight?: { start: number; end: number; seq: number } | null;
     /** Reassign the inclusive word range [from, to] to `speaker`. */
     onreassign: (from: number, to: number, speaker: string) => void;
     /** Replace the text of a single word (keeps its timestamp). */
@@ -121,6 +128,19 @@
       return true;
     }),
   );
+
+  // Words inside a deep-linked claim's source time range, for the claim
+  // highlight. A word belongs to the claim when its start time falls in the
+  // [start, end] window the claim reports.
+  let claimWords = $derived.by(() => {
+    const ch = claimHighlight;
+    const s = new Set<number>();
+    if (!ch) return s;
+    for (let i = 0; i < words.length; i++) {
+      if (words[i].start >= ch.start && words[i].start <= ch.end) s.add(i);
+    }
+    return s;
+  });
 
   // Word indices inside `[irrelevant]` turns. Excluded from coverage entirely:
   // not observed, not counted in the denominator. Marking a block irrelevant is
@@ -672,6 +692,35 @@
     });
   }
 
+  // Scroll to a deep-linked claim's first word. Retries across frames because
+  // on a cold load the digest (which supplies the range) arrives before the
+  // word DOM has painted. Instant scroll, centred - same reasoning as the
+  // resume-marker jump above.
+  function scrollToClaim() {
+    const first = [...claimWords].sort((a, b) => a - b)[0];
+    if (first === undefined) return;
+    let attempts = 0;
+    const tryScroll = () => {
+      const el = scrollEl?.querySelector<HTMLElement>(`[data-word-index="${first}"]`);
+      if (!el || !scrollEl) {
+        if (attempts++ < 20) requestAnimationFrame(tryScroll);
+        return;
+      }
+      const view = scrollEl.getBoundingClientRect();
+      const word = el.getBoundingClientRect();
+      const target = scrollEl.scrollTop + (word.top - view.top) - view.height * 0.5;
+      scrollEl.scrollTo({ top: Math.max(0, target) });
+    };
+    requestAnimationFrame(tryScroll);
+  }
+
+  $effect(() => {
+    void claimHighlight?.seq;
+    untrack(() => {
+      if (claimHighlight) scrollToClaim();
+    });
+  });
+
   function toggleHeaderPicker(run: SpeakerRun) {
     // Opening a header picker deselects any word range to avoid two live menus.
     anchor = null;
@@ -1063,13 +1112,15 @@
               class="cursor-text rounded-sm px-px transition-colors
                 {isSelected(g)
                 ? 'bg-primary/30 text-on-surface'
-                : g === resumeWord
-                  ? 'bg-sky-500/20 ring-1 ring-sky-500 text-on-surface'
-                  : g === activeWord
-                    ? 'bg-amber-400/40 text-on-surface'
-                    : isObserved(g)
-                      ? 'hover:bg-primary-container/30'
-                      : 'text-on-surface-muted/40 hover:bg-primary-container/30'}"
+                : claimWords.has(g)
+                  ? 'bg-yellow-300/60 ring-1 ring-yellow-500 text-on-surface'
+                  : g === resumeWord
+                    ? 'bg-sky-500/20 ring-1 ring-sky-500 text-on-surface'
+                    : g === activeWord
+                      ? 'bg-amber-400/40 text-on-surface'
+                      : isObserved(g)
+                        ? 'hover:bg-primary-container/30'
+                        : 'text-on-surface-muted/40 hover:bg-primary-container/30'}"
             >{words[g].text}</span>{" "}
             {#each notesByAnchorWord.get(g) ?? [] as note (note.id)}
               <!-- Reviewer visual note: rendered inline at its moment but

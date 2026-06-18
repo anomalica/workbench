@@ -22,7 +22,7 @@
   import CoverageStrip from "./CoverageStrip.svelte";
   import { DocumentStore } from "$lib/document.svelte";
   import { safeLocalSet } from "$lib/storage";
-  import { parseTranscript, secondsToTime, findActiveSegmentForTime, segmentAtTime, nextRelevantSegmentAfter, extractFrontmatterSpeakers, isSegmentIrrelevant, isSpecialSpeaker, nextSpeakerName, groupSegmentsBySpeaker, orderedNamedSpeakers, SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE, SPEAKER_GROUP } from "$lib/transcript";
+  import { parseTranscript, parseTimeToSeconds, secondsToTime, findActiveSegmentForTime, segmentAtTime, nextRelevantSegmentAfter, extractFrontmatterSpeakers, isSegmentIrrelevant, isSpecialSpeaker, nextSpeakerName, groupSegmentsBySpeaker, orderedNamedSpeakers, SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE, SPEAKER_GROUP } from "$lib/transcript";
   import { nextSegmentBoundary, singleEndForCurrentTime } from "$lib/playback";
   import type { Segment } from "$lib/transcript";
   import SpeakerManager from "./SpeakerManager.svelte";
@@ -351,6 +351,12 @@
   // hash changes to something different. The brief `.claim-flash` entry
   // pulse is layered on top so the reader's eye is drawn to it on arrival.
   let selectedClaimId = $state<string | null>(null);
+  // For word/video records, a deep-linked claim also drives a source-side
+  // highlight: the word editor highlights the words in the claim's time range
+  // and scrolls to them, and the player seeks there. `seq` bumps per navigation
+  // so re-linking the same claim re-fires the scroll.
+  let claimHighlight = $state<{ start: number; end: number; seq: number } | null>(null);
+  let _claimSeq = 0;
 
   /** Bounded poll for the card element. Large records can have hundreds of
    *  claims that take a moment to render after the digest column mounts,
@@ -383,6 +389,7 @@
     // Hash changed to something that isn't a claim ref: clear any selection.
     if (!m) {
       selectedClaimId = null;
+      claimHighlight = null;
       return;
     }
     const claimId = m[1];
@@ -407,6 +414,28 @@
     };
     if (selectedNodeIds.size > 0) selectedNodeIds = new Set();
     selectedClaimId = claimId;
+    // For a word/video record, the source view is the word editor, not the
+    // claim cards - so also drive a source-side highlight: find the claim's
+    // time range, highlight those words + scroll to them, and seek the player
+    // there (paused) so "take me to where in the video" actually lands.
+    if (isWordRecord) {
+      const claim = [
+        ...(digest.domain_claims ?? []),
+        ...(digest.infrastructure_claims ?? []),
+      ].find((c) => c.id === claimId);
+      const range = claim?.location ? parseClaimLocation(claim.location) : null;
+      if (range) {
+        claimHighlight = { ...range, seq: ++_claimSeq };
+        if (ytPlayer && playerReady) {
+          ytPlayer.seekTo(Math.max(0, range.start), true);
+          ytPlayer.pauseVideo();
+        }
+      } else {
+        claimHighlight = null;
+      }
+    } else {
+      claimHighlight = null;
+    }
     requestAnimationFrame(() => {
       _findCardWithRetry(claimId, 25, (el) => {
         el.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -415,6 +444,18 @@
         setTimeout(() => el.classList.remove("claim-flash"), 1800);
       });
     });
+  }
+
+  // Parse a claim's `location` ("00:00:00.1-00:00:11.0", or a single timecode)
+  // into a seconds range. Returns null if it can't be read.
+  function parseClaimLocation(loc: string): { start: number; end: number } | null {
+    const sep = loc.indexOf("-");
+    const startStr = (sep >= 0 ? loc.slice(0, sep) : loc).trim();
+    const endStr = sep >= 0 ? loc.slice(sep + 1).trim() : "";
+    const start = parseTimeToSeconds(startStr);
+    if (!Number.isFinite(start)) return null;
+    const end = endStr ? parseTimeToSeconds(endStr) : start;
+    return { start, end: Number.isFinite(end) && end >= start ? end : start };
   }
 
   // Apply / remove .claim-selected on the matching card whenever the
@@ -570,6 +611,10 @@
     // (effect_update_depth_exceeded), which silently broke the cold-load
     // deep-link. Only `digest` should re-trigger it.
     void digest;
+    // Also re-run once the body has loaded enough to be a word record: on a
+    // cold load the digest can arrive before the body, and the word-view claim
+    // highlight needs isWordRecord true to set claimHighlight.
+    void isWordRecord;
     untrack(() => _scrollToClaimFromHash());
   });
 
@@ -1681,6 +1726,13 @@
         onReady: () => {
           playerReady = true;
           ytPlayer?.setPlaybackRate(playbackRate);
+          // Cold-load claim deep link: the digest resolved and set the
+          // highlight before the player existed, so the seek was skipped.
+          // Now that it's ready, land on the claim's start (paused).
+          if (claimHighlight && ytPlayer) {
+            ytPlayer.seekTo(Math.max(0, claimHighlight.start), true);
+            ytPlayer.pauseVideo();
+          }
           timeInterval = setInterval(() => {
             if (!ytPlayer) return;
             const t = ytPlayer.getCurrentTime();
@@ -2963,6 +3015,7 @@
             storageKey={`workbench:observed:${ingest.content_hash}`}
             notesStorageKey={`workbench:notes:${ingest.content_hash}`}
             serverObserved={serverObservedWords}
+            {claimHighlight}
             onreassign={(from, to, speaker) => doc.reassignWords(from, to, speaker)}
             onedit={(gIndex, text) => doc.editWord(gIndex, text)}
             onsettime={(gIndex, start) => doc.setWordTime(gIndex, start)}
@@ -3678,7 +3731,9 @@
                       <span class="px-1.5 py-0.5 rounded bg-primary/10 text-primary font-medium uppercase tracking-wide text-[10px]">
                         {c.type}
                       </span>
-                      <span class="opacity-70">{c.attestation.replace("_", "-")}</span>
+                      {#if c.attestation}
+                        <span class="opacity-70">{c.attestation.replace("_", "-")}</span>
+                      {/if}
                       {#if c.speaker}
                         <span class="opacity-50">·</span>
                         <span>by <span class="font-mono text-on-surface">{c.speaker.name}</span></span>

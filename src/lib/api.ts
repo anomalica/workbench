@@ -102,7 +102,7 @@ export interface DigestNode {
 export interface DigestClaim {
   id: string;
   type: string;
-  attestation: string;
+  attestation?: string;
   speaker?: DigestRef;
   location?: string;
   date?: string;
