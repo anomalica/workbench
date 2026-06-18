@@ -117,6 +117,65 @@ describe("word coverage recall + playback highlight", () => {
     });
   });
 
+  it("survives a full localStorage: rendering and the amber cursor still work when setItem throws", async () => {
+    // Regression: the observed-persist $effect called localStorage.setItem with
+    // no try/catch. On a large record whose body draft had filled the quota the
+    // throw aborted WordTranscript's effect graph and killed ALL per-word
+    // highlighting - selection, amber cursor, marker. A full store must never
+    // break the view. (jsdom's localStorage has no quota, so we force the throw.)
+    const realSet = Storage.prototype.setItem;
+    Storage.prototype.setItem = () => {
+      const e = new Error("quota") as Error & { name: string };
+      e.name = "QuotaExceededError";
+      throw e;
+    };
+    try {
+      let verdict: Verdict | null = null;
+      render(WordTranscript, {
+        props: props(1.6, [0, 2, 3, 4], (v) => {
+          verdict = v;
+        }),
+      });
+      await tick();
+      // The component rendered all its words despite the throwing persist.
+      expect(document.querySelectorAll("[data-word-index]").length).toBe(5);
+      // The amber active-word cursor still tracks currentTime (word at t=1.5).
+      expect(amberIndex()).toBe(1);
+      // Coverage still computes from the merged observed set.
+      await waitFor(() =>
+        expect((verdict as unknown as Verdict).observed_coverage).toBeGreaterThan(0),
+      );
+    } finally {
+      Storage.prototype.setItem = realSet;
+    }
+  });
+
+  it("restores a legacy flat-array observed draft and a new spans draft alike", async () => {
+    // Old drafts were a flat [0,1,2] index array; new drafts are run-length
+    // spans [[0,2]]. decodeObserved must read both so existing saves survive.
+    for (const [label, raw] of [
+      ["legacy flat array", "[0,1,2]"],
+      ["compact spans", "[[0,2]]"],
+    ] as const) {
+      localStorage.clear();
+      localStorage.setItem("workbench:observed:codec-test", raw);
+      let verdict: Verdict | null = null;
+      const { unmount } = render(WordTranscript, {
+        props: {
+          ...props(0, []),
+          storageKey: "workbench:observed:codec-test",
+          onverdict: (v: Verdict) => {
+            verdict = v;
+          },
+        },
+      });
+      await waitFor(() => {
+        expect((verdict as unknown as Verdict).spans, label).toEqual([{ from: 0, to: 2 }]);
+      });
+      unmount();
+    }
+  });
+
   it("Jump to unobserved marks the last OBSERVED word before the gap, leaving the target untouched", async () => {
     // Words 0,1,2 observed -> first unobserved is 3 -> marker belongs on word 2.
     let resumeSeconds = -1;
