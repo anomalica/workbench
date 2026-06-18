@@ -280,9 +280,14 @@
         selectIngest(match.content_hash);
         return;
       }
-      // Public hash didn't match any record; drop the loading state and
-      // fall through to showing the list.
+      // Valid-looking hash but no matching record (e.g. a deep link to a record
+      // still parked in store/v1/ awaiting re-ingestion). The list is already
+      // loaded; surface a notice instead of silently dropping the reviewer on
+      // it with no explanation for why their link didn't open.
       openingRecord = false;
+      error =
+        "That record isn't available for review yet - it may be pending re-ingestion. Showing all records.";
+      return;
     }
     loadIngests();
   }
