@@ -2974,6 +2974,15 @@
                 ytPlayer.playVideo();
               }
             }}
+            onmarkresume={(seconds) => {
+              // Park the playhead at the marked word (paused) so the reviewer's
+              // next Play resumes from there - and so continued playback doesn't
+              // auto-observe the still-unobserved word just past the marker.
+              if (ytPlayer && playerReady) {
+                ytPlayer.seekTo(Math.max(0, seconds), true);
+                ytPlayer.pauseVideo();
+              }
+            }}
             onverdict={(v) => (wordVerdict = v)}
           />
         </div>

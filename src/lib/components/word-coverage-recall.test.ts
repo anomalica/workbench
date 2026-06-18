@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, waitFor } from "@testing-library/svelte";
+import { render, waitFor, fireEvent } from "@testing-library/svelte";
 import WordTranscript from "./WordTranscript.svelte";
 
 // 5 words (gIndex 0..4) at t = 1.0, 1.5, 2.0, 2.5, 3.0.
@@ -115,5 +115,32 @@ describe("word coverage recall + playback highlight", () => {
       expect(obs.has(2)).toBe(true);
       expect(obs.has(4)).toBe(true);
     });
+  });
+
+  it("Jump to unobserved marks the last OBSERVED word before the gap, leaving the target untouched", async () => {
+    // Words 0,1,2 observed -> first unobserved is 3 -> marker belongs on word 2.
+    let resumeSeconds = -1;
+    const { getByRole } = render(WordTranscript, {
+      props: {
+        ...props(0, [0, 1, 2]),
+        onmarkresume: (s: number) => {
+          resumeSeconds = s;
+        },
+      },
+    });
+    await waitFor(() => expect(document.querySelector("[data-word-index]")).not.toBeNull());
+    await fireEvent.click(getByRole("button", { name: "Jump to unobserved" }));
+    await waitFor(() => {
+      const marked = [...document.querySelectorAll<HTMLElement>("[data-word-index]")].find((e) =>
+        /ring-sky/.test(e.className),
+      );
+      expect(marked).toBeTruthy();
+      expect(Number(marked!.dataset.wordIndex)).toBe(2); // last observed, not the target (3)
+    });
+    // The first unobserved word (the review target) carries no marker.
+    const target = document.querySelector<HTMLElement>('[data-word-index="3"]');
+    expect(/ring-sky/.test(target!.className)).toBe(false);
+    // Playback is positioned at the marker's timestamp (word 2 starts at 2.00s).
+    expect(resumeSeconds).toBeCloseTo(2.0, 5);
   });
 });

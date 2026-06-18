@@ -26,6 +26,7 @@
     onedit,
     onsettime,
     onseek,
+    onmarkresume,
     onverdict,
   }: {
     /** Transcript body (everything after the frontmatter) using `{{t:N.N}}`
@@ -57,6 +58,9 @@
     onsettime: (gIndex: number, start: number) => void;
     /** Seek the media to `seconds` (optional). */
     onseek?: (seconds: number) => void;
+    /** Position the media at `seconds` WITHOUT starting playback - used by the
+     *  resume marker so pressing play continues from there. */
+    onmarkresume?: (seconds: number) => void;
     /** Report the observation verdict (observed word-index spans + the
      *  coverage fraction + digestible + total words) whenever it changes, so
      *  the submit can persist it to the sidecar. */
@@ -180,6 +184,10 @@
   // mutated) so reactivity fires regardless of Set-proxy behaviour.
   let observed = $state(new Set<number>());
   let lastPlayTime = -1;
+  // "Resume here" marker: the last observed word before the first unobserved
+  // gap, dropped by Jump to unobserved. A persistent position indicator (and
+  // play-resume point), distinct from the amber cursor and from a selection.
+  let resumeWord = $state<number | null>(null);
 
   // Restore the local observation draft when the record (storageKey) changes.
   // The current server coverage is read UNTRACKED and unioned in, so this effect
@@ -197,6 +205,7 @@
     }
     untrack(() => {
       lastPlayTime = -1;
+      resumeWord = null;
       observed = new Set([...restored, ...serverObserved]);
     });
   });
@@ -602,27 +611,35 @@
   // Scroll to the first word the reviewer hasn't observed yet (skipping
   // irrelevant words, which never need observing, and words hidden by a filter).
   function jumpToFirstUnobserved() {
-    for (let g = 0; g < words.length; g++) {
-      if (observed.has(g) || irrelevantWords.has(g)) continue;
-      if (!scrollEl?.querySelector(`[data-word-index="${g}"]`)) continue;
-      anchor = g;
-      range = { from: g, to: g };
-      // Scroll in the next frame so the range-change re-render doesn't cancel
-      // it. Centre scrollEl directly (mirrors the follow-scroll effect);
-      // scrollIntoView targets the wrong nested ancestor in this layout.
-      requestAnimationFrame(() => {
-        const el = scrollEl?.querySelector<HTMLElement>(`[data-word-index="${g}"]`);
-        if (!el || !scrollEl) return;
-        const view = scrollEl.getBoundingClientRect();
-        const word = el.getBoundingClientRect();
-        const target = scrollEl.scrollTop + (word.top - view.top) - view.height * 0.5;
-        // Instant, not smooth: smooth scrollTo is a no-op in some Chromium
-        // profiles, and a "jump" reads fine landing immediately.
-        scrollEl.scrollTo({ top: Math.max(0, target) });
-      });
-      schedulePositionBar();
-      return;
+    // First unobserved (non-irrelevant, visible) word - the review target.
+    let g = -1;
+    for (let i = 0; i < words.length; i++) {
+      if (observed.has(i) || irrelevantWords.has(i)) continue;
+      if (!scrollEl?.querySelector(`[data-word-index="${i}"]`)) continue;
+      g = i;
+      break;
     }
+    if (g < 0) return;
+    // Drop the marker on the last observed, non-irrelevant word BEFORE the gap -
+    // never on the unobserved word itself, so the review target stays untouched
+    // (a selection there could flip it to observed). Walk back past irrelevant.
+    let m = g - 1;
+    while (m >= 0 && irrelevantWords.has(m)) m--;
+    const markerWord = m >= 0 ? m : g;
+    resumeWord = markerWord;
+    // Position playback at the marker so pressing play resumes from there.
+    if (words[markerWord]) onmarkresume?.(words[markerWord].start);
+    // Scroll to the boundary (centre the marker). Instant, not smooth (smooth
+    // scrollTo is a no-op in some Chromium profiles); scroll scrollEl directly
+    // since scrollIntoView targets the wrong nested ancestor in this layout.
+    requestAnimationFrame(() => {
+      const el = scrollEl?.querySelector<HTMLElement>(`[data-word-index="${markerWord}"]`);
+      if (!el || !scrollEl) return;
+      const view = scrollEl.getBoundingClientRect();
+      const word = el.getBoundingClientRect();
+      const target = scrollEl.scrollTop + (word.top - view.top) - view.height * 0.5;
+      scrollEl.scrollTo({ top: Math.max(0, target) });
+    });
   }
 
   function toggleHeaderPicker(run: SpeakerRun) {
@@ -1003,7 +1020,11 @@
         </div>
         <p class="pl-6 text-sm text-on-surface leading-relaxed">
           {#each Array.from({ length: run.endWord - run.startWord + 1 }, (_, k) => run.startWord + k) as g (g)}
-            <span
+            {#if g === resumeWord}<span
+                class="text-sky-600 font-bold not-italic select-none"
+                title="Resume point - press play to continue from here"
+                aria-label="Resume point"
+              >&#9656;</span>{/if}<span
               data-word-index={g}
               role="button"
               tabindex="-1"
@@ -1012,11 +1033,13 @@
               class="cursor-text rounded-sm px-px transition-colors
                 {isSelected(g)
                 ? 'bg-primary/30 text-on-surface'
-                : g === activeWord
-                  ? 'bg-amber-400/40 text-on-surface'
-                  : isObserved(g)
-                    ? 'hover:bg-primary-container/30'
-                    : 'text-on-surface-muted/40 hover:bg-primary-container/30'}"
+                : g === resumeWord
+                  ? 'bg-sky-500/20 ring-1 ring-sky-500 text-on-surface'
+                  : g === activeWord
+                    ? 'bg-amber-400/40 text-on-surface'
+                    : isObserved(g)
+                      ? 'hover:bg-primary-container/30'
+                      : 'text-on-surface-muted/40 hover:bg-primary-container/30'}"
             >{words[g].text}</span>{" "}
             {#each notesByAnchorWord.get(g) ?? [] as note (note.id)}
               <!-- Reviewer visual note: rendered inline at its moment but
