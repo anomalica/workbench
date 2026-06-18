@@ -561,13 +561,15 @@
   }
 
   $effect(() => {
-    // Subscribe to digest (cold load via direct link) AND to the URL hash
-    // (in-page navigation). Both should trigger the scroll/flash.
+    // Re-run when the async digest arrives (cold load via direct link); in-page
+    // hash navigation is handled by the hashchange listener below. The call is
+    // untracked because _scrollToClaimFromHash reads AND writes cols / collapsed
+    // / selectedNodeIds / selectedClaimId - without untrack those writes make
+    // this effect depend on its own mutations and re-fire forever
+    // (effect_update_depth_exceeded), which silently broke the cold-load
+    // deep-link. Only `digest` should re-trigger it.
     void digest;
-    if (typeof window !== "undefined") {
-      void window.location.hash;
-    }
-    _scrollToClaimFromHash();
+    untrack(() => _scrollToClaimFromHash());
   });
 
   if (typeof window !== "undefined") {
