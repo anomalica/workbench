@@ -181,16 +181,12 @@
   let observed = $state(new Set<number>());
   let lastPlayTime = -1;
 
-  // Load persisted observation when the record (storageKey) changes OR when the
-  // server-submitted coverage arrives (fetched async after mount). The observed
-  // set is the union of the localStorage draft and the server coverage, so a
-  // reopened record restores previously-submitted words even though submit
-  // clears the localStorage draft. Session marks survive because they are
-  // persisted to localStorage before the async server coverage lands, so
-  // re-reading localStorage here still includes them.
+  // Restore the local observation draft when the record (storageKey) changes.
+  // The current server coverage is read UNTRACKED and unioned in, so this effect
+  // fires only on a record change - never when the async fetch lands - so it
+  // never rebuilds the set or resets the playback cursor mid-playback.
   $effect(() => {
     const key = storageKey;
-    const server = serverObserved;
     let restored: number[] = [];
     if (key) {
       try {
@@ -201,7 +197,27 @@
     }
     untrack(() => {
       lastPlayTime = -1;
-      observed = new Set([...restored, ...server]);
+      observed = new Set([...restored, ...serverObserved]);
+    });
+  });
+
+  // When the server coverage arrives (fetched async after mount), ADD it to the
+  // observed set rather than rebuilding - so it never clobbers session
+  // auto-observe marks and never touches lastPlayTime (which would interrupt the
+  // playback follow-along). Only reassigns when something is genuinely new.
+  $effect(() => {
+    const server = serverObserved;
+    untrack(() => {
+      if (server.length === 0) return;
+      const next = new Set(observed);
+      let changed = false;
+      for (const g of server) {
+        if (!next.has(g)) {
+          next.add(g);
+          changed = true;
+        }
+      }
+      if (changed) observed = next;
     });
   });
 

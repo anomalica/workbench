@@ -1,23 +1,25 @@
 /**
- * Regression test for the word/video coverage RECALL bug.
+ * Regression tests for word/video coverage recall + its interaction with the
+ * live playback highlight.
  *
- * Recording worked (the verdict + word-index spans persist to the server
- * sidecar), but WordTranscript restored its observed set from localStorage
- * ONLY - and submit clears that draft. So reopening a submitted record (or any
- * fresh session) showed nothing observed: "my review looks lost".
+ * 1. RECALL: submitting persists coverage server-side, but WordTranscript used
+ *    to restore `observed` from localStorage only - and submit clears that
+ *    draft - so a reopened record showed nothing observed. Server coverage is
+ *    now fed in as `serverObserved` and merged into the observed set.
  *
- * The fix feeds the server-submitted coverage down as `serverObserved` and
- * unions it into the observed set. This test mounts WordTranscript with an
- * EMPTY localStorage (the post-submit state) and serverObserved set, and
- * asserts the coverage verdict reflects the server words - i.e. recall works
- * from the server, not just the local cache.
+ * 2. The merge must NOT clobber: when the async server coverage arrives it is
+ *    ADDED to the observed set, never rebuilt/replaced, so session auto-observe
+ *    marks and the playback cursor survive.
+ *
+ * 3. The amber active-word highlight is driven purely by currentTime, never by
+ *    coverage - changing the observed set must not move it.
  */
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, waitFor } from "@testing-library/svelte";
 import WordTranscript from "./WordTranscript.svelte";
 
-// 5 words (gIndex 0..4) under one speaker.
+// 5 words (gIndex 0..4) at t = 1.0, 1.5, 2.0, 2.5, 3.0.
 const BODY =
   "<!-- speaker: Speaker 1 -->\n" +
   "00:00:01.0 {{t:1.00}}One {{t:1.50}}two {{t:2.00}}three {{t:2.50}}four {{t:3.00}}five.\n";
@@ -29,31 +31,49 @@ type Verdict = {
   total_units: number;
 };
 
-function mount(serverObserved: number[], onverdict: (v: Verdict) => void) {
-  return render(WordTranscript, {
-    props: {
-      body: BODY,
-      storageKey: "workbench:observed:recall-test",
-      serverObserved,
-      onreassign: () => {},
-      onedit: () => {},
-      onsettime: () => {},
-      onverdict,
-    },
-  });
+function props(currentTime: number, serverObserved: number[], onverdict?: (v: Verdict) => void) {
+  return {
+    body: BODY,
+    storageKey: "workbench:observed:recall-test",
+    serverObserved,
+    currentTime,
+    onreassign: () => {},
+    onedit: () => {},
+    onsettime: () => {},
+    onverdict,
+  };
 }
 
-describe("word coverage recall from the server", () => {
-  beforeEach(() => localStorage.clear());
+const tick = () => new Promise((r) => setTimeout(r, 30));
+const amberIndex = () => {
+  const el = [...document.querySelectorAll<HTMLElement>("[data-word-index]")].find((e) =>
+    /amber/.test(e.className),
+  );
+  return el ? Number(el.dataset.wordIndex) : -1;
+};
+const observedFromVerdict = (v: Verdict | null) =>
+  new Set(
+    (v?.spans ?? []).flatMap((s) =>
+      Array.from({ length: s.to - s.from + 1 }, (_, i) => s.from + i),
+    ),
+  );
+
+describe("word coverage recall + playback highlight", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    // jsdom implements neither; the follow-scroll/highlight path calls them.
+    Element.prototype.scrollTo = vi.fn();
+    Element.prototype.scrollIntoView = vi.fn();
+  });
 
   it("restores submitted coverage with an empty localStorage draft", async () => {
     let verdict: Verdict | null = null;
-    mount([0, 1, 2], (v) => {
-      verdict = v;
+    render(WordTranscript, {
+      props: props(0, [0, 1, 2], (v) => {
+        verdict = v;
+      }),
     });
     await waitFor(() => {
-      expect(verdict).not.toBeNull();
-      // 3 of 5 words observed, sourced purely from serverObserved.
       expect((verdict as unknown as Verdict).observed_coverage).toBeCloseTo(3 / 5, 5);
       expect((verdict as unknown as Verdict).spans).toEqual([{ from: 0, to: 2 }]);
     });
@@ -61,12 +81,39 @@ describe("word coverage recall from the server", () => {
 
   it("reports zero coverage when neither localStorage nor server has anything", async () => {
     let verdict: Verdict | null = null;
-    mount([], (v) => {
-      verdict = v;
+    render(WordTranscript, {
+      props: props(0, [], (v) => {
+        verdict = v;
+      }),
     });
+    await waitFor(() => expect((verdict as unknown as Verdict).observed_coverage).toBe(0));
+  });
+
+  it("the amber active-word highlight follows currentTime, not coverage", async () => {
+    const { rerender } = render(WordTranscript, { props: props(1.6, []) });
+    await tick();
+    expect(amberIndex()).toBe(1); // word at t=1.5 is active at 1.6s
+    // Change the coverage set without touching currentTime - amber must not move.
+    await rerender(props(1.6, [0, 2, 3, 4]));
+    await tick();
+    expect(amberIndex()).toBe(1);
+  });
+
+  it("server coverage arriving adds to - never replaces - the observed set", async () => {
+    // Mount with one server set, then a different one lands; the union must
+    // grow (additive merge), proving serverObserved is merged not rebuilt.
+    let verdict: Verdict | null = null;
+    const cb = (v: Verdict) => {
+      verdict = v;
+    };
+    const { rerender } = render(WordTranscript, { props: props(0, [1, 2], cb) });
+    await waitFor(() => expect(observedFromVerdict(verdict).has(2)).toBe(true));
+    await rerender(props(0, [4], cb));
     await waitFor(() => {
-      expect(verdict).not.toBeNull();
-      expect((verdict as unknown as Verdict).observed_coverage).toBe(0);
+      const obs = observedFromVerdict(verdict);
+      expect(obs.has(1)).toBe(true);
+      expect(obs.has(2)).toBe(true);
+      expect(obs.has(4)).toBe(true);
     });
   });
 });
