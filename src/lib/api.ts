@@ -221,3 +221,75 @@ export async function fetchReviewedHashes(): Promise<Record<string, string>> {
   }
   return {};
 }
+
+// --- Knowledge graph (read-only view over the assimilator's merged graph) ---
+
+export interface GraphStats {
+  total_nodes: number;
+  total_claims: number;
+  total_merges: number;
+  total_records: number;
+  total_corroborations: number;
+  by_type: { type: string; count: number }[];
+}
+
+export interface GraphNodeSummary {
+  id: string;
+  name: string;
+  node_type: string;
+  /** Surface forms the matcher merged into this node - the merge decisions. */
+  alias_count: number;
+  claim_count: number;
+}
+
+export interface GraphClaim {
+  id: string;
+  content: string;
+  claim_type: string;
+  attestation?: string;
+  excerpt?: string;
+  location?: string;
+  claim_role?: string;
+  record_id?: string;
+  record_title: string;
+}
+
+export interface GraphNodeDetail {
+  id: string;
+  name: string;
+  node_type: string;
+  /** The merge decisions: every other name resolved into this entity. */
+  aliases: string[];
+  claim_count: number;
+  claims_truncated: boolean;
+  claims: GraphClaim[];
+}
+
+/** Graph totals + node breakdown by type. Null when the assimilator DB isn't
+ *  available (503), so the view can show an unavailable state. */
+export async function fetchGraphStats(): Promise<GraphStats | null> {
+  const res = await fetch("/api/graph/stats");
+  if (res.status === 503) return null;
+  if (!res.ok) throw new Error(`Failed to fetch graph stats: ${res.status}`);
+  return res.json();
+}
+
+/** Browse/search entities, optionally filtered by type. */
+export async function fetchGraphNodes(type?: string, q?: string): Promise<GraphNodeSummary[]> {
+  const params = new URLSearchParams();
+  if (type) params.set("type", type);
+  if (q) params.set("q", q);
+  const res = await fetch(`/api/graph/nodes?${params.toString()}`);
+  if (res.status === 503) return [];
+  if (!res.ok) throw new Error(`Failed to fetch graph nodes: ${res.status}`);
+  return res.json();
+}
+
+/** An entity with its merge decisions (aliases) and referencing claims. Null
+ *  if the node id is unknown (404). */
+export async function fetchGraphNode(id: string): Promise<GraphNodeDetail | null> {
+  const res = await fetch(`/api/graph/nodes/${encodeURIComponent(id)}`);
+  if (res.status === 404 || res.status === 503) return null;
+  if (!res.ok) throw new Error(`Failed to fetch graph node: ${res.status}`);
+  return res.json();
+}

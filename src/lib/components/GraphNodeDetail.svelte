@@ -1,0 +1,106 @@
+<script lang="ts">
+  import type { GraphNodeDetail, GraphClaim } from "$lib/api";
+
+  let { node, loading = false }: { node: GraphNodeDetail | null; loading?: boolean } = $props();
+
+  // Group the node's claims by source record - the reviewer reads merges in the
+  // context of which sources assert what about this entity.
+  let groups = $derived.by(() => {
+    const m = new Map<string, GraphClaim[]>();
+    for (const c of node?.claims ?? []) {
+      const key = c.record_title;
+      if (!m.has(key)) m.set(key, []);
+      m.get(key)!.push(c);
+    }
+    return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  });
+</script>
+
+{#if loading}
+  <div class="flex-1 flex items-center justify-center text-on-surface-muted text-sm font-ui">
+    Loading entity...
+  </div>
+{:else if !node}
+  <div class="flex-1 flex items-center justify-center text-on-surface-muted text-sm font-ui px-6 text-center">
+    Select an entity to see what was merged into it.
+  </div>
+{:else}
+  <div class="flex-1 overflow-auto px-6 py-5">
+    <!-- Identity -->
+    <div class="flex items-baseline gap-3 flex-wrap">
+      <h2 class="text-xl text-on-surface font-medium">{node.name}</h2>
+      <span class="text-[10px] font-ui font-medium text-primary uppercase tracking-wide px-1.5 py-0.5 rounded bg-primary/10">
+        {node.node_type}
+      </span>
+    </div>
+
+    <!-- Merge decisions: the whole point of the view. Prominent. -->
+    <div class="mt-4 rounded-lg border border-border bg-surface-alt px-4 py-3">
+      {#if node.aliases.length > 0}
+        <div class="text-xs font-ui font-medium text-on-surface-secondary uppercase tracking-wide mb-2">
+          Assembled from {node.aliases.length} surface
+          {node.aliases.length === 1 ? "form" : "forms"} merged into this entity
+        </div>
+        <div class="flex flex-wrap gap-1.5">
+          {#each node.aliases as alias}
+            <span class="text-sm font-ui px-2 py-1 rounded border border-primary/30 bg-primary/5 text-on-surface">
+              {alias}
+            </span>
+          {/each}
+        </div>
+        <p class="mt-2 text-xs text-on-surface-muted">
+          If any of these are not the same entity, that's a bad merge.
+        </p>
+      {:else}
+        <div class="text-xs font-ui text-on-surface-muted">
+          No merges - a single surface form, nothing was folded into this entity.
+        </div>
+      {/if}
+    </div>
+
+    <!-- Claims grouped by source -->
+    <div class="mt-5">
+      <div class="text-xs font-ui font-medium text-on-surface-secondary uppercase tracking-wide mb-3">
+        {node.claim_count} {node.claim_count === 1 ? "claim references" : "claims reference"} this entity
+        {#if node.claims_truncated}
+          <span class="text-on-surface-muted normal-case font-normal">
+            (showing first {node.claims.length})
+          </span>
+        {/if}
+      </div>
+
+      {#each groups as [record, claims]}
+        <div class="mb-5">
+          <div class="text-sm font-medium text-on-surface mb-2 flex items-baseline gap-2">
+            <span class="truncate">{record}</span>
+            <span class="text-xs text-on-surface-muted font-ui flex-none">{claims.length}</span>
+          </div>
+          <div class="space-y-2.5">
+            {#each claims as claim}
+              <div class="rounded-md border border-border/70 bg-surface-alt/40 px-3 py-2.5 text-sm leading-relaxed">
+                <div class="flex gap-x-2 gap-y-1 flex-wrap items-center text-[11px] font-ui text-on-surface-muted mb-1.5">
+                  <span class="px-1.5 py-0.5 rounded bg-primary/10 text-primary font-medium uppercase tracking-wide text-[10px]">
+                    {claim.claim_type}
+                  </span>
+                  {#if claim.attestation}
+                    <span class="opacity-80">{claim.attestation.replace("_", "-")}</span>
+                  {/if}
+                  {#if claim.location}
+                    <span class="opacity-50">·</span>
+                    <span>{claim.location}</span>
+                  {/if}
+                </div>
+                <p class="text-on-surface">{claim.content}</p>
+                {#if claim.excerpt}
+                  <p class="mt-1.5 pl-3 border-l-2 border-border/70 text-xs italic text-on-surface-secondary">
+                    {claim.excerpt}
+                  </p>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        </div>
+      {/each}
+    </div>
+  </div>
+{/if}

@@ -16,10 +16,13 @@
   import FileDropZone from "$lib/components/FileDropZone.svelte";
   import IngestList from "$lib/components/IngestList.svelte";
   import IngestViewer from "$lib/components/IngestViewer.svelte";
+  import GraphView from "$lib/components/GraphView.svelte";
   import { carryoverState } from "$lib/carryover";
   import { themeState } from "$lib/theme.svelte";
 
   let user = $state<User | null>(null);
+  // Top-level view: record review (default) or the knowledge-graph review.
+  let appMode = $state<"records" | "graph">("records");
   // True while a cold-load deep link (e.g. /<public_hash>#claim-<uuid>) is
   // resolving: list fetch then record + digest fetch. Drives a centred
   // "Opening record..." indicator so the user sees progress instead of a
@@ -266,12 +269,28 @@
     selectedDigest = null;
     sourceFile = null;
     error = null;
+    appMode = "records";
     history.pushState(null, "", "/");
   }
 
   // On load: check URL for a public hash and try to open the matching ingest
+  function showRecords() {
+    appMode = "records";
+    if (!selectedIngest) history.pushState(null, "", "/");
+  }
+
+  function showGraph() {
+    appMode = "graph";
+    history.pushState(null, "", "/graph");
+  }
+
   async function checkUrlHash() {
     const path = window.location.pathname.slice(1);
+    if (path === "graph") {
+      appMode = "graph";
+      loadIngests();
+      return;
+    }
     if (path && /^[a-f0-9]{56}$/.test(path)) {
       openingRecord = true;
       await loadIngests();
@@ -316,6 +335,19 @@
       <img src="/logo-darkmode.svg" alt="Anomalica" class="h-4" />
       <span class="text-bone/60 text-sm leading-none mt-auto">Workbench</span>
     </a>
+    <nav class="flex items-center gap-1 ml-2">
+      <button
+        onclick={showRecords}
+        class="text-sm font-ui px-2.5 py-1 rounded cursor-pointer transition-colors
+          {appMode === 'records' ? 'bg-bone/15 text-bone' : 'text-bone/50 hover:text-bone/80 hover:bg-bone/10'}"
+      >Records</button>
+      <button
+        onclick={showGraph}
+        class="text-sm font-ui px-2.5 py-1 rounded cursor-pointer transition-colors
+          {appMode === 'graph' ? 'bg-bone/15 text-bone' : 'text-bone/50 hover:text-bone/80 hover:bg-bone/10'}"
+        title="Review the assimilator's merged knowledge graph"
+      >Graph</button>
+    </nav>
     <div class="flex-1"></div>
     <button
       onclick={() => themeState.toggle()}
@@ -350,7 +382,9 @@
   </header>
 
   <main class="flex-1 flex flex-col min-h-0">
-    {#if openingRecord && !selectedIngest}
+    {#if appMode === "graph"}
+      <GraphView />
+    {:else if openingRecord && !selectedIngest}
       <!-- Cold-load deep-link: list + record + digest are fetching. Show a
            centred indicator so the user knows the click registered. Hidden
            the moment selectedIngest is set; IngestViewer then takes over
