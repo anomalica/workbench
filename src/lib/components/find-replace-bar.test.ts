@@ -23,17 +23,23 @@ const type = (input: HTMLElement, value: string) => fireEvent.input(input, { tar
 describe("FindReplaceBar", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("counts matches and selects the first as you type", async () => {
+  it("counts matches live as you type WITHOUT moving the selection", async () => {
+    // Regression: calling onselect on every keystroke made the parent focus the
+    // editor, stealing focus from the find box mid-word. The count updates, but
+    // the selection must not move until the user navigates.
     const { getByPlaceholderText, getByText, onselect } = setup();
     await type(getByPlaceholderText("Find"), "cat");
     await waitFor(() => expect(getByText("1/2")).toBeTruthy());
-    expect(onselect).toHaveBeenLastCalledWith(4, 7);
+    expect(onselect).not.toHaveBeenCalled();
   });
 
-  it("next/prev cycle through matches with wrap-around", async () => {
+  it("next/prev reveal the current match first, then cycle with wrap-around", async () => {
     const { getByPlaceholderText, getByText, getByLabelText, onselect } = setup();
     await type(getByPlaceholderText("Find"), "cat");
     await waitFor(() => expect(getByText("1/2")).toBeTruthy());
+    await fireEvent.click(getByLabelText("Next match")); // reveals match 0, not 1
+    expect(getByText("1/2")).toBeTruthy();
+    expect(onselect).toHaveBeenLastCalledWith(4, 7);
     await fireEvent.click(getByLabelText("Next match"));
     expect(getByText("2/2")).toBeTruthy();
     expect(onselect).toHaveBeenLastCalledWith(19, 22);
