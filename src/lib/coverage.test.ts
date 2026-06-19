@@ -16,7 +16,32 @@ import {
   advancePlayWindow,
   segmentBounds,
   playedSegmentPositions,
+  observedPercent,
 } from "./coverage";
+
+describe("observedPercent", () => {
+  it("floors so editor-top and submit show the SAME percent for one coverage", () => {
+    // The bug: one site floored 0.209 -> 20, another rounded -> 21. Now every
+    // display site calls this one helper, so the number is identical.
+    const cov = 0.209;
+    expect(observedPercent(cov)).toBe(20);
+    // Whatever the editor top shows, the submit dialog shows the same value.
+    const editorTop = observedPercent(cov);
+    const submitDialog = observedPercent(cov);
+    expect(editorTop).toBe(submitDialog);
+  });
+
+  it("never overstates a gate metric: 99.5% is 99, not 100", () => {
+    expect(observedPercent(0.995)).toBe(99);
+  });
+
+  it("handles the exact bounds and missing values", () => {
+    expect(observedPercent(0)).toBe(0);
+    expect(observedPercent(1)).toBe(100);
+    expect(observedPercent(undefined as unknown as number)).toBe(0);
+    expect(observedPercent(Number.NaN)).toBe(0);
+  });
+});
 
 describe("bodyOf", () => {
   it("strips frontmatter", () => {
