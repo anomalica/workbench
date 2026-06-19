@@ -31,6 +31,7 @@
   import SpeakerDot from "./SpeakerDot.svelte";
   import DiffViewer from "./DiffViewer.svelte";
   import MilkdownEditor from "./MilkdownEditor.svelte";
+  import FindReplaceBar from "./FindReplaceBar.svelte";
   import EpubViewer from "./EpubViewer.svelte";
   import WordTranscript from "./WordTranscript.svelte";
   import ReadableText from "./ReadableText.svelte";
@@ -173,6 +174,10 @@
   // View mode for the ingest column's sub-tabs (rendered/edit/raw/diff).
   // Digest is no longer a sub-tab; it lives in its own column.
   let view = $state<"ingest" | "edit" | "diff" | "raw">("ingest");
+  // In-editor find/replace bar over the raw body textarea (Ctrl-F / Ctrl-H).
+  let findOpen = $state(false);
+  let rawTextarea = $state<HTMLTextAreaElement>();
+  let findBar = $state<{ focus: () => void }>();
 
   // Claim sections in display order. Derived rather than inline so the typed
   // tuple isn't inferred as a union by Svelte's compiler.
@@ -1952,7 +1957,14 @@
       else ytPlayer.playVideo();
       return;
     }
-    if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+    if ((e.ctrlKey || e.metaKey) && (e.key === "f" || e.key === "h")) {
+      // In-editor find/replace over the raw body text. Switch to the raw
+      // editor (the universal text surface) and open the bar.
+      e.preventDefault();
+      view = "raw";
+      findOpen = true;
+      requestAnimationFrame(() => findBar?.focus());
+    } else if ((e.ctrlKey || e.metaKey) && e.key === "s") {
       e.preventDefault();
       if (doc.dirty && user) showSubmitForm = true;
     } else if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey) {
@@ -2977,6 +2989,7 @@
       {:else if view === "raw"}
         <div class="flex-1 flex flex-col min-h-0">
           <textarea
+            bind:this={rawTextarea}
             data-scroll-sync
             value={currentBody()}
             oninput={(e) => doc.editBody((e.target as HTMLTextAreaElement).value)}
@@ -2985,6 +2998,20 @@
               p-4 font-mono outline-none border-none"
             spellcheck="false"
           ></textarea>
+          {#if findOpen}
+            <FindReplaceBar
+              bind:this={findBar}
+              text={currentBody()}
+              onreplace={(t) => doc.editBody(t)}
+              onselect={(start, end) => {
+                rawTextarea?.focus();
+                rawTextarea?.setSelectionRange(start, end);
+              }}
+              onclose={() => {
+                findOpen = false;
+              }}
+            />
+          {/if}
         </div>
 
       {:else if isWordRecord}
