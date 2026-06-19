@@ -28,6 +28,7 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from anomalica_common.review_gate import digestibility
 
+from backend import graph
 from backend.auth import setup_auth
 
 FULL_HASH_LENGTH = 64
@@ -1338,6 +1339,37 @@ def get_digest(full_hash: str) -> JSONResponse:
         ) from exc
 
     return JSONResponse(_filter_digest(digest))
+
+
+# --- Knowledge-graph review (read-only over the assimilator DB) ----------
+# Surfaces the assimilator's merged entity graph for human inspection - above
+# all the merge decisions (a node's aliases), so a bad merge is reviewable.
+
+
+@app.get("/api/graph/stats")
+def graph_stats() -> dict:
+    s = graph.stats()
+    if s is None:
+        raise HTTPException(status_code=503, detail="Graph database not available")
+    return s
+
+
+@app.get("/api/graph/nodes")
+def graph_nodes(type: str | None = None, q: str | None = None) -> list[dict]:
+    nodes = graph.list_nodes(node_type=type, q=q)
+    if nodes is None:
+        raise HTTPException(status_code=503, detail="Graph database not available")
+    return nodes
+
+
+@app.get("/api/graph/nodes/{node_id}")
+def graph_node(node_id: str) -> dict:
+    detail = graph.node_detail(node_id)
+    if detail is None:
+        raise HTTPException(status_code=503, detail="Graph database not available")
+    if detail is False:
+        raise HTTPException(status_code=404, detail="Node not found")
+    return detail
 
 
 @app.get("/api/sources/{full_hash}")
