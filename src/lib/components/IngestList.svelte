@@ -1,5 +1,6 @@
 <script lang="ts">
   import { type IngestSummary, provenanceOf, isPubliclyViewable } from "$lib/api";
+  import { observedPercent } from "$lib/coverage";
 
   let {
     ingests,
@@ -149,7 +150,7 @@
           {:else}
             <span
               class="text-on-surface-muted"
-              title={`${Math.floor(ingest.observed_coverage * 100)}% observed - not yet digestible`}
+              title={`${observedPercent(ingest.observed_coverage)}% observed - not yet digestible`}
             >No</span>
           {/if}
         </span>

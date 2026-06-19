@@ -35,6 +35,14 @@ export function bodyOf(docText: string): string {
   return match ? match[1] : docText;
 }
 
+/** The single way to display an observed-coverage fraction (0..1) as a whole
+ *  percent. Floors, never rounds: coverage gates on reaching a true 100%, so
+ *  rounding (which would show "100%" at 99.5%) must never overstate it. Used at
+ *  every display site so the editor, submit dialog and browse list agree. */
+export function observedPercent(coverage: number): number {
+  return Math.floor((coverage || 0) * 100);
+}
+
 /** Merge overlapping/adjacent spans into a minimal sorted list. */
 export function mergeSpans(spans: CoverageSpan[]): CoverageSpan[] {
   const sorted = [...spans].sort((a, b) => a.from - b.from);

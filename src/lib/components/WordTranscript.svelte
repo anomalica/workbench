@@ -13,6 +13,7 @@
   } from "$lib/transcript";
   import SpeakerDot from "./SpeakerDot.svelte";
   import { safeLocalSet } from "$lib/storage";
+  import { observedPercent } from "$lib/coverage";
 
   // The observed set is persisted as run-length spans [[from,to],...] rather
   // than a flat index array: on a long record (tens of thousands of words) the
@@ -656,7 +657,7 @@
     clearSelection();
   }
 
-  let observedPct = $derived(Math.floor(coverageVerdict.observed_coverage * 100));
+  let observedPct = $derived(observedPercent(coverageVerdict.observed_coverage));
 
   // Scroll to the first word the reviewer hasn't observed yet (skipping
   // irrelevant words, which never need observing, and words hidden by a filter).

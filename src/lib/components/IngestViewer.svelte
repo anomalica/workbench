@@ -17,6 +17,7 @@
     advancePlayWindow,
     segmentBounds,
     playedSegmentPositions,
+    observedPercent,
   } from "$lib/coverage";
   import type { CoverageSpan, KindedSpan, PlayWindow } from "$lib/coverage";
   import CoverageStrip from "./CoverageStrip.svelte";
@@ -2368,7 +2369,7 @@
           <div class="mt-3 flex items-center gap-2">
             <span class="text-xs font-ui text-on-surface-secondary">Read coverage</span>
             <span class="text-xs font-ui font-medium text-on-surface tabular-nums">
-              {Math.round(textVerdict.observed_coverage * 100)}%
+              {observedPercent(textVerdict.observed_coverage)}%
             </span>
             {#if textVerdict.digestible}
               <span class="text-[10px] font-ui text-success">fully read</span>
@@ -2378,7 +2379,7 @@
           <div class="mt-3 flex items-center gap-2">
             <span class="text-xs font-ui text-on-surface-secondary">Observed</span>
             <span class="text-xs font-ui font-medium text-on-surface tabular-nums">
-              {Math.round(wordVerdict.observed_coverage * 100)}%
+              {observedPercent(wordVerdict.observed_coverage)}%
             </span>
             <span class="text-[10px] font-ui text-on-surface-muted">
               of {wordVerdict.total_units} words
