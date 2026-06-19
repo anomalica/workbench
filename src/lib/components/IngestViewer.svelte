@@ -3003,7 +3003,7 @@
               bind:this={findBar}
               text={currentBody()}
               onreplace={(t) => doc.editBody(t)}
-              onselect={(start, end) => {
+              onlocate={(start, end) => {
                 rawTextarea?.focus();
                 rawTextarea?.setSelectionRange(start, end);
               }}

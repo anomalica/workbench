@@ -1,127 +1,105 @@
 <script lang="ts">
-  // Standard in-editor find/replace bar, scoped to ONE record's editable text
-  // (the raw body textarea). It operates on the `text` prop, reports the range
-  // to highlight via `onselect` (the parent selects it in the textarea), and
-  // emits replacements via `onreplace` - which the parent applies through the
-  // document store, so the change is undoable and flows through the normal
-  // review/submit/commit. No backend, no corpus-wide write.
+  // In-editor find/replace for ONE record, shown as a split-view panel under
+  // the editor: literal search (match-case optional), and a list of every
+  // matching line with the term highlighted so all matches are visible at once
+  // before replacing. Replace-all edits through the document store (undoable,
+  // flows through the normal review/submit). No regex, no backend.
+  //
+  // Display is cleaned (word-timestamp {{t:N}} markers stripped, whitespace
+  // collapsed) for readability, but matching, counting and replacement all run
+  // on the RAW text - only what's shown is cleaned.
 
   let {
     text,
     onreplace,
-    onselect,
+    onlocate,
     onclose,
-    canReplace = true,
   }: {
     text: string;
     onreplace: (newText: string) => void;
-    onselect?: (start: number, end: number) => void;
+    /** Locate a match in the editor (parent focuses + selects + scrolls). */
+    onlocate?: (start: number, end: number) => void;
     onclose?: () => void;
-    canReplace?: boolean;
   } = $props();
+
+  const MAX_LINES = 1000;
 
   let query = $state("");
   let replacement = $state("");
-  let useRegex = $state(false);
   let caseSensitive = $state(false);
-  let current = $state(0);
   let findInput = $state<HTMLInputElement>();
 
   function escapeRegExp(s: string): string {
     return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
+  function makeRe(): RegExp {
+    return new RegExp(escapeRegExp(query), `g${caseSensitive ? "" : "i"}`);
+  }
 
-  // Matches + any regex error computed together (a $derived must not mutate
-  // separate state, so error rides along rather than being set inside).
-  let search = $derived.by<{ matches: { start: number; end: number }[]; error: string | null }>(
-    () => {
-      if (!query) return { matches: [], error: null };
-      let re: RegExp;
-      try {
-        re = new RegExp(useRegex ? query : escapeRegExp(query), `g${caseSensitive ? "" : "i"}`);
-      } catch (e) {
-        return { matches: [], error: e instanceof Error ? e.message : "Invalid pattern" };
-      }
-      const out: { start: number; end: number }[] = [];
-      for (const m of text.matchAll(re)) {
-        if (m.index !== undefined && m[0].length > 0) {
-          out.push({ start: m.index, end: m.index + m[0].length });
+  // Strip transcript markers and tidy whitespace for the displayed line only.
+  function cleanForDisplay(line: string): string {
+    return line
+      .replace(/\{\{t:[0-9.]+\}\}/g, "")
+      .replace(/[ \t]{2,}/g, " ")
+      .trim();
+  }
+
+  // Split a cleaned line into highlighted / plain segments around the query.
+  function segmentsOf(cleaned: string): { text: string; hit: boolean }[] {
+    const re = makeRe();
+    const segs: { text: string; hit: boolean }[] = [];
+    let last = 0;
+    for (const m of cleaned.matchAll(re)) {
+      if (m.index === undefined || m[0].length === 0) continue;
+      if (m.index > last) segs.push({ text: cleaned.slice(last, m.index), hit: false });
+      segs.push({ text: m[0], hit: true });
+      last = m.index + m[0].length;
+    }
+    if (last < cleaned.length || segs.length === 0) segs.push({ text: cleaned.slice(last), hit: false });
+    return segs;
+  }
+
+  type ResultLine = { lineNo: number; segments: { text: string; hit: boolean }[]; start: number; end: number };
+
+  let result = $derived.by<{ count: number; lines: ResultLine[]; truncated: boolean }>(() => {
+    if (!query) return { count: 0, lines: [], truncated: false };
+    const re = makeRe();
+    const rawLines = text.split("\n");
+    const lines: ResultLine[] = [];
+    let count = 0;
+    let offset = 0;
+    let truncated = false;
+    for (let i = 0; i < rawLines.length; i++) {
+      const line = rawLines[i];
+      const hits = [...line.matchAll(re)].filter((m) => m[0].length > 0);
+      if (hits.length > 0) {
+        count += hits.length;
+        if (lines.length < MAX_LINES) {
+          const first = hits[0];
+          lines.push({
+            lineNo: i + 1,
+            segments: segmentsOf(cleanForDisplay(line)),
+            start: offset + (first.index ?? 0),
+            end: offset + (first.index ?? 0) + first[0].length,
+          });
+        } else {
+          truncated = true;
         }
-        if (out.length > 10000) break; // sanity cap
       }
-      return { matches: out, error: null };
-    },
-  );
-  let matches = $derived(search.matches);
-  let error = $derived(search.error);
-
-  // Whether the current match has been revealed (selected in the editor) yet.
-  let revealed = $state(false);
-
-  // Keep the cursor in range as the match set changes (typing, replacing).
-  $effect(() => {
-    if (current >= matches.length) current = matches.length > 0 ? matches.length - 1 : 0;
+      offset += line.length + 1; // + newline
+    }
+    return { count, lines, truncated };
   });
-
-  // Reset to the top when the query/options change. Crucially this does NOT
-  // move the selection: calling onselect on every keystroke made the parent
-  // focus the editor, stealing focus from the find box mid-word so the rest of
-  // the term typed into the document. The match reveals on explicit navigation
-  // (Enter / next / prev) instead - standard find UX; the i/N counter still
-  // updates live as you type.
-  let lastQueryKey = "";
-  $effect(() => {
-    const key = `${query} ${useRegex} ${caseSensitive}`;
-    if (key === lastQueryKey) return;
-    lastQueryKey = key;
-    current = 0;
-    revealed = false;
-  });
-
-  function go(delta: number) {
-    if (matches.length === 0) return;
-    // The first navigation reveals the current match (index 0) rather than
-    // skipping ahead, so Enter right after typing lands on the first hit.
-    if (revealed) current = (current + delta + matches.length) % matches.length;
-    else revealed = true;
-    const m = matches[current];
-    onselect?.(m.start, m.end);
-  }
-
-  function singleRe(): RegExp {
-    return new RegExp(useRegex ? query : escapeRegExp(query), caseSensitive ? "" : "i");
-  }
-
-  function replaceCurrent() {
-    if (matches.length === 0) return;
-    const m = matches[current];
-    const seg = text.slice(m.start, m.end);
-    // Function replacement in literal mode inserts the text verbatim ($ not
-    // special); regex mode keeps $1 capture-group substitution.
-    const repl = useRegex
-      ? seg.replace(singleRe(), replacement)
-      : seg.replace(singleRe(), () => replacement);
-    onreplace(text.slice(0, m.start) + repl + text.slice(m.end));
-  }
 
   function replaceAll() {
-    if (matches.length === 0) return;
-    let re: RegExp;
-    try {
-      re = new RegExp(useRegex ? query : escapeRegExp(query), `g${caseSensitive ? "" : "i"}`);
-    } catch {
-      return;
-    }
-    onreplace(useRegex ? text.replace(re, replacement) : text.replace(re, () => replacement));
+    if (result.count === 0) return;
+    onreplace(text.replace(makeRe(), () => replacement));
   }
 
   function onKey(e: KeyboardEvent) {
     if (e.key === "Escape") {
       e.preventDefault();
       onclose?.();
-    } else if (e.key === "Enter") {
-      e.preventDefault();
-      go(e.shiftKey ? -1 : 1);
     }
   }
 
@@ -131,70 +109,77 @@
   }
 </script>
 
-<div class="border-t border-border bg-surface-alt px-3 py-2 flex flex-col gap-1.5 flex-none font-ui">
-  <div class="flex items-center gap-2">
-    <input
-      bind:this={findInput}
-      bind:value={query}
-      onkeydown={onKey}
-      type="text"
-      placeholder="Find"
-      spellcheck="false"
-      class="flex-1 min-w-0 text-sm font-mono bg-surface border border-border rounded px-2 py-1
-        text-on-surface outline-none focus:border-primary placeholder:text-on-surface-muted/60"
-    />
-    <span class="text-xs text-on-surface-muted tabular-nums w-16 text-right flex-none">
-      {#if error}
-        <span class="text-error">err</span>
-      {:else if query}
-        {matches.length ? `${current + 1}/${matches.length}` : "0/0"}
-      {/if}
-    </span>
-    <button
-      onclick={() => go(-1)}
-      disabled={matches.length === 0}
-      class="px-1.5 py-1 rounded cursor-pointer text-on-surface-secondary hover:bg-surface disabled:opacity-40 disabled:cursor-not-allowed"
-      title="Previous (Shift+Enter)"
-      aria-label="Previous match">&#x2191;</button>
-    <button
-      onclick={() => go(1)}
-      disabled={matches.length === 0}
-      class="px-1.5 py-1 rounded cursor-pointer text-on-surface-secondary hover:bg-surface disabled:opacity-40 disabled:cursor-not-allowed"
-      title="Next (Enter)"
-      aria-label="Next match">&#x2193;</button>
-    <label class="flex items-center gap-1 text-xs text-on-surface-secondary cursor-pointer select-none" title="Match case">
-      <input type="checkbox" bind:checked={caseSensitive} class="accent-primary" />Aa
-    </label>
-    <label class="flex items-center gap-1 text-xs text-on-surface-secondary cursor-pointer select-none" title="Regular expression">
-      <input type="checkbox" bind:checked={useRegex} class="accent-primary" />.*
-    </label>
-    <button
-      onclick={() => onclose?.()}
-      class="px-1.5 py-1 rounded cursor-pointer text-on-surface-muted hover:bg-surface"
-      title="Close (Esc)"
-      aria-label="Close">&#x2715;</button>
-  </div>
-  {#if canReplace}
+<div class="border-t border-border bg-surface-alt flex flex-col min-h-0 flex-1 font-ui">
+  <!-- Controls -->
+  <div class="px-3 py-2 flex flex-col gap-1.5 flex-none border-b border-border/60">
+    <div class="flex items-center gap-2">
+      <input
+        bind:this={findInput}
+        bind:value={query}
+        onkeydown={onKey}
+        type="text"
+        placeholder="Find in this record"
+        spellcheck="false"
+        class="flex-1 min-w-0 text-sm font-mono bg-surface border border-border rounded px-2 py-1
+          text-on-surface outline-none focus:border-primary placeholder:text-on-surface-muted/60"
+      />
+      <span class="text-xs text-on-surface-secondary tabular-nums flex-none">
+        {#if query}{result.count} {result.count === 1 ? "match" : "matches"}{/if}
+      </span>
+      <label class="flex items-center gap-1 text-xs text-on-surface-secondary cursor-pointer select-none" title="Match case">
+        <input type="checkbox" bind:checked={caseSensitive} class="accent-primary" />Aa
+      </label>
+      <button
+        onclick={() => onclose?.()}
+        class="px-1.5 py-1 rounded cursor-pointer text-on-surface-muted hover:bg-surface"
+        title="Close (Esc)"
+        aria-label="Close">&#x2715;</button>
+    </div>
     <div class="flex items-center gap-2">
       <input
         bind:value={replacement}
         onkeydown={onKey}
         type="text"
-        placeholder={useRegex ? "Replace ($1 for groups)" : "Replace"}
+        placeholder="Replace with"
         spellcheck="false"
         class="flex-1 min-w-0 text-sm font-mono bg-surface border border-border rounded px-2 py-1
           text-on-surface outline-none focus:border-primary placeholder:text-on-surface-muted/60"
       />
       <button
-        onclick={replaceCurrent}
-        disabled={matches.length === 0}
-        class="text-xs px-2 py-1 rounded cursor-pointer text-on-surface-secondary hover:bg-surface disabled:opacity-40 disabled:cursor-not-allowed"
-      >Replace</button>
-      <button
         onclick={replaceAll}
-        disabled={matches.length === 0}
-        class="text-xs px-2 py-1 rounded cursor-pointer bg-primary/10 text-primary hover:bg-primary/20 disabled:opacity-40 disabled:cursor-not-allowed"
-      >All</button>
+        disabled={result.count === 0}
+        class="text-xs px-3 py-1 rounded cursor-pointer bg-primary text-on-primary hover:bg-primary-hover
+          disabled:opacity-40 disabled:cursor-not-allowed"
+      >Replace all</button>
     </div>
-  {/if}
+  </div>
+
+  <!-- Results: every matching line, term highlighted, markers stripped -->
+  <div class="flex-1 overflow-auto min-h-0">
+    {#if !query}
+      <p class="text-xs text-on-surface-muted px-3 py-2">Type to find every match in this record.</p>
+    {:else if result.lines.length === 0}
+      <p class="text-xs text-on-surface-muted px-3 py-2">No matches.</p>
+    {:else}
+      {#each result.lines as line (line.lineNo)}
+        <button
+          onclick={() => onlocate?.(line.start, line.end)}
+          class="w-full text-left flex gap-2 px-3 py-1 cursor-pointer hover:bg-surface text-sm font-mono leading-relaxed border-b border-border/30"
+          title="Locate in the editor"
+        >
+          <span class="text-[11px] text-on-surface-muted tabular-nums w-10 text-right flex-none select-none">{line.lineNo}</span>
+          <span class="min-w-0 break-words text-on-surface">
+            {#each line.segments as seg}
+              {#if seg.hit}<mark class="bg-amber-400/40 text-on-surface rounded-sm">{seg.text}</mark>{:else}{seg.text}{/if}
+            {/each}
+          </span>
+        </button>
+      {/each}
+      {#if result.truncated}
+        <p class="text-xs text-on-surface-muted px-3 py-2">
+          Showing the first {MAX_LINES} lines of {result.count} matches - narrow the search.
+        </p>
+      {/if}
+    {/if}
+  </div>
 </div>
