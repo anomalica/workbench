@@ -71,4 +71,38 @@ describe("ScheduleView", () => {
     const { getByText } = sample();
     expect(getByText(/Background \(eager/)).toBeTruthy();
   });
+
+  it("shows a known record's title + deep-link, the scheduler label otherwise", () => {
+    const KNOWN = "h".repeat(64);
+    const UNKNOWN = "z".repeat(64);
+    const queue: ScheduleQueue = {
+      generatedAt: null,
+      recordDemand: {},
+      reviewQueue: [],
+      jobs: [
+        {
+          id: "d1",
+          type: "digest",
+          lane: "claude",
+          status: "eligible",
+          target: { kind: "record", label: "2026-bob-lazar-slug", hash: KNOWN },
+        },
+        {
+          id: "d2",
+          type: "corroborate",
+          lane: "claude",
+          status: "eligible",
+          target: { kind: "record", label: "web page abcd", hash: UNKNOWN },
+        },
+      ],
+    };
+    const { getByText } = render(ScheduleView, {
+      props: { queue, recordTitles: { [KNOWN]: "Imminent" } },
+    });
+    // Known record: human title, deep-linked by public hash.
+    const link = getByText("Imminent").closest("a");
+    expect(link?.getAttribute("href")).toBe(`/${"h".repeat(56)}`);
+    // Unknown (e.g. un-ingested source): scheduler label, not a link.
+    expect(getByText("web page abcd").closest("a")).toBeNull();
+  });
 });

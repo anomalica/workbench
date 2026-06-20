@@ -1,22 +1,36 @@
 import { describe, it, expect } from "vitest";
-import { targetHref, stageRank } from "./schedule";
+import { resolveTarget, stageRank } from "./schedule";
 
-describe("targetHref", () => {
-  it("links a record target by its public (56-char) hash", () => {
-    const hash = "a".repeat(64);
-    expect(targetHref({ kind: "record", label: "x", hash })).toBe(`/${"a".repeat(56)}`);
+describe("resolveTarget", () => {
+  const hash = "a".repeat(64);
+  const titles = { [hash]: "In Plain Sight" };
+
+  it("shows a known record's title and deep-links by its 56-char public hash", () => {
+    expect(resolveTarget({ kind: "record", label: "record aaaa", hash }, titles)).toEqual({
+      label: "In Plain Sight",
+      href: `/${"a".repeat(56)}`,
+    });
   });
 
-  it("returns null for a page target (no workbench page view yet)", () => {
-    expect(targetHref({ kind: "page", label: "some-slug" })).toBeNull();
+  it("keeps the scheduler label and is NOT linkable for an un-ingested source", () => {
+    // record-kind target whose hash isn't a known record yet (e.g. an ingest job)
+    expect(
+      resolveTarget({ kind: "record", label: "web page 00880db2", hash: "b".repeat(64) }, titles),
+    ).toEqual({
+      label: "web page 00880db2",
+      href: null,
+    });
   });
 
-  it("returns null for a record with no hash", () => {
-    expect(targetHref({ kind: "record", label: "x" })).toBeNull();
+  it("returns the slug with no link for a page target", () => {
+    expect(resolveTarget({ kind: "page", label: "some-slug" }, titles)).toEqual({
+      label: "some-slug",
+      href: null,
+    });
   });
 
   it("respects an explicit href when present", () => {
-    expect(targetHref({ kind: "page", label: "x", href: "/y" })).toBe("/y");
+    expect(resolveTarget({ kind: "page", label: "x", href: "/y" }, titles).href).toBe("/y");
   });
 });
 
