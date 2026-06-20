@@ -1,29 +1,31 @@
 /**
- * Schedule view types + a PROVISIONAL sample queue.
+ * Schedule view types + an ILLUSTRATIVE placeholder queue.
  *
  * Read-only "outcome surface" of the prioritisation system the assimilator's
  * scheduler is building (design: anomalica/master/.ai/specs/
- * scheduling-prioritisation-design.md). The scheduler OWNS the real queue
- * contract; these types are a placeholder to build the shell against and are
- * being reconciled with the assimilator - do not treat them as final.
+ * scheduling-prioritisation-design.md). The scheduler OWNS the real queue and
+ * is the only source of the real comprehensive job list, priorities, effort and
+ * drivers - this module is a thin PLACEHOLDER so the layout is reviewable, and
+ * is wired to the scheduler's real output when it publishes.
  *
- * Three lanes by SCARCE RESOURCE (Mark, 2026-06-20, supersedes the earlier
- * Local/Claude split): `claude` (tokens) and `gpu` (GPU time) are machine job
- * queues ranked by VALUE; `review` is human review time - records awaiting
- * review, ranked by DEMAND ("what should a human review next"). Light plumbing
- * (import / re-score) is eager background, lane `eager`, not a competing lane.
+ * It must stay HONEST: it does NOT fabricate dollar costs, run-times, token
+ * budgets, scores or a nightly runner (none exist yet). The pipeline runs on the
+ * Claude SUBSCRIPTION - a TOKEN quota, not dollars; the metered/dollar path is
+ * off by default and handled elsewhere, never shown here. value/effort/drivers
+ * are optional and rendered only when the real scheduler supplies them.
+ *
+ * Three lanes by SCARCE RESOURCE: `claude` (tokens) + `gpu` (GPU time) machine
+ * job queues; `review` = records awaiting human review, ranked by DEMAND. Light
+ * plumbing (import / re-score) is eager background, lane `eager`, not a lane.
  */
 
-/** Machine job lanes; `eager` is the minimised background plumbing. */
 export type ScheduleLane = "claude" | "gpu" | "eager";
 
 export type JobStatus =
   | "eligible" // ready to run
   | "blocked" // an upstream job is queued/running (blocker named)
-  | "readiness_gated" // target not review-ready (its review sits in the Review lane)
-  | "awaiting_approval"; // metered spend, waiting on a cost estimate + yes
+  | "readiness_gated"; // target not review-ready (its review sits in the Review lane)
 
-/** Staleness band drives a chip colour; "off" greys a not-yet-pinned factor. */
 export type DriverBand = "urgent" | "normal" | "sub" | "off";
 
 export interface ScheduleDriver {
@@ -35,46 +37,40 @@ export interface ScheduleDriver {
 export interface ScheduleTarget {
   kind: "record" | "page";
   label: string;
-  hash?: string; // full content hash for record targets
-  href?: string | null; // in-app deep link, or null when there's no destination yet
+  hash?: string;
+  href?: string | null;
 }
 
 export interface ScheduleJob {
   id: string;
   type: string;
   lane: ScheduleLane;
-  effort: string;
-  dollars?: string | null; // set when the lane is on the metered API
   target: ScheduleTarget;
-  article?: string; // the page this job advances (per-article "what's next" grouping)
-  value: number | null; // VALUE score; null for eager jobs
-  drivers: ScheduleDriver[];
-  fitsBudget: boolean;
+  article?: string;
   status: JobStatus;
-  blocker?: string;
-  trigger: string;
+  blocker?: string; // named upstream when status === "blocked"
+  trigger?: string; // qualitative reason: never done / stale / logic version bump / on demand
+  // Real-scheduler fields - rendered only when present. The placeholder leaves
+  // them unset rather than inventing scores, effort or driver metrics.
+  value?: number | null;
+  effort?: string;
+  drivers?: ScheduleDriver[];
 }
 
 /** A record (later: an assembled article) awaiting human review - the Review
- *  lane. Ranked by demand: the scheduler's per-record priority. */
+ *  lane. The scheduler's per-record demand ranks it (placeholder for now). */
 export interface ReviewItem {
   target: ScheduleTarget;
-  demand: number; // scheduler's computed priority (placeholder for now)
-  reason: string; // why it's wanted (e.g. "unblocks digest -> 2 pages")
+  demand?: number; // scheduler's per-record priority; unset = unranked placeholder
+  reason?: string;
 }
 
 export interface ScheduleQueue {
   generatedAt: string | null;
-  budgets: {
-    claude: { used: string; total: string; note?: string };
-    gpu: { used: string; total: string; note?: string };
-  };
   jobs: ScheduleJob[];
   reviewQueue: ReviewItem[];
-  dryRunRunIds: string[]; // jobs tonight's budgets would actually execute
 }
 
-/** Pipeline order, for sorting a single article's jobs into "what's next". */
 export const STAGE_ORDER = [
   "ingest",
   "re-ingest",
@@ -100,11 +96,9 @@ export const LANE_LABEL: Record<ScheduleLane, string> = {
 };
 
 /**
- * PLACEHOLDER per-record demand (0-100), until the scheduler computes the real
- * per-record priority (how much downstream work reviewing it would unblock).
- * Deterministic from the content hash so the sort is stable. Drives both the
- * Review lane and the Records "sort by demand" mode; swap for the real signal
- * from the assimilator when it lands.
+ * PLACEHOLDER per-record demand (0-99), until the scheduler computes the real
+ * per-record priority. Deterministic from the content hash so the Records "sort
+ * by demand" produces a stable order; clearly flagged illustrative in the UI.
  */
 export function recordDemand(contentHash: string): number {
   let h = 0;
@@ -114,198 +108,116 @@ export function recordDemand(contentHash: string): number {
   return h % 100;
 }
 
-// --- PROVISIONAL sample queue (replace with the scheduler's real output) ----
+// --- ILLUSTRATIVE placeholder (generic targets, no fabricated metrics) ------
+// Shows the SHAPE of each lane. The real comprehensive, prioritised list comes
+// from the scheduler; this is replaced wholesale when it's wired.
 
 export const SAMPLE_QUEUE: ScheduleQueue = {
   generatedAt: null,
-  budgets: {
-    claude: { used: "120k", total: "500k", note: "tokens" },
-    gpu: { used: "18", total: "90", note: "GPU-min" },
-  },
   jobs: [
-    // --- Claude lane (token jobs, ranked by value) ---
+    // Claude lane - one of each job type, generic targets, no fake scores.
     {
       id: "j1",
       type: "digest",
       lane: "claude",
-      effort: "~9k tokens",
-      target: { kind: "record", label: "Nimitz CSG-11 AAV Incident Report", hash: "n1", href: "/" },
-      article: "The Nimitz UAP incident",
-      value: 8.4,
-      drivers: [
-        { label: "demand", value: "14 dead links" },
-        { label: "readiness", value: "reviewed", band: "normal" },
-      ],
-      fitsBudget: true,
+      target: { kind: "record", label: "(a reviewed record)", href: null },
+      article: "Example article A",
       status: "eligible",
       trigger: "never done",
     },
     {
       id: "j2",
-      type: "assemble",
+      type: "corroborate",
       lane: "claude",
-      effort: "~15k tokens",
-      target: { kind: "page", label: "the-nimitz-uap-incident", href: null },
-      article: "The Nimitz UAP incident",
-      value: 7.1,
-      drivers: [
-        { label: "demand", value: "high" },
-        { label: "staleness", value: "30%", band: "normal" },
-        { label: "reach", value: "fanout 4" },
-      ],
-      fitsBudget: true,
-      status: "blocked",
-      blocker: "digest (Nimitz CSG-11 AAV Incident Report)",
-      trigger: "stale 30%",
+      target: { kind: "page", label: "(graph-wide)", href: null },
+      status: "eligible",
+      trigger: "logic version bump",
     },
     {
       id: "j3",
-      type: "verify",
+      type: "synthesise",
       lane: "claude",
-      effort: "~6k tokens",
-      dollars: "$0.45",
-      target: { kind: "page", label: "the-nimitz-uap-incident", href: null },
-      article: "The Nimitz UAP incident",
-      value: 3.2,
-      drivers: [{ label: "follows", value: "assemble" }],
-      fitsBudget: true,
-      status: "awaiting_approval",
-      trigger: "logic v2",
+      target: { kind: "page", label: "(a proposed page)", href: null },
+      article: "Example article B",
+      status: "eligible",
+      trigger: "on demand",
     },
     {
       id: "j4",
       type: "assemble",
       lane: "claude",
-      effort: "~14k tokens",
-      target: { kind: "page", label: "project-stargate", href: null },
-      article: "Project Stargate",
-      value: 6.0,
-      drivers: [
-        { label: "demand", value: "9 dead links" },
-        { label: "staleness", value: "never done", band: "urgent" },
-        { label: "reach", value: "fanout 2" },
-      ],
-      fitsBudget: false,
+      target: { kind: "page", label: "example-article-a", href: null },
+      article: "Example article A",
+      status: "blocked",
+      blocker: "digest (a reviewed record)",
+      trigger: "stale",
+    },
+    {
+      id: "j5",
+      type: "assemble",
+      lane: "claude",
+      target: { kind: "page", label: "example-article-c", href: null },
+      article: "Example article C",
       status: "readiness_gated",
       trigger: "never done",
     },
     {
-      id: "j5",
-      type: "corroborate",
-      lane: "claude",
-      effort: "~11k tokens",
-      target: { kind: "page", label: "(graph-wide)", href: null },
-      value: 5.5,
-      drivers: [{ label: "pending duplicates", value: "23 claim pairs" }],
-      fitsBudget: true,
-      status: "eligible",
-      trigger: "logic v2",
-    },
-    {
       id: "j6",
-      type: "synthesise",
+      type: "translate",
       lane: "claude",
-      effort: "~12k tokens",
-      target: { kind: "page", label: "tic-tac-encounters (proposed)", href: null },
-      article: "Tic-Tac encounters",
-      value: 4.8,
-      drivers: [{ label: "demand", value: "missing page" }],
-      fitsBudget: true,
-      status: "eligible",
+      target: { kind: "page", label: "example-article-a (ja)", href: null },
+      article: "Example article A",
+      status: "blocked",
+      blocker: "assemble (example-article-a)",
       trigger: "on demand",
     },
     {
       id: "j7",
-      type: "translate",
+      type: "verify",
       lane: "claude",
-      effort: "~7k tokens",
-      target: { kind: "page", label: "the-nimitz-uap-incident (ja)", href: null },
-      article: "The Nimitz UAP incident",
-      value: 2.1,
-      drivers: [{ label: "languages", value: "ja wanted" }],
-      fitsBudget: false,
+      target: { kind: "page", label: "example-article-a", href: null },
+      article: "Example article A",
       status: "blocked",
-      blocker: "assemble (the-nimitz-uap-incident)",
-      trigger: "on demand",
+      blocker: "assemble (example-article-a)",
+      trigger: "follows assemble",
     },
-    // --- GPU lane (GPU-time jobs) ---
+    // GPU lane - one transcription job PER VIDEO (however many there are).
     {
-      id: "j8",
-      type: "ingest",
+      id: "g1",
+      type: "transcribe",
       lane: "gpu",
-      effort: "~12 GPU-min",
-      target: { kind: "record", label: "Lex Fridman #441 (queued source)", href: null },
-      value: 6.7,
-      drivers: [{ label: "source priority", value: "high (Area52)" }],
-      fitsBudget: true,
+      target: { kind: "record", label: "(a queued video)", href: null },
       status: "eligible",
       trigger: "on demand",
     },
     {
-      id: "j11",
-      type: "re-ingest",
+      id: "g2",
+      type: "transcribe",
       lane: "gpu",
-      effort: "~18 GPU-min",
-      target: {
-        kind: "record",
-        label: "The CIA's Psychic Spies (re-transcribe)",
-        hash: "c2",
-        href: "/",
-      },
-      value: 3.4,
-      drivers: [{ label: "source priority", value: "medium" }],
-      fitsBudget: false,
+      target: { kind: "record", label: "(another queued video)", href: null },
       status: "eligible",
-      trigger: "logic v2",
+      trigger: "on demand",
     },
-    // --- Background (eager) - minimised, not a competing lane ---
+    // Background (eager) - minimised, not a competing lane.
     {
-      id: "j9",
+      id: "e1",
       type: "import",
       lane: "eager",
-      effort: "light",
-      target: { kind: "record", label: "Bob Lazar - DEBRIEFED ep. 87", hash: "b1", href: "/" },
-      value: null,
-      drivers: [],
-      fitsBudget: true,
+      target: { kind: "record", label: "(a fresh digest)", href: null },
       status: "eligible",
-      trigger: "logic v2",
     },
     {
-      id: "j10",
+      id: "e2",
       type: "re-score",
       lane: "eager",
-      effort: "light",
       target: { kind: "page", label: "(all pages)", href: null },
-      value: null,
-      drivers: [],
-      fitsBudget: true,
       status: "eligible",
-      trigger: "logic v2",
     },
   ],
-  // Review lane: records awaiting human review, ranked by demand.
+  // Review lane - records awaiting human review. Unranked placeholders; the
+  // scheduler's demand will order them.
   reviewQueue: [
-    {
-      target: { kind: "record", label: "CIA Stargate memo (1995)", hash: "s9", href: "/" },
-      demand: 71,
-      reason: "unblocks digest -> assemble of project-stargate",
-    },
-    {
-      target: {
-        kind: "record",
-        label: "AARO Historical Record Report Vol. I",
-        hash: "a3",
-        href: "/",
-      },
-      demand: 58,
-      reason: "high fanout - 3 pages reference it",
-    },
-    {
-      target: { kind: "record", label: "Grusch Congressional testimony", hash: "g4", href: "/" },
-      demand: 33,
-      reason: "demand for a new page, source not yet reviewed",
-    },
+    { target: { kind: "record", label: "(an unreviewed record)", href: null } },
+    { target: { kind: "record", label: "(another unreviewed record)", href: null } },
   ],
-  dryRunRunIds: ["j1", "j5", "j6", "j8"],
 };
