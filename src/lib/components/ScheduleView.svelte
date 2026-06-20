@@ -2,16 +2,20 @@
   import {
     LANE_LABEL,
     stageRank,
-    targetHref,
+    resolveTarget,
     type ScheduleQueue,
     type ScheduleJob,
     type ReviewItem,
   } from "$lib/schedule";
   import ScheduleJobCard from "./ScheduleJobCard.svelte";
 
-  // The live scheduler queue (from /api/schedule), fetched by the parent. Null
-  // while loading.
-  let { queue }: { queue: ScheduleQueue | null } = $props();
+  // The live scheduler queue (from /api/schedule), fetched by the parent (null
+  // while loading), plus the known records' titles ({content_hash -> title})
+  // so record targets show their human title instead of a hash/slug.
+  let {
+    queue,
+    recordTitles = {},
+  }: { queue: ScheduleQueue | null; recordTitles?: Record<string, string> } = $props();
 
   // Cap how many cards render per lane - the GPU/ingest lane can be hundreds;
   // showing every one would be a heavy DOM, and the count note keeps it honest.
@@ -67,17 +71,17 @@
 {/snippet}
 
 {#snippet reviewRow(item: ReviewItem)}
-  {@const href = targetHref(item.target)}
+  {@const r = resolveTarget(item.target, recordTitles)}
   <div class="rounded-md border border-border bg-surface px-3 py-2 text-sm flex items-baseline gap-2 flex-wrap">
     {#if item.demand !== undefined}
       <span class="text-xs font-ui font-medium tabular-nums text-warning w-12 flex-none" title="demand (scheduler priority)">
         d {item.demand.toFixed(2)}
       </span>
     {/if}
-    {#if href}
-      <a {href} class="text-primary hover:underline">{item.target.label}</a>
+    {#if r.href}
+      <a href={r.href} class="text-primary hover:underline">{r.label}</a>
     {:else}
-      <span class="text-on-surface">{item.target.label}</span>
+      <span class="text-on-surface">{r.label}</span>
     {/if}
     {#if item.reason}<span class="text-xs text-on-surface-muted ml-auto">{item.reason}</span>{/if}
   </div>
@@ -117,13 +121,13 @@
       <h3 class="text-sm font-medium text-on-surface flex items-baseline gap-2">
         {LANE_LABEL.claude} lane <span class="text-xs font-ui text-on-surface-muted">tokens - the scarce-budget queue</span>
       </h3>
-      {#each claudeJobs.slice(0, CAP) as job (job.id)}<ScheduleJobCard {job} />{/each}
+      {#each claudeJobs.slice(0, CAP) as job (job.id)}<ScheduleJobCard {job} {recordTitles} />{/each}
       {@render capNote(Math.min(claudeJobs.length, CAP), claudeJobs.length)}
     {:else if tab === "gpu"}
       <h3 class="text-sm font-medium text-on-surface flex items-baseline gap-2">
         {LANE_LABEL.gpu} lane <span class="text-xs font-ui text-on-surface-muted">{gpuJobs.length} transcription jobs, one per video - unranked</span>
       </h3>
-      {#each gpuJobs.slice(0, CAP) as job (job.id)}<ScheduleJobCard {job} />{/each}
+      {#each gpuJobs.slice(0, CAP) as job (job.id)}<ScheduleJobCard {job} {recordTitles} />{/each}
       {@render capNote(Math.min(gpuJobs.length, CAP), gpuJobs.length, " (unranked - source priority not built yet)")}
     {:else if tab === "review"}
       <h3 class="text-sm font-medium text-on-surface flex items-baseline gap-2">
@@ -156,7 +160,7 @@
               >
                 {isNext ? (job.status === "eligible" ? "next →" : "next") : ""}
               </span>
-              <div class="flex-1 min-w-0"><ScheduleJobCard {job} /></div>
+              <div class="flex-1 min-w-0"><ScheduleJobCard {job} {recordTitles} /></div>
             </div>
           {/each}
         </section>

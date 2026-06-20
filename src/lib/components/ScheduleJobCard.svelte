@@ -1,10 +1,13 @@
 <script lang="ts">
   import type { ScheduleJob } from "$lib/schedule";
-  import { LANE_LABEL, targetHref } from "$lib/schedule";
+  import { LANE_LABEL, resolveTarget } from "$lib/schedule";
 
-  let { job }: { job: ScheduleJob } = $props();
+  let {
+    job,
+    recordTitles = {},
+  }: { job: ScheduleJob; recordTitles?: Record<string, string> } = $props();
 
-  let href = $derived(targetHref(job.target));
+  let resolved = $derived(resolveTarget(job.target, recordTitles));
 
   const STATUS: Record<string, { label: string; cls: string }> = {
     eligible: { label: "Eligible", cls: "bg-success/15 text-success" },
@@ -39,17 +42,13 @@
     <span class="text-[10px] font-ui px-1.5 py-0.5 rounded font-medium {status.cls}">{status.label}</span>
   </div>
 
-  <!-- Target: record hash + friendly name, or page slug; deep link where there's one -->
+  <!-- Target: the record's title (deep-linked) when it's a known record, else
+       the scheduler's label (e.g. an un-ingested source), not linkable. -->
   <div class="mt-1.5 text-on-surface flex items-baseline gap-2 flex-wrap">
-    {#if href}
-      <a {href} class="text-primary hover:underline">{job.target.label}</a>
+    {#if resolved.href}
+      <a href={resolved.href} class="text-primary hover:underline">{resolved.label}</a>
     {:else}
-      <span>{job.target.label}</span>
-    {/if}
-    {#if job.target.kind === "record" && job.target.hash}
-      <span class="text-[10px] font-mono text-on-surface-muted" title="record content hash">
-        {job.target.hash.slice(0, 12)}
-      </span>
+      <span>{resolved.label}</span>
     {/if}
   </div>
 

@@ -78,14 +78,21 @@ export interface ScheduleQueue {
 
 const PUBLIC_HASH_LENGTH = 56;
 
-/** The workbench deep link for a job/review target. Record targets link into
- *  the record review route by their public hash (the workbench owns its own URL
- *  scheme - the scheduler doesn't supply hrefs). Page targets have no workbench
- *  view yet, so no link. */
-export function targetHref(t: ScheduleTarget): string | null {
-  if (t.href) return t.href;
-  if (t.kind === "record" && t.hash) return `/${t.hash.slice(0, PUBLIC_HASH_LENGTH)}`;
-  return null;
+/** Resolve a job/review target to its display label + workbench deep link,
+ *  given the known records' titles ({content_hash -> title}). A target whose
+ *  hash is a KNOWN record shows that record's human title and deep-links into
+ *  the review route by public hash (the workbench owns its URL scheme - the
+ *  scheduler supplies no href). An ingest target points at an un-ingested
+ *  source: no record exists, so it keeps the scheduler's label and is NOT
+ *  linkable. Page targets keep their slug, no link. */
+export function resolveTarget(
+  t: ScheduleTarget,
+  titles: Record<string, string> = {},
+): { label: string; href: string | null } {
+  if (t.kind === "record" && t.hash && titles[t.hash]) {
+    return { label: titles[t.hash], href: `/${t.hash.slice(0, PUBLIC_HASH_LENGTH)}` };
+  }
+  return { label: t.label, href: t.href ?? null };
 }
 
 export const STAGE_ORDER = [

@@ -223,6 +223,12 @@
     [...new Set(ingests.map((i) => i.source_type))].sort(),
   );
 
+  // {content_hash -> title} so the Schedule view shows record titles instead of
+  // the scheduler's hash/slug labels (un-ingested sources have no record here).
+  let recordTitles = $derived(
+    Object.fromEntries(ingests.map((i) => [i.content_hash, i.title])),
+  );
+
   async function loadIngests() {
     try {
       ingests = await fetchIngests();
@@ -423,7 +429,7 @@
 
   <main class="flex-1 flex flex-col min-h-0">
     {#if appMode === "schedule"}
-      <ScheduleView queue={scheduleQueue} />
+      <ScheduleView queue={scheduleQueue} {recordTitles} />
     {:else if appMode === "graph"}
       <GraphView />
     {:else if openingRecord && !selectedIngest}
