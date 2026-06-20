@@ -67,7 +67,7 @@
   <button onclick={() => onsort("creator")} class="w-36 flex-none cursor-pointer hover:text-on-surface text-left" title="Sort by creator">
     Authors / Creators {sortBy === "creator" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
   </button>
-  <button onclick={() => onsort("digestible")} class="w-20 flex-none cursor-pointer hover:text-on-surface text-left" title="Sort by digestibility (how much has been observed)">
+  <button onclick={() => onsort("digestible")} class="w-28 flex-none cursor-pointer hover:text-on-surface text-left" title="Sort by digestibility (how much has been observed)">
     Digestible {sortBy === "digestible" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
   </button>
   <button onclick={() => onsort("digested")} class="w-20 flex-none cursor-pointer hover:text-on-surface text-left" title="Sort by whether a digest has been built">
@@ -144,15 +144,16 @@
             >{creator}</button>{#if idx < ingest.creators.length - 1}, {/if}
           {/each}
         </span>
-        <span class="w-20 flex-none text-xs font-ui">
-          {#if ingest.digestible}
-            <span class="font-medium text-success" title="100% of content observed">Yes</span>
-          {:else}
+        <span
+          class="w-28 flex-none flex items-center"
+          title={`${observedPercent(ingest.observed_coverage)}% observed${ingest.digestible ? " - digestible" : " - not yet digestible"}`}
+        >
+          <span class="flex-1 h-1.5 rounded-full bg-border overflow-hidden">
             <span
-              class="text-on-surface-muted"
-              title={`${observedPercent(ingest.observed_coverage)}% observed - not yet digestible`}
-            >No</span>
-          {/if}
+              class="block h-full rounded-full transition-all {ingest.digestible ? 'bg-success' : 'bg-primary'}"
+              style="width:{observedPercent(ingest.observed_coverage)}%"
+            ></span>
+          </span>
         </span>
         <span class="w-20 flex-none text-xs font-ui">
           {#if ingest.digested}
