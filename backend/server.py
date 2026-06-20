@@ -49,6 +49,9 @@ VERIFICATION_SESSION_TTL_SECONDS = 1800
 DEFAULT_INGESTS_PATH = Path(__file__).resolve().parents[2] / "ingests"
 DEFAULT_SOURCES_PATH = Path(__file__).resolve().parents[2] / "sources"
 DEFAULT_DIGESTS_PATH = Path(__file__).resolve().parents[2] / "digests"
+DEFAULT_SCHEDULER_QUEUE = (
+    Path.home() / ".local" / "share" / "assimilator" / "scheduler-queue.json"
+)
 
 
 def _unquote(value: str) -> str:
@@ -1370,6 +1373,23 @@ def graph_node(node_id: str) -> dict:
     if detail is False:
         raise HTTPException(status_code=404, detail="Node not found")
     return detail
+
+
+@app.get("/api/schedule")
+def get_schedule() -> dict:
+    """Serve the assimilator scheduler's prioritised work queue (the JSON file
+    it writes). Read-only pass-through; the scheduler owns the shape. Returns an
+    empty queue when the file isn't present (no run yet). Path is env-
+    configurable (SCHEDULER_QUEUE_PATH)."""
+    path = Path(os.environ.get("SCHEDULER_QUEUE_PATH", str(DEFAULT_SCHEDULER_QUEUE)))
+    if not path.exists():
+        return {"generatedAt": None, "jobs": [], "reviewQueue": [], "recordDemand": {}}
+    try:
+        return json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to read scheduler queue: {exc}"
+        ) from exc
 
 
 @app.get("/api/sources/{full_hash}")

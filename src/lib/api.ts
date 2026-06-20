@@ -1,5 +1,6 @@
 import { createSHA256 } from "hash-wasm";
 import type { ReviewCarryover } from "./carryover";
+import type { ScheduleQueue } from "./schedule";
 
 export type CopyrightStatus =
   | "public_domain"
@@ -291,5 +292,15 @@ export async function fetchGraphNode(id: string): Promise<GraphNodeDetail | null
   const res = await fetch(`/api/graph/nodes/${encodeURIComponent(id)}`);
   if (res.status === 404 || res.status === 503) return null;
   if (!res.ok) throw new Error(`Failed to fetch graph node: ${res.status}`);
+  return res.json();
+}
+
+// --- Schedule (the assimilator scheduler's prioritised work queue) ----------
+
+/** Fetch the scheduler's prioritised queue. The backend returns an empty queue
+ *  ({jobs:[], reviewQueue:[], recordDemand:{}}) when no run has emitted yet. */
+export async function fetchSchedule(): Promise<ScheduleQueue> {
+  const res = await fetch("/api/schedule");
+  if (!res.ok) throw new Error(`Failed to fetch schedule: ${res.status}`);
   return res.json();
 }

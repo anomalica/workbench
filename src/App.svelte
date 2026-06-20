@@ -5,6 +5,7 @@
     fetchDigest,
     fetchCurrentUser,
     fetchReviewedHashes,
+    fetchSchedule,
     provenanceOf,
   } from "$lib/api";
   import type {
@@ -18,7 +19,7 @@
   import IngestViewer from "$lib/components/IngestViewer.svelte";
   import GraphView from "$lib/components/GraphView.svelte";
   import ScheduleView from "$lib/components/ScheduleView.svelte";
-  import { recordDemand } from "$lib/schedule";
+  import type { ScheduleQueue } from "$lib/schedule";
   import { carryoverState } from "$lib/carryover";
   import { themeState } from "$lib/theme.svelte";
 
@@ -26,6 +27,20 @@
   // Top-level view: record review (default), knowledge-graph review, or the
   // prioritised work-queue Schedule view.
   let appMode = $state<"records" | "graph" | "schedule">("records");
+
+  // The scheduler's queue, fetched lazily (when the Schedule tab or the Records
+  // "sort by demand" first needs it). Its recordDemand map drives the sort.
+  let scheduleQueue = $state<ScheduleQueue | null>(null);
+  let scheduleRequested = false;
+  async function loadSchedule() {
+    if (scheduleRequested) return;
+    scheduleRequested = true;
+    try {
+      scheduleQueue = await fetchSchedule();
+    } catch {
+      scheduleRequested = false; // allow a retry
+    }
+  }
   // True while a cold-load deep link (e.g. /<public_hash>#claim-<uuid>) is
   // resolving: list fetch then record + digest fetch. Drives a centred
   // "Opening record..." indicator so the user sees progress instead of a
@@ -174,10 +189,11 @@
           return sortAsc ? cmp : -cmp;
         }
         if (sortBy === "demand") {
-          // The scheduler's per-record priority (placeholder for now) - the
-          // same signal as the Schedule view's Review lane, surfaced here so a
-          // reviewer can sort the list by what to review next.
-          const cmp = recordDemand(a.content_hash) - recordDemand(b.content_hash);
+          // The scheduler's per-record priority (same signal as the Schedule
+          // view's Review lane), so a reviewer can sort by what to review next.
+          // Records the graph hasn't scored sort off a 0 baseline (last, desc).
+          const m = scheduleQueue?.recordDemand ?? {};
+          const cmp = (m[a.content_hash] ?? 0) - (m[b.content_hash] ?? 0);
           return sortAsc ? cmp : -cmp;
         }
         if (sortBy === "date") {
@@ -297,6 +313,7 @@
 
   function showSchedule() {
     appMode = "schedule";
+    loadSchedule();
     history.pushState(null, "", "/schedule");
   }
 
@@ -304,6 +321,7 @@
     const path = window.location.pathname.slice(1);
     if (path === "graph" || path === "schedule") {
       appMode = path;
+      if (path === "schedule") loadSchedule();
       loadIngests();
       return;
     }
@@ -405,7 +423,7 @@
 
   <main class="flex-1 flex flex-col min-h-0">
     {#if appMode === "schedule"}
-      <ScheduleView />
+      <ScheduleView queue={scheduleQueue} />
     {:else if appMode === "graph"}
       <GraphView />
     {:else if openingRecord && !selectedIngest}
@@ -490,10 +508,10 @@
 
           <div class="flex items-center gap-1 border-l border-border pl-3">
             <button
-              onclick={() => { sortBy = "demand"; sortAsc = false; }}
+              onclick={() => { sortBy = "demand"; sortAsc = false; loadSchedule(); }}
               class="text-xs font-ui px-2 py-1 rounded cursor-pointer transition-colors
                 {sortBy === 'demand' ? 'bg-primary text-on-primary' : 'text-on-surface-secondary hover:bg-surface'}"
-              title="Sort by review demand - the scheduler's per-record priority (what to review next). Placeholder signal until the scheduler is wired."
+              title="Sort by review demand - the scheduler's per-record priority (what to review next). Records not yet in the graph rank last."
             >Sort by demand</button>
           </div>
 

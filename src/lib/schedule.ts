@@ -66,9 +66,26 @@ export interface ReviewItem {
 }
 
 export interface ScheduleQueue {
+  schema?: string;
   generatedAt: string | null;
   jobs: ScheduleJob[];
   reviewQueue: ReviewItem[];
+  /** Per-record demand {content_hash -> priority}, for the Records "sort by
+   *  demand" mode. Only records already in the graph have a value; others sort
+   *  last off a 0 baseline. */
+  recordDemand?: Record<string, number>;
+}
+
+const PUBLIC_HASH_LENGTH = 56;
+
+/** The workbench deep link for a job/review target. Record targets link into
+ *  the record review route by their public hash (the workbench owns its own URL
+ *  scheme - the scheduler doesn't supply hrefs). Page targets have no workbench
+ *  view yet, so no link. */
+export function targetHref(t: ScheduleTarget): string | null {
+  if (t.href) return t.href;
+  if (t.kind === "record" && t.hash) return `/${t.hash.slice(0, PUBLIC_HASH_LENGTH)}`;
+  return null;
 }
 
 export const STAGE_ORDER = [
@@ -95,25 +112,12 @@ export const LANE_LABEL: Record<ScheduleLane, string> = {
   eager: "Background",
 };
 
-/**
- * PLACEHOLDER per-record demand (0-99), until the scheduler computes the real
- * per-record priority. Deterministic from the content hash so the Records "sort
- * by demand" produces a stable order; clearly flagged illustrative in the UI.
- */
-export function recordDemand(contentHash: string): number {
-  let h = 0;
-  for (let i = 0; i < contentHash.length; i++) {
-    h = (h * 31 + contentHash.charCodeAt(i)) >>> 0;
-  }
-  return h % 100;
-}
-
-// --- ILLUSTRATIVE placeholder (generic targets, no fabricated metrics) ------
-// Shows the SHAPE of each lane. The real comprehensive, prioritised list comes
-// from the scheduler; this is replaced wholesale when it's wired.
+// --- Test fixture (the live view uses the real /api/schedule output) --------
+// Kept as a small, generic, fabrication-free fixture for component tests.
 
 export const SAMPLE_QUEUE: ScheduleQueue = {
   generatedAt: null,
+  recordDemand: {},
   jobs: [
     // Claude lane - one of each job type, generic targets, no fake scores.
     {

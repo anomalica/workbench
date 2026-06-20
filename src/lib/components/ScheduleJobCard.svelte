@@ -1,8 +1,10 @@
 <script lang="ts">
   import type { ScheduleJob } from "$lib/schedule";
-  import { LANE_LABEL } from "$lib/schedule";
+  import { LANE_LABEL, targetHref } from "$lib/schedule";
 
   let { job }: { job: ScheduleJob } = $props();
+
+  let href = $derived(targetHref(job.target));
 
   const STATUS: Record<string, { label: string; cls: string }> = {
     eligible: { label: "Eligible", cls: "bg-success/15 text-success" },
@@ -39,8 +41,8 @@
 
   <!-- Target: record hash + friendly name, or page slug; deep link where there's one -->
   <div class="mt-1.5 text-on-surface flex items-baseline gap-2 flex-wrap">
-    {#if job.target.href}
-      <a href={job.target.href} class="text-primary hover:underline">{job.target.label}</a>
+    {#if href}
+      <a {href} class="text-primary hover:underline">{job.target.label}</a>
     {:else}
       <span>{job.target.label}</span>
     {/if}
@@ -69,7 +71,7 @@
       <span class="text-warning">target not review-ready (see the Review lane)</span>
     {/if}
     {#if job.trigger}
-      <span class="ml-auto">trigger: {job.trigger}</span>
+      <span class="ml-auto">trigger: {job.trigger.replace(/_/g, " ")}</span>
     {/if}
   </div>
 </div>
