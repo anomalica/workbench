@@ -7,8 +7,10 @@ BOTH the 5-hour session and the 7-day all-models window. See
 anomalica/master/.ai/specs/runner-design.md.
 
 Phase 1: the Claude worker + the gate + the digest executor + recently-completed
-stats. The gate is pure and exhaustively tested - it's the safety-critical part
-(a bug here would burn the weekly rate-limit the whole fleet shares).
+stats. The credit-safety posture is fail-closed throughout - any uncertainty
+(stale/unreadable usage, an unconfirmed scheduler re-run, an out-of-range gate
+reading) HOLDS rather than dispatches, because the only real risk is burning the
+shared rate-limit. The pure gate is exhaustively tested (backend/test_runner.py).
 """
 
 from __future__ import annotations
@@ -17,10 +19,13 @@ import json
 import os
 import re
 import subprocess
+import sys
 import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+import yaml
 
 FIVE_HOUR_S = 5 * 3600
 SEVEN_DAY_S = 7 * 86400
@@ -28,14 +33,16 @@ SEVEN_DAY_S = 7 * 86400
 # Gate tuning.
 MARGIN_PCT = 3.0  # stay this many points below the line before dispatching
 SESSION_CAP_PCT = 90.0  # never dispatch if the 5h session is already this high
-FRESH_MAX_AGE_S = 20 * 60  # usage older than this is stale - never gate on it
+FRESH_MAX_AGE_S = 20 * 60  # usage outside +/- this window is stale - never gate on it
 POLL_INTERVAL_S = 90  # re-check cadence while waiting at/above the line
+MAX_DIGEST_ATTEMPTS = 2  # stop re-spending on a record that keeps failing
 
 DEFAULT_STATE_DIR = Path.home() / ".local" / "share" / "anomalica-workbench"
 FOREST_USAGE_DIR = "/var/lib/forest/bronze/claude-usage"
 
 # The Anomalica repos sit beside the workbench: .../anomalica/{workbench,ingests,
-# digests,digester,anomalica-common}. runner.py is .../workbench/backend/runner.py.
+# digests,digester,assimilator,anomalica-common}. runner.py is
+# .../workbench/backend/runner.py, so the parent-of-parent-of-parent is anomalica/.
 _ANOMALICA = Path(__file__).resolve().parents[2]
 
 
@@ -83,7 +90,7 @@ def evaluate_gate(
     """Decide whether a Claude job may dispatch. Dispatch ONLY when actual
     utilisation is at least `margin` points below the trend line on BOTH windows
     AND the 5h session isn't already near 100%. `utilization` is a PERCENTAGE
-    (0-100). Malformed/missing usage -> no dispatch (safe default)."""
+    (0-100). Malformed/missing/out-of-range usage -> no dispatch (fail closed)."""
     try:
         fh = usage["five_hour"]
         sd = usage["seven_day"]
@@ -93,6 +100,12 @@ def evaluate_gate(
         sd_ideal = window_ideal_pct(sd["resets_at"], SEVEN_DAY_S, now)
     except (KeyError, TypeError, ValueError):
         return {"dispatch": False, "reason": "usage unreadable", "windows": {}}
+
+    # Out-of-range utilisation is invalid data -> fail closed. This catches
+    # negative-on-both (which would otherwise read as huge headroom and
+    # dispatch), >100, and NaN (every comparison against NaN is False).
+    if not (0.0 <= fh_util <= 100.0 and 0.0 <= sd_util <= 100.0):
+        return {"dispatch": False, "reason": "utilisation out of range", "windows": {}}
 
     fh_below = fh_util <= fh_ideal - margin
     sd_below = sd_util <= sd_ideal - margin
@@ -126,13 +139,42 @@ def evaluate_gate(
     }
 
 
-# --- Forest usage reader (live, with a freshness check) ---------------------
+# --- Forest usage reader (live, with a fail-closed freshness check) ---------
+
+
+def _classify_usage(stdout: str, now: datetime) -> tuple[dict | None, str]:
+    """Parse one usage JSONL sample and classify its freshness. Pure, so it's
+    unit-testable without SSH. Fail CLOSED: any uncertainty about the age or the
+    shape returns something other than "fresh", so the worker holds. Returns
+    (record|None, "fresh"|"stale"|"unavailable")."""
+    text = (stdout or "").strip()
+    if not text:
+        return None, "unavailable"
+    try:
+        rec = json.loads(text.splitlines()[-1])
+    except json.JSONDecodeError:
+        return None, "unavailable"
+    if not isinstance(rec, dict):  # a bare number/list/string is not a usage record
+        return None, "unavailable"
+
+    sampled = rec.get("t")
+    if not sampled:  # no timestamp -> can't prove freshness -> stale, never fresh
+        return rec, "stale"
+    try:
+        age = (now - datetime.fromisoformat(sampled)).total_seconds()
+    except (ValueError, TypeError):  # garbage timestamp -> stale
+        return rec, "stale"
+    if (
+        age > FRESH_MAX_AGE_S or age < -FRESH_MAX_AGE_S
+    ):  # too old, or implausibly future
+        return rec, "stale"
+    return rec, "fresh"
 
 
 def read_forest_usage(now: datetime | None = None) -> tuple[dict | None, str]:
-    """Read the freshest Claude-usage sample from Forest. Returns (record,
-    status) where status is "fresh" / "stale" / "unavailable". Never gates on a
-    stale (older than FRESH_MAX_AGE_S) or missing sample - the caller waits."""
+    """Read the freshest Claude-usage sample from Forest and classify it. Never
+    gates on a stale (outside +/- FRESH_MAX_AGE_S) or unreadable sample - the
+    caller holds."""
     now = now or _now()
     date = now.strftime("%Y-%m-%d")
     env = {**os.environ, "SSH_AUTH_SOCK": f"/run/user/{os.getuid()}/keyring/ssh"}
@@ -149,27 +191,12 @@ def read_forest_usage(now: datetime | None = None) -> tuple[dict | None, str]:
         out = subprocess.run(cmd, capture_output=True, text=True, timeout=25, env=env)
     except (subprocess.SubprocessError, OSError):
         return None, "unavailable"
-    if out.returncode != 0 or not out.stdout.strip():
+    if out.returncode != 0:
         return None, "unavailable"
-    try:
-        rec = json.loads(out.stdout.strip().splitlines()[-1])
-    except json.JSONDecodeError:
-        return None, "unavailable"
-
-    sampled = rec.get("t")
-    if sampled:
-        try:
-            age = (now - datetime.fromisoformat(sampled)).total_seconds()
-            if age > FRESH_MAX_AGE_S:
-                return rec, "stale"
-        except ValueError:
-            pass
-    return rec, "fresh"
+    return _classify_usage(out.stdout, now)
 
 
-# --- Queue access + executors ----------------------------------------------
-
-import shlex  # noqa: E402
+# --- Queue access + path resolution -----------------------------------------
 
 
 def _queue_path() -> Path:
@@ -185,6 +212,14 @@ def _queue_path() -> Path:
             ),
         )
     )
+
+
+def _ingests_dir() -> Path:
+    return _path("INGESTS_PATH", _ANOMALICA / "ingests")
+
+
+def _digests_dir() -> Path:
+    return _path("DIGESTS_PATH", _ANOMALICA / "digests")
 
 
 def pick_top_digest_job(exclude: set[str] | None = None) -> dict | None:
@@ -207,14 +242,49 @@ def pick_top_digest_job(exclude: set[str] | None = None) -> dict | None:
     return digests[0] if digests else None
 
 
-def rerun_scheduler() -> None:
-    """Re-enumerate the queue after a job completes (a completion unlocks the
-    next stage). The assimilator owns the command (`assimilator schedule`)."""
-    cmd = os.environ.get("RUNNER_SCHEDULE_CMD", "assimilator schedule")
+def is_eligible_digest(record_hash: str) -> bool:
+    """True if `record_hash` is currently an eligible Claude digest job. Used as
+    the post-reschedule confirmation: if a just-digested record is STILL eligible
+    after a successful re-run, completion wasn't registered and we must halt
+    rather than re-spend. Fail closed: an unreadable queue counts as eligible."""
     try:
-        subprocess.run(shlex.split(cmd), capture_output=True, timeout=120, check=False)
+        queue = json.loads(_queue_path().read_text())
+    except (OSError, json.JSONDecodeError):
+        return True
+    for j in queue.get("jobs", []):
+        if (
+            j.get("lane") == "claude"
+            and j.get("type") == "digest"
+            and j.get("status") == "eligible"
+            and (j.get("target") or {}).get("hash") == record_hash
+        ):
+            return True
+    return False
+
+
+def rerun_scheduler() -> bool:
+    """Regenerate scheduler-queue.json via the assimilator's host entry point so a
+    completed job drops. anomalica/assimilator confirmed the invocation:
+    `python -m assimilator.scheduler` with PYTHONPATH = its workspace; it imports
+    only stdlib + pyyaml, opens the DB read-only, and exits 0 ONLY on success.
+    Returns True only on a confirmed exit 0 - the caller fails closed otherwise."""
+    ws = _path("ASSIMILATOR_WORKSPACE", _ANOMALICA / "assimilator" / "workspace")
+    env = {
+        **os.environ,
+        "PYTHONPATH": str(ws) + os.pathsep + os.environ.get("PYTHONPATH", ""),
+    }
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "assimilator.scheduler"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+        )
     except (subprocess.SubprocessError, OSError):
-        pass
+        return False
+    return proc.returncode == 0
 
 
 def resolve_body_path(record_hash: str) -> Path | None:
@@ -222,7 +292,7 @@ def resolve_body_path(record_hash: str) -> Path | None:
     store - `store/{H}.v2.md` if present else `store/{H}.md`. NEVER via the
     records/ slug symlinks: the digester found a slug pointing at OLD unreviewed
     v1 content, so trusting it would digest unreviewed material."""
-    store = _path("INGESTS_PATH", _ANOMALICA / "ingests") / "store"
+    store = _ingests_dir() / "store"
     for name in (f"{record_hash}.v2.md", f"{record_hash}.md"):
         p = store / name
         if p.exists():
@@ -230,14 +300,81 @@ def resolve_body_path(record_hash: str) -> Path | None:
     return None
 
 
-def digest_out_path(job_label: str) -> Path:
-    """Canonical digest output: digests/records/<friendly>.yaml, where friendly
-    is the job's slug label minus any version suffix (matches the existing
-    digest naming, e.g. ...ep-87.v2 -> ...ep-87.yaml)."""
-    friendly = re.sub(r"\.v\d+$", "", job_label)
-    return (
-        _path("DIGESTS_PATH", _ANOMALICA / "digests") / "records" / f"{friendly}.yaml"
-    )
+def slug_for_hash(record_hash: str) -> str | None:
+    """The ingester's canonical FLAT slug for a content_hash, via its records/
+    symlink (whose target basename is store/{hash}.v2.md or store/{hash}.md).
+    The slug is already filesystem-safe (the ingester sanitises titles, so
+    `w/@NelsonDellis` becomes `w-nelsondellis`). The digest output path is keyed
+    on this, NEVER on a free-text title/label - a '/' in a title would nest the
+    digest in a subdirectory the scheduler's completion scan can't find, leaving
+    the job eligible forever and re-spending every restart."""
+    records = _ingests_dir() / "records"
+    if not records.exists():
+        return None
+    prefix = f"{record_hash}."
+    for link in records.glob("*.md"):
+        try:
+            target = os.readlink(link)
+        except OSError:
+            continue
+        if os.path.basename(target).startswith(prefix):
+            return re.sub(r"\.v\d+$", "", link.stem)
+    return None
+
+
+def digest_out_path(record_hash: str) -> Path | None:
+    """Canonical digest output for a record: digests/records/<slug>.yaml, where
+    <slug> is the ingester's flat records/ slug (see slug_for_hash). None if the
+    record has no records/ symlink (no safe flat path -> don't write blindly)."""
+    slug = slug_for_hash(record_hash)
+    if slug is None:
+        return None
+    return _digests_dir() / "records" / f"{slug}.yaml"
+
+
+def _record_version(record_hash: str) -> str | None:
+    """The record's current `processing.version` from its body frontmatter - the
+    freshness key the assimilator's completion contract compares against."""
+    body = resolve_body_path(record_hash)
+    if body is None:
+        return None
+    try:
+        text = body.read_text()
+    except OSError:
+        return None
+    m = re.match(r"^---\n(.*?)\n---\n", text, re.DOTALL)
+    if not m:
+        return None
+    try:
+        fm = yaml.safe_load(m.group(1)) or {}
+    except yaml.YAMLError:
+        return None
+    return (fm.get("processing") or {}).get("version") if isinstance(fm, dict) else None
+
+
+def current_digest_exists(record_hash: str) -> bool:
+    """True if a digest on disk already covers this record at its CURRENT
+    processing version. Mirrors the assimilator's completion contract (they own
+    it - anomalica/assimilator): content_hash match AND (processing_version equal
+    OR either side missing -> treat as current). This is the restart-proof
+    re-spend guard: even if the queue is stale, an already-current digest on disk
+    means we must NOT re-dispatch."""
+    out = digest_out_path(record_hash)
+    if out is None or not out.exists():
+        return False
+    try:
+        digest = yaml.safe_load(out.read_text()) or {}
+    except (OSError, yaml.YAMLError):
+        return False
+    drec = digest.get("record") or {} if isinstance(digest, dict) else {}
+    dhash = (drec.get("content_hash") or "").removeprefix("sha256:")
+    if dhash != record_hash:
+        return False
+    dver = drec.get("processing_version")
+    rver = _record_version(record_hash)
+    if not dver or not rver:  # version unknown either side -> missing-safe -> current
+        return True
+    return dver == rver
 
 
 def _parse_usage(stdout: str) -> dict | None:
@@ -254,15 +391,18 @@ def _parse_usage(stdout: str) -> dict | None:
 
 def run_digest(body_path: Path, out_path: Path) -> subprocess.CompletedProcess:
     """Invoke the digester's CLI (subscription, opus). cwd = the digester
-    workspace so its package imports; PYTHONPATH includes anomalica-common/src;
-    DIGESTER_USE_API left unset (subscription, zero dollars)."""
+    workspace so its package imports; PYTHONPATH includes anomalica-common/src.
+    Subscription is asserted BY CONSTRUCTION, not left to the inherited env:
+    DIGESTER_USE_API='0' short-circuits the API toggle off and the global
+    ANOMALICA_USE_API fallback is removed - there is no metered/dollar path."""
     workspace = _path("DIGESTER_WORKSPACE", _ANOMALICA / "digester" / "workspace")
     common_src = _path("ANOMALICA_COMMON_SRC", _ANOMALICA / "anomalica-common" / "src")
     env = {
         **os.environ,
         "PYTHONPATH": str(common_src) + os.pathsep + os.environ.get("PYTHONPATH", ""),
+        "DIGESTER_USE_API": "0",  # explicit subscription - never metered
     }
-    env.pop("DIGESTER_USE_API", None)  # subscription default, never metered
+    env.pop("ANOMALICA_USE_API", None)  # and drop the global API fallback
     out_path.parent.mkdir(parents=True, exist_ok=True)
     return subprocess.run(
         [
@@ -290,7 +430,10 @@ def run_digest(body_path: Path, out_path: Path) -> subprocess.CompletedProcess:
 
 class Runner:
     """Owns processing-mode state + the Claude worker thread. One job at a time;
-    re-reads usage after each; stops when mode goes OFF."""
+    re-reads usage after each; stops when mode goes OFF. Fail-closed: if a
+    completed digest can't be confirmed dropped from the queue, the worker HALTS
+    (sits idle, surfaced in status) rather than risk re-spending on a stale queue
+    - a halt clears only on the next OFF->ON toggle / restart."""
 
     def __init__(self) -> None:
         self._on = False
@@ -305,14 +448,19 @@ class Runner:
             "checked_at": None,
         }
         self._completed: list[dict] = []
-        # Hashes attempted this worker-run, so we never re-pick (and re-spend on)
-        # a record before the scheduler re-run drops it from the queue. Reset each
-        # time the worker starts (toggle OFF then ON re-attempts a failed record).
+        # Hashes attempted this worker-run (success/fail/skip) so we don't re-pick
+        # within the run. Reset each worker start; NOT the durable guard - the
+        # durable guards are current_digest_exists() + the queue refresh.
         self._done: set[str] = set()
+        # Failed-attempt counts, PERSISTED across restarts so a record that keeps
+        # failing isn't re-spent on every toggle.
+        self._failed: dict[str, int] = {}
+        self._halted = False
+        self._halt_reason = ""
         self._load()
-        # NB: __init__ does NOT spawn the worker (bare imports - e.g. tests -
-        # must never start it SSHing to Forest). The server calls resume_if_on()
-        # from its startup hook to resume a persisted ON across a restart.
+        # NB: __init__ does NOT spawn the worker (bare imports - e.g. tests - must
+        # never start it SSHing to Forest). The server calls resume_if_on() from
+        # its startup hook to resume a persisted ON across a restart.
 
     def resume_if_on(self) -> None:
         with self._lock:
@@ -328,14 +476,23 @@ class Runner:
             d = json.loads(self._file().read_text())
             self._on = bool(d.get("on"))
             self._completed = list(d.get("completed", []))[-50:]
-        except (OSError, json.JSONDecodeError):
+            self._failed = {
+                str(k): int(v) for k, v in dict(d.get("failed", {})).items()
+            }
+        except (OSError, json.JSONDecodeError, ValueError, TypeError):
             pass
 
     def _save(self) -> None:
         try:
             _state_dir().mkdir(parents=True, exist_ok=True)
             self._file().write_text(
-                json.dumps({"on": self._on, "completed": self._completed[-50:]})
+                json.dumps(
+                    {
+                        "on": self._on,
+                        "completed": self._completed[-50:],
+                        "failed": self._failed,
+                    }
+                )
             )
         except OSError:
             pass
@@ -345,6 +502,7 @@ class Runner:
         with self._lock:
             return {
                 "mode": "on" if self._on else "off",
+                "halted": self._halted,
                 **self._status,
                 "completed": list(reversed(self._completed[-20:])),
             }
@@ -380,47 +538,11 @@ class Runner:
             self._completed = self._completed[-50:]
             self._save()
 
-    def _run_loop(self) -> None:
+    def _halt(self, reason: str) -> None:
         with self._lock:
-            self._done = set()
-        while self._is_on():
-            rec, ustat = read_forest_usage()
-            if rec is None or ustat == "stale":
-                self._set(
-                    state="waiting",
-                    reason=f"usage {ustat} - not gating on it",
-                    usage_status=ustat,
-                    gate=None,
-                    current=None,
-                )
-                self._sleep(POLL_INTERVAL_S)
-                continue
-            gate = evaluate_gate(rec, _now())
-            if not gate["dispatch"]:
-                self._set(
-                    state="waiting",
-                    reason=gate["reason"],
-                    usage_status=ustat,
-                    gate=gate["windows"],
-                    current=None,
-                )
-                self._sleep(POLL_INTERVAL_S)
-                continue
-            with self._lock:
-                done = set(self._done)
-            job = pick_top_digest_job(done)
-            if job is None:
-                self._set(
-                    state="idle",
-                    reason="below the line, but no eligible digest jobs",
-                    usage_status=ustat,
-                    gate=gate["windows"],
-                    current=None,
-                )
-                self._sleep(POLL_INTERVAL_S)
-                continue
-            self._execute_digest(job, gate["windows"], ustat)
-        self._set(state="idle", reason="processing off", current=None)
+            self._halted = True
+            self._halt_reason = reason
+        self._set(state="halted", reason=reason, current=None)
 
     def _sleep(self, secs: float) -> None:
         # Sleep in slices so toggling OFF is responsive.
@@ -428,14 +550,122 @@ class Runner:
         while time.time() < end and self._is_on():
             time.sleep(min(2.0, max(0.0, end - time.time())))
 
+    def _run_loop(self) -> None:
+        with self._lock:
+            self._done = set()
+            self._halted = False
+            self._halt_reason = ""
+        while self._is_on():
+            with self._lock:
+                halted = self._halted
+            if halted:
+                self._sleep(POLL_INTERVAL_S)
+                continue
+            try:
+                self._tick()
+            except Exception as exc:  # noqa: BLE001 - a poisoned line must not silently kill the thread
+                self._set(
+                    state="waiting", reason=f"tick error, holding: {exc}", current=None
+                )
+                self._sleep(POLL_INTERVAL_S)
+        self._set(state="idle", reason="processing off", current=None)
+
+    def _tick(self) -> None:
+        rec, ustat = read_forest_usage()
+        if (
+            rec is None or ustat != "fresh"
+        ):  # fail closed on anything but a fresh sample
+            self._set(
+                state="waiting",
+                reason=f"usage {ustat} - not gating on it",
+                usage_status=ustat,
+                gate=None,
+                current=None,
+            )
+            self._sleep(POLL_INTERVAL_S)
+            return
+        gate = evaluate_gate(rec, _now())
+        if not gate["dispatch"]:
+            self._set(
+                state="waiting",
+                reason=gate["reason"],
+                usage_status=ustat,
+                gate=gate["windows"],
+                current=None,
+            )
+            self._sleep(POLL_INTERVAL_S)
+            return
+        with self._lock:
+            done = set(self._done)
+        job = pick_top_digest_job(done)
+        if job is None:
+            self._set(
+                state="idle",
+                reason="below the line, no eligible digest jobs",
+                usage_status=ustat,
+                gate=gate["windows"],
+                current=None,
+            )
+            self._sleep(POLL_INTERVAL_S)
+            return
+        self._execute_digest(job, gate["windows"], ustat)
+
+    def _skip(
+        self,
+        h: str,
+        reason: str,
+        gate_windows: dict,
+        ustat: str,
+        state: str = "waiting",
+    ) -> None:
+        with self._lock:
+            self._done.add(h)
+        self._set(
+            state=state,
+            reason=reason,
+            usage_status=ustat,
+            gate=gate_windows,
+            current=None,
+        )
+        self._sleep(POLL_INTERVAL_S)
+
     def _execute_digest(self, job: dict, gate_windows: dict, ustat: str) -> None:
         target = job.get("target", {})
         title = target.get("label") or (target.get("hash", "")[:12])
-        record_hash = target.get("hash", "")
+        h = target.get("hash", "")
 
-        # Real execution is OFF by default. With it off the worker still proves
-        # the gate end-to-end (picks the top job, reports it) but spends nothing -
-        # this is the state master/Mark verify before the first supervised run.
+        # content_hash guard: a non-64-char hash can never satisfy the scheduler's
+        # completion check, so it would re-dispatch forever. Refuse it.
+        if len(h) != 64:
+            self._skip(
+                h, f"skipping '{title}': no usable content_hash", gate_windows, ustat
+            )
+            return
+
+        # Failed-attempt cap: don't re-spend on a record that keeps failing.
+        if self._failed.get(h, 0) >= MAX_DIGEST_ATTEMPTS:
+            self._skip(
+                h,
+                f"skipping '{title}': {self._failed[h]} failed attempts (cap reached)",
+                gate_windows,
+                ustat,
+            )
+            return
+
+        # Restart-proof re-spend guard: if a CURRENT digest already exists on disk
+        # (queue may be stale after an unconfirmed re-run), skip rather than spend.
+        if current_digest_exists(h):
+            self._skip(
+                h,
+                f"'{title}' already digested (current on disk) - skipping",
+                gate_windows,
+                ustat,
+                state="idle",
+            )
+            return
+
+        # Real execution gate (off by default). Proves the path end-to-end, spends
+        # nothing - the state master/Mark verify before the supervised first run.
         if not _execute_enabled():
             self._set(
                 state="ready",
@@ -447,22 +677,17 @@ class Runner:
             self._sleep(POLL_INTERVAL_S)
             return
 
-        body = resolve_body_path(record_hash)
-        if body is None:
-            # No store body to digest. Skip it this run so we don't spin on it.
-            with self._lock:
-                self._done.add(record_hash)
-            self._set(
-                state="waiting",
-                reason=f"no store body for '{title}' (looked for {record_hash[:12]}.v2.md/.md)",
-                usage_status=ustat,
-                gate=gate_windows,
-                current=None,
+        body = resolve_body_path(h)
+        out = digest_out_path(h)
+        if body is None or out is None:
+            self._skip(
+                h,
+                f"no store body / records slug for '{title}' ({h[:12]})",
+                gate_windows,
+                ustat,
             )
-            self._sleep(POLL_INTERVAL_S)
             return
 
-        out = digest_out_path(title)
         start = _now()
         self._set(
             state="running",
@@ -473,6 +698,7 @@ class Runner:
         )
         ok = False
         tokens = None
+        err = None
         try:
             proc = run_digest(body, out)
             ok = proc.returncode == 0 and out.exists()
@@ -480,28 +706,43 @@ class Runner:
             if usage:
                 tokens = usage.get("output_tokens") or usage.get("total_tokens")
             if not ok:
-                self._set(reason=f"digest exit {proc.returncode}, no output written")
+                err = f"exit {proc.returncode}, no output written"
         except (subprocess.SubprocessError, OSError) as exc:
-            self._set(reason=f"digest failed: {exc}")
+            err = f"digest failed: {exc}"
         end = _now()
-        # Mark attempted (success OR fail) so this run won't re-pick and re-spend
-        # on it; a successful digest is dropped by the scheduler re-run below, a
-        # failed one waits for the next worker start (no in-run retry by design).
         with self._lock:
-            self._done.add(record_hash)
+            self._done.add(h)
+            if ok:
+                self._failed.pop(h, None)
+            else:
+                self._failed[h] = self._failed.get(h, 0) + 1
+            self._save()
         self._record(
             type="digest",
             target=title,
-            hash=record_hash,
+            hash=h,
             start=start.isoformat(),
             end=end.isoformat(),
             duration_s=round((end - start).total_seconds(), 1),
             tokens=tokens,
             ok=ok,
+            error=err,
         )
         self._set(current=None)
-        if ok:
-            rerun_scheduler()
+        if not ok:
+            return
+        # Refresh the queue so the completed job drops; FAIL CLOSED if we can't
+        # confirm it - never dispatch again on a stale queue.
+        if not rerun_scheduler():
+            self._halt(
+                "scheduler re-run failed - halting to avoid re-spend on a stale queue"
+            )
+            return
+        if is_eligible_digest(h):
+            self._halt(
+                f"'{title}' still eligible after a successful digest + reschedule - "
+                "halting (completion not registered)"
+            )
 
 
 runner = Runner()
