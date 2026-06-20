@@ -18,6 +18,7 @@
   import IngestViewer from "$lib/components/IngestViewer.svelte";
   import GraphView from "$lib/components/GraphView.svelte";
   import ScheduleView from "$lib/components/ScheduleView.svelte";
+  import { recordDemand } from "$lib/schedule";
   import { carryoverState } from "$lib/carryover";
   import { themeState } from "$lib/theme.svelte";
 
@@ -78,6 +79,7 @@
     | "digestible"
     | "digested"
     | "copyright"
+    | "demand"
   >("date");
   let sortAsc = $state(false);
   // Which date the date column shows (and what "Date" sort uses).
@@ -169,6 +171,13 @@
         }
         if (sortBy === "digested") {
           const cmp = Number(a.digested) - Number(b.digested);
+          return sortAsc ? cmp : -cmp;
+        }
+        if (sortBy === "demand") {
+          // The scheduler's per-record priority (placeholder for now) - the
+          // same signal as the Schedule view's Review lane, surfaced here so a
+          // reviewer can sort the list by what to review next.
+          const cmp = recordDemand(a.content_hash) - recordDemand(b.content_hash);
           return sortAsc ? cmp : -cmp;
         }
         if (sortBy === "date") {
@@ -477,6 +486,15 @@
                 {filterUntraceable ? 'bg-warning/20 text-warning' : 'text-on-surface-secondary hover:bg-surface'}"
               title="Show only records with no recoverable source/origin"
             >Untraceable</button>
+          </div>
+
+          <div class="flex items-center gap-1 border-l border-border pl-3">
+            <button
+              onclick={() => { sortBy = "demand"; sortAsc = false; }}
+              class="text-xs font-ui px-2 py-1 rounded cursor-pointer transition-colors
+                {sortBy === 'demand' ? 'bg-primary text-on-primary' : 'text-on-surface-secondary hover:bg-surface'}"
+              title="Sort by review demand - the scheduler's per-record priority (what to review next). Placeholder signal until the scheduler is wired."
+            >Sort by demand</button>
           </div>
 
           <!-- Date-field selector: what value the Date column shows
