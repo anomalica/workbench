@@ -155,9 +155,15 @@
       <span class="text-on-surface-muted">idle - flip on to work the queue</span>
     {/if}
     {#if processing?.mode === "on"}
-      <span class="text-on-surface-secondary">
-        {processing.state}{processing.reason ? ` - ${processing.reason}` : ""}
-      </span>
+      {#if processing.halted}
+        <span class="text-error font-medium">
+          halted{processing.reason ? ` - ${processing.reason}` : ""} (toggle off then on to clear)
+        </span>
+      {:else}
+        <span class="text-on-surface-secondary">
+          {processing.state}{processing.reason ? ` - ${processing.reason}` : ""}
+        </span>
+      {/if}
       {#if processing.gate}
         <span class="ml-auto text-on-surface-muted tabular-nums">
           5h {processing.gate.five_hour.util}/{processing.gate.five_hour.ideal}
@@ -249,6 +255,7 @@
             <span class={c.ok ? "text-success" : "text-error"} aria-hidden="true">{c.ok ? "✓" : "✗"}</span>
             <span class="text-xs font-ui text-primary uppercase flex-none">{c.type}</span>
             <span class="text-on-surface truncate">{c.target}</span>
+            {#if !c.ok && c.error}<span class="text-xs text-error truncate">{c.error}</span>{/if}
             <span class="ml-auto text-xs text-on-surface-muted tabular-nums flex-none">
               {c.duration_s}s{#if c.tokens} &middot; {c.tokens} tok{/if}
             </span>

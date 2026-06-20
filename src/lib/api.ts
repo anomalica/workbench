@@ -321,12 +321,15 @@ export interface ProcessingCompleted {
   duration_s: number;
   tokens: number | null;
   ok: boolean;
+  error?: string | null;
 }
 
 export interface ProcessingStatus {
   mode: "on" | "off";
-  /** idle | waiting | dispatching | running | blocked */
+  /** idle | waiting | ready | running | halted */
   state: string;
+  /** true when the worker has stopped itself (fail-closed); clears on an off->on toggle */
+  halted: boolean;
   reason: string;
   gate: { five_hour: ProcessingWindow; seven_day: ProcessingWindow } | null;
   /** fresh | stale | unavailable */
