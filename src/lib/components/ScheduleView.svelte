@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import {
     LANE_LABEL,
     stageRank,
@@ -7,6 +8,7 @@
     type ScheduleJob,
     type ReviewItem,
   } from "$lib/schedule";
+  import { fetchProcessing, setProcessing, type ProcessingStatus } from "$lib/api";
   import ScheduleJobCard from "./ScheduleJobCard.svelte";
 
   // The live scheduler queue (from /api/schedule), fetched by the parent (null
@@ -15,7 +17,43 @@
   let {
     queue,
     recordTitles = {},
-  }: { queue: ScheduleQueue | null; recordTitles?: Record<string, string> } = $props();
+  }: {
+    queue: ScheduleQueue | null;
+    recordTitles?: Record<string, string>;
+  } = $props();
+
+  // Processing mode (the runner). Polled while this tab is open so the gate
+  // readout + recently-completed stay live.
+  let processing = $state<ProcessingStatus | null>(null);
+  let toggling = $state(false);
+  let procError = $state<string | null>(null);
+
+  async function loadProcessing() {
+    try {
+      processing = await fetchProcessing();
+    } catch {
+      /* leave last-known; transient */
+    }
+  }
+
+  async function toggleProcessing() {
+    if (toggling) return;
+    toggling = true;
+    procError = null;
+    try {
+      processing = await setProcessing(processing?.mode === "on" ? "off" : "on");
+    } catch (e) {
+      procError = e instanceof Error ? e.message : String(e);
+    } finally {
+      toggling = false;
+    }
+  }
+
+  onMount(() => {
+    loadProcessing();
+    const t = setInterval(loadProcessing, 10000);
+    return () => clearInterval(t);
+  });
 
   // Cap how many cards render per lane - the GPU/ingest lane can be hundreds;
   // showing every one would be a heavy DOM, and the count note keeps it honest.
@@ -103,6 +141,36 @@
     </span>
   </div>
 
+  <!-- Processing mode (the runner): the autonomous worker + its dual-trend gate -->
+  <div class="px-6 py-2 border-b border-border flex items-center gap-3 flex-wrap flex-none text-xs font-ui">
+    <span class="font-medium text-on-surface">Processing mode</span>
+    <button
+      onclick={toggleProcessing}
+      disabled={toggling}
+      class="px-2.5 py-0.5 rounded font-medium cursor-pointer transition-colors disabled:opacity-50
+        {processing?.mode === 'on' ? 'bg-success text-on-success' : 'bg-surface border border-border text-on-surface-secondary hover:bg-surface-alt'}"
+      title="Flip the runner on/off - it works the queue while on (subscription-only, gated by usage)"
+    >{processing?.mode === "on" ? "ON" : "OFF"}</button>
+    {#if processing?.mode !== "on"}
+      <span class="text-on-surface-muted">idle - flip on to work the queue</span>
+    {/if}
+    {#if processing?.mode === "on"}
+      <span class="text-on-surface-secondary">
+        {processing.state}{processing.reason ? ` - ${processing.reason}` : ""}
+      </span>
+      {#if processing.gate}
+        <span class="ml-auto text-on-surface-muted tabular-nums">
+          5h {processing.gate.five_hour.util}/{processing.gate.five_hour.ideal}
+          · 7d {processing.gate.seven_day.util}/{processing.gate.seven_day.ideal}
+          {#if processing.usage_status && processing.usage_status !== "fresh"}
+            · usage {processing.usage_status}
+          {/if}
+        </span>
+      {/if}
+    {/if}
+    {#if procError}<span class="text-error">{procError}</span>{/if}
+  </div>
+
   <!-- Honest caveats about the live data -->
   <div class="px-6 py-2 border-b border-border/60 flex-none text-xs font-ui text-on-surface-muted">
     Live queue from the scheduler. Ingest jobs are unranked (source priority isn't a built concept
@@ -171,6 +239,22 @@
       <p class="text-xs text-on-surface-muted pt-2 border-t border-border/40">
         Background (eager, runs automatically, not a scheduled lane): {[...new Set(eagerJobs.map((j) => j.type))].join(", ")}
       </p>
+    {/if}
+
+    {#if processing?.completed && processing.completed.length > 0}
+      <section class="pt-3 border-t border-border/40 space-y-1">
+        <h3 class="text-sm font-medium text-on-surface">Recently completed</h3>
+        {#each processing.completed as c}
+          <div class="text-sm flex items-baseline gap-2">
+            <span class={c.ok ? "text-success" : "text-error"} aria-hidden="true">{c.ok ? "✓" : "✗"}</span>
+            <span class="text-xs font-ui text-primary uppercase flex-none">{c.type}</span>
+            <span class="text-on-surface truncate">{c.target}</span>
+            <span class="ml-auto text-xs text-on-surface-muted tabular-nums flex-none">
+              {c.duration_s}s{#if c.tokens} &middot; {c.tokens} tok{/if}
+            </span>
+          </div>
+        {/each}
+      </section>
     {/if}
   </div>
 </div>

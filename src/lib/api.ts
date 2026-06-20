@@ -304,3 +304,52 @@ export async function fetchSchedule(): Promise<ScheduleQueue> {
   if (!res.ok) throw new Error(`Failed to fetch schedule: ${res.status}`);
   return res.json();
 }
+
+// --- Runner / processing mode -----------------------------------------------
+
+export interface ProcessingWindow {
+  util: number;
+  ideal: number;
+  below: boolean;
+}
+
+export interface ProcessingCompleted {
+  type: string;
+  target: string;
+  start: string;
+  end: string;
+  duration_s: number;
+  tokens: number | null;
+  ok: boolean;
+}
+
+export interface ProcessingStatus {
+  mode: "on" | "off";
+  /** idle | waiting | dispatching | running | blocked */
+  state: string;
+  reason: string;
+  gate: { five_hour: ProcessingWindow; seven_day: ProcessingWindow } | null;
+  /** fresh | stale | unavailable */
+  usage_status: string | null;
+  current: { type: string; target: string; started?: string } | null;
+  checked_at: string | null;
+  completed: ProcessingCompleted[];
+}
+
+export async function fetchProcessing(): Promise<ProcessingStatus> {
+  const res = await fetch("/api/processing");
+  if (!res.ok) throw new Error(`Failed to fetch processing: ${res.status}`);
+  return res.json();
+}
+
+/** Flip processing mode on/off (auth-gated server-side). */
+export async function setProcessing(mode: "on" | "off"): Promise<ProcessingStatus> {
+  const res = await fetch("/api/processing", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mode }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || `Error ${res.status}`);
+  return data;
+}
