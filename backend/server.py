@@ -30,6 +30,7 @@ from anomalica_common.review_gate import digestibility
 
 from backend import graph
 from backend.auth import setup_auth
+from backend.runner import runner
 
 FULL_HASH_LENGTH = 64
 PUBLIC_HASH_LENGTH = 56
@@ -734,6 +735,14 @@ app = FastAPI(title="Anomalica Workbench API")
 
 setup_auth(app)
 
+
+@app.on_event("startup")
+def _resume_runner() -> None:
+    # Resume processing mode if it was left ON across a restart. Runs when the
+    # server actually starts (not on bare import), so tests never spawn the worker.
+    runner.resume_if_on()
+
+
 source: IngestSource = build_source()
 sources_path = Path(os.environ.get("SOURCES_PATH", str(DEFAULT_SOURCES_PATH)))
 ingests_path = Path(os.environ.get("INGESTS_PATH", str(DEFAULT_INGESTS_PATH)))
@@ -1390,6 +1399,26 @@ def get_schedule() -> dict:
         raise HTTPException(
             status_code=500, detail=f"Failed to read scheduler queue: {exc}"
         ) from exc
+
+
+@app.get("/api/processing")
+def processing_status() -> dict:
+    """Runner / processing-mode status: mode (on/off), the worker's current
+    state + dual-trend gate readout, and recently-completed jobs."""
+    return runner.status()
+
+
+@app.post("/api/processing")
+def processing_toggle(body: dict) -> dict:
+    """Flip processing mode on/off. Ungated: this is the local service Mark
+    controls, and the runner spends no money (subscription only, paced by the
+    usage gate). NOTE: before any public exposure this must be auth/admin-gated
+    (it starts autonomous execution) - tracked with the other pre-public
+    hardening (fetch enforcement, verify rate-limiting)."""
+    mode = body.get("mode")
+    if mode not in ("on", "off"):
+        raise HTTPException(status_code=400, detail="mode must be 'on' or 'off'")
+    return runner.set_mode(mode == "on")
 
 
 @app.get("/api/sources/{full_hash}")
