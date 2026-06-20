@@ -17,12 +17,14 @@
   import IngestList from "$lib/components/IngestList.svelte";
   import IngestViewer from "$lib/components/IngestViewer.svelte";
   import GraphView from "$lib/components/GraphView.svelte";
+  import ScheduleView from "$lib/components/ScheduleView.svelte";
   import { carryoverState } from "$lib/carryover";
   import { themeState } from "$lib/theme.svelte";
 
   let user = $state<User | null>(null);
-  // Top-level view: record review (default) or the knowledge-graph review.
-  let appMode = $state<"records" | "graph">("records");
+  // Top-level view: record review (default), knowledge-graph review, or the
+  // prioritised work-queue Schedule view.
+  let appMode = $state<"records" | "graph" | "schedule">("records");
   // True while a cold-load deep link (e.g. /<public_hash>#claim-<uuid>) is
   // resolving: list fetch then record + digest fetch. Drives a centred
   // "Opening record..." indicator so the user sees progress instead of a
@@ -284,10 +286,15 @@
     history.pushState(null, "", "/graph");
   }
 
+  function showSchedule() {
+    appMode = "schedule";
+    history.pushState(null, "", "/schedule");
+  }
+
   async function checkUrlHash() {
     const path = window.location.pathname.slice(1);
-    if (path === "graph") {
-      appMode = "graph";
+    if (path === "graph" || path === "schedule") {
+      appMode = path;
       loadIngests();
       return;
     }
@@ -347,6 +354,12 @@
           {appMode === 'graph' ? 'bg-bone/15 text-bone' : 'text-bone/50 hover:text-bone/80 hover:bg-bone/10'}"
         title="Review the assimilator's merged knowledge graph"
       >Graph</button>
+      <button
+        onclick={showSchedule}
+        class="text-sm font-ui px-2.5 py-1 rounded cursor-pointer transition-colors
+          {appMode === 'schedule' ? 'bg-bone/15 text-bone' : 'text-bone/50 hover:text-bone/80 hover:bg-bone/10'}"
+        title="The prioritised work queue - what runs next"
+      >Schedule</button>
     </nav>
     <div class="flex-1"></div>
     <button
@@ -382,7 +395,9 @@
   </header>
 
   <main class="flex-1 flex flex-col min-h-0">
-    {#if appMode === "graph"}
+    {#if appMode === "schedule"}
+      <ScheduleView />
+    {:else if appMode === "graph"}
       <GraphView />
     {:else if openingRecord && !selectedIngest}
       <!-- Cold-load deep-link: list + record + digest are fetching. Show a
