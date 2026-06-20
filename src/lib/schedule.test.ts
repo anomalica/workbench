@@ -1,16 +1,22 @@
 import { describe, it, expect } from "vitest";
-import { recordDemand, stageRank } from "./schedule";
+import { targetHref, stageRank } from "./schedule";
 
-describe("recordDemand (placeholder per-record priority)", () => {
-  it("is deterministic and in 0..99", () => {
-    const a = recordDemand("a".repeat(64));
-    expect(recordDemand("a".repeat(64))).toBe(a);
-    expect(a).toBeGreaterThanOrEqual(0);
-    expect(a).toBeLessThan(100);
+describe("targetHref", () => {
+  it("links a record target by its public (56-char) hash", () => {
+    const hash = "a".repeat(64);
+    expect(targetHref({ kind: "record", label: "x", hash })).toBe(`/${"a".repeat(56)}`);
   });
 
-  it("varies by hash so the demand sort produces an order", () => {
-    expect(recordDemand("abc123")).not.toBe(recordDemand("zzz999"));
+  it("returns null for a page target (no workbench page view yet)", () => {
+    expect(targetHref({ kind: "page", label: "some-slug" })).toBeNull();
+  });
+
+  it("returns null for a record with no hash", () => {
+    expect(targetHref({ kind: "record", label: "x" })).toBeNull();
+  });
+
+  it("respects an explicit href when present", () => {
+    expect(targetHref({ kind: "page", label: "x", href: "/y" })).toBe("/y");
   });
 });
 

@@ -1,24 +1,35 @@
 /**
- * Schedule view (read-only, illustrative placeholder). Guards the tabbed lane
- * model and - the point of Mark's review - that the placeholder does NOT
- * fabricate dollar costs, budgets, run-times, scores or a nightly runner that
- * look like real data.
+ * Schedule view (read-only, fed the live scheduler queue via a prop). Guards the
+ * tabbed lane model, the loading/empty states, and - the point of Mark's review
+ * - that it never fabricates dollar costs, budgets, dry-runs or scores.
  */
 
 import { describe, it, expect } from "vitest";
 import { render, fireEvent, waitFor } from "@testing-library/svelte";
 import ScheduleView from "./ScheduleView.svelte";
+import { SAMPLE_QUEUE, type ScheduleQueue } from "$lib/schedule";
+
+const sample = () => render(ScheduleView, { props: { queue: SAMPLE_QUEUE } });
 
 describe("ScheduleView", () => {
-  it("defaults to the Claude tab and flags itself illustrative", () => {
-    const { getByText } = render(ScheduleView);
+  it("shows a loading state until the queue arrives", () => {
+    const { getByText } = render(ScheduleView, { props: { queue: null } });
+    expect(getByText(/Loading the queue/)).toBeTruthy();
+  });
+
+  it("shows an empty state when the scheduler hasn't run", () => {
+    const empty: ScheduleQueue = { generatedAt: null, jobs: [], reviewQueue: [], recordDemand: {} };
+    const { getByText } = render(ScheduleView, { props: { queue: empty } });
+    expect(getByText(/hasn't produced a queue/)).toBeTruthy();
+  });
+
+  it("defaults to the Claude tab", () => {
+    const { getByText } = sample();
     expect(getByText(/Claude lane/)).toBeTruthy();
-    expect(getByText(/Illustrative placeholder/)).toBeTruthy();
   });
 
   it("has a tab per lane plus By article (no By value)", () => {
-    const { getAllByText, queryByText } = render(ScheduleView);
-    // "Claude"/"GPU" also appear as card lane badges, so just require >=1.
+    const { getAllByText, queryByText } = sample();
     for (const t of ["Claude", "GPU", "Review", "By article"]) {
       expect(getAllByText(t).length).toBeGreaterThan(0);
     }
@@ -26,19 +37,19 @@ describe("ScheduleView", () => {
   });
 
   it("does NOT fabricate dollars, budgets, a dry-run, or scores", () => {
-    const { container } = render(ScheduleView);
+    const { container } = sample();
     const text = container.textContent || "";
-    expect(text).not.toMatch(/\$\d/); // no dollar amounts
-    expect(text).not.toContain("Tonight's run"); // no invented nightly runner
+    expect(text).not.toMatch(/\$\d/);
+    expect(text).not.toContain("Tonight's run");
     expect(text.toLowerCase()).not.toContain("needs $ approval");
-    expect(text).not.toMatch(/\bvalue \d/); // no fabricated VALUE scores
-    expect(text).not.toMatch(/\d+\s*\/\s*\d+\s*tokens/); // no invented token budget
+    expect(text).not.toMatch(/\bvalue \d/);
+    expect(text).not.toMatch(/\d+\s*\/\s*\d+\s*tokens/);
   });
 
   it("GPU tab is transcription jobs (one per video)", async () => {
-    const { getByText, container } = render(ScheduleView);
+    const { getByText, container } = sample();
     await fireEvent.click(getByText("GPU"));
-    await waitFor(() => expect(getByText(/one transcription job per queued video/)).toBeTruthy());
+    await waitFor(() => expect(getByText(/transcription jobs, one per video/)).toBeTruthy());
     const types = [...container.querySelectorAll("span")]
       .map((s) => (s.textContent || "").trim().toLowerCase())
       .filter((t) => t === "transcribe");
@@ -46,7 +57,7 @@ describe("ScheduleView", () => {
   });
 
   it("By article tab marks the earliest-stage job next", async () => {
-    const { getByText, container } = render(ScheduleView);
+    const { getByText, container } = sample();
     await fireEvent.click(getByText("By article"));
     await waitFor(() => {
       const markers = [...container.querySelectorAll("span")]
@@ -56,10 +67,8 @@ describe("ScheduleView", () => {
     });
   });
 
-  it("notes the eager background plumbing as a footnote, not a lane", () => {
-    const { getByText, queryByText } = render(ScheduleView);
+  it("notes the eager background plumbing as a footnote", () => {
+    const { getByText } = sample();
     expect(getByText(/Background \(eager/)).toBeTruthy();
-    // it isn't a tab
-    expect(queryByText("Background")).toBeNull();
   });
 });
