@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -69,6 +70,13 @@ def _path(env: str, default: Path) -> Path:
 # but spends nothing. Set RUNNER_EXECUTE=1 for a supervised real run.
 def _execute_enabled() -> bool:
     return os.environ.get("RUNNER_EXECUTE", "") not in ("", "0", "false", "no")
+
+
+# Eager (free, deterministic) graph imports are gated SEPARATELY from paid Claude
+# execution: RUNNER_EAGER lets a finished digest flow into the graph without arming
+# the paid digest path, and vice versa. "Free but mutating" kept distinct from "paid".
+def _eager_enabled() -> bool:
+    return os.environ.get("RUNNER_EAGER", "") not in ("", "0", "false", "no")
 
 
 def _state_dir() -> Path:
@@ -274,6 +282,99 @@ def is_eligible_digest(record_hash: str) -> bool:
         ):
             return True
     return False
+
+
+def pick_top_import_job(exclude: set[str] | None = None) -> dict | None:
+    """The next eligible eager IMPORT job (a digest on disk whose record isn't in
+    the graph yet), skipping any hash in `exclude`. Free + deterministic, so order
+    barely matters - highest value first, like the digest lane."""
+    try:
+        queue = json.loads(_queue_path().read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    exclude = exclude or set()
+    imports = [
+        j
+        for j in queue.get("jobs", [])
+        if j.get("lane") == "eager"
+        and j.get("type") == "import"
+        and j.get("status") == "eligible"
+        and (j.get("target") or {}).get("hash") not in exclude
+    ]
+    imports.sort(key=lambda j: j.get("value") or -1, reverse=True)
+    return imports[0] if imports else None
+
+
+def is_eligible_import(record_hash: str) -> bool:
+    """True if `record_hash` is still an eligible eager import job - the
+    post-reschedule confirmation for the import side. Fail closed: an unreadable
+    queue counts as eligible (so we halt rather than assume it dropped)."""
+    try:
+        queue = json.loads(_queue_path().read_text())
+    except (OSError, json.JSONDecodeError):
+        return True
+    for j in queue.get("jobs", []):
+        if (
+            j.get("lane") == "eager"
+            and j.get("type") == "import"
+            and j.get("status") == "eligible"
+            and (j.get("target") or {}).get("hash") == record_hash
+        ):
+            return True
+    return False
+
+
+def _graph_db_path() -> Path:
+    return _path(
+        "GRAPH_DB", Path.home() / ".local" / "share" / "assimilator" / "knowledge.db"
+    )
+
+
+def record_in_graph(record_hash: str) -> bool | None:
+    """Whether a record with this content_hash is already in the assimilator's
+    graph (read-only query on knowledge.db). Returns None when it CAN'T be
+    determined (DB missing/unreadable) - the caller must then HOLD, never import,
+    to avoid a duplicate (master's belt-and-braces pre-check)."""
+    p = _graph_db_path()
+    if not p.exists():
+        return None
+    try:
+        con = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
+        try:
+            row = con.execute(
+                "SELECT 1 FROM records WHERE content_hash = ? LIMIT 1",
+                (f"sha256:{record_hash}",),
+            ).fetchone()
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return None
+    return row is not None
+
+
+def run_import(digest_path: Path) -> subprocess.CompletedProcess:
+    """Import a digest YAML into the graph via the assimilator's host entry
+    (anomalica/assimilator confirmed: `python -m assimilator.import_markdown`,
+    PYTHONPATH = its workspace + anomalica-common/src, ANOMALICA_INGESTS_DIR set
+    so content_hash resolves). Deterministic, FREE (no Claude), idempotent on
+    re-run, exits non-zero on failure."""
+    ws = _path("ASSIMILATOR_WORKSPACE", _ANOMALICA / "assimilator" / "workspace")
+    common = _path("ANOMALICA_COMMON_SRC", _ANOMALICA / "anomalica-common" / "src")
+    env = {
+        **os.environ,
+        "PYTHONPATH": os.pathsep.join(
+            [str(ws), str(common), os.environ.get("PYTHONPATH", "")]
+        ),
+        "ANOMALICA_INGESTS_DIR": str(_ingests_dir()),
+    }
+    return subprocess.run(
+        [sys.executable, "-m", "assimilator.import_markdown", str(digest_path)],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=False,
+    )
 
 
 def rerun_scheduler() -> bool:
@@ -599,6 +700,17 @@ class Runner:
         self._set(state="idle", reason="processing off", current=None)
 
     def _tick(self) -> None:
+        # Eager imports first: free + deterministic, so they drain promptly and
+        # INDEPENDENT of the usage gate (the gate paces paid Claude spend only).
+        # Gated by RUNNER_EAGER - when off, the worker does digests only.
+        if _eager_enabled():
+            with self._lock:
+                done = set(self._done)
+            imp = pick_top_import_job(done)
+            if imp is not None:
+                self._execute_import(imp)
+                return
+
         rec, ustat = read_forest_usage()
         if (
             rec is None or ustat != "fresh"
@@ -771,6 +883,102 @@ class Runner:
         if is_eligible_digest(h):
             self._halt(
                 f"'{title}' still eligible after a successful digest + reschedule - "
+                "halting (completion not registered)"
+            )
+
+    def _execute_import(self, job: dict) -> None:
+        """Import a produced digest into the graph (eager lane). Free + idempotent,
+        so no usage gate - but with a fail-closed 'already in graph' pre-check
+        (master's belt-and-braces): if the record is present, skip; if we can't
+        tell, HOLD rather than risk a duplicate."""
+        target = job.get("target", {})
+        title = target.get("label") or (target.get("hash", "")[:12])
+        h = target.get("hash", "")
+
+        if len(h) != 64:
+            self._skip(
+                h, f"skipping import '{title}': no usable content_hash", None, None
+            )
+            return
+        if self._failed.get(h, 0) >= MAX_DIGEST_ATTEMPTS:
+            self._skip(
+                h,
+                f"skipping import '{title}': {self._failed[h]} failed attempts (cap)",
+                None,
+                None,
+            )
+            return
+
+        present = record_in_graph(h)
+        if present is None:  # can't confirm -> fail closed, never import blindly
+            self._set(
+                state="waiting",
+                reason=f"can't confirm '{title}' in the graph - holding (won't import)",
+                gate=None,
+                current=None,
+            )
+            self._sleep(POLL_INTERVAL_S)
+            return
+        if present:  # already imported - skip (idempotent, but never re-write)
+            self._skip(
+                h,
+                f"'{title}' already in the graph - skipping import",
+                None,
+                None,
+                state="idle",
+            )
+            return
+
+        digest = digest_out_path(h)
+        if digest is None or not digest.exists():
+            self._skip(h, f"no digest on disk to import for '{title}'", None, None)
+            return
+
+        start = _now()
+        self._set(
+            state="running",
+            reason=f"importing '{title}' into the graph",
+            gate=None,
+            current={"type": "import", "target": title, "started": start.isoformat()},
+        )
+        ok = False
+        err = None
+        try:
+            proc = run_import(digest)
+            # Confirm it actually landed in the graph (stronger than exit code alone).
+            ok = proc.returncode == 0 and record_in_graph(h) is True
+            if not ok:
+                err = f"import exit {proc.returncode}, record not in graph"
+        except (subprocess.SubprocessError, OSError) as exc:
+            err = f"import failed: {exc}"
+        end = _now()
+        with self._lock:
+            self._done.add(h)
+            if ok:
+                self._failed.pop(h, None)
+            else:
+                self._failed[h] = self._failed.get(h, 0) + 1
+            self._save()
+        self._record(
+            type="import",
+            target=title,
+            hash=h,
+            start=start.isoformat(),
+            end=end.isoformat(),
+            duration_s=round((end - start).total_seconds(), 1),
+            tokens=None,
+            ok=ok,
+            error=err,
+        )
+        self._set(current=None)
+        if not ok:
+            return
+        if not rerun_scheduler():
+            self._halt("scheduler re-run failed after import - halting")
+            return
+        if is_eligible_import(h):
+            self._halt(
+                f"'{title}' still an eligible import after a successful import + reschedule - "
                 "halting (completion not registered)"
             )
 
