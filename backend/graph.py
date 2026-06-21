@@ -109,6 +109,13 @@ def list_nodes(
         con.close()
 
 
+def _noderef(node_id, name, node_type) -> dict | None:
+    """A compact {id, name, node_type} for a referenced node, or None if absent."""
+    if not node_id:
+        return None
+    return {"id": node_id, "name": name, "node_type": node_type}
+
+
 def node_detail(node_id: str, db_path: str | Path | None = None):
     """A node with its merge decisions (aliases) and referencing claims.
 
@@ -146,20 +153,46 @@ def node_detail(node_id: str, db_path: str | Path | None = None):
                 "claim_role": r["claim_role"],
                 "record_id": r["record_id"],
                 "record_title": r["record_title"] or r["record_name"] or r["record_id"],
+                # The speaker and the record's producer are themselves nodes -
+                # surface them so the UI can link to their entity views.
+                "speaker": _noderef(r["sp_id"], r["sp_name"], r["sp_type"]),
+                "record_producer": _noderef(r["pr_id"], r["pr_name"], r["pr_type"]),
+                "corefs": [],  # filled in below
             }
             for r in con.execute(
                 "SELECT c.id, c.content, c.claim_type, c.attestation, c.original_excerpt,"
                 " c.location_in_record, c.claim_role, c.record_id,"
-                " rec.title AS record_title, rec.friendly_name AS record_name"
+                " rec.title AS record_title, rec.friendly_name AS record_name,"
+                " sp.id AS sp_id, sp.name AS sp_name, sp.node_type AS sp_type,"
+                " pr.id AS pr_id, pr.name AS pr_name, pr.node_type AS pr_type"
                 " FROM claims c"
                 " JOIN claim_node_refs ref ON ref.claim_id = c.id"
                 " LEFT JOIN records rec ON rec.id = c.record_id"
+                " LEFT JOIN nodes sp ON sp.id = c.speaker_id"
+                " LEFT JOIN nodes pr ON pr.id = rec.producer_id"
                 " WHERE ref.node_id = ?"
                 " ORDER BY record_title COLLATE NOCASE, c.location_in_record"
                 " LIMIT ?",
                 (node_id, CLAIM_LIMIT),
             )
         ]
+        # The OTHER entities each claim references (claim_node_refs, minus this
+        # node) - one query for all the claims above, grouped by claim.
+        by_claim = {c["id"]: c for c in claims}
+        if by_claim:
+            placeholders = ",".join("?" * len(by_claim))
+            for r in con.execute(
+                "SELECT ref.claim_id, n.id, n.name, n.node_type"
+                " FROM claim_node_refs ref JOIN nodes n ON n.id = ref.node_id"
+                f" WHERE ref.claim_id IN ({placeholders}) AND ref.node_id != ?"
+                " ORDER BY n.name COLLATE NOCASE",
+                (*by_claim.keys(), node_id),
+            ):
+                claim = by_claim.get(r["claim_id"])
+                if claim is not None:
+                    claim["corefs"].append(
+                        {"id": r["id"], "name": r["name"], "node_type": r["node_type"]}
+                    )
         return {
             "id": n["id"],
             "name": n["name"],
