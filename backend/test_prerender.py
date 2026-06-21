@@ -119,23 +119,6 @@ def test_serves_verbatim_is_a_failsafe_allowlist(status, served):
     assert prerender.serves_verbatim(status) is served
 
 
-def test_gate_digest_verbatim_strips_quotes_keeps_factual():
-    digest = {
-        "schema": "anomalica/digest/1",
-        "nodes": [{"id": "n1", "name": "X"}],
-        "domain_claims": [
-            {"id": "c1", "quote": "VERBATIM", "original_excerpt": "V2", "text": "fact"}
-        ],
-        "infrastructure_claims": [{"id": "c2", "quote": "VERBATIM2", "text": "fact2"}],
-    }
-    gated = prerender._gate_digest_verbatim(digest)
-    for ck in ("domain_claims", "infrastructure_claims"):
-        for c in gated[ck]:
-            assert "quote" not in c and "original_excerpt" not in c
-            assert c["text"]  # factual content stays
-    assert gated["nodes"] == digest["nodes"]  # structure untouched
-
-
 @pytest.fixture
 def records_repo(tmp_path, monkeypatch):
     """A tiny ingests store + digests with one public and one gated record."""
@@ -216,7 +199,7 @@ def records_repo(tmp_path, monkeypatch):
     return tmp_path
 
 
-def test_records_prerender_gates_bodies_and_quotes(records_repo, tmp_path):
+def test_records_prerender_gates_body_keeps_short_quotes(records_repo, tmp_path):
     base = tmp_path / "out" / "api"
     counts = prerender._prerender_records(base)
     assert counts == {"records": 2, "record_public": 1, "digests": 2, "coverage": 0}
@@ -235,19 +218,24 @@ def test_records_prerender_gates_bodies_and_quotes(records_repo, tmp_path):
     assert pub["raw_frontmatter"]
     assert pub["frontmatter"].get("description")
 
-    # GATED record: body emptied, digest quote stripped, factual text kept, AND no
-    # verbatim frontmatter (raw dropped; free-text description + word_timestamps
-    # gone; only whitelisted structured metadata remains).
+    # GATED record: body emptied + no verbatim frontmatter (raw dropped; free-text
+    # description + the verbatim word_timestamps transcript gone; only whitelisted
+    # structured metadata remains) - BUT the digest's short attributed quotes stay.
     gated = json.loads((base / "ingests" / f"{H_GATED}.json").read_text())
     assert gated["body"] == ""
     assert gated["raw_frontmatter"] == ""
     assert "description" not in gated["frontmatter"]
-    assert "word_timestamps" not in gated["frontmatter"]
+    assert (
+        "word_timestamps" not in gated["frontmatter"]
+    )  # full transcript = body, gated
     assert gated["frontmatter"]["title"] == "rec"  # structured metadata kept
     assert gated["frontmatter"]["copyright.status"] == "restricted"
     gated_digest = json.loads((base / "ingests" / H_GATED / "digest.json").read_text())
     claim = gated_digest["domain_claims"][0]
-    assert "quote" not in claim and claim["text"] == "fact rec-gated"
+    assert (
+        claim["quote"] == "VERBATIM rec-gated"
+    )  # short quotes PUBLIC for all (Art 32)
+    assert claim["text"] == "fact rec-gated"
 
 
 def test_records_prerender_never_writes_a_verification_sidecar(records_repo, tmp_path):

@@ -14,12 +14,14 @@ mirror the live API and the SPA can point at either):
   api/curation/merges.json              - active merges (cluster/un-merge view)
   api/ingests.json                      - the records list (metadata only, no bodies)
   api/ingests/<hash>.json               - record detail; body ONLY for public records
-  api/ingests/<hash>/digest.json        - digest; quotes stripped for gated records
+  api/ingests/<hash>/digest.json        - digest (claims + entities + short quotes), public for all
   api/ingests/<hash>/coverage.json      - review coverage (spans/notes)
 
-COPYRIGHT: only public_domain/open_licence record bodies + digest quotes enter the
-public snapshot (see serves_verbatim - an allow-list, fail-safe). Gated records ship
-metadata only; their bodies/quotes are served by the edge after the possession gate.
+COPYRIGHT: short attributed quotes (the digest + its quotes) are PUBLIC for all
+records (lawful quotation, Japan Art 32; the site shows them too). Only the full
+record BODY (and the verbatim transcript / raw frontmatter) is gated: it enters the
+snapshot ONLY for public_domain/open_licence (see serves_verbatim - an allow-list,
+fail-safe), else it is emptied + served by the edge after the possession gate.
 Verification sidecars (answers) are NEVER rendered.
 
 Reuses backend.graph / backend.curation, so the JSON is byte-for-byte what the
@@ -147,21 +149,6 @@ def prerender(out: Path | None = None) -> dict:
     return counts
 
 
-def _gate_digest_verbatim(digest: dict) -> dict:
-    """Strip verbatim source excerpts from a gated record's digest, keeping the
-    factual claim text + structure. The digest's verbatim field is `quote` (the
-    assembler later renames it original_excerpt); drop both to be safe."""
-    out = dict(digest)
-    for key in ("domain_claims", "infrastructure_claims"):
-        claims = out.get(key)
-        if claims:
-            out[key] = [
-                {k: v for k, v in c.items() if k not in ("quote", "original_excerpt")}
-                for c in claims
-            ]
-    return out
-
-
 def _build_digest_map(server) -> dict:
     """{content_hash: digest_yaml_path} for every record with a digest, in one
     pass over the records/ symlinks (vs _hash_to_digest_path's per-call O(n) walk)."""
@@ -187,11 +174,13 @@ def _build_digest_map(server) -> dict:
 def _prerender_records(base: Path) -> dict:
     """Render the Records-tab read surface to static JSON, COPYRIGHT-GATED.
 
-    Only public_domain/open_licence record bodies + digest quotes enter the public
-    snapshot; gated records ship metadata only (body excluded, digest quotes
-    stripped) and their bodies are served via the edge after the possession gate.
-    Verification answers never enter the snapshot. /me/reviews is per-user -> a
-    dynamic edge endpoint, not static. Reuses the FastAPI readers for parity."""
+    The digest (claims + entities + short attributed quotes) is PUBLIC for all
+    records. Only the full record BODY is gated: gated records ship metadata only
+    (body emptied, raw_frontmatter dropped, frontmatter whitelisted - so the
+    verbatim transcript in word_timestamps doesn't leak) and the body is served
+    via the edge after the possession gate. Verification answers never enter the
+    snapshot. /me/reviews is per-user -> a dynamic edge endpoint, not static.
+    Reuses the FastAPI readers for parity."""
     import yaml as _yaml
 
     from backend import server
@@ -216,9 +205,10 @@ def _prerender_records(base: Path) -> dict:
 
         yaml_path = digest_map.get(h)
         if yaml_path is not None:
+            # The digest (claims + entities + SHORT attributed quotes) is public
+            # for all records - short quotes are lawful + public (Japan Art 32),
+            # and the site shows them too. Only the full record BODY is gated.
             digest = server._filter_digest(_yaml.safe_load(yaml_path.read_text()) or {})
-            if not public:
-                digest = _gate_digest_verbatim(digest)
             _write(base / "ingests" / h / "digest.json", digest)
             counts["digests"] += 1
 
