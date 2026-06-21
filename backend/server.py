@@ -28,7 +28,7 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from anomalica_common.review_gate import digestibility
 
-from backend import curation, graph
+from backend import curation, graph, models
 from backend.auth import setup_auth
 from backend.runner import runner
 
@@ -1473,6 +1473,45 @@ def curation_reject(body: dict, request: Request) -> dict:
     if not result.get("ok"):
         raise HTTPException(
             status_code=400, detail=result.get("error", "reject failed")
+        )
+    return result
+
+
+# --- Model comparison (ADR 0039 Layer 1) ------------------------------------
+
+
+@app.get("/api/models/comparable")
+def models_comparable() -> dict:
+    """Ingests that have more than one model-variant digest, for the compare list."""
+    return {"comparable": models.list_comparable()}
+
+
+@app.get("/api/models/compare/{content_hash}")
+def models_compare(content_hash: str) -> dict:
+    """Side-by-side comparison of an ingest's model-variants + any prior judgment."""
+    comparison = models.load_comparison(content_hash)
+    if comparison is None:
+        raise HTTPException(
+            status_code=404, detail="No multi-model comparison for this ingest"
+        )
+    return {"comparison": comparison, "judgment": models.latest_judgment(content_hash)}
+
+
+@app.post("/api/models/judgment")
+def models_judgment(body: dict, request: Request) -> dict:
+    """Persist a 'which model is better' judgment (workbench-owned, queryable),
+    attributed to the logged-in reviewer."""
+    user = request.session.get("user")
+    result = models.save_judgment(
+        body.get("content_hash"),
+        body.get("models_compared") or [],
+        body.get("chosen_model"),
+        judged_by=(user.get("email") if user else "") or "",
+        notes=body.get("notes") or "",
+    )
+    if not result.get("ok"):
+        raise HTTPException(
+            status_code=400, detail=result.get("error", "judgment failed")
         )
     return result
 

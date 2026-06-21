@@ -385,6 +385,89 @@ export async function undoMerge(merge_id: string): Promise<void> {
   }
 }
 
+// --- Model comparison (ADR 0039 Layer 1) ------------------------------------
+
+export interface ComparableIngest {
+  content_hash: string;
+  title: string;
+  slug: string;
+  models: string[];
+  variant_count: number;
+}
+
+export interface ModelClaim {
+  id?: string;
+  type?: string;
+  location?: string;
+  text?: string;
+  quote?: string;
+  speaker?: string | null;
+  refs?: string[];
+  shared: boolean;
+}
+
+export interface ModelVariant {
+  model: string;
+  prompt_variant?: string | null;
+  domain_count: number;
+  infra_count: number;
+  claim_count: number;
+  node_count: number;
+  shared_count: number;
+  unique_count: number;
+  extracted_at?: string;
+  wall_seconds?: number | null;
+  claims: ModelClaim[];
+  node_names: string[];
+}
+
+export interface ModelComparison {
+  content_hash: string;
+  title: string;
+  models: string[];
+  per_model: ModelVariant[];
+  entities: { name: string; models: string[] }[];
+}
+
+export interface ModelJudgment {
+  content_hash: string;
+  models_compared: string[];
+  chosen_model: string;
+  judged_by?: string;
+  created_at: string;
+  notes?: string;
+}
+
+export async function fetchComparable(): Promise<ComparableIngest[]> {
+  const res = await fetch("/api/models/comparable");
+  if (!res.ok) throw new Error(`Failed to fetch comparable: ${res.status}`);
+  return (await res.json()).comparable;
+}
+
+export async function fetchComparison(
+  contentHash: string,
+): Promise<{ comparison: ModelComparison; judgment: ModelJudgment | null }> {
+  const res = await fetch(`/api/models/compare/${contentHash}`);
+  if (!res.ok) throw new Error(`Failed to fetch comparison: ${res.status}`);
+  return res.json();
+}
+
+export async function saveJudgment(
+  content_hash: string,
+  models_compared: string[],
+  chosen_model: string,
+  notes: string,
+): Promise<ModelJudgment> {
+  const res = await fetch("/api/models/judgment", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content_hash, models_compared, chosen_model, notes }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || `Judgment failed (${res.status})`);
+  return data;
+}
+
 export async function fetchGraphNode(id: string): Promise<GraphNodeDetail | null> {
   const res = await fetch(`/api/graph/nodes/${encodeURIComponent(id)}`);
   if (res.status === 404 || res.status === 503) return null;
