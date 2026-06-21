@@ -109,6 +109,87 @@ def list_nodes(
         con.close()
 
 
+def ego_graph(node_id: str, cap: int = 30, db_path: str | Path | None = None):
+    """A SCOPED node-link graph around one node, for the visual graph view - never
+    the whole 2013-node graph. Nodes = the centre + its top-`cap` neighbours by
+    shared-claim weight (co-occurrence in the centre's claims); edges = the
+    weighted co-occurrences AMONG those nodes within the centre's claims. Returns
+    None (DB absent) / False (unknown node) / {center, nodes, edges}."""
+    con = _open(db_path)
+    if con is None:
+        return None
+    try:
+        centre = con.execute("SELECT id FROM nodes WHERE id = ?", (node_id,)).fetchone()
+        if centre is None:
+            return False
+        claim_ids = [
+            r[0]
+            for r in con.execute(
+                "SELECT claim_id FROM claim_node_refs WHERE node_id = ?", (node_id,)
+            )
+        ]
+        node_ids = [node_id]
+        if claim_ids:
+            cph = ",".join("?" * len(claim_ids))
+            neighbours = con.execute(
+                f"SELECT node_id, count(*) w FROM claim_node_refs"
+                f" WHERE claim_id IN ({cph}) AND node_id != ?"
+                " GROUP BY node_id ORDER BY w DESC LIMIT ?",
+                (*claim_ids, node_id, cap),
+            ).fetchall()
+            node_ids += [r["node_id"] for r in neighbours]
+
+        nph = ",".join("?" * len(node_ids))
+        info = {
+            r["id"]: r
+            for r in con.execute(
+                "SELECT n.id, n.name, n.node_type,"
+                " (SELECT count(*) FROM claim_node_refs r WHERE r.node_id = n.id) AS claims"
+                f" FROM nodes n WHERE n.id IN ({nph})",
+                node_ids,
+            )
+        }
+        nodes = [
+            {
+                "id": i,
+                "name": info[i]["name"],
+                "node_type": info[i]["node_type"],
+                "claims": info[i]["claims"],
+                "center": i == node_id,
+            }
+            for i in node_ids
+            if i in info
+        ]
+
+        # Edges: co-occurrence among the node set within the centre's claims.
+        edges: dict[tuple[str, str], int] = {}
+        if claim_ids and len(node_ids) > 1:
+            nodeset = set(node_ids)
+            by_claim: dict[str, list[str]] = {}
+            cph = ",".join("?" * len(claim_ids))
+            for r in con.execute(
+                f"SELECT claim_id, node_id FROM claim_node_refs WHERE claim_id IN ({cph})",
+                claim_ids,
+            ):
+                if r["node_id"] in nodeset:
+                    by_claim.setdefault(r["claim_id"], []).append(r["node_id"])
+            for members in by_claim.values():
+                members.sort()
+                for a_idx in range(len(members)):
+                    for b_idx in range(a_idx + 1, len(members)):
+                        key = (members[a_idx], members[b_idx])
+                        edges[key] = edges.get(key, 0) + 1
+        return {
+            "center": node_id,
+            "nodes": nodes,
+            "edges": [
+                {"source": a, "target": b, "weight": w} for (a, b), w in edges.items()
+            ],
+        }
+    finally:
+        con.close()
+
+
 def nodes_brief(ids, db_path: str | Path | None = None) -> dict:
     """{id -> {id, name, node_type, claims}} for a set of node ids, for rendering
     merge-candidate members (which arrive as bare ids). {} if the DB is absent."""

@@ -1384,6 +1384,19 @@ def graph_node(node_id: str) -> dict:
     return detail
 
 
+@app.get("/api/graph/ego/{node_id}")
+def graph_ego(node_id: str, cap: int = 30) -> dict:
+    """A scoped node-link graph around a node (centre + top co-occurring
+    neighbours + weighted edges) for the visual graph view. cap bounds hubs."""
+    cap = max(1, min(cap, 80))
+    g = graph.ego_graph(node_id, cap=cap)
+    if g is None:
+        raise HTTPException(status_code=503, detail="Graph database not available")
+    if g is False:
+        raise HTTPException(status_code=404, detail="Node not found")
+    return g
+
+
 # --- Graph curation (merge duplicate entities) ------------------------------
 # Reads are read-only; the merge/un-merge writes shell the assimilator's command.
 # Ungated like the processing toggle (local control); same pre-public auth note
