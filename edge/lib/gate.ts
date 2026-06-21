@@ -43,8 +43,11 @@ interface SessionPayload {
   a: string[]; // per-challenge HMAC of the normalised answer
 }
 
-async function answerHmac(secret: string, answer: string): Promise<string> {
-  return await hmac(secret, `gate:${answer}`);
+// Salt the HMAC with the record hash so a common answer word hashes differently
+// per record - an attacker who passes one gate and reads its token can't build a
+// cross-record word->HMAC dictionary. The gate is the copyright boundary.
+async function answerHmac(secret: string, hash: string, answer: string): Promise<string> {
+  return await hmac(secret, `gate:${hash}:${answer}`);
 }
 
 export interface StartedSession {
@@ -60,7 +63,7 @@ export async function startSession(
   sample: Challenge[],
   nowSec: number,
 ): Promise<StartedSession> {
-  const a = await Promise.all(sample.map((c) => answerHmac(secret, c.answer)));
+  const a = await Promise.all(sample.map((c) => answerHmac(secret, hash, c.answer)));
   const token = await signToken(secret, { h: hash, t: nowSec, a } as SessionPayload);
   return {
     token,
@@ -90,7 +93,7 @@ export async function scoreSession(
   let score = 0;
   for (let i = 0; i < payload.a.length; i++) {
     const given = normaliseWord(String(responses[String(i + 1)] ?? ""));
-    if (given && (await answerHmac(secret, given)) === payload.a[i]) score++;
+    if (given && (await answerHmac(secret, hash, given)) === payload.a[i]) score++;
   }
   const need = needed(payload.a.length);
   return { ok: true, passed: score >= need, score, needed: need };

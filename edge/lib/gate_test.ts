@@ -77,6 +77,23 @@ Deno.test("session bound to its record hash", async () => {
   assert(!r.ok && r.reason === "wrong_record");
 });
 
+Deno.test("answer HMACs are salted per record (no cross-record dictionary)", async () => {
+  const a = await startSession(SECRET, "a".repeat(64), POOL, 1000);
+  const b = await startSession(SECRET, "b".repeat(64), POOL, 1000);
+  const hmacsOf = (token: string) =>
+    (
+      JSON.parse(atob(token.split(".")[0].replaceAll("-", "+").replaceAll("_", "/"))) as {
+        a: string[];
+      }
+    ).a;
+  // same answers, different record hash -> disjoint HMAC sets
+  const setA = new Set(hmacsOf(a.token));
+  assert(
+    hmacsOf(b.token).every((h) => !setA.has(h)),
+    "HMACs reused across records",
+  );
+});
+
 Deno.test("tampered token rejected", async () => {
   const s = await startSession(SECRET, HASH, POOL, 1000);
   const r = await scoreSession(SECRET, HASH, s.token + "x", {}, 1000);
