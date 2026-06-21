@@ -1,0 +1,10 @@
+{
+  "tasks": {
+    "test": "deno test --allow-env",
+    "check": "deno check main.ts && deno lint",
+    "dev": "deno run --allow-net --allow-env --watch main.ts"
+  },
+  "lint": {
+    "rules": { "tags": ["recommended"] }
+  }
+}
