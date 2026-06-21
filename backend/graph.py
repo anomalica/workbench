@@ -219,6 +219,29 @@ def nodes_brief(ids, db_path: str | Path | None = None) -> dict:
         con.close()
 
 
+def retired_node_ids(ids, db_path: str | Path | None = None) -> set:
+    """Which of the given node ids are retired (retired_at set) - i.e. already
+    merged into another entity. Used to filter merge candidates whose nodes are
+    already decided. Empty set if the DB is absent."""
+    con = _open(db_path)
+    if con is None:
+        return set()
+    try:
+        ids = list(dict.fromkeys(i for i in ids if i))
+        if not ids:
+            return set()
+        placeholders = ",".join("?" * len(ids))
+        return {
+            r["id"]
+            for r in con.execute(
+                f"SELECT id FROM nodes WHERE id IN ({placeholders}) AND retired_at IS NOT NULL",
+                ids,
+            )
+        }
+    finally:
+        con.close()
+
+
 def list_merges(db_path: str | Path | None = None):
     """Active merges (node_merges, undone_at IS NULL) grouped by merge_id, for the
     cluster / un-merge view. Returns None if the DB is absent, [] if the

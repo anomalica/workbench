@@ -99,3 +99,45 @@ def undo_merge(merge_id: str) -> dict:
     if not merge_id:
         return {"ok": False, "error": "merge_id is required"}
     return _run_merge(["--undo", merge_id])
+
+
+def candidate_key(node_ids) -> str:
+    """A stable key for a candidate cluster (its sorted node ids), for matching a
+    candidate against the rejections ledger."""
+    return ",".join(sorted(str(i) for i in node_ids if i))
+
+
+def rejections_path() -> Path:
+    return _path(
+        "ANOMALICA_MERGE_REJECTIONS",
+        Path.home() / ".local" / "share" / "assimilator" / "merge-rejections.json",
+    )
+
+
+def rejected_keys() -> set:
+    """Candidate keys the human marked 'not a duplicate' - the durable rejections
+    ledger, used to filter the queue so a rejected cluster never re-shows.
+    Provisional source (a JSON list of {node_ids} / id-arrays); empty until the
+    assimilator emits it. Finalise the source on their confirmation."""
+    try:
+        data = json.loads(rejections_path().read_text())
+    except (OSError, json.JSONDecodeError):
+        return set()
+    keys = set()
+    for entry in data if isinstance(data, list) else []:
+        ids = entry.get("node_ids") if isinstance(entry, dict) else entry
+        if isinstance(ids, list):
+            keys.add(candidate_key(ids))
+    return keys
+
+
+def reject(node_ids: list[str]) -> dict:
+    """Record a durable 'these are distinct' rejection (shells the assimilator's
+    reject command). Provisional CLI - confirm the exact invocation + ledger with
+    the assimilator. Fail-closed like apply-merge."""
+    if not node_ids or len(node_ids) < 2:
+        return {
+            "ok": False,
+            "error": "need at least two node ids to reject as distinct",
+        }
+    return _run_merge(["--reject", ",".join(node_ids)])
