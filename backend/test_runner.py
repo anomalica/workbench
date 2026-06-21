@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 import backend.runner as r
 from backend.runner import (
     FIVE_HOUR_S,
+    MARGIN_PCT,
     MAX_DIGEST_ATTEMPTS,
     SEVEN_DAY_S,
     _classify_usage,
@@ -23,6 +24,7 @@ from backend.runner import (
     evaluate_gate,
     pick_top_digest_job,
     resolve_body_path,
+    safe_margin,
     window_ideal_pct,
 )
 
@@ -66,33 +68,49 @@ def test_window_ideal_line():
     assert window_ideal_pct(past, FIVE_HOUR_S, NOW) == 100.0
 
 
+# These assert specific below-line decisions, so they pass an explicit margin (3)
+# to stay independent of the configurable default (now 15).
+
+
 def test_dispatch_when_below_both_lines():
-    g = evaluate_gate(_usage(40, 0.5, 26, 0.5), NOW)
+    g = evaluate_gate(_usage(40, 0.5, 26, 0.5), NOW, margin=3)
     assert g["dispatch"] is True
     assert g["windows"]["five_hour"]["below"] and g["windows"]["seven_day"]["below"]
 
 
 def test_no_dispatch_when_five_hour_at_line():
-    g = evaluate_gate(_usage(49, 0.5, 26, 0.5), NOW)
+    g = evaluate_gate(_usage(49, 0.5, 26, 0.5), NOW, margin=3)
     assert g["dispatch"] is False
     assert "5-hour" in g["reason"]
 
 
 def test_no_dispatch_when_seven_day_at_line():
-    g = evaluate_gate(_usage(10, 0.5, 49, 0.5), NOW)
+    g = evaluate_gate(_usage(10, 0.5, 49, 0.5), NOW, margin=3)
     assert g["dispatch"] is False
     assert "7-day" in g["reason"]
 
 
 def test_margin_keeps_it_off_the_line():
-    g = evaluate_gate(_usage(50, 0.5, 50, 0.5), NOW)
+    g = evaluate_gate(_usage(50, 0.5, 50, 0.5), NOW, margin=3)
     assert g["dispatch"] is False
+
+
+def test_bigger_margin_holds_where_a_small_one_would_dispatch():
+    # 5h util 44 at ideal 50: dispatches at margin 3 (44 <= 47), holds at 15 (44 > 35)
+    assert evaluate_gate(_usage(44, 0.5, 20, 0.5), NOW, margin=3)["dispatch"] is True
+    assert evaluate_gate(_usage(44, 0.5, 20, 0.5), NOW, margin=15)["dispatch"] is False
+
+
+def test_default_margin_is_15():
+    assert MARGIN_PCT == 15.0
+    # default applies when margin isn't passed
+    assert evaluate_gate(_usage(44, 0.5, 20, 0.5), NOW)["dispatch"] is False
 
 
 def test_session_cap_blocks_even_below_line():
     # late in the 5h window the line is ~99, util 95 is "below" it, but the
     # session cap (90) must still block - never let the session approach 100.
-    g = evaluate_gate(_usage(95, 0.99, 10, 0.5), NOW)
+    g = evaluate_gate(_usage(95, 0.99, 10, 0.5), NOW, margin=3)
     assert g["dispatch"] is False
     assert "cap" in g["reason"]
 
@@ -123,8 +141,32 @@ def test_over_100_and_nan_util_do_not_dispatch():
 def test_live_scenario_from_master():
     # Master's testing reading: ~44% of the 5h window, 26% of 7-day, ~3 under
     # the line. Model 5h ~47% elapsed (44 is 3 under) and 7d ~30% elapsed.
-    g = evaluate_gate(_usage(44, 0.47, 26, 0.30), NOW)
+    g = evaluate_gate(_usage(44, 0.47, 26, 0.30), NOW, margin=3)
     assert g["dispatch"] is True
+
+
+def test_safe_margin_fails_closed():
+    assert safe_margin(20) == 20.0
+    assert safe_margin("12.5") == 12.5
+    # invalid -> safe default (15), never 0
+    assert safe_margin(0) == MARGIN_PCT  # never let it be 0
+    assert safe_margin(-5) == MARGIN_PCT
+    assert safe_margin(100) == MARGIN_PCT
+    assert safe_margin(float("nan")) == MARGIN_PCT
+    assert safe_margin(None) == MARGIN_PCT
+    assert safe_margin("not a number") == MARGIN_PCT
+
+
+def test_set_margin_persists_and_validates(monkeypatch, tmp_path):
+    monkeypatch.setenv("RUNNER_STATE_DIR", str(tmp_path / "state"))
+    run = r.Runner()
+    assert run.status()["margin"] == MARGIN_PCT  # default
+    assert run.set_margin(25)["margin"] == 25.0
+    # a fresh Runner reads the persisted value back
+    assert r.Runner().status()["margin"] == 25.0
+    # invalid input fails closed to the default, never 0
+    assert run.set_margin(0)["margin"] == MARGIN_PCT
+    assert run.set_margin("garbage")["margin"] == MARGIN_PCT
 
 
 # --- Fail-closed freshness (_classify_usage) --------------------------------
