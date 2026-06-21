@@ -27,6 +27,25 @@
   let selectedNode = $state<GraphNodeDetailT | null>(null);
   let loadingNode = $state(false);
   let detailView = $state<"claims" | "graph">("claims");
+  let graphRefresh = $state(0);
+
+  function setDetailView(v: "claims" | "graph") {
+    detailView = v;
+    // ?view=graph makes a scoped graph view bookmarkable; claims is the default.
+    const p = new URLSearchParams(window.location.search);
+    if (v === "graph") p.set("view", "graph");
+    else p.delete("view");
+    const qs = p.toString();
+    history.replaceState(null, "", window.location.pathname + (qs ? `?${qs}` : ""));
+  }
+
+  function onMerged(survivorId: string) {
+    // After a merge the victims are gone: recentre on the survivor + refresh the
+    // graph (even if it was already the centre) and the browse list.
+    graphRefresh += 1;
+    selectNode(survivorId);
+    loadNodes();
+  }
 
   // The merge toggle filters client-side: merges are few (a handful of nodes),
   // and the list is already loaded, so no need for a server round-trip.
@@ -60,6 +79,9 @@
     }
     await loadNodes();
     booted = true;
+    if (new URLSearchParams(window.location.search).get("view") === "graph") {
+      detailView = "graph";
+    }
     if (initialNodeId) selectNode(initialNodeId);
   });
 
@@ -177,12 +199,12 @@
       {#if selectedId}
         <div class="px-4 py-1.5 border-b border-border flex items-center gap-1 flex-none">
           <button
-            onclick={() => (detailView = "claims")}
+            onclick={() => setDetailView("claims")}
             class="text-xs font-ui px-2.5 py-1 rounded cursor-pointer transition-colors
               {detailView === 'claims' ? 'bg-primary text-on-primary' : 'text-on-surface-secondary hover:bg-surface-alt'}"
           >Claims</button>
           <button
-            onclick={() => (detailView = "graph")}
+            onclick={() => setDetailView("graph")}
             class="text-xs font-ui px-2.5 py-1 rounded cursor-pointer transition-colors
               {detailView === 'graph' ? 'bg-primary text-on-primary' : 'text-on-surface-secondary hover:bg-surface-alt'}"
             title="A scoped node-link graph centred on this entity"
@@ -190,7 +212,7 @@
         </div>
       {/if}
       {#if selectedId && detailView === "graph"}
-        <GraphCanvas nodeId={selectedId} onRecenter={selectNode} />
+        <GraphCanvas nodeId={selectedId} refreshKey={graphRefresh} onRecenter={selectNode} {onMerged} />
       {:else}
         <GraphNodeDetail node={selectedNode} loading={loadingNode} />
       {/if}
