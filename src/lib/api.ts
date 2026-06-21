@@ -243,6 +243,13 @@ export interface GraphNodeSummary {
   claim_count: number;
 }
 
+/** A reference to another entity (node), followable to its own node view. */
+export interface NodeRef {
+  id: string;
+  name: string;
+  node_type: string;
+}
+
 export interface GraphClaim {
   id: string;
   content: string;
@@ -253,6 +260,12 @@ export interface GraphClaim {
   claim_role?: string;
   record_id?: string;
   record_title: string;
+  /** Other entities this claim references (claim_node_refs, minus this node). */
+  corefs?: NodeRef[];
+  /** The claim's speaker (a node), if any. */
+  speaker?: NodeRef | null;
+  /** The producer of the claim's source record (a node), if any. */
+  record_producer?: NodeRef | null;
 }
 
 export interface GraphNodeDetail {

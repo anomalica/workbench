@@ -71,12 +71,18 @@
 
       {#each groups as [record, claims]}
         <div class="mb-5">
-          <div class="text-sm font-medium text-on-surface mb-2 flex items-baseline gap-2">
+          <div class="text-sm font-medium text-on-surface mb-2 flex items-baseline gap-2 flex-wrap">
             <span class="truncate">{record}</span>
-            <span class="text-xs text-on-surface-muted font-ui flex-none">{claims.length}</span>
+            {#if claims[0]?.record_producer}
+              <span class="text-xs font-ui font-normal text-on-surface-muted">by
+                <a href={`/graph/${claims[0].record_producer.id}`} class="text-primary hover:underline">{claims[0].record_producer.name}</a>
+              </span>
+            {/if}
+            <span class="text-xs text-on-surface-muted font-ui flex-none ml-auto">{claims.length}</span>
           </div>
           <div class="space-y-2.5">
             {#each claims as claim}
+              {@const corefs = (claim.corefs ?? []).filter((c) => c.id !== claim.speaker?.id)}
               <div class="rounded-md border border-border/70 bg-surface-alt/40 px-3 py-2.5 text-sm leading-relaxed">
                 <div class="flex gap-x-2 gap-y-1 flex-wrap items-center text-[11px] font-ui text-on-surface-muted mb-1.5">
                   <span class="px-1.5 py-0.5 rounded bg-primary/10 text-primary font-medium uppercase tracking-wide text-[10px]">
@@ -95,6 +101,19 @@
                   <p class="mt-1.5 pl-3 border-l-2 border-border/70 text-xs italic text-on-surface-secondary">
                     {claim.excerpt}
                   </p>
+                {/if}
+                {#if claim.speaker}
+                  <div class="mt-1.5 text-[11px] font-ui text-on-surface-muted">
+                    said by <a href={`/graph/${claim.speaker.id}`} class="text-primary hover:underline">{claim.speaker.name}</a>
+                  </div>
+                {/if}
+                {#if corefs.length > 0}
+                  <div class="mt-1 text-[11px] font-ui text-on-surface-muted flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
+                    <span>also references</span>
+                    {#each corefs as ref}
+                      <a href={`/graph/${ref.id}`} class="text-primary hover:underline" title={ref.node_type}>{ref.name}</a>
+                    {/each}
+                  </div>
                 {/if}
               </div>
             {/each}
