@@ -20,6 +20,7 @@
   import IngestViewer from "$lib/components/IngestViewer.svelte";
   import GraphView from "$lib/components/GraphView.svelte";
   import ScheduleView from "$lib/components/ScheduleView.svelte";
+  import CurateMock from "$lib/components/CurateMock.svelte";
   import type { ScheduleQueue, IngestTitle } from "$lib/schedule";
   import { carryoverState } from "$lib/carryover";
   import { themeState } from "$lib/theme.svelte";
@@ -27,7 +28,7 @@
   let user = $state<User | null>(null);
   // Top-level view: record review (default), knowledge-graph review, or the
   // prioritised work-queue Schedule view.
-  let appMode = $state<"records" | "graph" | "schedule">("records");
+  let appMode = $state<"records" | "graph" | "schedule" | "curate-mock">("records");
 
   // The scheduler's queue, fetched lazily (when the Schedule tab or the Records
   // "sort by demand" first needs it). Its recordDemand map drives the sort.
@@ -335,6 +336,10 @@
 
   async function checkUrlHash() {
     const path = window.location.pathname.slice(1);
+    if (path === "curate-mock") {
+      appMode = "curate-mock";
+      return; // self-contained mock; no data load needed
+    }
     if (path === "graph" || path === "schedule") {
       appMode = path;
       if (path === "schedule") loadSchedule();
@@ -438,7 +443,9 @@
   </header>
 
   <main class="flex-1 flex flex-col min-h-0">
-    {#if appMode === "schedule"}
+    {#if appMode === "curate-mock"}
+      <CurateMock />
+    {:else if appMode === "schedule"}
       <ScheduleView queue={scheduleQueue} {recordTitles} {ingestTitles} />
     {:else if appMode === "graph"}
       <GraphView />
