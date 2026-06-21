@@ -16,6 +16,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from backend import graph
+
 # .../anomalica/{workbench,assimilator,anomalica-common}; this is workbench/backend/.
 _ANOMALICA = Path(__file__).resolve().parents[2]
 
@@ -44,8 +46,8 @@ def read_candidates() -> list[dict]:
     return data if isinstance(data, list) else []
 
 
-def _run_merge(args: list[str]) -> dict:
-    """Shell the assimilator's merge command (writes the live DB). Returns
+def _run(module: str, args: list[str]) -> dict:
+    """Shell an assimilator host command (writes the live DB). Returns
     {ok: bool, error?: str}. Fail-closed: any non-zero exit / failure is ok=False."""
     ws = _path("ASSIMILATOR_WORKSPACE", _ANOMALICA / "assimilator" / "workspace")
     common = _path("ANOMALICA_COMMON_SRC", _ANOMALICA / "anomalica-common" / "src")
@@ -57,7 +59,7 @@ def _run_merge(args: list[str]) -> dict:
     }
     try:
         proc = subprocess.run(
-            [sys.executable, "-m", "assimilator.merge", *args],
+            [sys.executable, "-m", f"assimilator.{module}", *args],
             env=env,
             capture_output=True,
             text=True,
@@ -82,7 +84,8 @@ def apply_merge(survivor_id: str, victim_ids: list[str], canonical_name: str) ->
         }
     if survivor_id in victim_ids:
         return {"ok": False, "error": "survivor cannot also be a victim"}
-    return _run_merge(
+    return _run(
+        "merge",
         [
             "--survivor",
             survivor_id,
@@ -90,7 +93,7 @@ def apply_merge(survivor_id: str, victim_ids: list[str], canonical_name: str) ->
             ",".join(victim_ids),
             "--name",
             canonical_name,
-        ]
+        ],
     )
 
 
@@ -98,7 +101,7 @@ def undo_merge(merge_id: str) -> dict:
     """Reverse a merge by its merge_id (restores victims, re-points claims back)."""
     if not merge_id:
         return {"ok": False, "error": "merge_id is required"}
-    return _run_merge(["--undo", merge_id])
+    return _run("merge", ["--undo", merge_id])
 
 
 def candidate_key(node_ids) -> str:
@@ -107,37 +110,29 @@ def candidate_key(node_ids) -> str:
     return ",".join(sorted(str(i) for i in node_ids if i))
 
 
-def rejections_path() -> Path:
-    return _path(
-        "ANOMALICA_MERGE_REJECTIONS",
-        Path.home() / ".local" / "share" / "assimilator" / "merge-rejections.json",
-    )
-
-
 def rejected_keys() -> set:
-    """Candidate keys the human marked 'not a duplicate' - the durable rejections
-    ledger, used to filter the queue so a rejected cluster never re-shows.
-    Provisional source (a JSON list of {node_ids} / id-arrays); empty until the
-    assimilator emits it. Finalise the source on their confirmation."""
-    try:
-        data = json.loads(rejections_path().read_text())
-    except (OSError, json.JSONDecodeError):
-        return set()
-    keys = set()
-    for entry in data if isinstance(data, list) else []:
-        ids = entry.get("node_ids") if isinstance(entry, dict) else entry
-        if isinstance(ids, list):
-            keys.add(candidate_key(ids))
-    return keys
+    """Candidate keys the human marked 'not a duplicate', read from the derived
+    node_rejections table (the durable rejections.yaml ledger's queryable view).
+    Used to filter the queue so a rejected cluster never re-shows."""
+    return {candidate_key(r["node_ids"]) for r in graph.list_rejections()}
 
 
-def reject(node_ids: list[str]) -> dict:
-    """Record a durable 'these are distinct' rejection (shells the assimilator's
-    reject command). Provisional CLI - confirm the exact invocation + ledger with
-    the assimilator. Fail-closed like apply-merge."""
+def reject(node_ids: list[str], reason: str = "", by: str = "") -> dict:
+    """Record a durable 'these are distinct' rejection via the assimilator's reject
+    command (writes rejections.yaml + the node_rejections table). Fail-closed."""
     if not node_ids or len(node_ids) < 2:
         return {
             "ok": False,
             "error": "need at least two node ids to reject as distinct",
         }
-    return _run_merge(["--reject", ",".join(node_ids)])
+    return _run(
+        "reject",
+        [
+            "--nodes",
+            ",".join(node_ids),
+            "--reason",
+            reason or "marked not a duplicate in the workbench",
+            "--by",
+            by or "workbench",
+        ],
+    )

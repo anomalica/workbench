@@ -283,6 +283,29 @@ def list_merges(db_path: str | Path | None = None):
         con.close()
 
 
+def list_rejections(db_path: str | Path | None = None) -> list[dict]:
+    """Active rejections (node_rejections, undone_at IS NULL) grouped by
+    rejection_id - each a {rejection_id, node_ids} for the candidate-queue filter
+    (a rejected cluster's current node-id set). [] if the DB or table is absent."""
+    con = _open(db_path)
+    if con is None:
+        return []
+    try:
+        try:
+            rows = con.execute(
+                "SELECT rejection_id, node_id FROM node_rejections"
+                " WHERE undone_at IS NULL"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []  # node_rejections table not created yet
+        groups: dict[str, list[str]] = {}
+        for r in rows:
+            groups.setdefault(r["rejection_id"], []).append(r["node_id"])
+        return [{"rejection_id": rid, "node_ids": ids} for rid, ids in groups.items()]
+    finally:
+        con.close()
+
+
 def _noderef(node_id, name, node_type) -> dict | None:
     """A compact {id, name, node_type} for a referenced node, or None if absent."""
     if not node_id:

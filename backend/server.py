@@ -1461,10 +1461,15 @@ def curation_unmerge(body: dict) -> dict:
 
 
 @app.post("/api/curation/reject")
-def curation_reject(body: dict) -> dict:
+def curation_reject(body: dict, request: Request) -> dict:
     """Record a durable 'not a duplicate' rejection for a candidate cluster so it
-    never re-shows in the queue. Fail-closed."""
-    result = curation.reject(body.get("node_ids") or [])
+    never re-shows in the queue. Fail-closed. Attributes it to the logged-in
+    reviewer when there is one."""
+    user = request.session.get("user")
+    by = user.get("email") if user else ""
+    result = curation.reject(
+        body.get("node_ids") or [], reason=body.get("reason") or "", by=by
+    )
     if not result.get("ok"):
         raise HTTPException(
             status_code=400, detail=result.get("error", "reject failed")
