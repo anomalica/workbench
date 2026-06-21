@@ -60,7 +60,9 @@ def prerender(out: Path | None = None) -> dict:
         if detail and detail is not True:
             _write(base / "graph" / "nodes" / f"{nid}.json", detail)
             counts["node_detail"] += 1
-        ego = graph.ego_graph(nid)
+        # cap=40 matches what GraphCanvas requests, so the static ego/<id>.json
+        # is exactly what the SPA fetches online (no server to recompute a cap).
+        ego = graph.ego_graph(nid, cap=40)
         if ego and ego is not True:
             _write(base / "graph" / "ego" / f"{nid}.json", ego)
             counts["ego"] += 1
