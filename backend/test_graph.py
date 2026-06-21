@@ -55,8 +55,8 @@ def graph_db(tmp_path):
         [("Defense Intelligence Agency", ORG), ("DIA", ORG)],
     )
     con.execute(
-        "INSERT INTO records (id, title, friendly_name) VALUES (?,?,?)",
-        ("rec1", "AARO Historical Record Report", "2024-aaro"),
+        "INSERT INTO records (id, title, friendly_name, content_hash) VALUES (?,?,?,?)",
+        ("rec1", "AARO Historical Record Report", "2024-aaro", "sha256:" + "a" * 64),
     )
     for i in range(3):
         con.execute(
@@ -167,6 +167,8 @@ def test_node_detail_surfaces_aliases_and_claims(graph_db):
     assert d["claims_truncated"] is False
     assert d["claims"][0]["record_title"] == "AARO Historical Record Report"
     assert d["claims"][0]["excerpt"].startswith("excerpt")
+    # the source record deep-links to the Records tab by its public hash (56 hex)
+    assert d["claims"][0]["record_public_hash"] == "a" * 56
 
 
 def test_node_detail_surfaces_cross_entity_refs(graph_db):
