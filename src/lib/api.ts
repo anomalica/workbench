@@ -315,7 +315,7 @@ export interface MergeCandidate {
   suggested_canonical: string;
   score: number;
   node_type: string;
-  reason: "name-equiv" | "fuzzy" | "embedding";
+  reason: "name-equiv" | "name-equiv-crosstype" | "fuzzy" | "embedding";
   members: MergeMember[];
 }
 

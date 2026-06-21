@@ -125,9 +125,12 @@
 
   const REASON_LABEL: Record<string, string> = {
     "name-equiv": "identical after normalisation",
+    "name-equiv-crosstype": "same name, different types",
     fuzzy: "near-identical names",
     embedding: "same entity, different wording",
   };
+
+  let isCrossType = $derived(current?.reason === "name-equiv-crosstype");
 
   onMount(() => {
     const p = new URLSearchParams(window.location.search);
@@ -176,18 +179,26 @@
             </div>
           </div>
           <p class="text-sm text-on-surface-secondary">
-            AI-verified clusters of likely-duplicate entities. Confirm the members (uncheck any that
-            aren't the same), pick the canonical name, and merge - or skip. Click a claim count to
-            inspect that entity's claims first.
+            Proposed duplicate clusters to review. Confirm the members (uncheck any that aren't the
+            same entity), pick the canonical name, and merge - or skip. Click a claim count to
+            inspect an entity's claims before merging. Fuzzy matches are by name similarity, so check
+            them - near names aren't always the same thing.
           </p>
 
           <div class="rounded-lg border border-border bg-surface p-4 space-y-4">
             <div class="flex items-center gap-2 flex-wrap">
-              <span class="text-xs font-ui px-2 py-0.5 rounded bg-primary/10 text-primary uppercase tracking-wide">{current.node_type}</span>
-              <span class="text-xs font-ui text-on-surface-secondary">{Math.round(current.score * 100)}% confident · {REASON_LABEL[current.reason] ?? current.reason}</span>
+              <span class="text-xs font-ui px-2 py-0.5 rounded bg-primary/10 text-primary uppercase tracking-wide">
+                {isCrossType ? "mixed types" : current.node_type}
+              </span>
+              <span class="text-xs font-ui text-on-surface-secondary">{Math.round(current.score * 100)}% · {REASON_LABEL[current.reason] ?? current.reason}</span>
               <span class="flex-1"></span>
               <span class="text-xs font-ui text-on-surface-muted tabular-nums">{selectedMembers.length} selected</span>
             </div>
+            {#if isCrossType}
+              <p class="text-xs font-ui text-warning border border-warning/40 bg-warning/5 rounded px-2.5 py-1.5">
+                Spans node types - a cross-type merge. Check each member's type below; merge only if they're genuinely the same thing (e.g. an event and the matter for it), not merely same-named.
+              </p>
+            {/if}
 
             <div class="space-y-1.5">
               {#each current.members as m (m.id)}
