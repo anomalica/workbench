@@ -347,6 +347,16 @@ export async function fetchProcessing(): Promise<ProcessingStatus> {
   return res.json();
 }
 
+/** {content_hash -> {title, source_url}} for un-ingested sources (from v1 records),
+ *  so the schedule view can show a transcription job's title + source link. */
+export async function fetchIngestTitles(): Promise<
+  Record<string, { title: string; source_url: string | null }>
+> {
+  const res = await fetch("/api/ingest-titles");
+  if (!res.ok) throw new Error(`Failed to fetch ingest titles: ${res.status}`);
+  return res.json();
+}
+
 /** Flip processing mode on/off (auth-gated server-side). */
 export async function setProcessing(mode: "on" | "off"): Promise<ProcessingStatus> {
   const res = await fetch("/api/processing", {

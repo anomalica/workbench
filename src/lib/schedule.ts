@@ -78,19 +78,30 @@ export interface ScheduleQueue {
 
 const PUBLIC_HASH_LENGTH = 56;
 
-/** Resolve a job/review target to its display label + workbench deep link,
- *  given the known records' titles ({content_hash -> title}). A target whose
- *  hash is a KNOWN record shows that record's human title and deep-links into
- *  the review route by public hash (the workbench owns its URL scheme - the
- *  scheduler supplies no href). An ingest target points at an un-ingested
- *  source: no record exists, so it keeps the scheduler's label and is NOT
- *  linkable. Page targets keep their slug, no link. */
+export interface IngestTitle {
+  title: string;
+  source_url: string | null;
+}
+
+/** Resolve a job/review target to its display label + link, given the known
+ *  records' titles ({content_hash -> title}) and the un-ingested sources'
+ *  titles ({content_hash -> {title, source_url}}). A KNOWN record shows its
+ *  human title and deep-links into the review route by public hash. An
+ *  un-ingested source (e.g. a transcription job) shows its episode title and an
+ *  EXTERNAL source link (e.g. YouTube) when its v1 record supplies one; with no
+ *  v1 record it keeps the scheduler's hash label, not linkable. Page targets
+ *  keep their slug, no link. */
 export function resolveTarget(
   t: ScheduleTarget,
   titles: Record<string, string> = {},
-): { label: string; href: string | null } {
+  ingestTitles: Record<string, IngestTitle> = {},
+): { label: string; href: string | null; external?: boolean } {
   if (t.kind === "record" && t.hash && titles[t.hash]) {
     return { label: titles[t.hash], href: `/${t.hash.slice(0, PUBLIC_HASH_LENGTH)}` };
+  }
+  if (t.hash && ingestTitles[t.hash]) {
+    const it = ingestTitles[t.hash];
+    return { label: it.title, href: it.source_url, external: true };
   }
   return { label: t.label, href: t.href ?? null };
 }

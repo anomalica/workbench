@@ -1421,6 +1421,34 @@ def processing_toggle(body: dict) -> dict:
     return runner.set_mode(mode == "on")
 
 
+@app.get("/api/ingest-titles")
+def ingest_titles() -> dict:
+    """Title + source_url for un-ingested sources, keyed by content_hash, read
+    from the v1 records at ingests/store/v1/<hash>.md. Lets the schedule view show
+    a transcription job's episode title + YouTube link instead of an opaque hash.
+    Sources with no v1 record are simply absent (the UI keeps the hash fallback)."""
+    v1_dir = ingests_path / "store" / "v1"
+    out: dict[str, dict] = {}
+    if not v1_dir.exists():
+        return out
+    for md in v1_dir.glob("*.md"):
+        record_hash = re.sub(r"\.v\d+$", "", md.stem)
+        try:
+            frontmatter, _, _ = parse_frontmatter(md.read_text())
+        except OSError:
+            continue
+        title = frontmatter.get("title")
+        if not title:
+            continue
+        out[record_hash] = {
+            "title": title,
+            "source_url": frontmatter.get("source_url")
+            or frontmatter.get("reference")
+            or frontmatter.get("url"),
+        }
+    return out
+
+
 @app.post("/api/processing/margin")
 def processing_margin(body: dict) -> dict:
     """Set the dual-trend gate margin (percentage points under the ideal line the

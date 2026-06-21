@@ -6,6 +6,7 @@
     fetchCurrentUser,
     fetchReviewedHashes,
     fetchSchedule,
+    fetchIngestTitles,
     provenanceOf,
   } from "$lib/api";
   import type {
@@ -19,7 +20,7 @@
   import IngestViewer from "$lib/components/IngestViewer.svelte";
   import GraphView from "$lib/components/GraphView.svelte";
   import ScheduleView from "$lib/components/ScheduleView.svelte";
-  import type { ScheduleQueue } from "$lib/schedule";
+  import type { ScheduleQueue, IngestTitle } from "$lib/schedule";
   import { carryoverState } from "$lib/carryover";
   import { themeState } from "$lib/theme.svelte";
 
@@ -31,6 +32,9 @@
   // The scheduler's queue, fetched lazily (when the Schedule tab or the Records
   // "sort by demand" first needs it). Its recordDemand map drives the sort.
   let scheduleQueue = $state<ScheduleQueue | null>(null);
+  // {content_hash -> {title, source_url}} for un-ingested sources, so the Schedule
+  // view shows transcription jobs' episode titles + source links, not hashes.
+  let ingestTitles = $state<Record<string, IngestTitle>>({});
   let scheduleRequested = false;
   async function loadSchedule() {
     if (scheduleRequested) return;
@@ -39,6 +43,12 @@
       scheduleQueue = await fetchSchedule();
     } catch {
       scheduleRequested = false; // allow a retry
+      return;
+    }
+    try {
+      ingestTitles = await fetchIngestTitles();
+    } catch {
+      /* titles are best-effort; the UI keeps the hash fallback */
     }
   }
   // True while a cold-load deep link (e.g. /<public_hash>#claim-<uuid>) is
@@ -429,7 +439,7 @@
 
   <main class="flex-1 flex flex-col min-h-0">
     {#if appMode === "schedule"}
-      <ScheduleView queue={scheduleQueue} {recordTitles} />
+      <ScheduleView queue={scheduleQueue} {recordTitles} {ingestTitles} />
     {:else if appMode === "graph"}
       <GraphView />
     {:else if openingRecord && !selectedIngest}

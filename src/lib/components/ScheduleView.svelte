@@ -7,6 +7,7 @@
     type ScheduleQueue,
     type ScheduleJob,
     type ReviewItem,
+    type IngestTitle,
   } from "$lib/schedule";
   import {
     fetchProcessing,
@@ -22,9 +23,11 @@
   let {
     queue,
     recordTitles = {},
+    ingestTitles = {},
   }: {
     queue: ScheduleQueue | null;
     recordTitles?: Record<string, string>;
+    ingestTitles?: Record<string, IngestTitle>;
   } = $props();
 
   // Processing mode (the runner). Polled while this tab is open so the gate
@@ -238,13 +241,13 @@
         <span class="text-on-surface-secondary">percentage points under the trend line, on both windows.</span>
         <span class="text-xs text-on-surface-muted">Higher = more conservative. Default 15.</span>
       </div>
-      {#each claudeJobs.slice(0, CAP) as job (job.id)}<ScheduleJobCard {job} {recordTitles} />{/each}
+      {#each claudeJobs.slice(0, CAP) as job (job.id)}<ScheduleJobCard {job} {recordTitles} {ingestTitles} />{/each}
       {@render capNote(Math.min(claudeJobs.length, CAP), claudeJobs.length)}
     {:else if tab === "gpu"}
       <h3 class="text-sm font-medium text-on-surface flex items-baseline gap-2">
         {LANE_LABEL.gpu} lane <span class="text-xs font-ui text-on-surface-muted">{gpuJobs.length} transcription jobs, one per video - unranked</span>
       </h3>
-      {#each gpuJobs.slice(0, CAP) as job (job.id)}<ScheduleJobCard {job} {recordTitles} />{/each}
+      {#each gpuJobs.slice(0, CAP) as job (job.id)}<ScheduleJobCard {job} {recordTitles} {ingestTitles} />{/each}
       {@render capNote(Math.min(gpuJobs.length, CAP), gpuJobs.length, " (unranked - source priority not built yet)")}
     {:else if tab === "review"}
       <h3 class="text-sm font-medium text-on-surface flex items-baseline gap-2">
@@ -277,7 +280,7 @@
               >
                 {isNext ? (job.status === "eligible" ? "next →" : "next") : ""}
               </span>
-              <div class="flex-1 min-w-0"><ScheduleJobCard {job} {recordTitles} /></div>
+              <div class="flex-1 min-w-0"><ScheduleJobCard {job} {recordTitles} {ingestTitles} /></div>
             </div>
           {/each}
         </section>

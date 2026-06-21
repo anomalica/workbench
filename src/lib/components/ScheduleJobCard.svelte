@@ -1,13 +1,18 @@
 <script lang="ts">
-  import type { ScheduleJob } from "$lib/schedule";
+  import type { ScheduleJob, IngestTitle } from "$lib/schedule";
   import { LANE_LABEL, resolveTarget } from "$lib/schedule";
 
   let {
     job,
     recordTitles = {},
-  }: { job: ScheduleJob; recordTitles?: Record<string, string> } = $props();
+    ingestTitles = {},
+  }: {
+    job: ScheduleJob;
+    recordTitles?: Record<string, string>;
+    ingestTitles?: Record<string, IngestTitle>;
+  } = $props();
 
-  let resolved = $derived(resolveTarget(job.target, recordTitles));
+  let resolved = $derived(resolveTarget(job.target, recordTitles, ingestTitles));
 
   const STATUS: Record<string, { label: string; cls: string }> = {
     eligible: { label: "Eligible", cls: "bg-success/15 text-success" },
@@ -45,7 +50,11 @@
   <!-- Target: the record's title (deep-linked) when it's a known record, else
        the scheduler's label (e.g. an un-ingested source), not linkable. -->
   <div class="mt-1.5 text-on-surface flex items-baseline gap-2 flex-wrap">
-    {#if resolved.href}
+    {#if resolved.href && resolved.external}
+      <a href={resolved.href} target="_blank" rel="noopener noreferrer" class="text-primary hover:underline">
+        {resolved.label} <span aria-hidden="true" class="text-xs text-on-surface-muted">&#8599;</span>
+      </a>
+    {:else if resolved.href}
       <a href={resolved.href} class="text-primary hover:underline">{resolved.label}</a>
     {:else}
       <span>{resolved.label}</span>
