@@ -1,8 +1,9 @@
 {
   "tasks": {
     "test": "deno test --allow-env",
-    "check": "deno check main.ts && deno lint",
-    "dev": "deno run --allow-net --allow-env --watch main.ts"
+    "check": "deno check serve.ts main.ts && deno lint",
+    "dev": "deno run --allow-net --allow-env --watch serve.ts",
+    "bundle": "deno bundle serve.ts -o /tmp/edge-bundle.js"
   },
   "lint": {
     "rules": { "tags": ["recommended"] }

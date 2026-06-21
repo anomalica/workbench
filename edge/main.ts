@@ -434,9 +434,10 @@ export async function handleRequest(req: Request, env: Env, deps: Deps): Promise
   return notFound();
 }
 
-// --- Deno entry (Bunny Edge Scripting / Deno Deploy / local `deno task dev`) ---
+// --- env + deps (the Deno.serve entry lives in serve.ts, so importing this
+// module for tests never starts a server) ---
 
-function loadEnv(): Env {
+export function loadEnv(): Env {
   const get = (k: string, d = "") => Deno.env.get(k) ?? d;
   return {
     clientId: get("GITHUB_CLIENT_ID"),
@@ -454,9 +455,9 @@ function loadEnv(): Env {
   };
 }
 
-if (import.meta.main) {
-  const env = loadEnv();
-  const github = new GitHubClient(env.serviceToken, env.owner, env.branch);
-  const deps: Deps = { github, nowSec: () => Math.floor(Date.now() / 1000) };
-  Deno.serve((req) => handleRequest(req, env, deps));
+export function buildDeps(env: Env): Deps {
+  return {
+    github: new GitHubClient(env.serviceToken, env.owner, env.branch),
+    nowSec: () => Math.floor(Date.now() / 1000),
+  };
 }
