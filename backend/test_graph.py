@@ -37,6 +37,8 @@ def graph_db(tmp_path):
         CREATE TABLE node_merges (merge_id TEXT, survivor_id TEXT, victim_id TEXT,
             victim_prior_name TEXT, canonical_name TEXT, created_at TEXT,
             created_by TEXT, undone_at TEXT);
+        CREATE TABLE node_rejections (rejection_id TEXT, node_id TEXT, reason TEXT,
+            created_at TEXT, created_by TEXT, undone_at TEXT);
         """
     )
     con.execute(
@@ -108,9 +110,24 @@ def graph_db(tmp_path):
             ),
         ],
     )
+    # One active rejection (a,b distinct) + one undone (excluded).
+    con.executemany(
+        "INSERT INTO node_rejections (rejection_id, node_id, undone_at) VALUES (?,?,?)",
+        [
+            ("rj1", "rn-a", None),
+            ("rj1", "rn-b", None),
+            ("rj2", "rn-c", "2026-06-21T02:00:00Z"),
+        ],
+    )
     con.commit()
     con.close()
     return str(db)
+
+
+def test_list_rejections_groups_active_only(graph_db):
+    rj = graph.list_rejections(db_path=graph_db)
+    assert [r["rejection_id"] for r in rj] == ["rj1"]  # rj2 undone -> excluded
+    assert sorted(rj[0]["node_ids"]) == ["rn-a", "rn-b"]
 
 
 def test_stats(graph_db):

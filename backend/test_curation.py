@@ -67,17 +67,44 @@ def test_candidate_key_is_order_independent():
     assert curation.candidate_key([]) == ""
 
 
-def test_rejected_keys_missing_ledger(monkeypatch, tmp_path):
-    monkeypatch.setenv("ANOMALICA_MERGE_REJECTIONS", str(tmp_path / "absent.json"))
+def _rejections_db(tmp_path, rows):
+    import sqlite3
+
+    db = tmp_path / "knowledge.db"
+    con = sqlite3.connect(db)
+    con.execute(
+        "CREATE TABLE node_rejections (rejection_id TEXT, node_id TEXT, undone_at TEXT)"
+    )
+    con.executemany(
+        "INSERT INTO node_rejections (rejection_id, node_id, undone_at) VALUES (?,?,?)",
+        rows,
+    )
+    con.commit()
+    con.close()
+    return str(db)
+
+
+def test_rejected_keys_reads_active_from_table(monkeypatch, tmp_path):
+    db = _rejections_db(
+        tmp_path,
+        [
+            ("r1", "a", None),
+            ("r1", "b", None),
+            ("r2", "c", "2026-06-21T00:00:00Z"),  # undone -> excluded
+            ("r2", "d", "2026-06-21T00:00:00Z"),
+        ],
+    )
+    monkeypatch.setenv("GRAPH_DB_PATH", db)
+    assert curation.rejected_keys() == {"a,b"}
+
+
+def test_rejected_keys_no_table(monkeypatch, tmp_path):
+    import sqlite3
+
+    db = tmp_path / "knowledge.db"
+    sqlite3.connect(db).close()  # DB with no node_rejections table
+    monkeypatch.setenv("GRAPH_DB_PATH", str(db))
     assert curation.rejected_keys() == set()
-
-
-def test_rejected_keys_reads_ledger(monkeypatch, tmp_path):
-    f = tmp_path / "rej.json"
-    # tolerate both {node_ids:[...]} entries and bare id-arrays
-    f.write_text(json.dumps([{"node_ids": ["a", "b"]}, ["c", "d"]]))
-    monkeypatch.setenv("ANOMALICA_MERGE_REJECTIONS", str(f))
-    assert curation.rejected_keys() == {"a,b", "c,d"}
 
 
 def test_reject_validates_before_shelling():
