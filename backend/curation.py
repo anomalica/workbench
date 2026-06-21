@@ -117,6 +117,25 @@ def rejected_keys() -> set:
     return {candidate_key(r["node_ids"]) for r in graph.list_rejections()}
 
 
+def enriched_candidates() -> list[dict]:
+    """The AI-proposed merge candidates enriched with each member's
+    {id, name, node_type, claims}, with already-DECIDED clusters filtered out: a
+    merged cluster has a retired member; a rejected cluster is in the rejections
+    ledger. (Skip stays transient + client-side, so skipped candidates may
+    return.) Shared by the /api/curation/candidates endpoint and the pre-render."""
+    raw = read_candidates()
+    all_ids = {nid for c in raw for nid in c.get("node_ids", [])}
+    brief = graph.nodes_brief(all_ids)
+    retired = graph.retired_node_ids(all_ids)
+    rejected = rejected_keys()
+    return [
+        {**c, "members": [brief[i] for i in c.get("node_ids", []) if i in brief]}
+        for c in raw
+        if not any(nid in retired for nid in c.get("node_ids", []))
+        and candidate_key(c.get("node_ids", [])) not in rejected
+    ]
+
+
 def reject(node_ids: list[str], reason: str = "", by: str = "") -> dict:
     """Record a durable 'these are distinct' rejection via the assimilator's reject
     command (writes rejections.yaml + the node_rejections table). Fail-closed."""

@@ -1393,24 +1393,9 @@ def graph_ego(node_id: str, cap: int = 30) -> dict:
 
 @app.get("/api/curation/candidates")
 def curation_candidates() -> dict:
-    """The assimilator's AI-proposed, pre-vetted merge candidates, each enriched
-    with its member nodes ({id, name, node_type, claims}) so the queue renders
-    names + claim-counts (the raw proposal carries only node ids)."""
-    raw = curation.read_candidates()
-    all_ids = {nid for c in raw for nid in c.get("node_ids", [])}
-    brief = graph.nodes_brief(all_ids)
-    # Exclude already-DECIDED candidates so they never re-show: a merged cluster
-    # has a retired member; a rejected cluster is in the rejections ledger. (Skip
-    # stays transient and is handled client-side - skipped candidates may return.)
-    retired = graph.retired_node_ids(all_ids)
-    rejected = curation.rejected_keys()
-    enriched = [
-        {**c, "members": [brief[i] for i in c.get("node_ids", []) if i in brief]}
-        for c in raw
-        if not any(nid in retired for nid in c.get("node_ids", []))
-        and curation.candidate_key(c.get("node_ids", [])) not in rejected
-    ]
-    return {"candidates": enriched}
+    """The assimilator's AI-proposed, pre-vetted merge candidates, enriched with
+    member details + the decided ones filtered out (see curation.enriched_candidates)."""
+    return {"candidates": curation.enriched_candidates()}
 
 
 @app.get("/api/curation/merges")
