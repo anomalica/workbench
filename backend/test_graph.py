@@ -189,6 +189,22 @@ def test_list_merges_groups_active_only(graph_db):
     assert m1["victims"] == [{"id": "victim-1", "prior_name": "DIA (old)"}]
 
 
+def test_ego_graph_scopes_to_neighbours(graph_db):
+    # PERSON co-occurs with ORG in claim c0, so ORG's ego-graph has PERSON as a
+    # neighbour and an edge between them; the centre is flagged.
+    g = graph.ego_graph(ORG, db_path=graph_db)
+    ids = {n["id"] for n in g["nodes"]}
+    assert ORG in ids and PERSON in ids
+    assert next(n for n in g["nodes"] if n["id"] == ORG)["center"] is True
+    assert {"source": min(ORG, PERSON), "target": max(ORG, PERSON), "weight": 1} in g[
+        "edges"
+    ]
+
+
+def test_ego_graph_unknown_id_is_false(graph_db):
+    assert graph.ego_graph("nope", db_path=graph_db) is False
+
+
 def test_node_detail_unknown_id_is_false(graph_db):
     assert graph.node_detail("nope", db_path=graph_db) is False
 
