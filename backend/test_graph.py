@@ -205,6 +205,19 @@ def test_ego_graph_unknown_id_is_false(graph_db):
     assert graph.ego_graph("nope", db_path=graph_db) is False
 
 
+def test_retired_node_ids(graph_db):
+    con = sqlite3.connect(graph_db)
+    con.execute(
+        "INSERT INTO nodes (id, node_type, name, retired_at) VALUES"
+        " ('ret1','event','Gone','2026-06-21T00:00:00Z')"
+    )
+    con.commit()
+    con.close()
+    assert graph.retired_node_ids([ORG, "ret1", "nope"], db_path=graph_db) == {"ret1"}
+    assert graph.retired_node_ids([ORG, PERSON], db_path=graph_db) == set()
+    assert graph.retired_node_ids([], db_path=graph_db) == set()
+
+
 def test_node_detail_unknown_id_is_false(graph_db):
     assert graph.node_detail("nope", db_path=graph_db) is False
 

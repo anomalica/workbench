@@ -56,3 +56,30 @@ def test_apply_merge_validates_before_shelling():
 
 def test_undo_merge_requires_id():
     assert curation.undo_merge("")["ok"] is False
+
+
+def test_candidate_key_is_order_independent():
+    assert (
+        curation.candidate_key(["b", "a"])
+        == curation.candidate_key(["a", "b"])
+        == "a,b"
+    )
+    assert curation.candidate_key([]) == ""
+
+
+def test_rejected_keys_missing_ledger(monkeypatch, tmp_path):
+    monkeypatch.setenv("ANOMALICA_MERGE_REJECTIONS", str(tmp_path / "absent.json"))
+    assert curation.rejected_keys() == set()
+
+
+def test_rejected_keys_reads_ledger(monkeypatch, tmp_path):
+    f = tmp_path / "rej.json"
+    # tolerate both {node_ids:[...]} entries and bare id-arrays
+    f.write_text(json.dumps([{"node_ids": ["a", "b"]}, ["c", "d"]]))
+    monkeypatch.setenv("ANOMALICA_MERGE_REJECTIONS", str(f))
+    assert curation.rejected_keys() == {"a,b", "c,d"}
+
+
+def test_reject_validates_before_shelling():
+    assert curation.reject([])["ok"] is False
+    assert curation.reject(["only-one"])["ok"] is False
