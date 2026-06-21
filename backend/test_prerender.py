@@ -194,6 +194,15 @@ def records_repo(tmp_path, monkeypatch):
                 "content_hash": h,
                 "copyright_status": status,
                 "body": f"BODY {h[:4]}",
+                "raw_frontmatter": f"title: rec\ndescription: SECRET BLURB {h[:4]}\n",
+                "frontmatter": {
+                    "title": "rec",
+                    "copyright.status": status,
+                    "description": f"SECRET BLURB {h[:4]}",  # free-text, must drop when gated
+                    "word_timestamps": [
+                        {"word": "secret", "t": 1}
+                    ],  # verbatim transcript
+                },
             }
 
         def load_coverage(self, _h):
@@ -222,9 +231,20 @@ def test_records_prerender_gates_bodies_and_quotes(records_repo, tmp_path):
     pub_digest = json.loads((base / "ingests" / H_PUB / "digest.json").read_text())
     assert pub_digest["domain_claims"][0]["quote"] == "VERBATIM rec-pub"
 
-    # GATED record: body emptied, digest quote stripped, factual text kept.
+    # PUBLIC record keeps its raw frontmatter + free-text (redistribution allowed).
+    assert pub["raw_frontmatter"]
+    assert pub["frontmatter"].get("description")
+
+    # GATED record: body emptied, digest quote stripped, factual text kept, AND no
+    # verbatim frontmatter (raw dropped; free-text description + word_timestamps
+    # gone; only whitelisted structured metadata remains).
     gated = json.loads((base / "ingests" / f"{H_GATED}.json").read_text())
     assert gated["body"] == ""
+    assert gated["raw_frontmatter"] == ""
+    assert "description" not in gated["frontmatter"]
+    assert "word_timestamps" not in gated["frontmatter"]
+    assert gated["frontmatter"]["title"] == "rec"  # structured metadata kept
+    assert gated["frontmatter"]["copyright.status"] == "restricted"
     gated_digest = json.loads((base / "ingests" / H_GATED / "digest.json").read_text())
     claim = gated_digest["domain_claims"][0]
     assert "quote" not in claim and claim["text"] == "fact rec-gated"

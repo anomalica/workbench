@@ -52,6 +52,50 @@ def serves_verbatim(status: str | None) -> bool:
     return status in SNAPSHOT_PUBLIC
 
 
+# Frontmatter keys safe to ship for a GATED record - pure structured metadata, no
+# source content. ALLOW-LIST (same fail-safe discipline as the body): everything
+# else is dropped, so free-text never leaks via the header - not `description`
+# (publisher blurbs/abstracts), not `word_timestamps`/`speakers` (the verbatim
+# transcript), not stray HTML that parsed into the frontmatter, nor any future key.
+GATED_FRONTMATTER_ALLOW = frozenset(
+    {
+        "title",
+        "creators",
+        "authors",
+        "publisher",
+        "source_type",
+        "source_url",
+        "fetched_url",
+        "source_file",
+        "source_id",
+        "source_hash",
+        "content_hash",
+        "public_hash",
+        "provenance",
+        "schema",
+        "duration",
+        "date",
+        "date_published",
+        "date_accessed",
+        "date_extracted",
+        "copyright.status",
+    }
+)
+
+
+def _gate_record_detail(detail: dict) -> dict:
+    """A gated record's detail with all verbatim source text removed: empty body,
+    no raw_frontmatter (the verbatim YAML header), and the parsed frontmatter
+    whitelisted to safe structured metadata. Allow-list, fail-safe."""
+    fm = detail.get("frontmatter") or {}
+    return {
+        **detail,
+        "body": "",
+        "raw_frontmatter": "",
+        "frontmatter": {k: v for k, v in fm.items() if k in GATED_FRONTMATTER_ALLOW},
+    }
+
+
 def snapshot_dir() -> Path:
     return Path(
         os.environ.get(
@@ -166,10 +210,8 @@ def _prerender_records(base: Path) -> dict:
         detail = server.source.get_ingest(h)
         if detail is not None:
             if not public:
-                detail = {
-                    **detail,
-                    "body": "",
-                }  # gated body NEVER in the public snapshot
+                # gated: no body, no raw frontmatter, whitelisted metadata only
+                detail = _gate_record_detail(detail)
             _write(base / "ingests" / f"{h}.json", detail)
 
         yaml_path = digest_map.get(h)
