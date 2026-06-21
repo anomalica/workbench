@@ -17,12 +17,16 @@ from backend.runner import (
     MAX_DIGEST_ATTEMPTS,
     SEVEN_DAY_S,
     _classify_usage,
+    _eager_enabled,
     _execute_enabled,
     _parse_usage,
     current_digest_exists,
     digest_out_path,
     evaluate_gate,
+    is_eligible_import,
     pick_top_digest_job,
+    pick_top_import_job,
+    record_in_graph,
     resolve_body_path,
     safe_margin,
     window_ideal_pct,
@@ -452,3 +456,152 @@ def test_off_does_not_spawn_a_worker(monkeypatch, tmp_path):
     run = _runner(monkeypatch, tmp_path)
     run.resume_if_on()  # _on is False -> must not start a thread
     assert run._thread is None
+
+
+# --- Eager-import executor --------------------------------------------------
+
+
+def test_eager_disabled_by_default(monkeypatch):
+    monkeypatch.delenv("RUNNER_EAGER", raising=False)
+    assert _eager_enabled() is False
+    monkeypatch.setenv("RUNNER_EAGER", "1")
+    assert _eager_enabled() is True
+
+
+def test_pick_and_eligible_import(monkeypatch, tmp_path):
+    queue = {
+        "jobs": [
+            {
+                "id": "i1",
+                "lane": "eager",
+                "type": "import",
+                "status": "eligible",
+                "target": {"hash": "h1"},
+            },
+            {
+                "id": "d1",
+                "lane": "claude",
+                "type": "digest",
+                "status": "eligible",
+                "target": {"hash": "h2"},
+            },  # not an import
+            {
+                "id": "i2",
+                "lane": "eager",
+                "type": "import",
+                "status": "blocked",
+                "target": {"hash": "h3"},
+            },  # not eligible
+        ]
+    }
+    qf = tmp_path / "queue.json"
+    qf.write_text(json.dumps(queue))
+    monkeypatch.setenv("SCHEDULER_QUEUE_PATH", str(qf))
+    assert pick_top_import_job()["id"] == "i1"
+    assert pick_top_import_job({"h1"}) is None  # excluded
+    assert is_eligible_import("h1") is True
+    assert is_eligible_import("h2") is False  # it's a digest, not an import
+    assert is_eligible_import("nope") is False
+
+
+def test_record_in_graph(monkeypatch, tmp_path):
+    import sqlite3
+
+    db = tmp_path / "knowledge.db"
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE records (content_hash TEXT)")
+    con.execute("INSERT INTO records VALUES (?)", (f"sha256:{'a' * 64}",))
+    con.commit()
+    con.close()
+    monkeypatch.setenv("GRAPH_DB", str(db))
+    assert record_in_graph("a" * 64) is True
+    assert record_in_graph("b" * 64) is False
+    # missing DB -> None (can't determine -> caller HOLDS)
+    monkeypatch.setenv("GRAPH_DB", str(tmp_path / "nope.db"))
+    assert record_in_graph("a" * 64) is None
+
+
+def test_import_holds_when_graph_unknown(monkeypatch, tmp_path):
+    run = _runner(monkeypatch, tmp_path)
+    monkeypatch.setenv("RUNNER_EAGER", "1")
+    monkeypatch.setattr(r, "record_in_graph", lambda h: None)  # can't determine
+    run._execute_import({"target": {"hash": "e" * 64, "label": "Vid"}})
+    st = run.status()
+    assert st["state"] == "waiting" and "holding" in st["reason"]
+    assert "e" * 64 not in run._done  # NOT marked done - must retry, never import blind
+
+
+def test_import_skips_when_already_in_graph(monkeypatch, tmp_path):
+    run = _runner(monkeypatch, tmp_path)
+    monkeypatch.setenv("RUNNER_EAGER", "1")
+    monkeypatch.setattr(r, "record_in_graph", lambda h: True)
+    run._execute_import({"target": {"hash": "e" * 64, "label": "Vid"}})
+    assert "already in the graph" in run.status()["reason"]
+
+
+def test_import_clean_path(monkeypatch, tmp_path):
+    run = _runner(monkeypatch, tmp_path)
+    h = "a" * 64
+    monkeypatch.setenv("RUNNER_EAGER", "1")
+    # absent before import, present after -> the "it landed" confirmation
+    calls = {"n": 0}
+
+    def _in_graph(x):
+        calls["n"] += 1
+        return calls["n"] > 1  # False on the pre-check, True on the post-check
+
+    monkeypatch.setattr(r, "record_in_graph", _in_graph)
+    out = tmp_path / "d.yaml"
+    out.write_text("digest")
+    monkeypatch.setattr(r, "digest_out_path", lambda x: out)
+
+    class _Proc:
+        returncode = 0
+        stdout = ""
+
+    monkeypatch.setattr(r, "run_import", lambda d: _Proc())
+    monkeypatch.setattr(r, "rerun_scheduler", lambda: True)
+    monkeypatch.setattr(r, "is_eligible_import", lambda x: False)
+    run._execute_import({"target": {"hash": h, "label": "Vid"}})
+    st = run.status()
+    assert st["halted"] is False
+    assert st["completed"][0]["type"] == "import" and st["completed"][0]["ok"] is True
+
+
+def test_import_fails_closed_when_reschedule_unconfirmed(monkeypatch, tmp_path):
+    run = _runner(monkeypatch, tmp_path)
+    h = "a" * 64
+    monkeypatch.setenv("RUNNER_EAGER", "1")
+    # pre-check False (not yet in graph), post-check True (landed)
+    seq = iter([False, True])
+    monkeypatch.setattr(r, "record_in_graph", lambda x: next(seq, True))
+    out = tmp_path / "d.yaml"
+    out.write_text("d")
+    monkeypatch.setattr(r, "digest_out_path", lambda x: out)
+
+    class _Proc:
+        returncode = 0
+        stdout = ""
+
+    monkeypatch.setattr(r, "run_import", lambda d: _Proc())
+    monkeypatch.setattr(r, "rerun_scheduler", lambda: False)  # unconfirmed
+    run._execute_import({"target": {"hash": h, "label": "Vid"}})
+    assert run.status()["halted"] is True
+
+
+def test_tick_drains_imports_before_digests(monkeypatch, tmp_path):
+    run = _runner(monkeypatch, tmp_path)
+    monkeypatch.setenv("RUNNER_EAGER", "1")
+    monkeypatch.setattr(
+        r, "pick_top_import_job", lambda done: {"target": {"hash": "x"}}
+    )
+    hit = {"digest": False, "import": False}
+    monkeypatch.setattr(
+        run, "_execute_import", lambda job: hit.__setitem__("import", True)
+    )
+    # if the import branch returns, the usage read for the digest path never happens
+    monkeypatch.setattr(
+        r, "read_forest_usage", lambda: hit.__setitem__("digest", True) or (None, "x")
+    )
+    run._tick()
+    assert hit["import"] is True and hit["digest"] is False
