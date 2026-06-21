@@ -75,10 +75,60 @@
     }
   }
 
+  // "Now processing" card: a 1s tick drives the live elapsed counter; the ETA +
+  // expected tokens come from the historical average of completed jobs of the
+  // same type (the AI-operation ledger will become the single source of truth
+  // once it lands). One worker runs one job at a time, so there's one live job.
+  let nowMs = $state(Date.now());
+  const LANE_OF_TYPE: Record<string, string> = {
+    digest: "claude",
+    corroborate: "claude",
+    import: "claude",
+    embed: "claude",
+    transcribe: "gpu",
+    ingest: "gpu",
+  };
+  let current = $derived(processing?.current ?? null);
+  let currentLane = $derived(current ? (LANE_OF_TYPE[current.type] ?? "claude") : null);
+  let currentTitle = $derived.by(() => {
+    if (!current) return "";
+    const h = current.hash;
+    if (h && recordTitles[h]) return recordTitles[h];
+    if (h && ingestTitles[h]) return ingestTitles[h].title;
+    return current.target;
+  });
+  let elapsedS = $derived(
+    current?.started ? Math.max(0, (nowMs - Date.parse(current.started)) / 1000) : 0,
+  );
+
+  function avgOf(type: string, key: "duration_s" | "tokens"): number | null {
+    const xs = (processing?.completed ?? []).filter((c) => c.type === type && c.ok && c[key]);
+    if (!xs.length) return null;
+    return xs.reduce((a, c) => a + ((c[key] as number) ?? 0), 0) / xs.length;
+  }
+  let typicalS = $derived(current ? avgOf(current.type, "duration_s") : null);
+  let typicalTokens = $derived(current ? avgOf(current.type, "tokens") : null);
+
+  function fmtDur(s: number): string {
+    if (s < 60) return `${Math.round(s)}s`;
+    const m = Math.floor(s / 60);
+    const sec = Math.round(s % 60);
+    return sec ? `${m}m ${sec}s` : `${m}m`;
+  }
+  function fmtApprox(s: number): string {
+    return s < 90 ? `~${Math.round(s)}s` : `~${Math.round(s / 60)}m`;
+  }
+
   onMount(() => {
     loadProcessing();
     const t = setInterval(loadProcessing, 10000);
-    return () => clearInterval(t);
+    const tick = setInterval(() => {
+      nowMs = Date.now();
+    }, 1000);
+    return () => {
+      clearInterval(t);
+      clearInterval(tick);
+    };
   });
 
   // Cap how many cards render per lane - the GPU/ingest lane can be hundreds;
@@ -131,6 +181,28 @@
 {#snippet capNote(shown: number, total: number, suffix = "")}
   {#if total > shown}
     <p class="text-xs text-on-surface-muted pt-1">Showing the first {shown} of {total}{suffix}.</p>
+  {/if}
+{/snippet}
+
+{#snippet nowProcessing()}
+  {#if current}
+    <div class="rounded-md border border-primary/40 bg-primary/5 px-3 py-2.5">
+      <div class="flex items-baseline gap-2 flex-wrap">
+        <span class="text-xs font-ui font-medium text-primary uppercase tracking-wide">Now processing</span>
+        <span class="text-[10px] font-ui px-1.5 py-0.5 rounded bg-primary/10 text-primary">{current.type}</span>
+        <span class="ml-auto text-xs font-ui text-on-surface-muted tabular-nums">
+          running {fmtDur(elapsedS)}{#if typicalS}, typically {fmtApprox(typicalS)}{/if}
+        </span>
+      </div>
+      <div class="mt-1 text-on-surface">{currentTitle}</div>
+      {#if typicalS}
+        {@const left = typicalS - elapsedS}
+        <div class="mt-1 text-xs font-ui text-on-surface-muted tabular-nums">
+          {left > 0 ? `${fmtApprox(left)} left` : "over typical"}
+          {#if typicalTokens}&middot; expects ~{Math.round(typicalTokens / 1000)}k tokens{/if}
+        </div>
+      {/if}
+    </div>
   {/if}
 {/snippet}
 
@@ -219,6 +291,7 @@
         The scheduler hasn't produced a queue yet. Run <code class="font-mono">assimilator schedule</code> to generate one.
       </p>
     {:else if tab === "claude"}
+      {#if currentLane === "claude"}{@render nowProcessing()}{/if}
       <h3 class="text-sm font-medium text-on-surface flex items-baseline gap-2">
         {LANE_LABEL.claude} lane <span class="text-xs font-ui text-on-surface-muted">tokens - the scarce-budget queue</span>
       </h3>
@@ -244,6 +317,7 @@
       {#each claudeJobs.slice(0, CAP) as job (job.id)}<ScheduleJobCard {job} {recordTitles} {ingestTitles} />{/each}
       {@render capNote(Math.min(claudeJobs.length, CAP), claudeJobs.length)}
     {:else if tab === "gpu"}
+      {#if currentLane === "gpu"}{@render nowProcessing()}{/if}
       <h3 class="text-sm font-medium text-on-surface flex items-baseline gap-2">
         {LANE_LABEL.gpu} lane <span class="text-xs font-ui text-on-surface-muted">{gpuJobs.length} transcription jobs, one per video - unranked</span>
       </h3>

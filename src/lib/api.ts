@@ -336,7 +336,7 @@ export interface ProcessingStatus {
   gate: { five_hour: ProcessingWindow; seven_day: ProcessingWindow } | null;
   /** fresh | stale | unavailable */
   usage_status: string | null;
-  current: { type: string; target: string; started?: string } | null;
+  current: { type: string; target: string; hash?: string; started?: string } | null;
   checked_at: string | null;
   completed: ProcessingCompleted[];
 }
