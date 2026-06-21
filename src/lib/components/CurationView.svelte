@@ -90,11 +90,11 @@
     // The survivor is the most-referenced selected node (fewest refs to move);
     // the rest retire into it.
     const survivor = selectedMembers.reduce((a, b) => (b.claims > a.claims ? b : a));
-    const victims = selectedMembers.filter((m) => m.id !== survivor.id).map((m) => m.id);
+    const victims = selectedMembers.filter((m) => m.id !== survivor.id);
     busy = true;
     error = null;
     try {
-      await applyMerge(survivor.id, victims, canonicalName);
+      await applyMerge(survivor, victims, canonicalName);
       note = `Merged ${selectedMembers.length} nodes into "${canonicalName}".`;
       // Drop the just-merged candidate locally (the file refreshes on the next
       // propose run), refresh the merged list, and move to the next candidate.
@@ -114,7 +114,7 @@
     busy = true;
     error = null;
     try {
-      await rejectCandidate(current.node_ids);
+      await rejectCandidate(current.members);
       note = "Recorded as not a duplicate - it won't be proposed again.";
       candidates = candidates.filter((_, i) => i !== index);
       if (index >= candidates.length) index = Math.max(0, candidates.length - 1);

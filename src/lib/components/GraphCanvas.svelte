@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import cytoscape from "cytoscape";
-  import { applyMerge } from "$lib/api";
+  import { applyMerge, STATIC_READS } from "$lib/api";
 
   // A SCOPED node-link graph centred on one node (its ego-graph from
   // /api/graph/ego/<id>) - never the whole graph. Explore mode: tap a node to
@@ -55,7 +55,10 @@
     loading = true;
     error = null;
     try {
-      const res = await fetch(`/api/graph/ego/${id}?cap=40`);
+      // Static mode reads the pre-rendered ego file (rendered at cap=40 to match).
+      const res = await fetch(
+        STATIC_READS ? `/api/graph/ego/${id}.json` : `/api/graph/ego/${id}?cap=40`,
+      );
       if (!res.ok) throw new Error(`Graph fetch failed (${res.status})`);
       const g = await res.json();
       count = g.nodes.length;
@@ -171,8 +174,8 @@
     merging = true;
     mergeError = null;
     try {
-      const victims = selected.filter((s) => s.id !== survivor!.id).map((s) => s.id);
-      await applyMerge(survivor.id, victims, canonical.trim());
+      const victims = selected.filter((s) => s.id !== survivor!.id);
+      await applyMerge(survivor, victims, canonical.trim());
       onMerged?.(survivor.id); // parent recentres on the survivor + refreshes
       selected = [];
     } catch (e) {

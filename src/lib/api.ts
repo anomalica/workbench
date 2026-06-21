@@ -280,17 +280,54 @@ export interface GraphNodeDetail {
   claims: GraphClaim[];
 }
 
-/** Graph totals + node breakdown by type. Null when the assimilator DB isn't
- *  available (503), so the view can show an unavailable state. */
+// --- Static-read mode (serverless deploy) -----------------------------------
+// In the serverless deploy the graph + curation READS come from the pre-rendered
+// JSON snapshot on the CDN (backend/prerender.py) - no live backend. The snapshot
+// mirrors the API paths with a ".json" suffix, so a read just gains ".json" and
+// the node list (shipped whole) is filtered client-side. WRITES are unchanged:
+// they POST to the same /api/* paths, served online by the edge function.
+// Off by default (dev hits the FastAPI backend); set VITE_STATIC_READS=1 to build
+// the static SPA or to test the snapshot path locally.
+export const STATIC_READS = import.meta.env.VITE_STATIC_READS === "1";
+
+/** A read path: static-mode appends ".json" (the snapshot), else the live API. */
+function readPath(apiPath: string): string {
+  return STATIC_READS ? `${apiPath}.json` : apiPath;
+}
+
+/** Client-side equivalent of the backend list_nodes filter (name substring +
+ *  exact type), used when the static snapshot ships the whole node list.
+ *  Note: the static list carries no alias strings, so search is name-only
+ *  (the live backend also matches aliases). */
+export function filterNodes(
+  nodes: GraphNodeSummary[],
+  type?: string,
+  q?: string,
+): GraphNodeSummary[] {
+  const needle = q?.trim().toLowerCase();
+  return nodes.filter(
+    (n) => (!type || n.node_type === type) && (!needle || n.name.toLowerCase().includes(needle)),
+  );
+}
+
+/** Graph totals + node breakdown by type. Null when the graph isn't available
+ *  (503 live, or 404 in static mode), so the view can show an unavailable state. */
 export async function fetchGraphStats(): Promise<GraphStats | null> {
-  const res = await fetch("/api/graph/stats");
-  if (res.status === 503) return null;
+  const res = await fetch(readPath("/api/graph/stats"));
+  if (res.status === 503 || res.status === 404) return null;
   if (!res.ok) throw new Error(`Failed to fetch graph stats: ${res.status}`);
   return res.json();
 }
 
-/** Browse/search entities, optionally filtered by type. */
+/** Browse/search entities, optionally filtered by type. In static mode the whole
+ *  list is fetched once and filtered client-side. */
 export async function fetchGraphNodes(type?: string, q?: string): Promise<GraphNodeSummary[]> {
+  if (STATIC_READS) {
+    const res = await fetch("/api/graph/nodes.json");
+    if (res.status === 503 || res.status === 404) return [];
+    if (!res.ok) throw new Error(`Failed to fetch graph nodes: ${res.status}`);
+    return filterNodes(await res.json(), type, q);
+  }
   const params = new URLSearchParams();
   if (type) params.set("type", type);
   if (q) params.set("q", q);
@@ -309,6 +346,8 @@ export interface MergeMember {
   name: string;
   node_type: string;
   claims: number;
+  /** the node's alias surface forms -> the ledger entry's prior_names (online). */
+  aliases?: string[];
 }
 
 export interface MergeCandidate {
@@ -330,27 +369,43 @@ export interface ActiveMerge {
 }
 
 export async function fetchMergeCandidates(): Promise<MergeCandidate[]> {
-  const res = await fetch("/api/curation/candidates");
+  const res = await fetch(readPath("/api/curation/candidates"));
+  if (res.status === 404 && STATIC_READS) return [];
   if (!res.ok) throw new Error(`Failed to fetch candidates: ${res.status}`);
   return (await res.json()).candidates;
 }
 
 export async function fetchActiveMerges(): Promise<ActiveMerge[]> {
-  const res = await fetch("/api/curation/merges");
+  const res = await fetch(readPath("/api/curation/merges"));
+  if (res.status === 404 && STATIC_READS) return [];
   if (!res.ok) throw new Error(`Failed to fetch merges: ${res.status}`);
   return (await res.json()).merges;
 }
 
-/** Apply a merge (writes the live graph via the assimilator). Throws on failure. */
+/** A node reference carried in a curation write so both backends are satisfied:
+ *  the local FastAPI uses the ids, the online edge (no DB) uses the natural
+ *  identity (name/node_type/aliases -> the ledger's prior_names). */
+function nodeRef(m: MergeMember) {
+  return { id: m.id, name: m.name, node_type: m.node_type, aliases: m.aliases ?? [] };
+}
+
+/** Apply a merge. Sends both bare ids (FastAPI) and node refs (edge ledger).
+ *  Throws on failure. */
 export async function applyMerge(
-  survivor_id: string,
-  victim_ids: string[],
+  survivor: MergeMember,
+  victims: MergeMember[],
   canonical_name: string,
 ): Promise<void> {
   const res = await fetch("/api/curation/merge", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ survivor_id, victim_ids, canonical_name }),
+    body: JSON.stringify({
+      survivor_id: survivor.id,
+      victim_ids: victims.map((v) => v.id),
+      canonical_name,
+      survivor: nodeRef(survivor),
+      victims: victims.map(nodeRef),
+    }),
   });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
@@ -358,12 +413,16 @@ export async function applyMerge(
   }
 }
 
-/** Record a durable 'not a duplicate' rejection for a candidate cluster. */
-export async function rejectCandidate(node_ids: string[]): Promise<void> {
+/** Record a durable 'not a duplicate' rejection for a candidate cluster. Sends
+ *  both bare ids (FastAPI) and node refs (edge ledger). */
+export async function rejectCandidate(members: MergeMember[]): Promise<void> {
   const res = await fetch("/api/curation/reject", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ node_ids }),
+    body: JSON.stringify({
+      node_ids: members.map((m) => m.id),
+      nodes: members.map(nodeRef),
+    }),
   });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
@@ -468,7 +527,7 @@ export async function saveJudgment(
 }
 
 export async function fetchGraphNode(id: string): Promise<GraphNodeDetail | null> {
-  const res = await fetch(`/api/graph/nodes/${encodeURIComponent(id)}`);
+  const res = await fetch(readPath(`/api/graph/nodes/${encodeURIComponent(id)}`));
   if (res.status === 404 || res.status === 503) return null;
   if (!res.ok) throw new Error(`Failed to fetch graph node: ${res.status}`);
   return res.json();
