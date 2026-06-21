@@ -357,6 +357,19 @@ export async function applyMerge(
   }
 }
 
+/** Record a durable 'not a duplicate' rejection for a candidate cluster. */
+export async function rejectCandidate(node_ids: string[]): Promise<void> {
+  const res = await fetch("/api/curation/reject", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ node_ids }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail || `Reject failed (${res.status})`);
+  }
+}
+
 /** Reverse a merge by its merge_id. Throws on failure. */
 export async function undoMerge(merge_id: string): Promise<void> {
   const res = await fetch("/api/curation/unmerge", {

@@ -5,6 +5,7 @@
     fetchActiveMerges,
     applyMerge,
     undoMerge,
+    rejectCandidate,
     type MergeCandidate,
     type ActiveMerge,
   } from "$lib/api";
@@ -100,6 +101,23 @@
       candidates = candidates.filter((_, i) => i !== index);
       if (index >= candidates.length) index = Math.max(0, candidates.length - 1);
       merges = await fetchActiveMerges();
+      syncUrl();
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function doReject() {
+    if (!current) return;
+    busy = true;
+    error = null;
+    try {
+      await rejectCandidate(current.node_ids);
+      note = "Recorded as not a duplicate - it won't be proposed again.";
+      candidates = candidates.filter((_, i) => i !== index);
+      if (index >= candidates.length) index = Math.max(0, candidates.length - 1);
       syncUrl();
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
@@ -234,8 +252,8 @@
               <button onclick={doMerge} disabled={busy || selectedMembers.length < 2 || !canonicalName} class="px-3 py-1.5 rounded bg-primary text-on-primary text-sm font-medium cursor-pointer disabled:opacity-40 hover:opacity-90">
                 {busy ? "Merging..." : `Merge ${selectedMembers.length} nodes`}
               </button>
-              <button onclick={() => go(index + 1)} disabled={busy} class="px-3 py-1.5 rounded border border-border text-on-surface-secondary text-sm cursor-pointer hover:bg-surface-alt">Not a duplicate</button>
-              <button onclick={() => go(index + 1)} disabled={busy} class="px-3 py-1.5 rounded text-on-surface-muted text-sm cursor-pointer hover:bg-surface-alt">Skip</button>
+              <button onclick={doReject} disabled={busy} class="px-3 py-1.5 rounded border border-border text-on-surface-secondary text-sm cursor-pointer hover:bg-surface-alt" title="Confirmed distinct - record durably; never proposed again">Not a duplicate</button>
+              <button onclick={() => go(index + 1)} disabled={busy} class="px-3 py-1.5 rounded text-on-surface-muted text-sm cursor-pointer hover:bg-surface-alt" title="Not now - may reappear in a future run">Skip</button>
             </div>
           </div>
         </div>
