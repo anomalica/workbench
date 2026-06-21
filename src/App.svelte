@@ -29,6 +29,9 @@
   // Top-level view: record review (default), knowledge-graph review, or the
   // prioritised work-queue Schedule view.
   let appMode = $state<"records" | "graph" | "schedule" | "curate-mock">("records");
+  // A node to open directly in the graph view (deep link /graph/<node_id>), so a
+  // claim-count / any link can jump straight to that node's claims in context.
+  let graphNodeId = $state<string | undefined>(undefined);
 
   // The scheduler's queue, fetched lazily (when the Schedule tab or the Records
   // "sort by demand" first needs it). Its recordDemand map drives the sort.
@@ -324,6 +327,7 @@
   }
 
   function showGraph() {
+    graphNodeId = undefined; // nav click opens the list, not a specific node
     appMode = "graph";
     history.pushState(null, "", "/graph");
   }
@@ -339,6 +343,15 @@
     if (path === "curate-mock") {
       appMode = "curate-mock";
       return; // self-contained mock; no data load needed
+    }
+    if (path.startsWith("graph/")) {
+      const id = path.slice("graph/".length);
+      if (id) {
+        graphNodeId = id;
+        appMode = "graph";
+        loadIngests();
+        return;
+      }
     }
     if (path === "graph" || path === "schedule") {
       appMode = path;
@@ -448,7 +461,7 @@
     {:else if appMode === "schedule"}
       <ScheduleView queue={scheduleQueue} {recordTitles} {ingestTitles} />
     {:else if appMode === "graph"}
-      <GraphView />
+      <GraphView initialNodeId={graphNodeId} />
     {:else if openingRecord && !selectedIngest}
       <!-- Cold-load deep-link: list + record + digest are fetching. Show a
            centred indicator so the user knows the click registered. Hidden

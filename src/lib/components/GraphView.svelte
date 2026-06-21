@@ -10,6 +10,10 @@
   } from "$lib/api";
   import GraphNodeDetail from "./GraphNodeDetail.svelte";
 
+  // Optional node to open on mount (deep link: /graph/<node_id>), so the
+  // curation card / any link can jump straight to a node's claims in context.
+  let { initialNodeId }: { initialNodeId?: string } = $props();
+
   let stats = $state<GraphStats | null>(null);
   let unavailable = $state(false);
   let booted = $state(false);
@@ -54,6 +58,7 @@
     }
     await loadNodes();
     booted = true;
+    if (initialNodeId) selectNode(initialNodeId);
   });
 
   // Debounced re-query when the type filter or search text changes.
