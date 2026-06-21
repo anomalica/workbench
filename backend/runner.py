@@ -814,7 +814,7 @@ class Runner:
                 reason=f"would digest '{title}' - execution disabled (set RUNNER_EXECUTE=1)",
                 usage_status=ustat,
                 gate=gate_windows,
-                current={"type": "digest", "target": title},
+                current={"type": "digest", "target": title, "hash": h},
             )
             self._sleep(POLL_INTERVAL_S)
             return
@@ -836,7 +836,12 @@ class Runner:
             reason=f"digesting '{title}'",
             usage_status=ustat,
             gate=gate_windows,
-            current={"type": "digest", "target": title, "started": start.isoformat()},
+            current={
+                "type": "digest",
+                "target": title,
+                "hash": h,
+                "started": start.isoformat(),
+            },
         )
         ok = False
         tokens = None
@@ -939,7 +944,12 @@ class Runner:
             state="running",
             reason=f"importing '{title}' into the graph",
             gate=None,
-            current={"type": "import", "target": title, "started": start.isoformat()},
+            current={
+                "type": "import",
+                "target": title,
+                "hash": h,
+                "started": start.isoformat(),
+            },
         )
         ok = False
         err = None
