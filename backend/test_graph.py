@@ -72,6 +72,14 @@ def graph_db(tmp_path):
             "INSERT INTO claim_node_refs (claim_id, node_id) VALUES (?,?)",
             (f"c{i}", ORG),
         )
+    # Cross-entity refs on c0: PERSON is its speaker, a co-referenced node, and
+    # the record's producer - all of which the detail view should surface as
+    # followable entity links.
+    con.execute("UPDATE records SET producer_id = ? WHERE id = 'rec1'", (PERSON,))
+    con.execute("UPDATE claims SET speaker_id = ? WHERE id = 'c0'", (PERSON,))
+    con.execute(
+        "INSERT INTO claim_node_refs (claim_id, node_id) VALUES ('c0', ?)", (PERSON,)
+    )
     con.commit()
     con.close()
     return str(db)
@@ -114,6 +122,21 @@ def test_node_detail_surfaces_aliases_and_claims(graph_db):
     assert d["claims_truncated"] is False
     assert d["claims"][0]["record_title"] == "AARO Historical Record Report"
     assert d["claims"][0]["excerpt"].startswith("excerpt")
+
+
+def test_node_detail_surfaces_cross_entity_refs(graph_db):
+    d = graph.node_detail(ORG, db_path=graph_db)
+    c0 = next(c for c in d["claims"] if c["id"] == "c0")
+    # the claim's speaker is a followable node
+    assert c0["speaker"] == {"id": PERSON, "name": "Lazar, Bob", "node_type": "person"}
+    # the record's producer is a followable node
+    assert c0["record_producer"]["id"] == PERSON
+    # co-referenced entities include PERSON but exclude THIS node (ORG)
+    coref_ids = [r["id"] for r in c0["corefs"]]
+    assert PERSON in coref_ids and ORG not in coref_ids
+    # a claim with no extra refs has empty corefs / no speaker
+    c1 = next(c for c in d["claims"] if c["id"] == "c1")
+    assert c1["corefs"] == [] and c1["speaker"] is None
 
 
 def test_node_detail_unknown_id_is_false(graph_db):
