@@ -1676,7 +1676,9 @@ _verification_sessions: dict[str, dict] = {}
 
 
 def _normalise_word(word: str) -> str:
-    return word.strip(string.punctuation + "“”‘’\"'").lower()
+    # Strip surrounding whitespace as well as punctuation/quotes so a response
+    # like " ufo " still matches (the edge port in edge/lib/gate.ts mirrors this).
+    return word.strip(string.whitespace + string.punctuation + "“”‘’\"'").lower()
 
 
 def _drop_expired_sessions(now: float) -> None:
