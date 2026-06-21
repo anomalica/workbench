@@ -72,7 +72,11 @@
       {#each groups as [record, claims]}
         <div class="mb-5">
           <div class="text-sm font-medium text-on-surface mb-2 flex items-baseline gap-2 flex-wrap">
-            <span class="truncate">{record}</span>
+            {#if claims[0]?.record_public_hash}
+              <a href={`/${claims[0].record_public_hash}`} class="truncate text-primary hover:underline" title="Open the source record in the Records tab">{record}</a>
+            {:else}
+              <span class="truncate">{record}</span>
+            {/if}
             {#if claims[0]?.record_producer}
               <span class="text-xs font-ui font-normal text-on-surface-muted">by
                 <a href={`/graph/${claims[0].record_producer.id}`} class="text-primary hover:underline">{claims[0].record_producer.name}</a>

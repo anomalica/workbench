@@ -260,6 +260,8 @@ export interface GraphClaim {
   claim_role?: string;
   record_id?: string;
   record_title: string;
+  /** The source record's public hash, to deep-link to it in the Records tab. */
+  record_public_hash?: string | null;
   /** Other entities this claim references (claim_node_refs, minus this node). */
   corefs?: NodeRef[];
   /** The claim's speaker (a node), if any. */

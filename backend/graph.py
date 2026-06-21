@@ -306,6 +306,15 @@ def list_rejections(db_path: str | Path | None = None) -> list[dict]:
         con.close()
 
 
+def _public_hash(content_hash) -> str | None:
+    """The record's public hash (content_hash hex, first 56 chars) - the workbench's
+    record deep-link key. None if absent."""
+    if not content_hash:
+        return None
+    h = str(content_hash).removeprefix("sha256:")
+    return h[:56] if h else None
+
+
 def _noderef(node_id, name, node_type) -> dict | None:
     """A compact {id, name, node_type} for a referenced node, or None if absent."""
     if not node_id:
@@ -350,6 +359,9 @@ def node_detail(node_id: str, db_path: str | Path | None = None):
                 "claim_role": r["claim_role"],
                 "record_id": r["record_id"],
                 "record_title": r["record_title"] or r["record_name"] or r["record_id"],
+                # The record's public hash (content_hash[:56]) so the UI can deep-
+                # link the source to its record in the Records tab.
+                "record_public_hash": _public_hash(r["record_content_hash"]),
                 # The speaker and the record's producer are themselves nodes -
                 # surface them so the UI can link to their entity views.
                 "speaker": _noderef(r["sp_id"], r["sp_name"], r["sp_type"]),
@@ -360,6 +372,7 @@ def node_detail(node_id: str, db_path: str | Path | None = None):
                 "SELECT c.id, c.content, c.claim_type, c.attestation, c.original_excerpt,"
                 " c.location_in_record, c.claim_role, c.record_id,"
                 " rec.title AS record_title, rec.friendly_name AS record_name,"
+                " rec.content_hash AS record_content_hash,"
                 " sp.id AS sp_id, sp.name AS sp_name, sp.node_type AS sp_type,"
                 " pr.id AS pr_id, pr.name AS pr_name, pr.node_type AS pr_type"
                 " FROM claims c"
