@@ -1421,6 +1421,15 @@ def processing_toggle(body: dict) -> dict:
     return runner.set_mode(mode == "on")
 
 
+@app.post("/api/processing/margin")
+def processing_margin(body: dict) -> dict:
+    """Set the dual-trend gate margin (percentage points under the ideal line the
+    runner holds for before dispatching). Validated/fail-closed in the runner: an
+    invalid value falls back to the safe default, never 0. Ungated like the toggle
+    (local control, no spend) - same pre-public auth note applies."""
+    return runner.set_margin(body.get("margin"))
+
+
 @app.get("/api/sources/{full_hash}")
 def get_source(full_hash: str) -> FileResponse:
     """Serve an original source file by its full SHA-256 hash.

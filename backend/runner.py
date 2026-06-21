@@ -31,11 +31,25 @@ FIVE_HOUR_S = 5 * 3600
 SEVEN_DAY_S = 7 * 86400
 
 # Gate tuning.
-MARGIN_PCT = 3.0  # stay this many points below the line before dispatching
+MARGIN_PCT = 15.0  # default: stay this many points below the line before dispatching
 SESSION_CAP_PCT = 90.0  # never dispatch if the 5h session is already this high
 FRESH_MAX_AGE_S = 20 * 60  # usage outside +/- this window is stale - never gate on it
 POLL_INTERVAL_S = 90  # re-check cadence while waiting at/above the line
 MAX_DIGEST_ATTEMPTS = 2  # stop re-spending on a record that keeps failing
+
+
+def safe_margin(value, default: float = MARGIN_PCT) -> float:
+    """Validate a user-supplied trend-line margin (percentage points). Fail
+    closed: anything non-numeric, NaN, <=0, or >=100 falls back to the safe
+    default (never 0, which would let the gate dispatch right at the line)."""
+    try:
+        m = float(value)
+    except (TypeError, ValueError):
+        return default
+    if m != m or not (0.0 < m < 100.0):  # NaN or out of (0, 100)
+        return default
+    return m
+
 
 DEFAULT_STATE_DIR = Path.home() / ".local" / "share" / "anomalica-workbench"
 FOREST_USAGE_DIR = "/var/lib/forest/bronze/claude-usage"
@@ -457,6 +471,9 @@ class Runner:
         self._failed: dict[str, int] = {}
         self._halted = False
         self._halt_reason = ""
+        # The trend-line margin (percentage points under the ideal line) the gate
+        # holds for, configurable from the UI. Persisted; fail-closed to the default.
+        self._margin = MARGIN_PCT
         self._load()
         # NB: __init__ does NOT spawn the worker (bare imports - e.g. tests - must
         # never start it SSHing to Forest). The server calls resume_if_on() from
@@ -479,6 +496,7 @@ class Runner:
             self._failed = {
                 str(k): int(v) for k, v in dict(d.get("failed", {})).items()
             }
+            self._margin = safe_margin(d.get("margin"))
         except (OSError, json.JSONDecodeError, ValueError, TypeError):
             pass
 
@@ -491,6 +509,7 @@ class Runner:
                         "on": self._on,
                         "completed": self._completed[-50:],
                         "failed": self._failed,
+                        "margin": self._margin,
                     }
                 )
             )
@@ -503,6 +522,7 @@ class Runner:
             return {
                 "mode": "on" if self._on else "off",
                 "halted": self._halted,
+                "margin": self._margin,
                 **self._status,
                 "completed": list(reversed(self._completed[-20:])),
             }
@@ -515,6 +535,14 @@ class Runner:
                 self._save()
             if on:
                 self._spawn()
+        return self.status()
+
+    def set_margin(self, value) -> dict:
+        """Set the trend-line margin (percentage points under the line the gate
+        holds for). Invalid input fails closed to the safe default - never 0."""
+        with self._lock:
+            self._margin = safe_margin(value)
+            self._save()
         return self.status()
 
     # -- internals --
@@ -584,7 +612,9 @@ class Runner:
             )
             self._sleep(POLL_INTERVAL_S)
             return
-        gate = evaluate_gate(rec, _now())
+        with self._lock:
+            margin = self._margin
+        gate = evaluate_gate(rec, _now(), margin=margin)
         if not gate["dispatch"]:
             self._set(
                 state="waiting",
