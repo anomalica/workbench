@@ -330,6 +330,8 @@ export interface ProcessingStatus {
   state: string;
   /** true when the worker has stopped itself (fail-closed); clears on an off->on toggle */
   halted: boolean;
+  /** trend-line margin: dispatch only when usage is this many points under the ideal line */
+  margin: number;
   reason: string;
   gate: { five_hour: ProcessingWindow; seven_day: ProcessingWindow } | null;
   /** fresh | stale | unavailable */
@@ -351,6 +353,18 @@ export async function setProcessing(mode: "on" | "off"): Promise<ProcessingStatu
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ mode }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || `Error ${res.status}`);
+  return data;
+}
+
+/** Set the gate's trend-line margin (percentage points under the ideal line). */
+export async function setProcessingMargin(margin: number): Promise<ProcessingStatus> {
+  const res = await fetch("/api/processing/margin", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ margin }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.detail || `Error ${res.status}`);

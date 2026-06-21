@@ -8,7 +8,12 @@
     type ScheduleJob,
     type ReviewItem,
   } from "$lib/schedule";
-  import { fetchProcessing, setProcessing, type ProcessingStatus } from "$lib/api";
+  import {
+    fetchProcessing,
+    setProcessing,
+    setProcessingMargin,
+    type ProcessingStatus,
+  } from "$lib/api";
   import ScheduleJobCard from "./ScheduleJobCard.svelte";
 
   // The live scheduler queue (from /api/schedule), fetched by the parent (null
@@ -46,6 +51,24 @@
       procError = e instanceof Error ? e.message : String(e);
     } finally {
       toggling = false;
+    }
+  }
+
+  // The trend-line margin (points under the ideal line the gate holds for). The
+  // input is editable while focused; we commit on change/blur, and the value
+  // re-syncs from the server poll whenever the field isn't being edited.
+  let marginDraft = $state<number | null>(null);
+  let marginEditing = $state(false);
+  let marginValue = $derived(marginEditing ? marginDraft : (processing?.margin ?? null));
+
+  async function commitMargin() {
+    marginEditing = false;
+    if (marginDraft === null || marginDraft === processing?.margin) return;
+    procError = null;
+    try {
+      processing = await setProcessingMargin(marginDraft);
+    } catch (e) {
+      procError = e instanceof Error ? e.message : String(e);
     }
   }
 
@@ -126,22 +149,8 @@
 {/snippet}
 
 <div class="flex-1 flex flex-col min-h-0">
-  <!-- Tabs -->
-  <div class="px-6 py-2 border-b border-border bg-surface-alt flex items-center gap-1 flex-none">
-    {#each TABS as t}
-      <button
-        onclick={() => { tab = t.id; }}
-        class="text-sm font-ui px-3 py-1 rounded cursor-pointer transition-colors
-          {tab === t.id ? 'bg-primary text-on-primary' : 'text-on-surface-secondary hover:bg-surface'}"
-      >{t.label}</button>
-    {/each}
-    <span class="flex-1"></span>
-    <span class="text-xs font-ui text-on-surface-muted">
-      {#if queue?.generatedAt}generated {new Date(queue.generatedAt).toLocaleString()}{:else if queue}not yet generated{/if}
-    </span>
-  </div>
-
-  <!-- Processing mode (the runner): the autonomous worker + its dual-trend gate -->
+  <!-- Processing mode (the runner): the autonomous worker + its dual-trend gate.
+       Top row, above the lane selector. -->
   <div class="px-6 py-2 border-b border-border flex items-center gap-3 flex-wrap flex-none text-xs font-ui">
     <span class="font-medium text-on-surface">Processing mode</span>
     <button
@@ -177,6 +186,21 @@
     {#if procError}<span class="text-error">{procError}</span>{/if}
   </div>
 
+  <!-- Lane selector -->
+  <div class="px-6 py-2 border-b border-border bg-surface-alt flex items-center gap-1 flex-none">
+    {#each TABS as t}
+      <button
+        onclick={() => { tab = t.id; }}
+        class="text-sm font-ui px-3 py-1 rounded cursor-pointer transition-colors
+          {tab === t.id ? 'bg-primary text-on-primary' : 'text-on-surface-secondary hover:bg-surface'}"
+      >{t.label}</button>
+    {/each}
+    <span class="flex-1"></span>
+    <span class="text-xs font-ui text-on-surface-muted">
+      {#if queue?.generatedAt}generated {new Date(queue.generatedAt).toLocaleString()}{:else if queue}not yet generated{/if}
+    </span>
+  </div>
+
   <!-- Honest caveats about the live data -->
   <div class="px-6 py-2 border-b border-border/60 flex-none text-xs font-ui text-on-surface-muted">
     Live queue from the scheduler. Ingest jobs are unranked (source priority isn't a built concept
@@ -195,6 +219,25 @@
       <h3 class="text-sm font-medium text-on-surface flex items-baseline gap-2">
         {LANE_LABEL.claude} lane <span class="text-xs font-ui text-on-surface-muted">tokens - the scarce-budget queue</span>
       </h3>
+      <!-- Gate margin setting: hold until usage is N points under the trend line -->
+      <div class="rounded-md border border-border bg-surface-alt px-3 py-2 flex items-center gap-2 flex-wrap text-sm">
+        <label for="gate-margin" class="text-on-surface-secondary">Dispatch only when usage is</label>
+        <input
+          id="gate-margin"
+          type="number"
+          min="1"
+          max="99"
+          step="1"
+          value={marginValue ?? ""}
+          oninput={(e) => { marginEditing = true; marginDraft = e.currentTarget.valueAsNumber; }}
+          onchange={commitMargin}
+          onblur={commitMargin}
+          class="w-16 px-2 py-1 rounded border border-border bg-surface text-on-surface tabular-nums text-right
+            focus:outline-none focus:ring-2 focus:ring-primary/40"
+        />
+        <span class="text-on-surface-secondary">percentage points under the trend line, on both windows.</span>
+        <span class="text-xs text-on-surface-muted">Higher = more conservative. Default 15.</span>
+      </div>
       {#each claudeJobs.slice(0, CAP) as job (job.id)}<ScheduleJobCard {job} {recordTitles} />{/each}
       {@render capNote(Math.min(claudeJobs.length, CAP), claudeJobs.length)}
     {:else if tab === "gpu"}
