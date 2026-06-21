@@ -9,6 +9,7 @@
     type GraphNodeDetail as GraphNodeDetailT,
   } from "$lib/api";
   import GraphNodeDetail from "./GraphNodeDetail.svelte";
+  import GraphCanvas from "./GraphCanvas.svelte";
 
   // Optional node to open on mount (deep link: /graph/<node_id>), so the
   // curation card / any link can jump straight to a node's claims in context.
@@ -25,6 +26,7 @@
   let selectedId = $state<string | null>(null);
   let selectedNode = $state<GraphNodeDetailT | null>(null);
   let loadingNode = $state(false);
+  let detailView = $state<"claims" | "graph">("claims");
 
   // The merge toggle filters client-side: merges are few (a handful of nodes),
   // and the list is already loaded, so no need for a server round-trip.
@@ -170,9 +172,28 @@
       </div>
     </div>
 
-    <!-- Detail -->
+    <!-- Detail: a node's claims, or the scoped visual graph centred on it -->
     <div class="flex-1 flex flex-col min-h-0">
-      <GraphNodeDetail node={selectedNode} loading={loadingNode} />
+      {#if selectedId}
+        <div class="px-4 py-1.5 border-b border-border flex items-center gap-1 flex-none">
+          <button
+            onclick={() => (detailView = "claims")}
+            class="text-xs font-ui px-2.5 py-1 rounded cursor-pointer transition-colors
+              {detailView === 'claims' ? 'bg-primary text-on-primary' : 'text-on-surface-secondary hover:bg-surface-alt'}"
+          >Claims</button>
+          <button
+            onclick={() => (detailView = "graph")}
+            class="text-xs font-ui px-2.5 py-1 rounded cursor-pointer transition-colors
+              {detailView === 'graph' ? 'bg-primary text-on-primary' : 'text-on-surface-secondary hover:bg-surface-alt'}"
+            title="A scoped node-link graph centred on this entity"
+          >Graph</button>
+        </div>
+      {/if}
+      {#if selectedId && detailView === "graph"}
+        <GraphCanvas nodeId={selectedId} onRecenter={selectNode} />
+      {:else}
+        <GraphNodeDetail node={selectedNode} loading={loadingNode} />
+      {/if}
     </div>
   </div>
 {/if}
