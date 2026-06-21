@@ -213,7 +213,18 @@ def nodes_brief(ids, db_path: str | Path | None = None) -> dict:
                 "name": r["name"],
                 "node_type": r["node_type"],
                 "claims": r["claims"],
+                "aliases": [],
             }
+        # The node's alias surface forms become prior_names in the curation ledger
+        # (name-drift robustness on replay), so the merge can be recorded online
+        # without a DB read. One grouped query for the whole candidate set.
+        for r in con.execute(
+            f"SELECT node_id, alias FROM aliases WHERE node_id IN ({placeholders})"
+            " ORDER BY alias COLLATE NOCASE",
+            ids,
+        ):
+            if r["node_id"] in out:
+                out[r["node_id"]]["aliases"].append(r["alias"])
         return out
     finally:
         con.close()

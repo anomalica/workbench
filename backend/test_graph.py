@@ -193,7 +193,12 @@ def test_nodes_brief(graph_db):
         "name": "Defense Intelligence Agency (DIA)",
         "node_type": "organisation",
         "claims": 3,
+        "aliases": [
+            "Defense Intelligence Agency",
+            "DIA",
+        ],  # -> prior_names, sorted NOCASE
     }
+    assert brief[PERSON]["aliases"] == []  # no merge history -> no prior_names
     assert "missing" not in brief  # unknown ids simply absent
     assert graph.nodes_brief([], db_path=graph_db) == {}
 
