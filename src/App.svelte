@@ -5,8 +5,6 @@
     fetchDigest,
     fetchCurrentUser,
     fetchReviewedHashes,
-    fetchSchedule,
-    fetchIngestTitles,
     provenanceOf,
   } from "$lib/api";
   import type {
@@ -19,42 +17,18 @@
   import IngestList from "$lib/components/IngestList.svelte";
   import IngestViewer from "$lib/components/IngestViewer.svelte";
   import GraphView from "$lib/components/GraphView.svelte";
-  import ScheduleView from "$lib/components/ScheduleView.svelte";
   import CurationView from "$lib/components/CurationView.svelte";
-  import type { ScheduleQueue, IngestTitle } from "$lib/schedule";
   import { carryoverState } from "$lib/carryover";
   import { themeState } from "$lib/theme.svelte";
 
   let user = $state<User | null>(null);
-  // Top-level view: record review (default), knowledge-graph review, or the
-  // prioritised work-queue Schedule view.
-  let appMode = $state<"records" | "graph" | "schedule" | "curate">("records");
+  // Top-level view: record review (default), knowledge-graph review, or curation.
+  // (The Schedule view + processing-mode runner moved to the local `scheduler`
+  // repo - this workbench is review-only.)
+  let appMode = $state<"records" | "graph" | "curate">("records");
   // A node to open directly in the graph view (deep link /graph/<node_id>), so a
   // claim-count / any link can jump straight to that node's claims in context.
   let graphNodeId = $state<string | undefined>(undefined);
-
-  // The scheduler's queue, fetched lazily (when the Schedule tab or the Records
-  // "sort by demand" first needs it). Its recordDemand map drives the sort.
-  let scheduleQueue = $state<ScheduleQueue | null>(null);
-  // {content_hash -> {title, source_url}} for un-ingested sources, so the Schedule
-  // view shows transcription jobs' episode titles + source links, not hashes.
-  let ingestTitles = $state<Record<string, IngestTitle>>({});
-  let scheduleRequested = false;
-  async function loadSchedule() {
-    if (scheduleRequested) return;
-    scheduleRequested = true;
-    try {
-      scheduleQueue = await fetchSchedule();
-    } catch {
-      scheduleRequested = false; // allow a retry
-      return;
-    }
-    try {
-      ingestTitles = await fetchIngestTitles();
-    } catch {
-      /* titles are best-effort; the UI keeps the hash fallback */
-    }
-  }
   // True while a cold-load deep link (e.g. /<public_hash>#claim-<uuid>) is
   // resolving: list fetch then record + digest fetch. Drives a centred
   // "Opening record..." indicator so the user sees progress instead of a
@@ -108,7 +82,6 @@
     | "digestible"
     | "digested"
     | "copyright"
-    | "demand"
   >("date");
   let sortAsc = $state(false);
   // Which date the date column shows (and what "Date" sort uses).
@@ -202,14 +175,6 @@
           const cmp = Number(a.digested) - Number(b.digested);
           return sortAsc ? cmp : -cmp;
         }
-        if (sortBy === "demand") {
-          // The scheduler's per-record priority (same signal as the Schedule
-          // view's Review lane), so a reviewer can sort by what to review next.
-          // Records the graph hasn't scored sort off a 0 baseline (last, desc).
-          const m = scheduleQueue?.recordDemand ?? {};
-          const cmp = (m[a.content_hash] ?? 0) - (m[b.content_hash] ?? 0);
-          return sortAsc ? cmp : -cmp;
-        }
         if (sortBy === "date") {
           const ad = dateValueFor(a);
           const bd = dateValueFor(b);
@@ -235,12 +200,6 @@
 
   let sourceTypes = $derived(
     [...new Set(ingests.map((i) => i.source_type))].sort(),
-  );
-
-  // {content_hash -> title} so the Schedule view shows record titles instead of
-  // the scheduler's hash/slug labels (un-ingested sources have no record here).
-  let recordTitles = $derived(
-    Object.fromEntries(ingests.map((i) => [i.content_hash, i.title])),
   );
 
   async function loadIngests() {
@@ -332,12 +291,6 @@
     history.pushState(null, "", "/graph");
   }
 
-  function showSchedule() {
-    appMode = "schedule";
-    loadSchedule();
-    history.pushState(null, "", "/schedule");
-  }
-
   function showCurate() {
     appMode = "curate";
     history.pushState(null, "", "/curate");
@@ -358,9 +311,8 @@
         return;
       }
     }
-    if (path === "graph" || path === "schedule") {
-      appMode = path;
-      if (path === "schedule") loadSchedule();
+    if (path === "graph") {
+      appMode = "graph";
       loadIngests();
       return;
     }
@@ -426,12 +378,6 @@
           {appMode === 'curate' ? 'bg-bone/15 text-bone' : 'text-bone/50 hover:text-bone/80 hover:bg-bone/10'}"
         title="Curate the graph - merge duplicate entities"
       >Curate</button>
-      <button
-        onclick={showSchedule}
-        class="text-sm font-ui px-2.5 py-1 rounded cursor-pointer transition-colors
-          {appMode === 'schedule' ? 'bg-bone/15 text-bone' : 'text-bone/50 hover:text-bone/80 hover:bg-bone/10'}"
-        title="The prioritised work queue - what runs next"
-      >Schedule</button>
     </nav>
     <div class="flex-1"></div>
     <button
@@ -469,8 +415,6 @@
   <main class="flex-1 flex flex-col min-h-0">
     {#if appMode === "curate"}
       <CurationView />
-    {:else if appMode === "schedule"}
-      <ScheduleView queue={scheduleQueue} {recordTitles} {ingestTitles} />
     {:else if appMode === "graph"}
       <GraphView initialNodeId={graphNodeId} />
     {:else if openingRecord && !selectedIngest}
@@ -551,15 +495,6 @@
                 {filterUntraceable ? 'bg-warning/20 text-warning' : 'text-on-surface-secondary hover:bg-surface'}"
               title="Show only records with no recoverable source/origin"
             >Untraceable</button>
-          </div>
-
-          <div class="flex items-center gap-1 border-l border-border pl-3">
-            <button
-              onclick={() => { sortBy = "demand"; sortAsc = false; loadSchedule(); }}
-              class="text-xs font-ui px-2 py-1 rounded cursor-pointer transition-colors
-                {sortBy === 'demand' ? 'bg-primary text-on-primary' : 'text-on-surface-secondary hover:bg-surface'}"
-              title="Sort by review demand - the scheduler's per-record priority (what to review next). Records not yet in the graph rank last."
-            >Sort by demand</button>
           </div>
 
           <!-- Date-field selector: what value the Date column shows

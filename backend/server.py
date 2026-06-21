@@ -30,7 +30,6 @@ from anomalica_common.review_gate import digestibility
 
 from backend import curation, graph, models
 from backend.auth import setup_auth
-from backend.runner import runner
 
 FULL_HASH_LENGTH = 64
 PUBLIC_HASH_LENGTH = 56
@@ -50,9 +49,6 @@ VERIFICATION_SESSION_TTL_SECONDS = 1800
 DEFAULT_INGESTS_PATH = Path(__file__).resolve().parents[2] / "ingests"
 DEFAULT_SOURCES_PATH = Path(__file__).resolve().parents[2] / "sources"
 DEFAULT_DIGESTS_PATH = Path(__file__).resolve().parents[2] / "digests"
-DEFAULT_SCHEDULER_QUEUE = (
-    Path.home() / ".local" / "share" / "assimilator" / "scheduler-queue.json"
-)
 
 
 def _unquote(value: str) -> str:
@@ -734,14 +730,6 @@ def build_source() -> IngestSource:
 app = FastAPI(title="Anomalica Workbench API")
 
 setup_auth(app)
-
-
-@app.on_event("startup")
-def _resume_runner() -> None:
-    # Resume processing mode if it was left ON across a restart. Runs when the
-    # server actually starts (not on bare import), so tests never spawn the worker.
-    runner.resume_if_on()
-
 
 source: IngestSource = build_source()
 sources_path = Path(os.environ.get("SOURCES_PATH", str(DEFAULT_SOURCES_PATH)))
@@ -1516,78 +1504,9 @@ def models_judgment(body: dict, request: Request) -> dict:
     return result
 
 
-@app.get("/api/schedule")
-def get_schedule() -> dict:
-    """Serve the assimilator scheduler's prioritised work queue (the JSON file
-    it writes). Read-only pass-through; the scheduler owns the shape. Returns an
-    empty queue when the file isn't present (no run yet). Path is env-
-    configurable (SCHEDULER_QUEUE_PATH)."""
-    path = Path(os.environ.get("SCHEDULER_QUEUE_PATH", str(DEFAULT_SCHEDULER_QUEUE)))
-    if not path.exists():
-        return {"generatedAt": None, "jobs": [], "reviewQueue": [], "recordDemand": {}}
-    try:
-        return json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
-        raise HTTPException(
-            status_code=500, detail=f"Failed to read scheduler queue: {exc}"
-        ) from exc
-
-
-@app.get("/api/processing")
-def processing_status() -> dict:
-    """Runner / processing-mode status: mode (on/off), the worker's current
-    state + dual-trend gate readout, and recently-completed jobs."""
-    return runner.status()
-
-
-@app.post("/api/processing")
-def processing_toggle(body: dict) -> dict:
-    """Flip processing mode on/off. Ungated: this is the local service Mark
-    controls, and the runner spends no money (subscription only, paced by the
-    usage gate). NOTE: before any public exposure this must be auth/admin-gated
-    (it starts autonomous execution) - tracked with the other pre-public
-    hardening (fetch enforcement, verify rate-limiting)."""
-    mode = body.get("mode")
-    if mode not in ("on", "off"):
-        raise HTTPException(status_code=400, detail="mode must be 'on' or 'off'")
-    return runner.set_mode(mode == "on")
-
-
-@app.get("/api/ingest-titles")
-def ingest_titles() -> dict:
-    """Title + source_url for un-ingested sources, keyed by content_hash, read
-    from the v1 records at ingests/store/v1/<hash>.md. Lets the schedule view show
-    a transcription job's episode title + YouTube link instead of an opaque hash.
-    Sources with no v1 record are simply absent (the UI keeps the hash fallback)."""
-    v1_dir = ingests_path / "store" / "v1"
-    out: dict[str, dict] = {}
-    if not v1_dir.exists():
-        return out
-    for md in v1_dir.glob("*.md"):
-        record_hash = re.sub(r"\.v\d+$", "", md.stem)
-        try:
-            frontmatter, _, _ = parse_frontmatter(md.read_text())
-        except OSError:
-            continue
-        title = frontmatter.get("title")
-        if not title:
-            continue
-        out[record_hash] = {
-            "title": title,
-            "source_url": frontmatter.get("source_url")
-            or frontmatter.get("reference")
-            or frontmatter.get("url"),
-        }
-    return out
-
-
-@app.post("/api/processing/margin")
-def processing_margin(body: dict) -> dict:
-    """Set the dual-trend gate margin (percentage points under the ideal line the
-    runner holds for before dispatching). Validated/fail-closed in the runner: an
-    invalid value falls back to the safe default, never 0. Ungated like the toggle
-    (local control, no spend) - same pre-public auth note applies."""
-    return runner.set_margin(body.get("margin"))
+# The schedule + processing-mode runner moved OUT to the local `scheduler` repo
+# (review-vs-orchestrate split): /api/schedule, /api/processing(/margin),
+# /api/ingest-titles and the runner now live there. The workbench is review-only.
 
 
 @app.get("/api/sources/{full_hash}")

@@ -1,6 +1,5 @@
 import { createSHA256 } from "hash-wasm";
 import type { ReviewCarryover } from "./carryover";
-import type { ScheduleQueue } from "./schedule";
 
 export type CopyrightStatus =
   | "public_domain"
@@ -475,88 +474,5 @@ export async function fetchGraphNode(id: string): Promise<GraphNodeDetail | null
   return res.json();
 }
 
-// --- Schedule (the assimilator scheduler's prioritised work queue) ----------
-
-/** Fetch the scheduler's prioritised queue. The backend returns an empty queue
- *  ({jobs:[], reviewQueue:[], recordDemand:{}}) when no run has emitted yet. */
-export async function fetchSchedule(): Promise<ScheduleQueue> {
-  const res = await fetch("/api/schedule");
-  if (!res.ok) throw new Error(`Failed to fetch schedule: ${res.status}`);
-  return res.json();
-}
-
-// --- Runner / processing mode -----------------------------------------------
-
-export interface ProcessingWindow {
-  util: number;
-  ideal: number;
-  below: boolean;
-}
-
-export interface ProcessingCompleted {
-  type: string;
-  target: string;
-  start: string;
-  end: string;
-  duration_s: number;
-  tokens: number | null;
-  ok: boolean;
-  error?: string | null;
-}
-
-export interface ProcessingStatus {
-  mode: "on" | "off";
-  /** idle | waiting | ready | running | halted */
-  state: string;
-  /** true when the worker has stopped itself (fail-closed); clears on an off->on toggle */
-  halted: boolean;
-  /** trend-line margin: dispatch only when usage is this many points under the ideal line */
-  margin: number;
-  reason: string;
-  gate: { five_hour: ProcessingWindow; seven_day: ProcessingWindow } | null;
-  /** fresh | stale | unavailable */
-  usage_status: string | null;
-  current: { type: string; target: string; hash?: string; started?: string } | null;
-  checked_at: string | null;
-  completed: ProcessingCompleted[];
-}
-
-export async function fetchProcessing(): Promise<ProcessingStatus> {
-  const res = await fetch("/api/processing");
-  if (!res.ok) throw new Error(`Failed to fetch processing: ${res.status}`);
-  return res.json();
-}
-
-/** {content_hash -> {title, source_url}} for un-ingested sources (from v1 records),
- *  so the schedule view can show a transcription job's title + source link. */
-export async function fetchIngestTitles(): Promise<
-  Record<string, { title: string; source_url: string | null }>
-> {
-  const res = await fetch("/api/ingest-titles");
-  if (!res.ok) throw new Error(`Failed to fetch ingest titles: ${res.status}`);
-  return res.json();
-}
-
-/** Flip processing mode on/off (auth-gated server-side). */
-export async function setProcessing(mode: "on" | "off"): Promise<ProcessingStatus> {
-  const res = await fetch("/api/processing", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ mode }),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.detail || `Error ${res.status}`);
-  return data;
-}
-
-/** Set the gate's trend-line margin (percentage points under the ideal line). */
-export async function setProcessingMargin(margin: number): Promise<ProcessingStatus> {
-  const res = await fetch("/api/processing/margin", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ margin }),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.detail || `Error ${res.status}`);
-  return data;
-}
+// The schedule + processing-mode API moved to the local `scheduler` repo
+// (review-vs-orchestrate split). The workbench is review-only.
