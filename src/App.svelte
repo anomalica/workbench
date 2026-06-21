@@ -20,7 +20,7 @@
   import IngestViewer from "$lib/components/IngestViewer.svelte";
   import GraphView from "$lib/components/GraphView.svelte";
   import ScheduleView from "$lib/components/ScheduleView.svelte";
-  import CurateMock from "$lib/components/CurateMock.svelte";
+  import CurationView from "$lib/components/CurationView.svelte";
   import type { ScheduleQueue, IngestTitle } from "$lib/schedule";
   import { carryoverState } from "$lib/carryover";
   import { themeState } from "$lib/theme.svelte";
@@ -28,7 +28,7 @@
   let user = $state<User | null>(null);
   // Top-level view: record review (default), knowledge-graph review, or the
   // prioritised work-queue Schedule view.
-  let appMode = $state<"records" | "graph" | "schedule" | "curate-mock">("records");
+  let appMode = $state<"records" | "graph" | "schedule" | "curate">("records");
   // A node to open directly in the graph view (deep link /graph/<node_id>), so a
   // claim-count / any link can jump straight to that node's claims in context.
   let graphNodeId = $state<string | undefined>(undefined);
@@ -338,11 +338,16 @@
     history.pushState(null, "", "/schedule");
   }
 
+  function showCurate() {
+    appMode = "curate";
+    history.pushState(null, "", "/curate");
+  }
+
   async function checkUrlHash() {
     const path = window.location.pathname.slice(1);
-    if (path === "curate-mock") {
-      appMode = "curate-mock";
-      return; // self-contained mock; no data load needed
+    if (path === "curate") {
+      appMode = "curate";
+      return; // CurationView fetches its own data + reads its URL query
     }
     if (path.startsWith("graph/")) {
       const id = path.slice("graph/".length);
@@ -416,6 +421,12 @@
         title="Review the assimilator's merged knowledge graph"
       >Graph</button>
       <button
+        onclick={showCurate}
+        class="text-sm font-ui px-2.5 py-1 rounded cursor-pointer transition-colors
+          {appMode === 'curate' ? 'bg-bone/15 text-bone' : 'text-bone/50 hover:text-bone/80 hover:bg-bone/10'}"
+        title="Curate the graph - merge duplicate entities"
+      >Curate</button>
+      <button
         onclick={showSchedule}
         class="text-sm font-ui px-2.5 py-1 rounded cursor-pointer transition-colors
           {appMode === 'schedule' ? 'bg-bone/15 text-bone' : 'text-bone/50 hover:text-bone/80 hover:bg-bone/10'}"
@@ -456,8 +467,8 @@
   </header>
 
   <main class="flex-1 flex flex-col min-h-0">
-    {#if appMode === "curate-mock"}
-      <CurateMock />
+    {#if appMode === "curate"}
+      <CurationView />
     {:else if appMode === "schedule"}
       <ScheduleView queue={scheduleQueue} {recordTitles} {ingestTitles} />
     {:else if appMode === "graph"}

@@ -301,6 +301,75 @@ export async function fetchGraphNodes(type?: string, q?: string): Promise<GraphN
 
 /** An entity with its merge decisions (aliases) and referencing claims. Null
  *  if the node id is unknown (404). */
+// --- Graph curation (merge duplicate entities) ------------------------------
+
+export interface MergeMember {
+  id: string;
+  name: string;
+  node_type: string;
+  claims: number;
+}
+
+export interface MergeCandidate {
+  node_ids: string[];
+  suggested_canonical: string;
+  score: number;
+  node_type: string;
+  reason: "name-equiv" | "fuzzy" | "embedding";
+  members: MergeMember[];
+}
+
+export interface ActiveMerge {
+  merge_id: string;
+  survivor_id: string;
+  survivor_name: string;
+  canonical_name: string;
+  created_at: string;
+  victims: { id: string; prior_name: string }[];
+}
+
+export async function fetchMergeCandidates(): Promise<MergeCandidate[]> {
+  const res = await fetch("/api/curation/candidates");
+  if (!res.ok) throw new Error(`Failed to fetch candidates: ${res.status}`);
+  return (await res.json()).candidates;
+}
+
+export async function fetchActiveMerges(): Promise<ActiveMerge[]> {
+  const res = await fetch("/api/curation/merges");
+  if (!res.ok) throw new Error(`Failed to fetch merges: ${res.status}`);
+  return (await res.json()).merges;
+}
+
+/** Apply a merge (writes the live graph via the assimilator). Throws on failure. */
+export async function applyMerge(
+  survivor_id: string,
+  victim_ids: string[],
+  canonical_name: string,
+): Promise<void> {
+  const res = await fetch("/api/curation/merge", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ survivor_id, victim_ids, canonical_name }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail || `Merge failed (${res.status})`);
+  }
+}
+
+/** Reverse a merge by its merge_id. Throws on failure. */
+export async function undoMerge(merge_id: string): Promise<void> {
+  const res = await fetch("/api/curation/unmerge", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ merge_id }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail || `Un-merge failed (${res.status})`);
+  }
+}
+
 export async function fetchGraphNode(id: string): Promise<GraphNodeDetail | null> {
   const res = await fetch(`/api/graph/nodes/${encodeURIComponent(id)}`);
   if (res.status === 404 || res.status === 503) return null;
