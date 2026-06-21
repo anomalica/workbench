@@ -73,14 +73,30 @@ export interface IngestDetail {
   body: string;
 }
 
+// --- Static-read mode (serverless deploy) -----------------------------------
+// In the serverless deploy the READS (records, graph, curation) come from the
+// pre-rendered JSON snapshot on the CDN (backend/prerender.py) - no live backend.
+// The snapshot mirrors the API paths with a ".json" suffix, so a read just gains
+// ".json" (and the node list, shipped whole, is filtered client-side). WRITES are
+// unchanged: they POST to the same /api/* paths, served online by the edge
+// function. /api/me/reviews stays dynamic (per-user) -> an edge endpoint. Off by
+// default (dev hits the FastAPI backend); VITE_STATIC_READS=1 builds the static
+// SPA (or tests the snapshot path locally).
+export const STATIC_READS = import.meta.env.VITE_STATIC_READS === "1";
+
+/** A read path: static-mode appends ".json" (the snapshot), else the live API. */
+function readPath(apiPath: string): string {
+  return STATIC_READS ? `${apiPath}.json` : apiPath;
+}
+
 export async function fetchIngests(): Promise<IngestSummary[]> {
-  const res = await fetch("/api/ingests");
+  const res = await fetch(readPath("/api/ingests"));
   if (!res.ok) throw new Error(`Failed to fetch ingests: ${res.status}`);
   return res.json();
 }
 
 export async function fetchIngest(hash: string): Promise<IngestDetail> {
-  const res = await fetch(`/api/ingests/${hash}`);
+  const res = await fetch(readPath(`/api/ingests/${hash}`));
   if (!res.ok) throw new Error(`Failed to fetch ingest: ${res.status}`);
   return res.json();
 }
@@ -131,7 +147,7 @@ export interface DigestDocument {
 /** Fetch the digester's YAML output for an ingest. Returns null if no digest
  *  has been produced for this record yet (404). */
 export async function fetchDigest(hash: string): Promise<DigestDocument | null> {
-  const res = await fetch(`/api/ingests/${hash}/digest`);
+  const res = await fetch(readPath(`/api/ingests/${hash}/digest`));
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`Failed to fetch digest: ${res.status}`);
   return res.json();
@@ -139,7 +155,7 @@ export async function fetchDigest(hash: string): Promise<DigestDocument | null> 
 
 /** Check whether an ingest exists for a given full hash. */
 export async function ingestExists(fullHash: string): Promise<boolean> {
-  const res = await fetch(`/api/ingests/${fullHash}`);
+  const res = await fetch(readPath(`/api/ingests/${fullHash}`));
   return res.ok;
 }
 
@@ -173,7 +189,7 @@ import type { KindedSpan, CoverageReview } from "$lib/coverage";
 /** Fetch all reviewers' coverage entries for a record. Empty when no
  *  coverage has been recorded yet. */
 export async function fetchCoverage(hash: string): Promise<CoverageReview[]> {
-  const res = await fetch(`/api/ingests/${hash}/coverage`);
+  const res = await fetch(readPath(`/api/ingests/${hash}/coverage`));
   if (!res.ok) return [];
   const data = await res.json().catch(() => ({}));
   return Array.isArray(data?.reviews) ? data.reviews : [];
@@ -278,21 +294,6 @@ export interface GraphNodeDetail {
   claim_count: number;
   claims_truncated: boolean;
   claims: GraphClaim[];
-}
-
-// --- Static-read mode (serverless deploy) -----------------------------------
-// In the serverless deploy the graph + curation READS come from the pre-rendered
-// JSON snapshot on the CDN (backend/prerender.py) - no live backend. The snapshot
-// mirrors the API paths with a ".json" suffix, so a read just gains ".json" and
-// the node list (shipped whole) is filtered client-side. WRITES are unchanged:
-// they POST to the same /api/* paths, served online by the edge function.
-// Off by default (dev hits the FastAPI backend); set VITE_STATIC_READS=1 to build
-// the static SPA or to test the snapshot path locally.
-export const STATIC_READS = import.meta.env.VITE_STATIC_READS === "1";
-
-/** A read path: static-mode appends ".json" (the snapshot), else the live API. */
-function readPath(apiPath: string): string {
-  return STATIC_READS ? `${apiPath}.json` : apiPath;
 }
 
 /** Client-side equivalent of the backend list_nodes filter (name substring +
