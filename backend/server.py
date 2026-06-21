@@ -28,7 +28,7 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from anomalica_common.review_gate import digestibility
 
-from backend import graph
+from backend import curation, graph
 from backend.auth import setup_auth
 from backend.runner import runner
 
@@ -1382,6 +1382,61 @@ def graph_node(node_id: str) -> dict:
     if detail is False:
         raise HTTPException(status_code=404, detail="Node not found")
     return detail
+
+
+# --- Graph curation (merge duplicate entities) ------------------------------
+# Reads are read-only; the merge/un-merge writes shell the assimilator's command.
+# Ungated like the processing toggle (local control); same pre-public auth note
+# applies - a merge mutates the live graph, so gate before any public exposure.
+
+
+@app.get("/api/curation/candidates")
+def curation_candidates() -> dict:
+    """The assimilator's AI-proposed, pre-vetted merge candidates, each enriched
+    with its member nodes ({id, name, node_type, claims}) so the queue renders
+    names + claim-counts (the raw proposal carries only node ids)."""
+    raw = curation.read_candidates()
+    brief = graph.nodes_brief({nid for c in raw for nid in c.get("node_ids", [])})
+    enriched = [
+        {**c, "members": [brief[i] for i in c.get("node_ids", []) if i in brief]}
+        for c in raw
+    ]
+    return {"candidates": enriched}
+
+
+@app.get("/api/curation/merges")
+def curation_merges() -> dict:
+    """Active merges grouped for the cluster / un-merge view (node_merges)."""
+    merges = graph.list_merges()
+    if merges is None:
+        raise HTTPException(status_code=503, detail="Graph database not available")
+    return {"merges": merges}
+
+
+@app.post("/api/curation/merge")
+def curation_merge(body: dict) -> dict:
+    """Merge victim nodes into a survivor under a canonical name (writes the live
+    graph via the assimilator). Fail-closed: a failed command returns 400 with
+    the error, applies nothing."""
+    result = curation.apply_merge(
+        body.get("survivor_id"),
+        body.get("victim_ids") or [],
+        body.get("canonical_name"),
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error", "merge failed"))
+    return result
+
+
+@app.post("/api/curation/unmerge")
+def curation_unmerge(body: dict) -> dict:
+    """Reverse a merge by merge_id."""
+    result = curation.undo_merge(body.get("merge_id"))
+    if not result.get("ok"):
+        raise HTTPException(
+            status_code=400, detail=result.get("error", "un-merge failed")
+        )
+    return result
 
 
 @app.get("/api/schedule")

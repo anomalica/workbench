@@ -109,6 +109,76 @@ def list_nodes(
         con.close()
 
 
+def nodes_brief(ids, db_path: str | Path | None = None) -> dict:
+    """{id -> {id, name, node_type, claims}} for a set of node ids, for rendering
+    merge-candidate members (which arrive as bare ids). {} if the DB is absent."""
+    con = _open(db_path)
+    if con is None:
+        return {}
+    try:
+        ids = list(dict.fromkeys(i for i in ids if i))  # de-dupe, drop falsy
+        if not ids:
+            return {}
+        placeholders = ",".join("?" * len(ids))
+        out: dict[str, dict] = {}
+        for r in con.execute(
+            "SELECT n.id, n.name, n.node_type,"
+            " (SELECT count(*) FROM claim_node_refs r WHERE r.node_id = n.id) AS claims"
+            f" FROM nodes n WHERE n.id IN ({placeholders})",
+            ids,
+        ):
+            out[r["id"]] = {
+                "id": r["id"],
+                "name": r["name"],
+                "node_type": r["node_type"],
+                "claims": r["claims"],
+            }
+        return out
+    finally:
+        con.close()
+
+
+def list_merges(db_path: str | Path | None = None):
+    """Active merges (node_merges, undone_at IS NULL) grouped by merge_id, for the
+    cluster / un-merge view. Returns None if the DB is absent, [] if the
+    node_merges table doesn't exist yet (the assimilator builds it) or there are
+    no merges, else a list of {merge_id, survivor_id, survivor_name,
+    canonical_name, created_at, victims:[{id, prior_name}]}."""
+    con = _open(db_path)
+    if con is None:
+        return None
+    try:
+        try:
+            rows = con.execute(
+                "SELECT m.merge_id, m.survivor_id, m.canonical_name, m.victim_id,"
+                " m.victim_prior_name, m.created_at, n.name AS survivor_name"
+                " FROM node_merges m LEFT JOIN nodes n ON n.id = m.survivor_id"
+                " WHERE m.undone_at IS NULL"
+                " ORDER BY m.created_at DESC, m.merge_id"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []  # node_merges table not created yet
+        groups: dict[str, dict] = {}
+        for r in rows:
+            g = groups.setdefault(
+                r["merge_id"],
+                {
+                    "merge_id": r["merge_id"],
+                    "survivor_id": r["survivor_id"],
+                    "survivor_name": r["survivor_name"],
+                    "canonical_name": r["canonical_name"],
+                    "created_at": r["created_at"],
+                    "victims": [],
+                },
+            )
+            g["victims"].append(
+                {"id": r["victim_id"], "prior_name": r["victim_prior_name"]}
+            )
+        return list(groups.values())
+    finally:
+        con.close()
+
+
 def _noderef(node_id, name, node_type) -> dict | None:
     """A compact {id, name, node_type} for a referenced node, or None if absent."""
     if not node_id:
