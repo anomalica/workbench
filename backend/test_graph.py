@@ -34,6 +34,9 @@ def graph_db(tmp_path):
             metadata TEXT, created_at TEXT, claim_role TEXT);
         CREATE TABLE claim_node_refs (claim_id TEXT, node_id TEXT);
         CREATE TABLE corroborations (claim_a TEXT, claim_b TEXT, similarity REAL);
+        CREATE TABLE node_merges (merge_id TEXT, survivor_id TEXT, victim_id TEXT,
+            victim_prior_name TEXT, canonical_name TEXT, created_at TEXT,
+            created_by TEXT, undone_at TEXT);
         """
     )
     con.execute(
@@ -79,6 +82,31 @@ def graph_db(tmp_path):
     con.execute("UPDATE claims SET speaker_id = ? WHERE id = 'c0'", (PERSON,))
     con.execute(
         "INSERT INTO claim_node_refs (claim_id, node_id) VALUES ('c0', ?)", (PERSON,)
+    )
+    # One active merge (a victim folded into ORG) + one already undone (excluded).
+    con.executemany(
+        "INSERT INTO node_merges (merge_id, survivor_id, victim_id, victim_prior_name,"
+        " canonical_name, created_at, undone_at) VALUES (?,?,?,?,?,?,?)",
+        [
+            (
+                "m1",
+                ORG,
+                "victim-1",
+                "DIA (old)",
+                "Defense Intelligence Agency (DIA)",
+                "2026-06-21T00:00:00Z",
+                None,
+            ),
+            (
+                "m2",
+                ORG,
+                "victim-2",
+                "Gone",
+                "Whatever",
+                "2026-06-20T00:00:00Z",
+                "2026-06-21T01:00:00Z",
+            ),
+        ],
     )
     con.commit()
     con.close()
@@ -137,6 +165,28 @@ def test_node_detail_surfaces_cross_entity_refs(graph_db):
     # a claim with no extra refs has empty corefs / no speaker
     c1 = next(c for c in d["claims"] if c["id"] == "c1")
     assert c1["corefs"] == [] and c1["speaker"] is None
+
+
+def test_nodes_brief(graph_db):
+    brief = graph.nodes_brief([ORG, PERSON, "missing"], db_path=graph_db)
+    assert brief[ORG] == {
+        "id": ORG,
+        "name": "Defense Intelligence Agency (DIA)",
+        "node_type": "organisation",
+        "claims": 3,
+    }
+    assert "missing" not in brief  # unknown ids simply absent
+    assert graph.nodes_brief([], db_path=graph_db) == {}
+
+
+def test_list_merges_groups_active_only(graph_db):
+    merges = graph.list_merges(db_path=graph_db)
+    # m2 is undone -> excluded; m1 active -> present, with the survivor's live name
+    assert [m["merge_id"] for m in merges] == ["m1"]
+    m1 = merges[0]
+    assert m1["survivor_id"] == ORG
+    assert m1["survivor_name"] == "Defense Intelligence Agency (DIA)"
+    assert m1["victims"] == [{"id": "victim-1", "prior_name": "DIA (old)"}]
 
 
 def test_node_detail_unknown_id_is_false(graph_db):
