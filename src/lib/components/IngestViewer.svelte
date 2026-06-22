@@ -162,13 +162,21 @@
     return m ? m[1].trim() : "";
   });
   let segments = $derived(parseTranscript(currentBody()));
-  let hasTranscript = $derived(segments.length > 0 && segments[0].speaker !== "");
 
   // Per-word-timestamp (PWTS) records carry `{{t:N.N}}` markers and a
-  // `word_timestamps: true` frontmatter flag. They get the isolated
-  // word-level editor instead of the segment editor; v1 records are
-  // untouched. Detect from the live body so the toggle survives edits.
-  let isWordRecord = $derived(hasTranscript && hasWordTimestamps(currentBody()));
+  // `word_timestamps: true` frontmatter flag. They get the isolated word-level
+  // editor instead of the segment editor; v1 records are untouched. Detect from
+  // the live body so the toggle survives edits. NB: parseTranscript keys off the
+  // HH:MM:SS.D line prefix, which record/2 no longer carries, so it finds no
+  // segments for a PWTS body - detect the word record directly from the {{t:}}
+  // markers, NOT via hasTranscript.
+  let isWordRecord = $derived(hasWordTimestamps(currentBody()));
+  // A PWTS body IS a transcript even though parseTranscript found no prefixed
+  // segments in it, so fold isWordRecord into hasTranscript (drives the speaker
+  // panel, keyboard nav, layout).
+  let hasTranscript = $derived(
+    isWordRecord || (segments.length > 0 && segments[0].speaker !== ""),
+  );
   // Latest observation verdict reported by the word editor (word-index spans +
   // coverage fraction + digestible + total words), persisted on review submit.
   let wordVerdict = $state<{
@@ -1126,6 +1134,11 @@
 
   function preprocessAnnotations(body: string): string {
     const recordHash = ingest.content_hash;
+    // Strip per-word timestamp markers ({{t:SECONDS}}) for prose display: they're
+    // an inline annotation (record/2), not content. The word-level editor
+    // consumes them; any markdown/prose render must hide them (word records use
+    // WordTranscript, but this keeps markers out of every other prose path too).
+    body = body.replace(/\{\{t:\d+(?:\.\d+)?\}\}/g, "");
     body = pairImageCaptions(body);
     return body.replace(
       /<!--\s*([\s\S]*?)-->/g,
