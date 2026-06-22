@@ -62,6 +62,7 @@ def test_entity_article_shape(content_repo):
         "tags": ["official", "intelligence"],
         "url": "https://anomalica.is/people/luis-elizondo/",
         "record_hash": None,  # entities never carry one
+        "directives": [],  # no sidecar in this fixture
     }
 
 
@@ -93,3 +94,51 @@ def test_malformed_or_frontmatterless_file_falls_back_to_slug(tmp_path, monkeypa
     assert arts["no-frontmatter"]["title"] == "no-frontmatter"  # slug fallback
     assert arts["no-frontmatter"]["record_hash"] is None
     assert "broken" in arts  # malformed YAML doesn't crash the walk
+
+
+# --- presentation directives ------------------------------------------------
+
+
+def test_list_articles_surfaces_sidecar_directives(content_repo):
+    import yaml
+
+    sidecar = (
+        content_repo / "content" / "pages" / "people" / "luis-elizondo.directives.yaml"
+    )
+    sidecar.write_text(yaml.safe_dump(["Use the full name Luis Elizondo"]))
+    art = next(a for a in server.list_articles() if a["slug"] == "luis-elizondo")
+    assert art["directives"] == ["Use the full name Luis Elizondo"]
+    # an article with no sidecar reports an empty list
+    other = next(a for a in server.list_articles() if a["slug"] == "aatip")
+    assert other["directives"] == []
+
+
+def test_read_article_directives_handles_absent_and_malformed(content_repo):
+    assert server.read_article_directives("people", "luis-elizondo") == []  # no sidecar
+    bad = (
+        content_repo / "content" / "pages" / "people" / "luis-elizondo.directives.yaml"
+    )
+    bad.write_text("{ not a list\n")  # malformed YAML
+    assert server.read_article_directives("people", "luis-elizondo") == []
+    bad.write_text("not a list\n")  # valid YAML, wrong shape (a scalar)
+    assert server.read_article_directives("people", "luis-elizondo") == []
+
+
+def test_article_sidecar_path_rejects_traversal():
+    assert server._article_sidecar_path("people", "luis-elizondo") is not None
+    for section, slug in [
+        ("people", "luis.elizondo"),  # dot (extension/traversal vector)
+        ("People", "x"),  # uppercase
+        ("..", "x"),
+        ("people", ".."),
+        ("people", "a/b"),
+    ]:
+        assert server._article_sidecar_path(section, slug) is None
+
+
+def test_clean_directives_trims_dedupes_caps():
+    assert server._clean_directives(["  a  ", "", "a", "b"]) == ["a", "b"]
+    assert server._clean_directives([]) == []
+    assert server._clean_directives("not a list") is None
+    assert server._clean_directives([1]) is None  # non-string item
+    assert server._clean_directives(["x" * 501]) is None  # over the length cap
