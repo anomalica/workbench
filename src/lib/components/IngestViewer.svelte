@@ -1,6 +1,13 @@
 <script lang="ts">
   import type { IngestDetail, DigestDocument, User } from "$lib/api";
-  import { submitReview, fetchCoverage, provenanceOf } from "$lib/api";
+  import {
+    submitReview,
+    fetchCoverage,
+    provenanceOf,
+    submitVerification,
+    hashFile,
+    STATIC_READS,
+  } from "$lib/api";
   import {
     bodyOf,
     editedLineSpans,
@@ -77,7 +84,14 @@
 
   const doc = new DocumentStore();
 
-  let rawMarkdown = $derived(ingest.raw_frontmatter + ingest.body);
+  // For a gated record, the public snapshot withholds body + raw_frontmatter;
+  // they arrive only after a possession proof (unlockGatedBody) and then override
+  // the empty snapshot values so the editor + write-back see the real record.
+  let unlockedBody = $state<string | null>(null);
+  let unlockedRawFm = $state<string | null>(null);
+  let rawMarkdown = $derived(
+    (unlockedRawFm ?? ingest.raw_frontmatter) + (unlockedBody ?? ingest.body),
+  );
 
   // Only reload when we're actually looking at a different ingest.
   // Without this guard, writes inside doc.load (to $state fields) can
@@ -666,12 +680,58 @@
   // Hash input for manual verification
   let hashInput = $state("");
   let hashError = $state<string | null>(null);
+  let unlocking = $state(false);
+
+  // A gated record online: the snapshot withheld the body, so proving possession
+  // also has to FETCH it. true exactly when there's a hidden body to unlock.
+  let gatedBodyWithheld = $derived(STATIC_READS && !isPublic && !ingest.body && !unlockedBody);
+
+  // Prove possession to the edge and, on a pass, pull back the withheld body +
+  // raw_frontmatter (the public snapshot omits them for gated records). Loads the
+  // editor with the real record so review + write-back work. Returns whether the
+  // gate opened. Access is granted ONLY on a server pass - a wrong proof leaves
+  // the body hidden.
+  async function unlockGatedBody(proof: {
+    sha256?: string;
+    session_id?: string;
+    responses?: Record<string, string>;
+    ext?: string;
+  }): Promise<boolean> {
+    unlocking = true;
+    try {
+      const out = await submitVerification(ingest.content_hash, proof);
+      if (!out.passed) return false;
+      if (typeof out.body === "string") {
+        unlockedRawFm = out.raw_frontmatter ?? ingest.raw_frontmatter;
+        unlockedBody = out.body;
+        // Same hash, so the load-effect won't re-run; load the now-available body
+        // explicitly and mark it loaded.
+        doc.load((unlockedRawFm ?? "") + unlockedBody, ingest.content_hash);
+        lastLoadedHash = ingest.content_hash;
+      }
+      accessGranted = true;
+      return true;
+    } catch {
+      return false;
+    } finally {
+      unlocking = false;
+    }
+  }
 
   async function verifyHash() {
     hashError = null;
     const hash = hashInput.trim().toLowerCase();
     if (!/^[a-f0-9]{64}$/.test(hash)) {
       hashError = "Enter a valid 64-character SHA-256 hash";
+      return;
+    }
+    if (gatedBodyWithheld) {
+      // Online: let the edge check the proof against the record's source hash and
+      // return the body. (The content hash and the source-file hash differ for
+      // ebooks/web, so we can't validate locally.)
+      if (!(await unlockGatedBody({ sha256: hash }))) {
+        hashError = "That hash doesn't match this record";
+      }
       return;
     }
     if (hash !== ingest.content_hash) {
@@ -871,9 +931,30 @@
     }
   });
 
-  function acceptFile(file: File) {
+  async function acceptFile(file: File) {
     loadingFile = true;
-    accessGranted = true;
+    hashError = null;
+    // Gated record online: the body is withheld from the snapshot, so prove
+    // possession (the source file's SHA-256) to the edge and fetch the body.
+    // Only reveal it on a server pass - a wrong file keeps the body hidden.
+    if (gatedBodyWithheld) {
+      let sha256: string;
+      try {
+        sha256 = await hashFile(file);
+      } catch {
+        hashError = "Couldn't read that file";
+        loadingFile = false;
+        return;
+      }
+      const ext = file.name.split(".").pop()?.toLowerCase();
+      if (!(await unlockGatedBody({ sha256, ext }))) {
+        hashError = "That file doesn't match this record";
+        loadingFile = false;
+        return;
+      }
+    } else {
+      accessGranted = true;
+    }
     // Use requestAnimationFrame to let the spinner render before
     // the browser starts processing the file
     requestAnimationFrame(() => {
@@ -2951,16 +3032,20 @@
                   name="password"
                   autocomplete="current-password"
                   bind:value={hashInput}
+                  disabled={unlocking}
                   placeholder="64-character hex hash"
                   class="flex-1 text-xs font-mono bg-surface border border-border rounded px-3 py-2
-                    text-on-surface outline-none focus:border-primary placeholder:text-on-surface-muted/50"
+                    text-on-surface outline-none focus:border-primary placeholder:text-on-surface-muted/50
+                    disabled:opacity-50"
                 />
                 <button
                   type="submit"
+                  disabled={unlocking}
                   class="text-xs font-ui font-medium px-4 py-2 rounded cursor-pointer
-                    bg-primary text-on-primary hover:bg-primary-hover"
+                    bg-primary text-on-primary hover:bg-primary-hover
+                    disabled:opacity-50 disabled:cursor-default"
                 >
-                  Verify
+                  {unlocking ? "Checking..." : "Verify"}
                 </button>
               </div>
               {#if hashError}

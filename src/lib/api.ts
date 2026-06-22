@@ -231,6 +231,41 @@ import type { KindedSpan, CoverageReview } from "$lib/coverage";
 
 /** Fetch all reviewers' coverage entries for a record. Empty when no
  *  coverage has been recorded yet. */
+/** The gate's verify/submit response. On a PASS for a gated record the edge also
+ *  returns the record body + raw_frontmatter (withheld from the public snapshot),
+ *  so a proven possessor can review and edit the text. */
+export interface VerificationResult {
+  passed: boolean;
+  method?: string;
+  score?: number | null;
+  needed?: number | null;
+  url?: string;
+  expires_in?: number;
+  body?: string;
+  raw_frontmatter?: string;
+}
+
+/** Prove possession to the gate (a source-file SHA-256, or a cloze session +
+ *  responses). Always dynamic - the live edge serves it; the static snapshot
+ *  never carries the gated body. */
+export async function submitVerification(
+  fullHash: string,
+  proof: {
+    sha256?: string;
+    session_id?: string;
+    responses?: Record<string, string>;
+    ext?: string;
+  },
+): Promise<VerificationResult> {
+  const res = await fetch(`/api/ingests/${fullHash}/verification/submit`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(proof),
+  });
+  if (!res.ok) throw new Error(`Verification failed: ${res.status}`);
+  return res.json();
+}
+
 export async function fetchCoverage(hash: string): Promise<CoverageReview[]> {
   const res = await fetch(readPath(`/api/ingests/${hash}/coverage`));
   if (!res.ok) return [];
