@@ -11,6 +11,19 @@
   import GraphNodeDetail from "./GraphNodeDetail.svelte";
   import GraphCanvas from "./GraphCanvas.svelte";
 
+  // Deprecated node types (node-types.md): no longer emitted by extraction, they
+  // linger only in stale pre-re-digestion data. Hidden from the type filter so it
+  // offers only the live taxonomy (person/organisation/event/place/document/object/
+  // topic/project); the dead-type nodes themselves clear on the next re-digestion +
+  // rebuild. Blocklist (not allow-list) so any live/new type still shows.
+  const DEAD_TYPES = new Set([
+    "matter",
+    "concept",
+    "programme",
+    "investigation",
+    "classification",
+  ]);
+
   // Optional node to open on mount (deep link: /graph/<node_id>), so the
   // curation card / any link can jump straight to a node's claims in context.
   let { initialNodeId }: { initialNodeId?: string } = $props();
@@ -135,7 +148,7 @@
           class="text-xs font-ui px-2 py-1 rounded cursor-pointer transition-colors
             {selectedType === '' ? 'bg-primary text-on-primary' : 'text-on-surface-secondary hover:bg-surface'}"
         >All</button>
-        {#each stats.by_type as t}
+        {#each stats.by_type.filter((t) => !DEAD_TYPES.has(t.type)) as t}
           <button
             onclick={() => { selectedType = t.type; }}
             class="text-xs font-ui px-2 py-1 rounded cursor-pointer transition-colors
