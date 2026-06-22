@@ -247,6 +247,22 @@ async function handleGate(
         );
         out.expires_in = env.gateTtlSeconds;
       }
+      // Serve the extracted TEXT BODY to the proven possessor. The public
+      // snapshot blanks the body for gated records (copyright); without this the
+      // gate passes into an empty editor. One-shot - returned in this pass
+      // response only, no persistent unlock state (re-gates on reload, the safer
+      // boundary). Read from the canonical .v2/.md path (the same read the
+      // review-write path does) and split into frontmatter + body so the SPA can
+      // both display the text AND reconstruct the full record on write-back
+      // (raw_frontmatter + body) without clobbering the frontmatter.
+      const md = (
+        await deps.github.getFile(env.ingestsRepo, await resolveBodyPath(env, deps, hash))
+      )?.text;
+      if (md != null) {
+        const m = md.match(/^(---\n[\s\S]*?\n---\n)([\s\S]*)$/);
+        out.raw_frontmatter = m ? m[1] : "";
+        out.body = m ? m[2] : md;
+      }
     }
     return json(out);
   }
