@@ -60,6 +60,10 @@ export interface Env extends AuthConfig {
   bunnyHost: string;
   bunnyKey: string;
   gateTtlSeconds: number;
+  // Serve a gated record's text body on a gate-pass. OFF by default - it crosses
+  // the copyright boundary (licensed text), so it is an explicit, separate switch
+  // from any other edge deploy.
+  serveGatedBody: boolean;
 }
 
 interface GitHubLike {
@@ -263,13 +267,21 @@ async function handleGate(
       // review-write path does) and split into frontmatter + body so the SPA can
       // both display the text AND reconstruct the full record on write-back
       // (raw_frontmatter + body) without clobbering the frontmatter.
-      const md = (
-        await deps.github.getFile(env.ingestsRepo, await resolveBodyPath(env, deps, hash))
-      )?.text;
-      if (md != null) {
-        const m = md.match(/^(---\n[\s\S]*?\n---\n)([\s\S]*)$/);
-        out.raw_frontmatter = m ? m[1] : "";
-        out.body = m ? m[2] : md;
+      //
+      // GATED behind SERVE_GATED_BODY (default OFF): serving licensed text on a
+      // gate-pass crosses a copyright boundary, so it is its own explicit switch -
+      // a directive-only or any other edge deploy must NOT start serving bodies as
+      // a side effect. With the flag off, a pass returns only the signed URL (the
+      // pre-existing behaviour), never the body.
+      if (env.serveGatedBody) {
+        const md = (
+          await deps.github.getFile(env.ingestsRepo, await resolveBodyPath(env, deps, hash))
+        )?.text;
+        if (md != null) {
+          const m = md.match(/^(---\n[\s\S]*?\n---\n)([\s\S]*)$/);
+          out.raw_frontmatter = m ? m[1] : "";
+          out.body = m ? m[2] : md;
+        }
       }
     }
     return json(out);
@@ -576,6 +588,7 @@ export function loadEnv(): Env {
     bunnyHost: get("BUNNY_ZONE_HOST"),
     bunnyKey: get("BUNNY_TOKEN_KEY"),
     gateTtlSeconds: Number(get("GATE_TTL_SECONDS", "300")),
+    serveGatedBody: get("SERVE_GATED_BODY") === "1",
   };
 }
 
