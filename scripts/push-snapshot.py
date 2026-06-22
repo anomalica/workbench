@@ -22,10 +22,23 @@ from __future__ import annotations
 import concurrent.futures
 import mimetypes
 import os
+import socket
 import sys
 import time
 import urllib.request
 from pathlib import Path
+
+# storage.bunnycdn.com publishes AAAA records that are often unreachable from a
+# v4-only path ("No route to host"); pin resolution to IPv4 so every connection
+# lands on a reachable address instead of retrying past dead v6 IPs.
+_orig_getaddrinfo = socket.getaddrinfo
+
+
+def _ipv4_only(host, port, family=0, *args, **kwargs):
+    return _orig_getaddrinfo(host, port, socket.AF_INET, *args, **kwargs)
+
+
+socket.getaddrinfo = _ipv4_only
 
 HOST = os.environ.get("BUNNY_STORAGE_HOST", "storage.bunnycdn.com")
 ZONE = os.environ["BUNNY_STORAGE_ZONE"]
