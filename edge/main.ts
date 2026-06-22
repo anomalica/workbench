@@ -27,7 +27,7 @@ import {
 } from "./lib/auth.ts";
 import { signedUrl } from "./lib/bunny.ts";
 import { needed, scoreSession, startSession } from "./lib/gate.ts";
-import { type Author, type FileState, GitHubClient } from "./lib/github.ts";
+import { type Author, type FileState, GitHubClient, GitHubError } from "./lib/github.ts";
 import {
   appendEntry,
   buildMergeEntry,
@@ -400,7 +400,7 @@ async function handleCuration(
   return notFound();
 }
 
-export async function handleRequest(req: Request, env: Env, deps: Deps): Promise<Response> {
+async function route(req: Request, env: Env, deps: Deps): Promise<Response> {
   const { pathname } = new URL(req.url);
   const method = req.method;
 
@@ -432,6 +432,21 @@ export async function handleRequest(req: Request, env: Env, deps: Deps): Promise
   }
 
   return notFound();
+}
+
+export async function handleRequest(req: Request, env: Env, deps: Deps): Promise<Response> {
+  try {
+    return await route(req, env, deps);
+  } catch (e) {
+    // A GitHub API failure (bad/expired service token, permission, sha conflict)
+    // throws GitHubError - surface a diagnosable upstream status rather than letting
+    // it bubble to a bare, body-less Bunny 500 (which masked a malformed service
+    // token on 2026-06-22). Other unexpected throws still get a clean 500.
+    if (e instanceof GitHubError) {
+      return err(502, `upstream write failed: GitHub ${e.status}`);
+    }
+    return err(500, "internal error");
+  }
 }
 
 // --- env + deps (the Deno.serve entry lives in serve.ts, so importing this

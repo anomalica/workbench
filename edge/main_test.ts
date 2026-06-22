@@ -1,7 +1,7 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { parseAll } from "jsr:@std/yaml@1";
 import { makeSessionCookie, type User } from "./lib/auth.ts";
-import type { Author, FileState } from "./lib/github.ts";
+import { type Author, type FileState, GitHubError } from "./lib/github.ts";
 import { type Deps, type Env, handleRequest } from "./main.ts";
 
 const ENV: Env = {
@@ -232,4 +232,27 @@ Deno.test("review PUT needs auth, then commits the corrected record", async () =
 Deno.test("unknown route -> 404", async () => {
   const res = await handleRequest(req("/api/nope"), ENV, deps(new FakeGitHub()));
   assertEquals(res.status, 404);
+});
+
+Deno.test("a GitHub write failure surfaces a 502, not a bare 500", async () => {
+  const gh = {
+    getFile: () => Promise.resolve(null),
+    editFile: () => Promise.reject(new GitHubError(401, "Bad credentials")),
+  };
+  const res = await handleRequest(
+    req("/api/curation/reject", {
+      method: "POST",
+      headers: { cookie: await cookie() },
+      body: JSON.stringify({
+        nodes: [
+          { id: "n1", name: "A", node_type: "matter" },
+          { id: "n2", name: "B", node_type: "matter" },
+        ],
+      }),
+    }),
+    ENV,
+    { github: gh, nowSec: () => NOW },
+  );
+  assertEquals(res.status, 502);
+  assertEquals((await res.json()).detail, "upstream write failed: GitHub 401");
 });
