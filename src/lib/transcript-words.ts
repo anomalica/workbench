@@ -20,12 +20,6 @@ export interface ParsedWords {
   /** gIndex of the last word on each original body line, so the line-break
    *  structure can be reproduced exactly on serialise. */
   lineEndWords: Set<number>;
-  /** The literal `HH:MM:SS.D` prefix of each original word line, keyed by the
-   *  gIndex of that line's FIRST word. Preserved verbatim because the 2dp word
-   *  token doesn't carry enough precision to recompute it: the ingester derived
-   *  the prefix from the full-precision word start, which sits just below the
-   *  rounded token, so recomputing can land one tenth too high. */
-  linePrefixes: Map<number, string>;
   /** Everything in the body before the first `<!-- speaker -->` comment (the
    *  title heading, published line, blank separators). Re-emitted verbatim so a
    *  reassign doesn't destroy the record's `# PWTS ...` title. */
@@ -41,8 +35,6 @@ const INLINE_SPEAKER = /^<!--\s*speaker:\s*(.+?)\s*-->$/;
 // mis-recognised word into several words that share one timestamp, so a unit
 // is not restricted to a single token.
 const WORD_TOKEN = /\{\{t:(\d+(?:\.\d+)?)\}\}([\s\S]*?)(?=\{\{t:|$)/g;
-// Leading HH:MM:SS.D timecode prefix of a word line.
-const LINE_PREFIX = /^(\d{2}:\d{2}:\d{2}\.\d)\s+/;
 
 /** True if the body uses per-word timestamps (contains `{{t:` markers). */
 export function hasWordTimestamps(body: string): boolean {
@@ -50,16 +42,17 @@ export function hasWordTimestamps(body: string): boolean {
 }
 
 /** Parse a per-word-timestamp body into words, speaker runs, the set of
- *  line-ending word indices, the literal per-line timecode prefixes, and the
- *  body preamble. The transcript region begins at the first `<!-- speaker -->`
- *  comment; everything before it is kept verbatim as the preamble. Lines that
- *  are neither a speaker comment nor a word line (blank separators) carry no
- *  words and are reconstructed from the run structure on serialise. */
+ *  line-ending word indices, and the body preamble. The transcript region begins
+ *  at the first `<!-- speaker -->` comment; everything before it is kept verbatim
+ *  as the preamble. Lines that are neither a speaker comment nor a word line
+ *  (blank separators) carry no words and are reconstructed from the run structure
+ *  on serialise. A legacy `HH:MM:SS.D` line-start prefix, if present, is ignored
+ *  (it sits before the first `{{t:}}`, so WORD_TOKEN never sees it) and dropped on
+ *  the next serialise. */
 export function parseWords(body: string): ParsedWords {
   const words: Word[] = [];
   const runs: SpeakerRun[] = [];
   const lineEndWords = new Set<number>();
-  const linePrefixes = new Map<number, string>();
 
   const rawLines = body.split("\n");
   const firstSpeakerLine = rawLines.findIndex((raw) => INLINE_SPEAKER.test(raw.trim()));
@@ -85,7 +78,6 @@ export function parseWords(body: string): ParsedWords {
 
     if (!hasWordTimestamps(line)) continue;
 
-    const lineStartIndex = gIndex;
     let lastOnLine = -1;
     WORD_TOKEN.lastIndex = 0;
     let m = WORD_TOKEN.exec(line);
@@ -112,38 +104,23 @@ export function parseWords(body: string): ParsedWords {
     }
     if (lastOnLine >= 0) {
       lineEndWords.add(lastOnLine);
-      const prefixMatch = line.match(LINE_PREFIX);
-      if (prefixMatch) linePrefixes.set(lineStartIndex, prefixMatch[1]);
     }
   }
 
-  return { words, runs, lineEndWords, linePrefixes, preamble };
-}
-
-/** Floor an absolute seconds value to a `HH:MM:SS.D` prefix. Used only for line
- *  starts created by a mid-line speaker split, where there's no original prefix
- *  to preserve. */
-function flooredPrefix(seconds: number): string {
-  const t = Math.max(0, seconds);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const h = Math.floor(t / 3600);
-  const m = Math.floor((t % 3600) / 60);
-  const sec = Math.floor(t % 60);
-  const tenth = Math.floor((t * 10) % 10);
-  return `${pad(h)}:${pad(m)}:${pad(sec)}.${tenth}`;
+  return { words, runs, lineEndWords, preamble };
 }
 
 /** Serialise words + runs + line breaks back into a transcript body.
  *  Re-emits the body preamble verbatim, then a `<!-- speaker -->` comment only
  *  when the speaker changes (adjacent same-speaker runs merge), a single blank
- *  line between runs, each original line's literal `HH:MM:SS.D` prefix (keyed by
- *  its first word), and a `{{t:N.N}}` marker (two decimals) glued before every
- *  word. Round-trip identical to the parsed body when nothing was edited. */
+ *  line between runs, and a `{{t:N.N}}` marker (two decimals) glued before every
+ *  word. No line-start `HH:MM:SS.D` prefix is emitted - each line's first
+ *  `{{t:}}` already carries the line's start time (record/2). Round-trip
+ *  identical to the parsed body when nothing was edited. */
 export function serializeWords(
   words: Word[],
   runs: SpeakerRun[],
   lineEndWords: Set<number>,
-  linePrefixes: Map<number, string> = new Map(),
   preamble = "",
 ): string {
   const speakerByWord = new Array<string>(words.length);
@@ -158,10 +135,7 @@ export function serializeWords(
 
   const flushLine = () => {
     if (lineStartWord < 0) return;
-    // Prefer the original verbatim prefix for this line's first word; only a
-    // mid-line speaker split produces a line start with no captured prefix.
-    const prefix = linePrefixes.get(lineStartWord) ?? flooredPrefix(words[lineStartWord].start);
-    out.push(`${prefix} ${lineTokens.join(" ")}`);
+    out.push(lineTokens.join(" "));
     lineStartWord = -1;
     lineTokens = [];
   };
@@ -198,7 +172,7 @@ export function splitWord(
   pieces: string[],
   mediaDuration?: number,
 ): ParsedWords {
-  const { words, runs, lineEndWords, linePrefixes, preamble } = parsed;
+  const { words, runs, lineEndWords, preamble } = parsed;
   if (gIndex < 0 || gIndex >= words.length) return parsed;
   if (pieces.length <= 1) {
     if (pieces.length === 1 && words[gIndex].text !== pieces[0]) {
@@ -236,14 +210,11 @@ export function splitWord(
   }));
   const newLineEndWords = new Set<number>();
   for (const e of lineEndWords) newLineEndWords.add(e === gIndex ? gIndex + (k - 1) : shift(e));
-  const newLinePrefixes = new Map<number, string>();
-  for (const [key, val] of linePrefixes) newLinePrefixes.set(shift(key), val);
 
   return {
     words: newWords,
     runs: newRuns,
     lineEndWords: newLineEndWords,
-    linePrefixes: newLinePrefixes,
     preamble,
   };
 }

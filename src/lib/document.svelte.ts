@@ -148,13 +148,7 @@ export class DocumentStore {
     parsed: ReturnType<typeof parseWords>,
     newRuns: ReturnType<typeof reassignSpeaker>,
   ): string {
-    const newBody = serializeWords(
-      parsed.words,
-      newRuns,
-      parsed.lineEndWords,
-      parsed.linePrefixes,
-      parsed.preamble,
-    );
+    const newBody = serializeWords(parsed.words, newRuns, parsed.lineEndWords, parsed.preamble);
     // Reconcile the frontmatter speakers: KEEP real names the reviewer curated,
     // even when they have no body occurrences (a name added before assigning,
     // or un-named from the body) - only the user removes named speakers; auto-
@@ -249,13 +243,7 @@ export class DocumentStore {
     const [fm, body] = splitFrontmatter(this.current);
     const parsed = parseWords(body);
     const next = splitWord(parsed, gIndex, clean.split(" "));
-    const newBody = serializeWords(
-      next.words,
-      next.runs,
-      next.lineEndWords,
-      next.linePrefixes,
-      next.preamble,
-    );
+    const newBody = serializeWords(next.words, next.runs, next.lineEndWords, next.preamble);
     const result = fm + newBody;
     if (result !== this.current) this.pushEdit(result);
   }
@@ -272,13 +260,7 @@ export class DocumentStore {
     const clamped = Math.max(prev, Math.min(next, start));
     if (Math.abs(clamped - parsed.words[gIndex].start) < 0.005) return;
     parsed.words[gIndex] = { ...parsed.words[gIndex], start: clamped };
-    const newBody = serializeWords(
-      parsed.words,
-      parsed.runs,
-      parsed.lineEndWords,
-      parsed.linePrefixes,
-      parsed.preamble,
-    );
+    const newBody = serializeWords(parsed.words, parsed.runs, parsed.lineEndWords, parsed.preamble);
     const result = fm + newBody;
     if (result !== this.current) this.pushEdit(result);
   }
