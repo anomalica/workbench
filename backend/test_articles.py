@@ -60,7 +60,7 @@ def test_entity_article_shape(content_repo):
         "title": "Luis Elizondo",
         "description": "A former intelligence officer.",
         "tags": ["official", "intelligence"],
-        "url": "https://anomalica.is/people/luis-elizondo/",
+        "url": "https://anomalica.is/en/people/luis-elizondo/",  # /en/ language subdir
         "record_hash": None,  # entities never carry one
         "directives": [],  # no sidecar in this fixture
     }
@@ -69,13 +69,15 @@ def test_entity_article_shape(content_repo):
 def test_record_article_keeps_record_hash_for_deeplink(content_repo):
     art = next(a for a in server.list_articles() if a["section"] == "records")
     assert art["record_hash"] == REC_HASH
-    assert art["url"] == "https://anomalica.is/records/2020-01-01-video-some-episode/"
+    assert (
+        art["url"] == "https://anomalica.is/en/records/2020-01-01-video-some-episode/"
+    )
 
 
 def test_site_base_url_is_honoured(content_repo, monkeypatch):
     monkeypatch.setattr(server, "site_base_url", "https://staging.example")
     art = next(a for a in server.list_articles() if a["slug"] == "aatip")
-    assert art["url"] == "https://staging.example/organisations/aatip/"
+    assert art["url"] == "https://staging.example/en/organisations/aatip/"
 
 
 def test_missing_content_dir_returns_empty(tmp_path, monkeypatch):

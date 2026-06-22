@@ -65,6 +65,12 @@ STATIC_PAGE_SECTIONS = frozenset(
     }
 )
 
+# The site publishes every language under a subdir (Hugo defaultContentLanguageInSubdir),
+# so even English pages live at /en/<section>/<slug>/. The workbench is English-only
+# for now, so article links always point at the English render. When the workbench
+# becomes multilingual this should track the reviewer's chosen language.
+WORKBENCH_LANG = "en"
+
 
 def _unquote(value: str) -> str:
     """Strip surrounding YAML quotes and unescape a double-quoted scalar, so a
@@ -847,7 +853,7 @@ def list_articles() -> list[dict]:
                     "title": fields.get("title") or slug,
                     "description": fields.get("description") or "",
                     "tags": fields.get("tags") or [],
-                    "url": f"{site_base_url}/{section}/{slug}/",
+                    "url": f"{site_base_url}/{WORKBENCH_LANG}/{section}/{slug}/",
                     "record_hash": record_hash
                     if isinstance(record_hash, str)
                     else None,
