@@ -37,6 +37,7 @@
   import WordTranscript from "./WordTranscript.svelte";
   import ReadableText from "./ReadableText.svelte";
   import EditableMetadata from "./EditableMetadata.svelte";
+  import ReviewHistory from "./ReviewHistory.svelte";
   import { hasWordTimestamps } from "$lib/transcript-words";
   import { untrack } from "svelte";
   import { marked } from "marked";
@@ -2888,6 +2889,8 @@
             </summary>
             <pre class="mt-2 font-mono text-on-surface whitespace-pre-wrap">{currentRawFrontmatter}</pre>
           </details>
+          <!-- Every reviewer's edits to this record (from git). -->
+          <ReviewHistory hash={ingest.content_hash} />
         </div>
       {/if}
 

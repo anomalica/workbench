@@ -183,6 +183,11 @@ class IngestSource(ABC):
     def reviewed_by_email(self, email: str) -> dict[str, str]:
         """Return {content_hash: latest_review_iso} for this user's reviews."""
 
+    @abstractmethod
+    def review_history(self, full_hash: str) -> list[dict]:
+        """Every reviewer's edits to a record, newest first: a list of
+        {by, at, summary} from the record's git history (no email)."""
+
 
 def normalise_hash(value: str | None) -> str | None:
     """Strip the optional `sha256:` prefix and validate the hex string."""
@@ -467,6 +472,33 @@ class LocalIngestSource(IngestSource):
                 out[content_hash] = max(candidates)
         return out
 
+    def review_history(self, full_hash: str) -> list[dict]:
+        """Every reviewer's edits to this record, newest first: the git log of
+        the record's canonical body file. {by, at, summary} - no email."""
+        import subprocess
+
+        entry = self._scan().get(full_hash)
+        if entry is None:
+            return []
+        md_path, _ = entry
+        repo_dir = self.store.parent
+        rel = str(md_path.relative_to(repo_dir))
+        proc = subprocess.run(
+            ["git", "log", "--format=%an%x00%aI%x00%s", "--", rel],
+            cwd=repo_dir,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            return []
+        history = []
+        for line in proc.stdout.splitlines():
+            parts = line.split("\x00")
+            if len(parts) == 3:
+                history.append({"by": parts[0], "at": parts[1], "summary": parts[2]})
+        return history
+
     def _scan_git_reviews(self) -> dict[str, list[tuple[str, str, str]]]:
         """Walk review commits in the ingests repo and collect every
         Reviewed-Record trailer (and synthesise content-kind entries
@@ -714,6 +746,11 @@ class GitHubIngestSource(IngestSource):
         # under store/ in the ingests repo. Returning an empty dict is correct
         # default behaviour - no records show as reviewed until implemented.
         return {}
+
+    def review_history(self, full_hash: str) -> list[dict]:
+        # The edge (edge/main.ts) serves this in production via the GitHub commits
+        # API; this Python stub is unused there. [] is a safe default.
+        return []
 
 
 def build_source() -> IngestSource:
@@ -1602,6 +1639,15 @@ def get_coverage(full_hash: str) -> JSONResponse:
         raise HTTPException(status_code=404, detail="Not found")
     sidecar = source.load_coverage(full_hash)
     return JSONResponse({"reviews": (sidecar or {}).get("reviews", [])})
+
+
+@app.get("/api/ingests/{full_hash}/history")
+def get_history(full_hash: str) -> JSONResponse:
+    """Every reviewer's edits to a record, newest first (the record's git history):
+    a list of {by, at, summary}. Public read; reviewer email is not exposed."""
+    if not FULL_HASH_PATTERN.match(full_hash):
+        raise HTTPException(status_code=404, detail="Not found")
+    return JSONResponse({"history": source.review_history(full_hash)})
 
 
 @app.put("/api/ingests/{full_hash}")

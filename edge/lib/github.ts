@@ -76,6 +76,32 @@ export class GitHubClient {
     };
   }
 
+  /** The commit history of a path (newest first) - the review history of a
+   *  record. Returns [] if the file/repo is absent (404). */
+  async listCommits(
+    repo: string,
+    path: string,
+    perPage = 30,
+  ): Promise<{ by: string; email: string; at: string; message: string }[]> {
+    const clean = path.split("/").map(encodeURIComponent).join("/");
+    const res = await this.fetchImpl(
+      `https://api.github.com/repos/${this.owner}/${repo}/commits` +
+        `?path=${clean}&sha=${encodeURIComponent(this.branch)}&per_page=${perPage}`,
+      { headers: this.headers() },
+    );
+    if (res.status === 404 || res.status === 409) return []; // 409: empty repo
+    if (res.status !== 200) throw new GitHubError(res.status, `listCommits ${path}`);
+    const body = (await res.json()) as {
+      commit: { author: { name: string; email: string; date: string }; message: string };
+    }[];
+    return body.map((c) => ({
+      by: c.commit.author.name,
+      email: c.commit.author.email,
+      at: c.commit.author.date,
+      message: c.commit.message.split("\n")[0],
+    }));
+  }
+
   /** Read a file. Returns null if it does not exist (404). */
   async getFile(repo: string, path: string): Promise<FileState | null> {
     const res = await this.fetchImpl(

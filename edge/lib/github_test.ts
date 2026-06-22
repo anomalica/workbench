@@ -89,3 +89,33 @@ Deno.test("editFile retries on a sha conflict then succeeds", async () => {
   assertEquals(putCount, 2); // retried
   assertEquals(getCount, 2); // re-read before the retry
 });
+
+Deno.test("listCommits maps the commits API + summarises the message", async () => {
+  const fetchImpl: FetchLike = (url) => {
+    assert(url.includes("/commits?path="));
+    return Promise.resolve({
+      status: 200,
+      json: () =>
+        Promise.resolve([
+          {
+            commit: {
+              author: { name: "Mark", email: "m@x.com", date: "2026-06-22T02:35:31Z" },
+              message: "review: fix names\n\ntrailer",
+            },
+          },
+        ]),
+    });
+  };
+  const gh = new GitHubClient("t", "anomalica", "main", fetchImpl);
+  const commits = await gh.listCommits("ingests", "store/abc.v2.md");
+  assertEquals(commits, [
+    { by: "Mark", email: "m@x.com", at: "2026-06-22T02:35:31Z", message: "review: fix names" },
+  ]);
+});
+
+Deno.test("listCommits returns [] for a missing path (404)", async () => {
+  const gh = new GitHubClient("t", "anomalica", "main", () =>
+    Promise.resolve({ status: 404, json: () => Promise.resolve({}) }),
+  );
+  assertEquals(await gh.listCommits("ingests", "store/nope.md"), []);
+});

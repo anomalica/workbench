@@ -195,6 +195,22 @@ export async function fetchCoverage(hash: string): Promise<CoverageReview[]> {
   return Array.isArray(data?.reviews) ? data.reviews : [];
 }
 
+export interface ReviewHistoryEntry {
+  by: string;
+  at: string;
+  summary: string;
+}
+
+/** Every reviewer's edits to a record, newest first (the record's git history).
+ *  DYNAMIC (the live edge/FastAPI), never the static snapshot - the history grows
+ *  with each review, so it is not pre-rendered. Empty on any error. */
+export async function fetchHistory(hash: string): Promise<ReviewHistoryEntry[]> {
+  const res = await fetch(`/api/ingests/${hash}/history`);
+  if (!res.ok) return [];
+  const data = await res.json().catch(() => ({}));
+  return Array.isArray(data?.history) ? data.history : [];
+}
+
 export interface User {
   name: string;
   email: string;

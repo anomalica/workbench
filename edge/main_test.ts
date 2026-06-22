@@ -42,6 +42,10 @@ class FakeGitHub {
     this.files.set(k, transform(this.files.get(k) ?? ""));
     return Promise.resolve("newsha");
   }
+  commits = new Map<string, { by: string; email: string; at: string; message: string }[]>();
+  listCommits(repo: string, path: string) {
+    return Promise.resolve(this.commits.get(`${repo}/${path}`) ?? []);
+  }
 }
 
 function deps(gh: FakeGitHub): Deps {
@@ -247,6 +251,23 @@ Deno.test("review of a V2 record writes the canonical .v2.md, not a stray .md", 
   assertEquals(gh.files.has(`ingests/store/${HASH}.md`), false);
 });
 
+Deno.test("review history: public read, maps git commits, drops reviewer email", async () => {
+  const gh = new FakeGitHub();
+  gh.put("ingests", `store/${HASH}.v2.md`, "body\n"); // v2 record -> history reads .v2.md
+  gh.commits.set(`ingests/store/${HASH}.v2.md`, [
+    { by: "Mark", email: "mark@x.com", at: "2026-06-22T02:35:31Z", message: "review: fix names" },
+    { by: "Sam", email: "sam@x.com", at: "2026-06-21T09:00:00Z", message: "review: first pass" },
+  ]);
+  const res = await handleRequest(req(`/api/ingests/${HASH}/history`), ENV, deps(gh)); // no cookie
+  assertEquals(res.status, 200);
+  const body = await res.json();
+  assertEquals(body.history, [
+    { by: "Mark", at: "2026-06-22T02:35:31Z", summary: "review: fix names" },
+    { by: "Sam", at: "2026-06-21T09:00:00Z", summary: "review: first pass" },
+  ]);
+  assert(!JSON.stringify(body).includes("@x.com"), "reviewer email must not leak");
+});
+
 Deno.test("unknown route -> 404", async () => {
   const res = await handleRequest(req("/api/nope"), ENV, deps(new FakeGitHub()));
   assertEquals(res.status, 404);
@@ -256,6 +277,7 @@ Deno.test("a GitHub write failure surfaces a 502, not a bare 500", async () => {
   const gh = {
     getFile: () => Promise.resolve(null),
     editFile: () => Promise.reject(new GitHubError(401, "Bad credentials")),
+    listCommits: () => Promise.resolve([]),
   };
   const res = await handleRequest(
     req("/api/curation/reject", {

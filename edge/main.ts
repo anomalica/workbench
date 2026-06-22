@@ -64,6 +64,11 @@ interface GitHubLike {
     author: Author,
     retries?: number,
   ): Promise<string>;
+  listCommits(
+    repo: string,
+    path: string,
+    perPage?: number,
+  ): Promise<{ by: string; email: string; at: string; message: string }[]>;
 }
 
 export interface Deps {
@@ -109,6 +114,14 @@ async function loadSidecar(env: Env, deps: Deps, hash: string): Promise<Sidecar 
 
 function authorOf(user: User): Author {
   return { name: user.name || user.login || "reviewer", email: user.email };
+}
+
+// The canonical record body file: v2 records keep it in {hash}.v2.md (preferred
+// by the workbench's _scan + records/ symlink), else {hash}.md. Reviews write it
+// and the history reads it.
+async function resolveBodyPath(env: Env, deps: Deps, hash: string): Promise<string> {
+  const v2 = `store/${hash}.v2.md`;
+  return (await deps.github.getFile(env.ingestsRepo, v2)) ? v2 : `store/${hash}.md`;
 }
 
 // --- handlers ---
@@ -264,14 +277,7 @@ async function handleReviewWrite(
   const notes = (body.notes ?? "").trim();
   const author = authorOf(user);
 
-  // V2 records keep their canonical body in store/{hash}.v2.md - the workbench's
-  // _scan + the records/ symlink prefer it over {hash}.md. Write there if it
-  // exists, else {hash}.md. Otherwise a v2 review lands in a stray {hash}.md and
-  // the reviewer keeps seeing the old .v2.md (their edit silently orphaned).
-  const v2Path = `store/${hash}.v2.md`;
-  const bodyPath = (await deps.github.getFile(env.ingestsRepo, v2Path))
-    ? v2Path
-    : `store/${hash}.md`;
+  const bodyPath = await resolveBodyPath(env, deps, hash);
 
   await deps.github.editFile(
     env.ingestsRepo,
@@ -409,6 +415,18 @@ async function handleCuration(
   return notFound();
 }
 
+// The review history of a record: every reviewer's edits to the canonical body,
+// from git. Live (not the static snapshot, which lags), public read. Reviewer
+// EMAIL is dropped - only name + date + summary reach the client.
+async function handleHistory(hash: string, env: Env, deps: Deps): Promise<Response> {
+  if (!FULL_HASH.test(hash)) return notFound();
+  const bodyPath = await resolveBodyPath(env, deps, hash);
+  const commits = await deps.github.listCommits(env.ingestsRepo, bodyPath);
+  return json({
+    history: commits.map((c) => ({ by: c.by, at: c.at, summary: c.message })),
+  });
+}
+
 async function route(req: Request, env: Env, deps: Deps): Promise<Response> {
   const { pathname } = new URL(req.url);
   const method = req.method;
@@ -423,6 +441,13 @@ async function route(req: Request, env: Env, deps: Deps): Promise<Response> {
       if (method !== "POST") return err(405, "Method not allowed");
     } else if (method !== "GET") return err(405, "Method not allowed");
     return handleGate(hash, action ?? "", req, env, deps);
+  }
+
+  // Review history (public read - who edited this record, from git).
+  const history = pathname.match(/^\/api\/ingests\/([^/]+)\/history$/);
+  if (history) {
+    if (method !== "GET") return err(405, "Method not allowed");
+    return handleHistory(history[1], env, deps);
   }
 
   // Everything past here writes - require a logged-in reviewer.
