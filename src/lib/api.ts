@@ -95,6 +95,28 @@ export async function fetchIngests(): Promise<IngestSummary[]> {
   return res.json();
 }
 
+/** An assembled knowledge-article page (the public, post-digest content layer).
+ *  Read-only listing for the Articles tab. `record_hash` is set only for the
+ *  records page-class (its 56-char id, deep-linkable to the in-app record view);
+ *  entity articles have it null and link to the public site at `url`. */
+export interface Article {
+  section: string;
+  slug: string;
+  title: string;
+  description: string;
+  tags: string[];
+  url: string;
+  record_hash: string | null;
+}
+
+export async function fetchArticles(): Promise<Article[]> {
+  const res = await fetch(readPath("/api/articles"));
+  // Snapshot may predate the articles render (older build): treat absence as empty.
+  if (res.status === 404 && STATIC_READS) return [];
+  if (!res.ok) throw new Error(`Failed to fetch articles: ${res.status}`);
+  return res.json();
+}
+
 export async function fetchIngest(hash: string): Promise<IngestDetail> {
   const res = await fetch(readPath(`/api/ingests/${hash}`));
   if (!res.ok) throw new Error(`Failed to fetch ingest: ${res.status}`);

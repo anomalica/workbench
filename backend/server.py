@@ -49,6 +49,21 @@ VERIFICATION_SESSION_TTL_SECONDS = 1800
 DEFAULT_INGESTS_PATH = Path(__file__).resolve().parents[2] / "ingests"
 DEFAULT_SOURCES_PATH = Path(__file__).resolve().parents[2] / "sources"
 DEFAULT_DIGESTS_PATH = Path(__file__).resolve().parents[2] / "digests"
+DEFAULT_CONTENT_PATH = Path(__file__).resolve().parents[2] / "content"
+
+# Sections under content/pages/ that are hand-authored static/explainer pages
+# (translated ~30 ways), NOT assembled knowledge articles. Excluded from the
+# Articles tab. Authoritative list per the assembler.
+STATIC_PAGE_SECTIONS = frozenset(
+    {
+        "about",
+        "methodology",
+        "artificial-intelligence",
+        "contact",
+        "language-coverage",
+        "decisions",
+    }
+)
 
 
 def _unquote(value: str) -> str:
@@ -772,6 +787,9 @@ source: IngestSource = build_source()
 sources_path = Path(os.environ.get("SOURCES_PATH", str(DEFAULT_SOURCES_PATH)))
 ingests_path = Path(os.environ.get("INGESTS_PATH", str(DEFAULT_INGESTS_PATH)))
 digests_path = Path(os.environ.get("DIGESTS_PATH", str(DEFAULT_DIGESTS_PATH)))
+content_path = Path(os.environ.get("CONTENT_PATH", str(DEFAULT_CONTENT_PATH)))
+# Public site base for linking assembled article pages (the live, post-digest layer).
+site_base_url = os.environ.get("SITE_BASE_URL", "https://anomalica.is").rstrip("/")
 
 MEDIA_FILENAME_PATTERN = re.compile(r"^[0-9a-f]{12}\.[a-z]{3,4}$")
 
@@ -792,6 +810,56 @@ def list_ingests() -> list[dict]:
     should return only public hashes to non-authenticated callers.
     """
     return source.list_ingests()
+
+
+def list_articles() -> list[dict]:
+    """List assembled knowledge-article pages from the content repo for the
+    Articles tab. Walks content/pages/<section>/*.en.md, skipping the
+    hand-authored static/explainer sections. Entity articles (people,
+    organisations, events, ...) link to the public site at /<section>/<slug>/;
+    records additionally carry a top-level record_hash (their 56-char stable id)
+    so the workbench can deep-link to its own richer inspection view. Every
+    content page is public - no access gating applies to this layer."""
+    import yaml as _yaml
+
+    pages = content_path / "pages"
+    if not pages.is_dir():
+        return []
+    articles: list[dict] = []
+    for section_dir in sorted(pages.iterdir()):
+        if not section_dir.is_dir() or section_dir.name in STATIC_PAGE_SECTIONS:
+            continue
+        section = section_dir.name
+        for md in sorted(section_dir.glob("*.en.md")):
+            slug = md.name[: -len(".en.md")]
+            try:
+                match = re.match(r"^---\n(.*?)\n---\n", md.read_text(), re.DOTALL)
+                fields = _yaml.safe_load(match.group(1)) if match else None
+            except (OSError, _yaml.YAMLError):
+                fields = None
+            if not isinstance(fields, dict):
+                fields = {}
+            record_hash = fields.get("record_hash")
+            articles.append(
+                {
+                    "section": section,
+                    "slug": slug,
+                    "title": fields.get("title") or slug,
+                    "description": fields.get("description") or "",
+                    "tags": fields.get("tags") or [],
+                    "url": f"{site_base_url}/{section}/{slug}/",
+                    "record_hash": record_hash
+                    if isinstance(record_hash, str)
+                    else None,
+                }
+            )
+    return articles
+
+
+@app.get("/api/articles")
+def get_articles() -> list[dict]:
+    """Assembled knowledge-article pages, read-only listing for the Articles tab."""
+    return list_articles()
 
 
 @app.get("/api/ingests/{full_hash}")

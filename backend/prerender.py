@@ -149,6 +149,16 @@ def prerender(out: Path | None = None) -> dict:
     )
     _write(base / "curation" / "merges.json", {"merges": graph.list_merges() or []})
 
+    # Assembled knowledge-article listing (public content layer). Walked from the
+    # content repo at full-render time only; the records-only incremental refresh
+    # leaves it untouched (a record review never changes assembled articles - those
+    # change on assembler reassembly, a separate input).
+    from backend import server as _server
+
+    articles = _server.list_articles()
+    _write(base / "articles.json", articles)
+    counts["articles"] = len(articles)
+
     counts.update(_prerender_records(base))
     return counts
 

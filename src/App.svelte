@@ -18,6 +18,7 @@
   import IngestViewer from "$lib/components/IngestViewer.svelte";
   import GraphView from "$lib/components/GraphView.svelte";
   import CurationView from "$lib/components/CurationView.svelte";
+  import ArticlesView from "$lib/components/ArticlesView.svelte";
   import { carryoverState } from "$lib/carryover";
   import { themeState } from "$lib/theme.svelte";
 
@@ -25,7 +26,7 @@
   // Top-level view: record review (default), knowledge-graph review, or curation.
   // (The Schedule view + processing-mode runner moved to the local `scheduler`
   // repo - this workbench is review-only.)
-  let appMode = $state<"records" | "graph" | "curate">("records");
+  let appMode = $state<"records" | "graph" | "curate" | "articles">("records");
   // A node to open directly in the graph view (deep link /graph/<node_id>), so a
   // claim-count / any link can jump straight to that node's claims in context.
   let graphNodeId = $state<string | undefined>(undefined);
@@ -296,11 +297,36 @@
     history.pushState(null, "", "/curate");
   }
 
+  function showArticles() {
+    appMode = "articles";
+    history.pushState(null, "", "/articles");
+  }
+
+  // Open a record in the workbench review view by its public hash (the 56-char
+  // record_hash an Articles record-page carries). Mirrors the deep-link path so
+  // a not-yet-reviewable record surfaces the same friendly notice.
+  async function openRecordByHash(publicHash: string) {
+    appMode = "records";
+    history.pushState(null, "", `/${publicHash}`);
+    if (!ingests.length) await loadIngests();
+    const match = ingests.find((i) => i.public_hash === publicHash);
+    if (match) {
+      selectIngest(match.content_hash);
+    } else {
+      error =
+        "That record isn't available for review yet - it may be pending re-ingestion. Showing all records.";
+    }
+  }
+
   async function checkUrlHash() {
     const path = window.location.pathname.slice(1);
     if (path === "curate") {
       appMode = "curate";
       return; // CurationView fetches its own data + reads its URL query
+    }
+    if (path === "articles") {
+      appMode = "articles";
+      return; // ArticlesView fetches its own listing
     }
     if (path.startsWith("graph/")) {
       const id = path.slice("graph/".length);
@@ -378,6 +404,12 @@
           {appMode === 'curate' ? 'bg-bone/15 text-bone' : 'text-bone/50 hover:text-bone/80 hover:bg-bone/10'}"
         title="Curate the graph - merge duplicate entities"
       >Curate</button>
+      <button
+        onclick={showArticles}
+        class="text-sm font-ui px-2.5 py-1 rounded cursor-pointer transition-colors
+          {appMode === 'articles' ? 'bg-bone/15 text-bone' : 'text-bone/50 hover:text-bone/80 hover:bg-bone/10'}"
+        title="Browse the assembled knowledge-article pages"
+      >Articles</button>
     </nav>
     <div class="flex-1"></div>
     <button
@@ -415,6 +447,8 @@
   <main class="flex-1 flex flex-col min-h-0">
     {#if appMode === "curate"}
       <CurationView />
+    {:else if appMode === "articles"}
+      <ArticlesView onOpenRecord={openRecordByHash} />
     {:else if appMode === "graph"}
       <GraphView initialNodeId={graphNodeId} />
     {:else if openingRecord && !selectedIngest}
