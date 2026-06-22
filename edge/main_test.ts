@@ -1,5 +1,5 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { parseAll } from "jsr:@std/yaml@1";
+import { parse, parseAll } from "jsr:@std/yaml@1";
 import { makeSessionCookie, type User } from "./lib/auth.ts";
 import { type Author, type FileState, GitHubError } from "./lib/github.ts";
 import { type Deps, type Env, handleRequest } from "./main.ts";
@@ -13,6 +13,7 @@ const ENV: Env = {
   owner: "anomalica",
   ingestsRepo: "ingests",
   curationRepo: "curation",
+  contentRepo: "content",
   branch: "main",
   bunnyHost: "cdn.example.b-cdn.net",
   bunnyKey: "test-security-key",
@@ -206,6 +207,94 @@ Deno.test("gate submit FAIL: never returns the gated body (no leak)", async () =
   assertEquals(out.passed, false);
   assertEquals(out.body, undefined);
   assertEquals(out.raw_frontmatter, undefined);
+});
+
+Deno.test("article directives: PUT needs auth", async () => {
+  const gh = new FakeGitHub();
+  const res = await handleRequest(
+    req(`/api/articles/people/luis-elizondo/directives`, {
+      method: "PUT",
+      body: JSON.stringify({ directives: ["Use the full name Luis Elizondo"] }),
+    }),
+    ENV,
+    deps(gh),
+  );
+  assertEquals(res.status, 401);
+  assertEquals(gh.files.size, 0);
+});
+
+Deno.test("article directives: writes the per-article sidecar as a YAML list", async () => {
+  const gh = new FakeGitHub();
+  const res = await handleRequest(
+    req(`/api/articles/people/luis-elizondo/directives`, {
+      method: "PUT",
+      headers: { cookie: await cookie() },
+      body: JSON.stringify({
+        // trimmed, blanks dropped, deduped, order preserved
+        directives: [
+          "  Use the full name Luis Elizondo  ",
+          "",
+          "Use the full name Luis Elizondo",
+          "Prefer active voice",
+        ],
+      }),
+    }),
+    ENV,
+    deps(gh),
+  );
+  assertEquals(res.status, 200);
+  const out = await res.json();
+  assertEquals(out.directives, ["Use the full name Luis Elizondo", "Prefer active voice"]);
+  // Written to the cross-language per-article sidecar in the CONTENT repo...
+  const written = gh.files.get("content/pages/people/luis-elizondo.directives.yaml")!;
+  assert(written, "sidecar not written");
+  // ...as valid YAML the assembler can safe_load back to the same list.
+  assertEquals(parse(written), ["Use the full name Luis Elizondo", "Prefer active voice"]);
+});
+
+Deno.test("article directives: an empty list writes an empty YAML list", async () => {
+  const gh = new FakeGitHub();
+  const res = await handleRequest(
+    req(`/api/articles/people/luis-elizondo/directives`, {
+      method: "PUT",
+      headers: { cookie: await cookie() },
+      body: JSON.stringify({ directives: [] }),
+    }),
+    ENV,
+    deps(gh),
+  );
+  assertEquals(res.status, 200);
+  assertEquals(parse(gh.files.get("content/pages/people/luis-elizondo.directives.yaml")!), []);
+});
+
+Deno.test("article directives: rejects an invalid slug (traversal/extension), writes nothing", async () => {
+  const gh = new FakeGitHub();
+  const res = await handleRequest(
+    req(`/api/articles/people/luis.elizondo/directives`, {
+      method: "PUT",
+      headers: { cookie: await cookie() },
+      body: JSON.stringify({ directives: ["x"] }),
+    }),
+    ENV,
+    deps(gh),
+  );
+  assertEquals(res.status, 404);
+  assertEquals(gh.files.size, 0);
+});
+
+Deno.test("article directives: a non-array body is a 400", async () => {
+  const gh = new FakeGitHub();
+  const res = await handleRequest(
+    req(`/api/articles/people/luis-elizondo/directives`, {
+      method: "PUT",
+      headers: { cookie: await cookie() },
+      body: JSON.stringify({ directives: "not a list" }),
+    }),
+    ENV,
+    deps(gh),
+  );
+  assertEquals(res.status, 400);
+  assertEquals(gh.files.size, 0);
 });
 
 Deno.test("curation merge needs auth, then appends a ledger entry", async () => {
