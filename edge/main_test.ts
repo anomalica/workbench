@@ -150,6 +150,64 @@ Deno.test("gate submit: SHA fastpath passes without a session", async () => {
   assertEquals(out.method, "sha256");
 });
 
+Deno.test("gate submit pass: serves the gated body from the canonical .v2 record", async () => {
+  const gh = new FakeGitHub();
+  gh.put(
+    "ingests",
+    `store/${HASH}.verification.json`,
+    JSON.stringify(sidecar(10, { sha256: "DEADBEEF" })),
+  );
+  // The canonical .v2.md wins over a stray v1 .md (the workbench reads .v2.md).
+  gh.put("ingests", `store/${HASH}.md`, "---\ntitle: STALE\n---\nstale body\n");
+  const v2 =
+    "---\ntitle: A Gated Book\ncopyright:\n  status: licensed\n---\nThe body.\nLine two.\n";
+  gh.put("ingests", `store/${HASH}.v2.md`, v2);
+
+  const res = await handleRequest(
+    req(`/api/ingests/${HASH}/verification/submit`, {
+      method: "POST",
+      body: JSON.stringify({ sha256: "deadbeef" }),
+    }),
+    ENV,
+    deps(gh),
+  );
+  const out = await res.json();
+  assertEquals(out.passed, true);
+  assertEquals(
+    out.raw_frontmatter,
+    "---\ntitle: A Gated Book\ncopyright:\n  status: licensed\n---\n",
+  );
+  assertEquals(out.body, "The body.\nLine two.\n");
+  // raw_frontmatter + body reconstructs the full canonical record (safe write-back).
+  assertEquals(out.raw_frontmatter + out.body, v2);
+});
+
+Deno.test("gate submit FAIL: never returns the gated body (no leak)", async () => {
+  const gh = new FakeGitHub();
+  gh.put("ingests", `store/${HASH}.verification.json`, JSON.stringify(sidecar(10)));
+  gh.put("ingests", `store/${HASH}.v2.md`, "---\ntitle: secret\n---\nSECRET BODY\n");
+  const startRes = await handleRequest(
+    req(`/api/ingests/${HASH}/verification/start`, { method: "POST" }),
+    ENV,
+    deps(gh),
+  );
+  const started = await startRes.json();
+  const responses: Record<string, string> = {};
+  for (const c of started.challenges) responses[String(c.id)] = "WRONG";
+  const res = await handleRequest(
+    req(`/api/ingests/${HASH}/verification/submit`, {
+      method: "POST",
+      body: JSON.stringify({ session_id: started.session_id, responses }),
+    }),
+    ENV,
+    deps(gh),
+  );
+  const out = await res.json();
+  assertEquals(out.passed, false);
+  assertEquals(out.body, undefined);
+  assertEquals(out.raw_frontmatter, undefined);
+});
+
 Deno.test("curation merge needs auth, then appends a ledger entry", async () => {
   const gh = new FakeGitHub();
   const merge = {
