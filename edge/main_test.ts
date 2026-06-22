@@ -229,6 +229,24 @@ Deno.test("review PUT needs auth, then commits the corrected record", async () =
   assertEquals(gh.files.get(`ingests/store/${HASH}.md`), "# corrected body\n");
 });
 
+Deno.test("review of a V2 record writes the canonical .v2.md, not a stray .md", async () => {
+  const gh = new FakeGitHub();
+  gh.put("ingests", `store/${HASH}.v2.md`, "old v2 body\n"); // canonical exists
+  const ok = await handleRequest(
+    req(`/api/ingests/${HASH}`, {
+      method: "PUT",
+      headers: { cookie: await cookie() },
+      body: JSON.stringify({ content: "# corrected v2 body\n", notes: "fix speakers" }),
+    }),
+    ENV,
+    deps(gh),
+  );
+  assertEquals((await ok.json()).submitted, true);
+  // landed on the canonical .v2.md; did NOT create a stray .md
+  assertEquals(gh.files.get(`ingests/store/${HASH}.v2.md`), "# corrected v2 body\n");
+  assertEquals(gh.files.has(`ingests/store/${HASH}.md`), false);
+});
+
 Deno.test("unknown route -> 404", async () => {
   const res = await handleRequest(req("/api/nope"), ENV, deps(new FakeGitHub()));
   assertEquals(res.status, 404);

@@ -264,9 +264,18 @@ async function handleReviewWrite(
   const notes = (body.notes ?? "").trim();
   const author = authorOf(user);
 
+  // V2 records keep their canonical body in store/{hash}.v2.md - the workbench's
+  // _scan + the records/ symlink prefer it over {hash}.md. Write there if it
+  // exists, else {hash}.md. Otherwise a v2 review lands in a stray {hash}.md and
+  // the reviewer keeps seeing the old .v2.md (their edit silently orphaned).
+  const v2Path = `store/${hash}.v2.md`;
+  const bodyPath = (await deps.github.getFile(env.ingestsRepo, v2Path))
+    ? v2Path
+    : `store/${hash}.md`;
+
   await deps.github.editFile(
     env.ingestsRepo,
-    `store/${hash}.md`,
+    bodyPath,
     () => body.content as string,
     `review: ${hash.slice(0, 12)}${notes ? ` - ${notes}` : ""}`,
     author,
