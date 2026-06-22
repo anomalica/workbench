@@ -107,6 +107,9 @@ export interface Article {
   tags: string[];
   url: string;
   record_hash: string | null;
+  /** Presentation directives for this article (a YAML sidecar in the content
+   *  repo). Read-only in the listing; edited via setArticleDirectives. */
+  directives: string[];
 }
 
 export async function fetchArticles(): Promise<Article[]> {
@@ -115,6 +118,24 @@ export async function fetchArticles(): Promise<Article[]> {
   if (res.status === 404 && STATIC_READS) return [];
   if (!res.ok) throw new Error(`Failed to fetch articles: ${res.status}`);
   return res.json();
+}
+
+/** Set an article's presentation-directive list. Always dynamic (the live
+ *  edge/FastAPI commits the content-repo sidecar, never the static snapshot).
+ *  Presentation-only - the server trims/dedupes/caps and returns the stored
+ *  list. The edge enforces login; a 401 means the session lapsed. */
+export async function setArticleDirectives(
+  section: string,
+  slug: string,
+  directives: string[],
+): Promise<string[]> {
+  const res = await fetch(`/api/articles/${section}/${slug}/directives`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ directives }),
+  });
+  if (!res.ok) throw new Error(`Failed to save directives: ${res.status}`);
+  return (await res.json()).directives ?? [];
 }
 
 export async function fetchIngest(hash: string): Promise<IngestDetail> {

@@ -851,15 +851,94 @@ def list_articles() -> list[dict]:
                     "record_hash": record_hash
                     if isinstance(record_hash, str)
                     else None,
+                    "directives": read_article_directives(section, slug),
                 }
             )
     return articles
+
+
+# Article identity for the directive sidecar path. Strict kebab-case so a path
+# segment can never escape content/pages/ (no dots, slashes, or "..").
+ARTICLE_SECTION_RE = re.compile(r"^[a-z][a-z-]*$")
+ARTICLE_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+MAX_DIRECTIVE_LEN = 500
+
+
+def _article_sidecar_path(section: str, slug: str) -> Path | None:
+    """The per-article presentation-directive sidecar, or None if section/slug
+    fail the strict kebab-case check."""
+    if not ARTICLE_SECTION_RE.match(section) or not ARTICLE_SLUG_RE.match(slug):
+        return None
+    return content_path / "pages" / section / f"{slug}.directives.yaml"
+
+
+def read_article_directives(section: str, slug: str) -> list[str]:
+    """The presentation directives for one article, from its sidecar (a YAML list
+    of strings), or [] if absent/invalid."""
+    import yaml as _yaml
+
+    path = _article_sidecar_path(section, slug)
+    if path is None or not path.exists():
+        return []
+    try:
+        loaded = _yaml.safe_load(path.read_text())
+    except (OSError, _yaml.YAMLError):
+        return []
+    return [d for d in loaded if isinstance(d, str)] if isinstance(loaded, list) else []
+
+
+def _clean_directives(raw) -> list[str] | None:
+    """Trim, drop blanks, dedupe (order-preserving), length-cap a directive list.
+    None if not a list, or any item is a non-string / over the length cap."""
+    if not isinstance(raw, list):
+        return None
+    seen: set[str] = set()
+    out: list[str] = []
+    for d in raw:
+        if not isinstance(d, str):
+            return None
+        s = d.strip()
+        if not s:
+            continue
+        if len(s) > MAX_DIRECTIVE_LEN:
+            return None
+        if s not in seen:
+            seen.add(s)
+            out.append(s)
+    return out
 
 
 @app.get("/api/articles")
 def get_articles() -> list[dict]:
     """Assembled knowledge-article pages, read-only listing for the Articles tab."""
     return list_articles()
+
+
+@app.put("/api/articles/{section}/{slug}/directives")
+def set_article_directives(
+    section: str, slug: str, body: dict, request: Request
+) -> JSONResponse:
+    """Write an article's presentation-directive sidecar (local dev; the edge does
+    this in production by committing to the content repo). Presentation-only - the
+    assembler enforces in-prompt that a directive can never change a fact, and the
+    UI labels it. Requires authentication."""
+    import yaml as _yaml
+
+    user = request.session.get("user")
+    if not user:
+        raise HTTPException(status_code=401, detail="Login required")
+    path = _article_sidecar_path(section, slug)
+    if path is None or not path.parent.is_dir():
+        raise HTTPException(status_code=404, detail="Not found")
+    directives = _clean_directives(body.get("directives"))
+    if directives is None:
+        raise HTTPException(status_code=400, detail="Invalid directives list")
+    path.write_text(
+        _yaml.safe_dump(directives, default_flow_style=False, allow_unicode=True)
+        if directives
+        else "[]\n"
+    )
+    return JSONResponse({"ok": True, "directives": directives})
 
 
 @app.get("/api/ingests/{full_hash}")

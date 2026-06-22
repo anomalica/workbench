@@ -1,13 +1,16 @@
 <script lang="ts">
-  import { fetchArticles, type Article } from "$lib/api";
+  import { fetchArticles, type Article, type User } from "$lib/api";
+  import ArticleDirectives from "$lib/components/ArticleDirectives.svelte";
 
-  // Read-only listing of the assembled knowledge-article pages (the public,
-  // post-digest content layer). Entity articles link to the live site; records
-  // additionally offer an in-app deep-link to the workbench's richer record view
-  // via their record_hash. There is no editing here - directive authoring waits
-  // on the assembler's preserve-on-regen + consume work (a written directive
-  // would be wiped on the next reassembly today).
-  let { onOpenRecord }: { onOpenRecord?: (recordHash: string) => void } = $props();
+  // Listing of the assembled knowledge-article pages (the public, post-digest
+  // content layer). Entity articles link to the live site; records additionally
+  // offer an in-app deep-link to the workbench's richer record view via their
+  // record_hash. Each article carries an editable presentation-directive list
+  // (logged-in reviewers) that steers how the assembler renders it.
+  let {
+    onOpenRecord,
+    user = null,
+  }: { onOpenRecord?: (recordHash: string) => void; user?: User | null } = $props();
 
   let articles = $state<Article[]>([]);
   let loading = $state(true);
@@ -130,6 +133,12 @@
                       {a.description}
                     </p>
                   {/if}
+                  <ArticleDirectives
+                    section={a.section}
+                    slug={a.slug}
+                    directives={a.directives}
+                    canEdit={!!user}
+                  />
                 </li>
               {/each}
             </ul>

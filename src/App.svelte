@@ -448,7 +448,7 @@
     {#if appMode === "curate"}
       <CurationView />
     {:else if appMode === "articles"}
-      <ArticlesView onOpenRecord={openRecordByHash} />
+      <ArticlesView onOpenRecord={openRecordByHash} {user} />
     {:else if appMode === "graph"}
       <GraphView initialNodeId={graphNodeId} />
     {:else if openingRecord && !selectedIngest}
