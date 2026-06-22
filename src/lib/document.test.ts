@@ -425,11 +425,11 @@ describe("splitSegmentMulti replaces one segment with N ordered pieces", () => {
   });
 });
 
-describe("reassignWords preserves frontmatter, preamble and line prefixes", () => {
+describe("reassignWords preserves frontmatter and preamble", () => {
   // Mirrors DocumentStore.reassignWords exactly: split off the YAML block,
   // parse the remaining body (preamble + transcript) into words/runs, reassign,
-  // serialise, then concatenate fm + newBody. Reproduces the two verified
-  // round-trip failures end-to-end (preamble dropped, prefix recomputed wrong).
+  // serialise, then concatenate fm + newBody. Guards the preamble-dropped
+  // round-trip failure; record/2 word lines are prefix-free.
   const SPLIT_FM = /^(---\n[\s\S]*?\n---\n)([\s\S]*)$/;
 
   const doc =
@@ -444,15 +444,15 @@ describe("reassignWords preserves frontmatter, preamble and line prefixes", () =
     "*Published 2023-07-28*\n" +
     "\n" +
     "<!-- speaker: Speaker 1 -->\n" +
-    "00:07:02.4 {{t:422.50}}I {{t:422.58}}think {{t:422.76}}it's {{t:422.92}}great.\n";
+    "{{t:422.50}}I {{t:422.58}}think {{t:422.76}}it's {{t:422.92}}great.\n";
 
   function reassignWords(current: string, from: number, to: number, newSpeaker: string): string {
     const match = current.match(SPLIT_FM);
     const fm = match ? match[1] : "";
     const body = match ? match[2] : current;
-    const { words, runs, lineEndWords, linePrefixes, preamble } = parseWords(body);
+    const { words, runs, lineEndWords, preamble } = parseWords(body);
     const newRuns = reassignSpeaker(runs, from, to, newSpeaker);
-    return fm + serializeWords(words, newRuns, lineEndWords, linePrefixes, preamble);
+    return fm + serializeWords(words, newRuns, lineEndWords, preamble);
   }
 
   it("keeps the title and published line after a reassign", () => {
@@ -462,13 +462,12 @@ describe("reassignWords preserves frontmatter, preamble and line prefixes", () =
     expect(result).toContain('title: "PWTS Example"');
   });
 
-  it("keeps the verbatim line prefix the token would round up", () => {
-    // Reassign the whole line to a new speaker: the line stays one block so its
-    // first word keeps the verbatim 07:02.4 prefix rather than recomputing it to
-    // the (wrong) floored 07:02.5 the 2dp token would yield.
+  it("emits the line prefix-free after a whole-line reassign", () => {
+    // record/2 word lines carry no HH:MM:SS.D prefix - the first {{t:}} is the
+    // line start - so a reassigned line round-trips with its tokens and no prefix.
     const result = reassignWords(doc, 0, 3, "Speaker 2");
-    expect(result).toContain("00:07:02.4 {{t:422.50}}I");
-    expect(result).not.toContain("00:07:02.5");
+    expect(result).toContain("{{t:422.50}}I");
+    expect(result).not.toContain("00:07:02");
   });
 
   it("round-trips identically when the reassign is a no-op", () => {
@@ -509,13 +508,7 @@ describe("renameWordSpeaker / reassignWords reconcile the frontmatter speakers l
     const [fm, body] = split(current);
     const parsed = parseWords(body);
     const newRuns = renameSpeakerInRuns(parsed.runs, oldName, newName);
-    const newBody = serializeWords(
-      parsed.words,
-      newRuns,
-      parsed.lineEndWords,
-      parsed.linePrefixes,
-      parsed.preamble,
-    );
+    const newBody = serializeWords(parsed.words, newRuns, parsed.lineEndWords, parsed.preamble);
     const currentNamed = fmSpeakers(current);
     const bodyNamed = namedSpeakersInOrder(newRuns);
     const kept = currentNamed.filter((n) => !/^Speaker \d+$/i.test(n));
@@ -527,13 +520,7 @@ describe("renameWordSpeaker / reassignWords reconcile the frontmatter speakers l
     const [fm, body] = split(current);
     const parsed = parseWords(body);
     const newRuns = reassignSpeaker(parsed.runs, from, to, newSpeaker);
-    const newBody = serializeWords(
-      parsed.words,
-      newRuns,
-      parsed.lineEndWords,
-      parsed.linePrefixes,
-      parsed.preamble,
-    );
+    const newBody = serializeWords(parsed.words, newRuns, parsed.lineEndWords, parsed.preamble);
     const currentNamed = fmSpeakers(current);
     const bodyNamed = namedSpeakersInOrder(newRuns);
     const kept = currentNamed.filter((n) => !/^Speaker \d+$/i.test(n));
@@ -555,13 +542,13 @@ describe("renameWordSpeaker / reassignWords reconcile the frontmatter speakers l
     "*Published 2023-07-28*\n" +
     "\n" +
     "<!-- speaker: Speaker 1 -->\n" +
-    "00:07:02.4 {{t:422.50}}I {{t:422.58}}think {{t:422.76}}it's {{t:422.92}}great.\n" +
+    "{{t:422.50}}I {{t:422.58}}think {{t:422.76}}it's {{t:422.92}}great.\n" +
     "\n" +
     "<!-- speaker: Speaker 2 -->\n" +
-    "00:00:13.0 {{t:13.02}}He {{t:13.12}}was {{t:13.28}}brave.\n" +
+    "{{t:13.02}}He {{t:13.12}}was {{t:13.28}}brave.\n" +
     "\n" +
     "<!-- speaker: Speaker 1 -->\n" +
-    "00:00:21.0 {{t:21.02}}They {{t:21.20}}agree.\n";
+    "{{t:21.02}}They {{t:21.20}}agree.\n";
 
   function fmSpeakers(current: string): string[] {
     const [rawFm] = split(current);
@@ -570,15 +557,14 @@ describe("renameWordSpeaker / reassignWords reconcile the frontmatter speakers l
     return (fmDoc.speakers as string[] | undefined) ?? [];
   }
 
-  it("renameWordSpeaker preserves word times, line prefixes and preamble", () => {
+  it("renameWordSpeaker preserves word times and preamble", () => {
     const result = renameWordSpeaker(doc, "Speaker 1", "Ed Leedskalnin");
     // Preamble untouched.
     expect(result).toContain("# PWTS Example");
     expect(result).toContain("*Published 2023-07-28*");
-    // Verbatim prefix and every word token survive; only the speaker comment
-    // changed. 422.50 must NOT recompute to 07:02.5.
-    expect(result).toContain("00:07:02.4 {{t:422.50}}I {{t:422.58}}think {{t:422.76}}it's");
-    expect(result).not.toContain("00:07:02.5");
+    // Every word token survives prefix-free; only the speaker comment changed.
+    expect(result).toContain("{{t:422.50}}I {{t:422.58}}think {{t:422.76}}it's");
+    expect(result).not.toContain("00:07:02");
     expect(result).toContain("{{t:21.02}}They {{t:21.20}}agree.");
     // Speaker comments renamed everywhere, other speaker untouched.
     expect(result).toContain("<!-- speaker: Ed Leedskalnin -->");
@@ -664,7 +650,7 @@ describe("setWordTime clamps a word's start between its neighbours", () => {
     "word_timestamps: true\n" +
     "---\n" +
     "<!-- speaker: Speaker 1 -->\n" +
-    "00:07:02.4 {{t:422.50}}I {{t:422.58}}think {{t:422.76}}it's {{t:422.92}}great.\n";
+    "{{t:422.50}}I {{t:422.58}}think {{t:422.76}}it's {{t:422.92}}great.\n";
 
   function setWordTime(current: string, gIndex: number, start: number): string {
     const match = current.match(SPLIT_FM);
@@ -677,16 +663,7 @@ describe("setWordTime clamps a word's start between its neighbours", () => {
     const clamped = Math.max(prev, Math.min(next, start));
     if (Math.abs(clamped - parsed.words[gIndex].start) < 0.005) return current;
     parsed.words[gIndex] = { ...parsed.words[gIndex], start: clamped };
-    return (
-      fm +
-      serializeWords(
-        parsed.words,
-        parsed.runs,
-        parsed.lineEndWords,
-        parsed.linePrefixes,
-        parsed.preamble,
-      )
-    );
+    return fm + serializeWords(parsed.words, parsed.runs, parsed.lineEndWords, parsed.preamble);
   }
 
   it("nudges a word later within its window", () => {
