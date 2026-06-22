@@ -26,5 +26,17 @@ function context() {
 
 BunnySDK.net.http.serve(async (req: Request): Promise<Response> => {
   const { env, deps } = context();
-  return await handleRequest(req, env, deps);
+  const res = await handleRequest(req, env, deps);
+  // The edge only serves dynamic /api (auth, gate, writes) - never cache it.
+  // Assert this on the edge itself, not just via the pull-zone rule, so a future
+  // zone-config change can't silently start caching an auth/session response.
+  // Reconstruct (rather than mutate) because redirect responses have immutable
+  // headers.
+  const headers = new Headers(res.headers);
+  headers.set("cache-control", "no-store");
+  return new Response(res.body, {
+    status: res.status,
+    statusText: res.statusText,
+    headers,
+  });
 });
