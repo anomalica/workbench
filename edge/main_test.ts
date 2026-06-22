@@ -18,6 +18,7 @@ const ENV: Env = {
   bunnyHost: "cdn.example.b-cdn.net",
   bunnyKey: "test-security-key",
   gateTtlSeconds: 300,
+  serveGatedBody: false, // production-safe default; body-serving tests opt in
 };
 const NOW = 1000;
 const HASH = "a".repeat(64);
@@ -169,7 +170,7 @@ Deno.test("gate submit pass: serves the gated body from the canonical .v2 record
       method: "POST",
       body: JSON.stringify({ sha256: "deadbeef" }),
     }),
-    ENV,
+    { ...ENV, serveGatedBody: true }, // body-serving requires the explicit flag
     deps(gh),
   );
   const out = await res.json();
@@ -181,6 +182,28 @@ Deno.test("gate submit pass: serves the gated body from the canonical .v2 record
   assertEquals(out.body, "The body.\nLine two.\n");
   // raw_frontmatter + body reconstructs the full canonical record (safe write-back).
   assertEquals(out.raw_frontmatter + out.body, v2);
+});
+
+Deno.test("gate submit: SERVE_GATED_BODY off -> a pass returns NO body (copyright gate)", async () => {
+  const gh = new FakeGitHub();
+  gh.put(
+    "ingests",
+    `store/${HASH}.verification.json`,
+    JSON.stringify(sidecar(10, { sha256: "DEADBEEF" })),
+  );
+  gh.put("ingests", `store/${HASH}.v2.md`, "---\ntitle: x\n---\nSECRET BODY\n");
+  const res = await handleRequest(
+    req(`/api/ingests/${HASH}/verification/submit`, {
+      method: "POST",
+      body: JSON.stringify({ sha256: "deadbeef" }),
+    }),
+    ENV, // flag off (default)
+    deps(gh),
+  );
+  const out = await res.json();
+  assertEquals(out.passed, true); // possession still proven
+  assertEquals(out.body, undefined); // ...but the body is NOT served with the flag off
+  assertEquals(out.raw_frontmatter, undefined);
 });
 
 Deno.test("gate submit FAIL: never returns the gated body (no leak)", async () => {
@@ -200,7 +223,7 @@ Deno.test("gate submit FAIL: never returns the gated body (no leak)", async () =
       method: "POST",
       body: JSON.stringify({ session_id: started.session_id, responses }),
     }),
-    ENV,
+    { ...ENV, serveGatedBody: true }, // even with serving ENABLED, a FAIL gets no body
     deps(gh),
   );
   const out = await res.json();
