@@ -4,9 +4,11 @@
     fetchGraphStats,
     fetchGraphNodes,
     fetchGraphNode,
+    applyMerge,
     type GraphStats,
     type GraphNodeSummary,
     type GraphNodeDetail as GraphNodeDetailT,
+    type MergeMember,
   } from "$lib/api";
   import GraphNodeDetail from "./GraphNodeDetail.svelte";
   import GraphCanvas from "./GraphCanvas.svelte";
@@ -41,6 +43,65 @@
   let loadingNode = $state(false);
   let detailView = $state<"claims" | "graph">("claims");
   let graphRefresh = $state(0);
+
+  // Multi-select merge: propose merging several BROWSED nodes as one entity - for
+  // links the assimilator's matcher missed (it only auto-proposes connected/similar
+  // pairs, and the ego-graph merge only spans one node's neighbours). Same
+  // applyMerge path as the candidate queue. In select mode a click toggles a node
+  // into the set instead of opening its detail.
+  let selectMode = $state(false);
+  let selectedForMerge = $state<GraphNodeSummary[]>([]);
+  let mergeCanonical = $state("");
+  let merging = $state(false);
+  let mergeError = $state<string | null>(null);
+  let mergeSurvivor = $derived(
+    selectedForMerge.length
+      ? selectedForMerge.reduce((a, b) => (b.claim_count > a.claim_count ? b : a))
+      : null,
+  );
+  // Default the canonical name to the survivor's (most-claimed) name.
+  $effect(() => {
+    mergeCanonical = mergeSurvivor?.name ?? "";
+  });
+
+  function toggleSelectMode() {
+    selectMode = !selectMode;
+    selectedForMerge = [];
+    mergeError = null;
+  }
+
+  function toggleNodeSelection(node: GraphNodeSummary) {
+    selectedForMerge = selectedForMerge.some((n) => n.id === node.id)
+      ? selectedForMerge.filter((n) => n.id !== node.id)
+      : [...selectedForMerge, node];
+  }
+
+  const asMember = (n: GraphNodeSummary): MergeMember => ({
+    id: n.id,
+    name: n.name,
+    node_type: n.node_type,
+    claims: n.claim_count,
+    aliases: [],
+  });
+
+  async function doMergeSelected() {
+    if (!mergeSurvivor || selectedForMerge.length < 2 || !mergeCanonical.trim()) return;
+    merging = true;
+    mergeError = null;
+    try {
+      const survivorId = mergeSurvivor.id;
+      const victims = selectedForMerge.filter((n) => n.id !== survivorId);
+      await applyMerge(asMember(mergeSurvivor), victims.map(asMember), mergeCanonical.trim());
+      selectMode = false;
+      selectedForMerge = [];
+      await loadNodes();
+      selectNode(survivorId); // open the survivor so the result is visible
+    } catch (e) {
+      mergeError = e instanceof Error ? e.message : String(e);
+    } finally {
+      merging = false;
+    }
+  }
 
   function setDetailView(v: "claims" | "graph") {
     detailView = v;
@@ -163,7 +224,7 @@
   <div class="flex-1 flex min-h-0">
     <!-- Browse / search -->
     <div class="w-80 flex-none border-r border-border flex flex-col min-h-0">
-      <div class="px-3 py-2 border-b border-border flex-none">
+      <div class="px-3 py-2 border-b border-border flex-none space-y-2">
         <input
           type="search"
           placeholder="Search entities + aliases..."
@@ -171,6 +232,19 @@
           class="w-full text-sm bg-surface border border-border rounded px-3 py-1.5
             text-on-surface outline-none focus:border-primary placeholder:text-on-surface-muted/60"
         />
+        <div class="flex items-center justify-between">
+          <button
+            onclick={toggleSelectMode}
+            class="text-xs font-ui px-2 py-1 rounded cursor-pointer transition-colors
+              {selectMode ? 'bg-primary text-on-primary' : 'text-on-surface-secondary hover:bg-surface'}"
+            title="Select several entities and mark them as the same (a human-proposed merge)"
+          >{selectMode ? "Selecting to merge" : "Select to merge"}</button>
+          {#if selectMode}
+            <span class="text-[11px] font-ui text-on-surface-muted tabular-nums"
+              >{selectedForMerge.length} selected</span
+            >
+          {/if}
+        </div>
       </div>
       <div class="flex-1 overflow-auto">
         {#if loadingList && nodes.length === 0}
@@ -181,12 +255,23 @@
           </p>
         {:else}
           {#each displayed as node (node.id)}
+            {@const picked = selectedForMerge.some((n) => n.id === node.id)}
             <button
-              onclick={() => selectNode(node.id)}
+              onclick={() => (selectMode ? toggleNodeSelection(node) : selectNode(node.id))}
               class="w-full text-left px-3 py-2 border-b border-border/40 cursor-pointer transition-colors
-                {selectedId === node.id ? 'bg-primary/10' : 'hover:bg-surface-alt'}"
+                {selectMode && picked
+                ? 'bg-primary/20 ring-1 ring-inset ring-primary'
+                : !selectMode && selectedId === node.id
+                  ? 'bg-primary/10'
+                  : 'hover:bg-surface-alt'}"
             >
               <div class="flex items-baseline gap-2">
+                {#if selectMode}
+                  <span
+                    class="flex-none w-3 h-3 mt-0.5 rounded-sm border self-center
+                      {picked ? 'bg-primary border-primary' : 'border-on-surface-muted/50'}"
+                  ></span>
+                {/if}
                 <span class="text-sm text-on-surface truncate flex-1 min-w-0">{node.name}</span>
                 {#if node.alias_count > 0}
                   <span
@@ -205,6 +290,37 @@
           {/each}
         {/if}
       </div>
+      <!-- Human-proposed merge: appears in select mode with 2+ entities picked. -->
+      {#if selectMode && selectedForMerge.length >= 2}
+        <div class="border-t border-border p-3 flex-none bg-surface-alt/40 space-y-2">
+          <div class="text-[11px] font-ui text-on-surface-secondary leading-snug">
+            Merge {selectedForMerge.length} entities into one. Survivor (most claims):
+            <span class="text-on-surface">{mergeSurvivor?.name}</span>
+          </div>
+          <input
+            bind:value={mergeCanonical}
+            placeholder="Canonical name"
+            class="w-full text-sm bg-surface border border-border rounded px-2 py-1
+              text-on-surface outline-none focus:border-primary"
+          />
+          {#if mergeError}
+            <div class="text-[11px] text-red-500">{mergeError}</div>
+          {/if}
+          <div class="flex gap-2">
+            <button
+              onclick={doMergeSelected}
+              disabled={merging || !mergeCanonical.trim()}
+              class="flex-1 text-xs font-ui px-2 py-1.5 rounded bg-primary text-on-primary
+                disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+            >{merging ? "Merging..." : "Merge as same"}</button>
+            <button
+              onclick={() => (selectedForMerge = [])}
+              class="text-xs font-ui px-2 py-1.5 rounded text-on-surface-secondary
+                hover:bg-surface cursor-pointer"
+            >Clear</button>
+          </div>
+        </div>
+      {/if}
     </div>
 
     <!-- Detail: a node's claims, or the scoped visual graph centred on it -->
