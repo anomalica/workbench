@@ -10,6 +10,7 @@
  *             POST /api/ingests/{h}/verification/submit      score -> on pass, a signed Bunny URL
  *   write     PUT  /api/ingests/{h}                          reviewer correction -> ingests git (auth)
  *   curate    POST /api/curation/{merge,unmerge,reject}      decision -> curation ledger git (auth)
+ *   directives PUT /api/articles/{section}/{slug}/directives presentation directives -> content git (auth)
  *
  * Reads of restricted sidecars (verification answers) go through the private
  * ingests repo via the service token - answers never reach the client.
@@ -25,6 +26,7 @@ import {
   type User,
   verifyState,
 } from "./lib/auth.ts";
+import { stringify as stringifyYaml } from "jsr:@std/yaml@1";
 import { signedUrl } from "./lib/bunny.ts";
 import { needed, scoreSession, startSession } from "./lib/gate.ts";
 import { type Author, type FileState, GitHubClient, GitHubError } from "./lib/github.ts";
@@ -40,6 +42,11 @@ import {
 
 const FULL_HASH = /^[a-f0-9]{64}$/;
 const EXT = /^[a-z0-9]{1,8}$/;
+// Article identity for the directive-write route. Strict kebab-case so a path
+// segment can never escape content/pages/ (no dots, slashes, or "..").
+const ARTICLE_SECTION = /^[a-z][a-z-]*$/;
+const ARTICLE_SLUG = /^[a-z0-9][a-z0-9-]*$/;
+const MAX_DIRECTIVE_LEN = 500;
 const CHALLENGES_PER_SESSION = 10;
 const MIN_POOL_FOR_CLOZE_GATE = 5;
 
@@ -48,6 +55,7 @@ export interface Env extends AuthConfig {
   owner: string;
   ingestsRepo: string;
   curationRepo: string;
+  contentRepo: string;
   branch: string;
   bunnyHost: string;
   bunnyKey: string;
@@ -443,6 +451,50 @@ async function handleHistory(hash: string, env: Env, deps: Deps): Promise<Respon
   });
 }
 
+// Presentation directives for one assembled article. Written to the per-article
+// sidecar content/pages/<section>/<slug>.directives.yaml - a standalone YAML list
+// of strings the assembler reads for EVERY language render of that article (so a
+// single write is cross-language, no 30-frontmatter fan-out). Presentation-only:
+// the assembler enforces in-prompt that a directive can never add/drop/change a
+// fact; the UI labels it too. The sidecar must stay valid YAML or the assembler
+// silently drops it, so we re-serialise the whole list rather than text-append.
+async function handleArticleDirectives(
+  section: string,
+  slug: string,
+  req: Request,
+  env: Env,
+  deps: Deps,
+  user: User,
+): Promise<Response> {
+  if (!ARTICLE_SECTION.test(section) || !ARTICLE_SLUG.test(slug)) return notFound();
+  const body = (await req.json().catch(() => ({}))) as { directives?: unknown };
+  if (!Array.isArray(body.directives)) return err(400, "Missing directives list");
+
+  const seen = new Set<string>();
+  const directives: string[] = [];
+  for (const d of body.directives) {
+    if (typeof d !== "string") return err(400, "Each directive must be a string");
+    const s = d.trim();
+    if (!s) continue;
+    if (s.length > MAX_DIRECTIVE_LEN) return err(400, "Directive too long");
+    if (!seen.has(s)) {
+      seen.add(s);
+      directives.push(s);
+    }
+  }
+
+  const path = `pages/${section}/${slug}.directives.yaml`;
+  await deps.github.editFile(
+    env.contentRepo,
+    path,
+    // Set the whole list (the standalone sidecar has no other content to keep).
+    () => (directives.length ? stringifyYaml(directives) : "[]\n"),
+    `directives: ${section}/${slug} (${directives.length})`,
+    authorOf(user),
+  );
+  return json({ ok: true, directives });
+}
+
 async function route(req: Request, env: Env, deps: Deps): Promise<Response> {
   const { pathname } = new URL(req.url);
   const method = req.method;
@@ -481,6 +533,12 @@ async function route(req: Request, env: Env, deps: Deps): Promise<Response> {
     return handleCuration(curate[1], req, env, deps, user);
   }
 
+  const directives = pathname.match(/^\/api\/articles\/([^/]+)\/([^/]+)\/directives$/);
+  if (directives && method === "PUT") {
+    if (!user) return err(401, "Login required");
+    return handleArticleDirectives(directives[1], directives[2], req, env, deps, user);
+  }
+
   return notFound();
 }
 
@@ -513,6 +571,7 @@ export function loadEnv(): Env {
     owner: get("GITHUB_OWNER", "anomalica"),
     ingestsRepo: get("INGESTS_REPO", "ingests"),
     curationRepo: get("CURATION_REPO", "curation"),
+    contentRepo: get("CONTENT_REPO", "content"),
     branch: get("GIT_BRANCH", "main"),
     bunnyHost: get("BUNNY_ZONE_HOST"),
     bunnyKey: get("BUNNY_TOKEN_KEY"),
