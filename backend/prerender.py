@@ -18,11 +18,12 @@ mirror the live API and the SPA can point at either):
   api/ingests/<hash>/coverage.json      - review coverage (spans/notes)
 
 COPYRIGHT: short attributed quotes (the digest + its quotes) are PUBLIC for all
-records (lawful quotation, Japan Art 32; the site shows them too). Only the full
-record BODY (and the verbatim transcript / raw frontmatter) is gated: it enters the
-snapshot ONLY for public_domain/open_licence (see serves_verbatim - an allow-list,
-fail-safe), else it is emptied + served by the edge after the possession gate.
-Verification sidecars (answers) are NEVER rendered.
+records (lawful quotation, Japan Art 32; the site shows them too). The full record
+BODY + frontmatter enters the snapshot for public_domain/open_licence/
+publicly_accessible (see serves_verbatim - an allow-list, fail-safe); only the
+licensed/restricted records are gated (body emptied, frontmatter whitelisted),
+served by the edge after the possession gate. Verification sidecars (answers) are
+NEVER rendered.
 
 Reuses backend.graph / backend.curation, so the JSON is byte-for-byte what the
 live API returns - no drift.
@@ -38,14 +39,18 @@ from pathlib import Path
 
 from backend import curation, graph
 
-# The PUBLIC snapshot carries verbatim source text (record bodies + digest quotes)
-# ONLY for these copyright statuses. This is an ALLOW-LIST, fail-safe by design:
-# anything else - licensed, restricted, publicly_accessible, AND any unknown or
-# absent status - is gated and served only via the edge after the possession gate.
-# IDENTICAL to the site's quote-gating rule (site: feat/public-quote-gating ->
-# `in (slice "public_domain" "open_licence")`). DO NOT widen this without changing
-# both ends together: a leak to the public CDN is irreversible.
-SNAPSHOT_PUBLIC = frozenset({"public_domain", "open_licence"})
+# The PUBLIC snapshot carries the verbatim record BODY + full frontmatter (incl.
+# word_timestamps - the word-level transcript - and description) ONLY for these
+# copyright statuses. ALLOW-LIST, fail-safe: anything else - licensed, restricted,
+# AND any unknown/absent status - is gated (body emptied, frontmatter whitelisted)
+# and served only via the edge after the possession gate.
+# publicly_accessible is SERVED per Mark's call (2026-06-22, his jurisdiction): the
+# sources are publicly accessible (e.g. YouTube captions are publicly scrapable;
+# ours are just more accurate versions), so no real exposure. Only the licensed
+# books (Imminent etc.) stay gated, pending Mark's login-gate decision. (Digest
+# verbatim QUOTES are a separate, already-all-public policy - see _prerender_records.)
+# DO NOT widen without Mark's sign-off: a leak to the public CDN is irreversible.
+SNAPSHOT_PUBLIC = frozenset({"public_domain", "open_licence", "publicly_accessible"})
 
 
 def serves_verbatim(status: str | None) -> bool:

@@ -104,11 +104,8 @@ def test_prerender_no_db_raises(tmp_path, monkeypatch):
     [
         ("public_domain", True),
         ("open_licence", True),
-        (
-            "publicly_accessible",
-            False,
-        ),  # conservative: source-accessible != redistributable
-        ("licensed", False),
+        ("publicly_accessible", True),  # opened up (Mark's call - public sources)
+        ("licensed", False),  # copyrighted books stay gated
         ("restricted", False),
         ("", False),  # absent -> gated
         (None, False),  # unknown -> gated
