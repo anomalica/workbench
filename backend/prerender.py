@@ -34,7 +34,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import sys
 from pathlib import Path
 
 from backend import curation, graph
@@ -176,7 +175,7 @@ def _build_digest_map(server) -> dict:
     return out
 
 
-def _prerender_records(base: Path) -> dict:
+def _prerender_records(base: Path, only: set[str] | None = None) -> dict:
     """Render the Records-tab read surface to static JSON, COPYRIGHT-GATED.
 
     The digest (claims + entities + short attributed quotes) is PUBLIC for all
@@ -185,7 +184,11 @@ def _prerender_records(base: Path) -> dict:
     verbatim transcript in word_timestamps doesn't leak) and the body is served
     via the edge after the possession gate. Verification answers never enter the
     snapshot. /me/reviews is per-user -> a dynamic edge endpoint, not static.
-    Reuses the FastAPI readers for parity."""
+    Reuses the FastAPI readers for parity.
+
+    `only`: if given, re-render the detail/digest/coverage for just these content
+    hashes (the on-review incremental refresh) - the ingests.json list is always
+    rewritten (it is cheap and reflects per-record review state)."""
     import yaml as _yaml
 
     from backend import server
@@ -200,6 +203,8 @@ def _prerender_records(base: Path) -> dict:
         public = serves_verbatim(s.get("copyright_status"))
         counts["records"] += 1
         counts["record_public"] += int(public)
+        if only is not None and h not in only:
+            continue  # incremental: only re-render the changed records' files
 
         detail = server.source.get_ingest(h)
         if detail is not None:
@@ -224,7 +229,39 @@ def _prerender_records(base: Path) -> dict:
     return counts
 
 
+def prerender_records_only(
+    out: Path | None = None, hashes: list[str] | None = None
+) -> dict:
+    """Re-render ONLY the records read surface (no graph) - cheap (~seconds),
+    used by the on-review incremental snapshot refresh. `hashes` limits the
+    detail/digest/coverage re-render to those records; the ingests.json list is
+    always rewritten. The graph snapshot is left untouched (a review never changes
+    the graph)."""
+    base = (out or snapshot_dir()) / "api"
+    return _prerender_records(base, only=set(hashes) if hashes else None)
+
+
 if __name__ == "__main__":
-    out = Path(sys.argv[1]) if len(sys.argv) > 1 else None
-    summary = prerender(out)
-    print(f"pre-rendered to {(out or snapshot_dir())}/api : {summary}")
+    import argparse
+
+    p = argparse.ArgumentParser(prog="backend.prerender")
+    p.add_argument("out", nargs="?", help="output dir (default: SNAPSHOT_DIR)")
+    p.add_argument(
+        "--records-only",
+        action="store_true",
+        help="re-render just the records surface (skip the ~15s graph render)",
+    )
+    p.add_argument(
+        "--hash",
+        action="append",
+        metavar="CONTENT_HASH",
+        help="re-render only this record (repeatable; implies --records-only)",
+    )
+    args = p.parse_args()
+    out = Path(args.out) if args.out else None
+    if args.records_only or args.hash:
+        summary = prerender_records_only(out, args.hash)
+        print(f"records re-rendered to {(out or snapshot_dir())}/api : {summary}")
+    else:
+        summary = prerender(out)
+        print(f"pre-rendered to {(out or snapshot_dir())}/api : {summary}")

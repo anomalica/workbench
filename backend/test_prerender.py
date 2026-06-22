@@ -239,3 +239,20 @@ def test_records_prerender_never_writes_a_verification_sidecar(records_repo, tmp
     base = tmp_path / "out" / "api"
     prerender._prerender_records(base)
     assert not list(base.rglob("*verification*"))
+
+
+def test_prerender_records_only_renders_just_the_named_record(
+    records_repo, tmp_path, monkeypatch
+):
+    # the on-review incremental refresh: re-render ONE record, not the other.
+    out = tmp_path / "out"
+    monkeypatch.setenv("SNAPSHOT_DIR", str(out))
+    prerender.prerender_records_only(hashes=[H_PUB])
+    api = out / "api"
+    # the named record's detail was (re)rendered...
+    assert (api / "ingests" / f"{H_PUB}.json").exists()
+    # ...the other record's detail was NOT...
+    assert not (api / "ingests" / f"{H_GATED}.json").exists()
+    # ...but the list (cheap, reflects review state) is always written + has both.
+    listed = json.loads((api / "ingests.json").read_text())
+    assert {r["content_hash"] for r in listed} == {H_PUB, H_GATED}
