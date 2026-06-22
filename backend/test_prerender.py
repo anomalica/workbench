@@ -61,6 +61,9 @@ def graph_db(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "source", _EmptySource())
     monkeypatch.setattr(server, "ingests_path", tmp_path / "empty-ingests")
     monkeypatch.setattr(server, "digests_path", tmp_path / "empty-digests")
+    # Isolate the articles walk too: absent content dir -> [] (the real content
+    # repo must not bleed into this graph/curation render test).
+    monkeypatch.setattr(server, "content_path", tmp_path / "empty-content")
     return db
 
 
@@ -71,6 +74,7 @@ def test_prerender_writes_graph_and_curation_json(graph_db, tmp_path):
         "nodes": 1,
         "node_detail": 1,
         "ego": 1,
+        "articles": 0,
         "records": 0,
         "record_public": 0,
         "digests": 0,
@@ -78,6 +82,7 @@ def test_prerender_writes_graph_and_curation_json(graph_db, tmp_path):
     }
 
     api = out / "api"
+    assert json.loads((api / "articles.json").read_text()) == []
     assert json.loads((api / "graph" / "stats.json").read_text())["total_nodes"] == 1
     nodes = json.loads((api / "graph" / "nodes.json").read_text())
     assert [n["name"] for n in nodes] == ["Lazar, Bob"]
