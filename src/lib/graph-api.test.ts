@@ -5,6 +5,8 @@ import {
   type GraphNodeSummary,
   type MergeMember,
   rejectCandidate,
+  setArticleDirectives,
+  submitVerification,
 } from "./api";
 
 const nodes: GraphNodeSummary[] = [
@@ -79,5 +81,61 @@ describe("curation writes carry both ids and node refs", () => {
         { id: "v1", name: "Tic-Tac UAP", node_type: "object", aliases: [] },
       ],
     });
+  });
+});
+
+describe("setArticleDirectives", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("PUTs the directive list to the article route and returns the stored list", async () => {
+    const calls: { url: string; method?: string; body: unknown }[] = [];
+    vi.stubGlobal("fetch", (url: string, init?: RequestInit) => {
+      calls.push({ url, method: init?.method, body: JSON.parse(String(init?.body)) });
+      return Promise.resolve(
+        new Response(JSON.stringify({ ok: true, directives: ["Use the full name"] }), {
+          status: 200,
+        }),
+      );
+    });
+    const out = await setArticleDirectives("people", "luis-elizondo", ["Use the full name"]);
+    expect(calls[0].url).toBe("/api/articles/people/luis-elizondo/directives");
+    expect(calls[0].method).toBe("PUT");
+    expect(calls[0].body).toEqual({ directives: ["Use the full name"] });
+    expect(out).toEqual(["Use the full name"]);
+  });
+});
+
+describe("submitVerification", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("POSTs the proof to the submit route and returns the gated body on a pass", async () => {
+    const calls: { url: string; method?: string; body: unknown }[] = [];
+    vi.stubGlobal("fetch", (url: string, init?: RequestInit) => {
+      calls.push({ url, method: init?.method, body: JSON.parse(String(init?.body)) });
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            passed: true,
+            method: "sha256",
+            body: "The body.\n",
+            raw_frontmatter: "---\ntitle: x\n---\n",
+          }),
+          { status: 200 },
+        ),
+      );
+    });
+    const hash = "a".repeat(64);
+    const out = await submitVerification(hash, { sha256: "deadbeef", ext: "epub" });
+    expect(calls[0].url).toBe(`/api/ingests/${hash}/verification/submit`);
+    expect(calls[0].method).toBe("POST");
+    expect(calls[0].body).toEqual({ sha256: "deadbeef", ext: "epub" });
+    expect(out.passed).toBe(true);
+    expect(out.body).toBe("The body.\n");
+    expect(out.raw_frontmatter).toBe("---\ntitle: x\n---\n");
+  });
+
+  it("throws on a non-ok response (so the gate stays closed)", async () => {
+    vi.stubGlobal("fetch", () => Promise.resolve(new Response("nope", { status: 400 })));
+    await expect(submitVerification("a".repeat(64), { sha256: "x" })).rejects.toThrow();
   });
 });
