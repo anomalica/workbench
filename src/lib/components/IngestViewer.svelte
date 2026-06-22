@@ -900,8 +900,14 @@
 
   $effect(() => {
     if (isPublic && !localSourceFile && !localSourceUrl && !ytId) {
+      // Online (static-read) the edge has no /api/sources route; public source
+      // FILES are served straight from the CDN at /sources/<hash>.<ext>. Only
+      // PDFs are served that way - web uses the source_url link-out, video the
+      // embed - so skip the fetch for non-PDF public sources in static mode.
+      if (STATIC_READS && !isPdf) return;
+      const srcUrl = STATIC_READS ? `/sources/${sourceKey}.pdf` : `/api/sources/${sourceKey}`;
       loadingFile = true;
-      fetch(`/api/sources/${sourceKey}`)
+      fetch(srcUrl)
         .then(async (res) => {
           if (!res.ok) return null;
           const blob = await res.blob();
