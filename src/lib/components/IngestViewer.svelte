@@ -983,8 +983,12 @@
   //   don't auto-fetch them)
   // Once the source is attached, two-pane shows the rendered EPUB
   // (flattenEpubToHtml -> single sandbox="" iframe) next to the ingest.
+  // Keep the source pane for a web record that has a source_url even when no
+  // archived capture loads (it never does online - the edge has no /api/sources
+  // route), so the "open the original page" link-out stays available to verify
+  // the extraction against the live page.
   let singleColumn = $derived(
-    (isWeb && !localSourceFile && !localSourceUrl) ||
+    (isWeb && !localSourceFile && !localSourceUrl && !ingest.frontmatter.source_url) ||
       (isEbook && !localSourceFile),
   );
 
@@ -2713,7 +2717,24 @@
             ondragleave={() => { dragging = false; }}
             ondrop={handleFileDrop}
           >
-            <p>{dragging ? "Drop file here" : "Drop a source file here to view alongside the ingest"}</p>
+            {#if ingest.frontmatter.source_url && !dragging}
+              <!-- The archived capture isn't served here (web originals live at
+                   their source URL); link out so the reviewer can check the
+                   extraction against the live page. -->
+              <p class="text-on-surface-secondary">The original isn't archived here.</p>
+              <a
+                href={ingest.frontmatter.source_url}
+                target="_blank"
+                rel="noopener"
+                class="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-ui bg-primary
+                  text-on-primary rounded hover:bg-primary-hover transition-colors"
+              >
+                Open the original page &rsaquo;
+              </a>
+              <p class="text-on-surface-muted text-xs">or drop the source file to view it here</p>
+            {:else}
+              <p>{dragging ? "Drop file here" : "Drop a source file here to view alongside the ingest"}</p>
+            {/if}
             <input type="file" class="hidden" onchange={handleFilePick} bind:this={sourceFileInput} />
             <button
               type="button"
