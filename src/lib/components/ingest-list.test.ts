@@ -20,6 +20,7 @@ function ingest(over: Partial<IngestSummary>): IngestSummary {
     source_type: "web",
     source_url: "",
     source_file: "",
+    source_hash: "",
     provenance: "",
     publisher: "",
     copyright_status: "public_domain",

@@ -151,6 +151,10 @@
         typeof currentFrontmatterObj.source_file === "string"
           ? currentFrontmatterObj.source_file
           : "",
+      source_hash:
+        typeof currentFrontmatterObj.source_hash === "string"
+          ? currentFrontmatterObj.source_hash
+          : "",
       provenance:
         typeof currentFrontmatterObj.provenance === "string"
           ? currentFrontmatterObj.provenance

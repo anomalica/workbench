@@ -22,6 +22,9 @@ export interface IngestSummary {
   source_url: string;
   /** Local-file origin filename (PDFs ingested from disk). */
   source_file: string;
+  /** sha256 of the archived original source file (ebooks/PDFs ingested from a
+   *  file). A recoverable origin even when `provenance` is "unknown". */
+  source_hash: string;
   /** "unknown" when the acquisition origin is unrecoverable. */
   provenance: string;
   publisher: string;
@@ -54,10 +57,16 @@ export type ProvenanceKind = "url" | "file" | "unknown" | "none";
 export function provenanceOf(r: {
   source_url?: string;
   source_file?: string;
+  source_hash?: string;
   provenance?: string;
 }): { kind: ProvenanceKind; label: string; traceable: boolean } {
   if (r.source_url) return { kind: "url", label: r.source_url, traceable: true };
   if (r.source_file) return { kind: "file", label: r.source_file, traceable: true };
+  // The original source file archived by its hash (e.g. ebooks/PDFs ingested from
+  // a file) is a recoverable origin even when provenance is "unknown" - the bytes
+  // exist in the sources archive. Without this, ebooks read as "No source
+  // recorded" though their epub is on hand.
+  if (r.source_hash) return { kind: "file", label: "Archived source file", traceable: true };
   if (r.provenance === "unknown")
     return { kind: "unknown", label: "Origin unknown", traceable: false };
   return { kind: "none", label: "No source recorded", traceable: false };

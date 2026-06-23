@@ -305,9 +305,11 @@ class LocalIngestSource(IngestSource):
                     "source_type": frontmatter.get("source_type", ""),
                     "source_url": frontmatter.get("source_url", ""),
                     # Acquisition provenance: source_url (http origin),
-                    # source_file (local origin filename), or provenance:
-                    # "unknown" when the origin is unrecoverable.
+                    # source_file (local origin filename), source_hash (the
+                    # archived original by sha256), or provenance: "unknown"
+                    # when none of those recover the origin.
                     "source_file": frontmatter.get("source_file", ""),
+                    "source_hash": frontmatter.get("source_hash", ""),
                     "provenance": frontmatter.get("provenance", ""),
                     "publisher": frontmatter.get("publisher", ""),
                     "copyright_status": frontmatter.get(
