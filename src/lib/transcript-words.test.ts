@@ -10,6 +10,7 @@ import {
   nextRelevantWordStartAfter,
   speakerWordCounts,
   splitWord,
+  replaceWordRange,
   type SpeakerRun,
   type Word,
 } from "./transcript-words";
@@ -44,6 +45,47 @@ const W: Word[] = [
   { text: "c", start: 2.0, gIndex: 2 },
   { text: "d", start: 3.0, gIndex: 3 },
 ];
+
+describe("replaceWordRange (multi-word selection editor splice)", () => {
+  const body = "<!-- speaker: A -->\n{{t:1.00}}one {{t:2.00}}two {{t:3.00}}three {{t:4.00}}four";
+
+  it("replaces a sub-range, growing the run and re-timing", () => {
+    const p = parseWords(body);
+    const next = replaceWordRange(p, 1, 2, [
+      { text: "TWO", start: 2.0 },
+      { text: "X", start: 2.5 },
+      { text: "THREE", start: 3.0 },
+    ]);
+    expect(next.words.map((w) => w.text)).toEqual(["one", "TWO", "X", "THREE", "four"]);
+    expect(next.words.map((w) => w.gIndex)).toEqual([0, 1, 2, 3, 4]);
+    expect(next.runs).toEqual([{ speaker: "A", startWord: 0, endWord: 4 }]);
+  });
+
+  it("deletes a range (empty replacement) and shrinks the run", () => {
+    const p = parseWords(body);
+    const next = replaceWordRange(p, 1, 2, []);
+    expect(next.words.map((w) => w.text)).toEqual(["one", "four"]);
+    expect(next.runs).toEqual([{ speaker: "A", startWord: 0, endWord: 1 }]);
+  });
+
+  it("round-trips through serialise (edited text + new timestamp present)", () => {
+    const p = parseWords(body);
+    const next = replaceWordRange(p, 1, 1, [
+      { text: "TWO", start: 2.0 },
+      { text: "and-a-half", start: 2.5 },
+    ]);
+    const out = serializeWords(next.words, next.runs, next.lineEndWords, next.preamble);
+    expect(out).toContain("{{t:2.00}}TWO");
+    expect(out).toContain("{{t:2.50}}and-a-half");
+    expect(parseWords(out).words.map((w) => w.text)).toEqual([
+      "one",
+      "TWO",
+      "and-a-half",
+      "three",
+      "four",
+    ]);
+  });
+});
 
 describe("speakerWordCounts", () => {
   it("counts words per speaker in first-appearance order, including specials", () => {
