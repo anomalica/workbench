@@ -7,6 +7,7 @@ import {
   renameSpeakerInRuns,
   namedSpeakersInOrder,
   wordsInTimeRange,
+  wordActiveAt,
   nextRelevantWordStartAfter,
   speakerWordCounts,
   splitWord,
@@ -143,6 +144,24 @@ describe("wordsInTimeRange", () => {
   });
   it("is empty when the clock did not advance", () => {
     expect(wordsInTimeRange(W, 2.0, 2.0)).toEqual([]);
+  });
+});
+
+describe("wordActiveAt", () => {
+  it("is -1 before the first word", () => {
+    expect(wordActiveAt(W, 0.5)).toBe(-1);
+  });
+  it("includes a word at exactly its start (the seek-landing boundary)", () => {
+    expect(wordActiveAt(W, 1.0)).toBe(0);
+    expect(wordActiveAt(W, 2.0)).toBe(2);
+  });
+  it("returns the word the playhead sits within", () => {
+    expect(wordActiveAt(W, 1.7)).toBe(1);
+    expect(wordActiveAt(W, 2.9)).toBe(2);
+  });
+  it("clamps to the last word past the end, and is -1 for no words", () => {
+    expect(wordActiveAt(W, 99)).toBe(3);
+    expect(wordActiveAt([], 1.0)).toBe(-1);
   });
 });
 

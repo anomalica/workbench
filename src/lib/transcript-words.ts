@@ -387,6 +387,28 @@ export function wordsInTimeRange(words: Word[], fromTime: number, toTime: number
   return out;
 }
 
+/** gIndex of the word under the playhead at `time` - the last word whose start
+ *  is <= time, or -1 before the first word. `words` must be start-ordered.
+ *  Used for the karaoke cursor and to auto-observe the word being played through
+ *  at an interval start (the word at exactly the seek-landing time, which
+ *  wordsInTimeRange's open lower bound would otherwise miss). */
+export function wordActiveAt(words: Word[], time: number): number {
+  if (words.length === 0 || time < words[0].start) return -1;
+  let lo = 0;
+  let hi = words.length - 1;
+  let ans = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (words[mid].start <= time) {
+      ans = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return ans;
+}
+
 /** Playback skip-irrelevant for the per-word format. When the playhead at `t`
  *  sits on a word whose run is irrelevant, returns the start time of the next
  *  word whose run is NOT irrelevant (seek there to skip the irrelevant stretch);
