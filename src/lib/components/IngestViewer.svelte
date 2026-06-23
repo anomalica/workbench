@@ -45,7 +45,7 @@
   import ReadableText from "./ReadableText.svelte";
   import EditableMetadata from "./EditableMetadata.svelte";
   import ReviewHistory from "./ReviewHistory.svelte";
-  import { hasWordTimestamps } from "$lib/transcript-words";
+  import { hasWordTimestamps, parseWords, nextRelevantWordStartAfter } from "$lib/transcript-words";
   import { untrack } from "svelte";
   import { marked } from "marked";
   import yaml from "js-yaml";
@@ -177,6 +177,9 @@
   let hasTranscript = $derived(
     isWordRecord || (segments.length > 0 && segments[0].speaker !== ""),
   );
+  // Parsed word runs for word records (drives the per-word playback skip below);
+  // null otherwise. Memoised on the live body.
+  let parsedWords = $derived(isWordRecord ? parseWords(currentBody()) : null);
   // Latest observation verdict reported by the word editor (word-index spans +
   // coverage fraction + digestible + total words), persisted on review submit.
   let wordVerdict = $state<{
@@ -1432,6 +1435,19 @@
     if (!skipIrrelevant || !hasTranscript || autoFollowPaused) return;
     if (!ytPlayer || !playerReady) return;
     if (ytPlayer.getPlayerState() !== 1) return; // only while playing
+    // Per-word records (record/2) have no V1 segments (parseTranscript keys off
+    // the line-start timecode, which is gone), so skip off the word runs: when
+    // the playhead is on an [irrelevant] word, seek to the next relevant word.
+    if (isWordRecord && parsedWords) {
+      const target = nextRelevantWordStartAfter(
+        parsedWords.words,
+        parsedWords.runs,
+        t,
+        (s) => s === SPEAKER_IRRELEVANT,
+      );
+      if (target != null) ytPlayer.seekTo(target, true);
+      return;
+    }
     // segmentAtTime (unlike findActiveSegmentForTime) includes irrelevant
     // segments, so it can tell us the playhead is inside one - which is the
     // whole point. The previous skip used findActiveSegmentForTime, which

@@ -311,3 +311,34 @@ export function wordsInTimeRange(words: Word[], fromTime: number, toTime: number
   }
   return out;
 }
+
+/** Playback skip-irrelevant for the per-word format. When the playhead at `t`
+ *  sits on a word whose run is irrelevant, returns the start time of the next
+ *  word whose run is NOT irrelevant (seek there to skip the irrelevant stretch);
+ *  otherwise null. The segment-based nextRelevantSegmentAfter can't be used for
+ *  a record/2 body because parseTranscript finds no prefixed segments in it - so
+ *  the skip works off the word runs instead. `isIrrelevant` is the run-speaker
+ *  predicate (typically `s === "[irrelevant]"`). */
+export function nextRelevantWordStartAfter(
+  words: Word[],
+  runs: SpeakerRun[],
+  t: number,
+  isIrrelevant: (speaker: string) => boolean,
+): number | null {
+  if (words.length === 0) return null;
+  const speakerOf = new Array<string>(words.length);
+  for (const r of runs) {
+    for (let i = r.startWord; i <= r.endWord && i < words.length; i++) speakerOf[i] = r.speaker;
+  }
+  // The active word is the last whose start is <= t (words are time-ordered).
+  let active = -1;
+  for (let i = 0; i < words.length; i++) {
+    if (words[i].start <= t) active = i;
+    else break;
+  }
+  if (active < 0 || !isIrrelevant(speakerOf[active] ?? "")) return null;
+  for (let i = active + 1; i < words.length; i++) {
+    if (!isIrrelevant(speakerOf[i] ?? "")) return words[i].start;
+  }
+  return null; // everything after the playhead is irrelevant - nothing to seek to
+}
