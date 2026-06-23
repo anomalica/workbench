@@ -7,6 +7,7 @@ import {
   renameSpeakerInRuns,
   namedSpeakersInOrder,
   wordsInTimeRange,
+  nextRelevantWordStartAfter,
   splitWord,
   type SpeakerRun,
   type Word,
@@ -42,6 +43,36 @@ const W: Word[] = [
   { text: "c", start: 2.0, gIndex: 2 },
   { text: "d", start: 3.0, gIndex: 3 },
 ];
+
+describe("nextRelevantWordStartAfter (per-word skip-irrelevant)", () => {
+  const body =
+    "<!-- speaker: Speaker 1 -->\n{{t:0.00}}relevant {{t:1.00}}one\n" +
+    "<!-- speaker: [irrelevant] -->\n{{t:2.00}}skip {{t:3.00}}this\n" +
+    "<!-- speaker: Speaker 1 -->\n{{t:4.00}}relevant {{t:5.00}}two";
+  const irr = (s: string) => s === "[irrelevant]";
+
+  it("seeks to the next relevant word when the playhead is in an irrelevant run", () => {
+    const p = parseWords(body);
+    expect(nextRelevantWordStartAfter(p.words, p.runs, 2.5, irr)).toBe(4.0);
+    expect(nextRelevantWordStartAfter(p.words, p.runs, 3.5, irr)).toBe(4.0);
+  });
+
+  it("returns null when the playhead is on relevant content", () => {
+    const p = parseWords(body);
+    expect(nextRelevantWordStartAfter(p.words, p.runs, 0.5, irr)).toBeNull();
+    expect(nextRelevantWordStartAfter(p.words, p.runs, 4.5, irr)).toBeNull();
+  });
+
+  it("returns null before the first word and when nothing relevant follows", () => {
+    const p = parseWords(body);
+    expect(nextRelevantWordStartAfter(p.words, p.runs, -1, irr)).toBeNull();
+    // an all-irrelevant tail: playhead in it, no relevant word after -> null
+    const tail = parseWords(
+      "<!-- speaker: Speaker 1 -->\n{{t:0.00}}hi\n<!-- speaker: [irrelevant] -->\n{{t:1.00}}bye",
+    );
+    expect(nextRelevantWordStartAfter(tail.words, tail.runs, 1.5, irr)).toBeNull();
+  });
+});
 
 describe("wordsInTimeRange", () => {
   it("returns words whose start is in (from, to]", () => {
