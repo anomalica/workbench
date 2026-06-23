@@ -12,6 +12,7 @@
     SPEAKER_GROUP,
   } from "$lib/transcript";
   import SpeakerDot from "./SpeakerDot.svelte";
+  import EditSelectionDialog from "./EditSelectionDialog.svelte";
   import { safeLocalSet } from "$lib/storage";
   import { observedPercent } from "$lib/coverage";
 
@@ -62,6 +63,7 @@
     onreassign,
     onedit,
     onsettime,
+    onreplaceselection,
     onseek,
     onmarkresume,
     onverdict,
@@ -99,6 +101,13 @@
     onedit: (gIndex: number, text: string) => void;
     /** Set a single word's start time (clamped between its neighbours). */
     onsettime: (gIndex: number, start: number) => void;
+    /** Replace the selected word range [from, to] with edited words (text +
+     *  start) - the multi-word selection editor's save. */
+    onreplaceselection?: (
+      from: number,
+      to: number,
+      newWords: { text: string; start: number }[],
+    ) => void;
     /** Seek the media to `seconds` (optional). */
     onseek?: (seconds: number) => void;
     /** Position the media at `seconds` WITHOUT starting playback - used by the
@@ -225,6 +234,19 @@
   let editingWord = $state(false);
   let editValue = $state("");
   let editWordEl = $state<HTMLInputElement>();
+  // Multi-word selection editor (text + timing + add/delete) over the range.
+  let editingSelection = $state(false);
+  let selectionInfo = $derived.by(() => {
+    if (!range) return null;
+    const speaker =
+      parsed.runs.find((r) => range!.from >= r.startWord && range!.from <= r.endWord)?.speaker ?? "";
+    return {
+      words: words.slice(range.from, range.to + 1),
+      prevStart: range.from > 0 ? words[range.from - 1].start : null,
+      nextStart: range.to + 1 < words.length ? words[range.to + 1].start : null,
+      speaker,
+    };
+  });
   // Single-word time-adjust mode.
   let adjustingTime = $state(false);
 
@@ -961,6 +983,14 @@
       >
         {rangeAllObserved() ? "Mark unseen" : "Mark seen"}
       </button>
+      <div class="w-px h-4 bg-border" aria-hidden="true"></div>
+      <button
+        onclick={() => { pickerOpen = false; editingSelection = true; }}
+        class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
+        title="Edit the selected words together: text, timing, and add/delete words"
+      >
+        Edit selection
+      </button>
       {#if single}
         <div class="w-px h-4 bg-border" aria-hidden="true"></div>
         <button
@@ -1196,4 +1226,20 @@
       </div>
     {/each}
   </div>
+
+  {#if editingSelection && range && selectionInfo}
+    <EditSelectionDialog
+      words={selectionInfo.words}
+      prevStart={selectionInfo.prevStart}
+      nextStart={selectionInfo.nextStart}
+      speaker={selectionInfo.speaker}
+      onseek={(t) => onseek?.(t)}
+      oncancel={() => { editingSelection = false; }}
+      onsave={(newWords) => {
+        if (range) onreplaceselection?.(range.from, range.to, newWords);
+        editingSelection = false;
+        range = null;
+      }}
+    />
+  {/if}
 </div>

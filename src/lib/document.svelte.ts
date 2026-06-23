@@ -265,6 +265,29 @@ export class DocumentStore {
     if (result !== this.current) this.pushEdit(result);
   }
 
+  /** Replace a selected word range [from, to] (within one speaker run) with an
+   *  edited set of words (text + start) - the multi-word selection editor's save.
+   *  Handles delete/insert/retext/retime in one undo step, then reconciles the
+   *  frontmatter speakers (a delete could remove a speaker's last words). */
+  replaceSelection(from: number, to: number, newWords: { text: string; start: number }[]) {
+    const [fm, body] = splitFrontmatter(this.current);
+    const parsed = parseWords(body);
+    if (from < 0 || to >= parsed.words.length || from > to) return;
+    const next = replaceWordRange(parsed, from, to, newWords);
+    const newBody = serializeWords(next.words, next.runs, next.lineEndWords, next.preamble);
+    // Reconcile frontmatter speakers to those still present (mirrors
+    // serialiseWithReconcile): keep curated named speakers, drop default
+    // "Speaker N" entries, add any new names, rewrite only on change.
+    const currentNamed = extractFrontmatterSpeakers(fm);
+    const bodyNamed = namedSpeakersInOrder(next.runs);
+    const kept = currentNamed.filter((n) => !isDefaultSpeakerName(n));
+    const merged = [...kept, ...bodyNamed.filter((n) => !kept.includes(n))];
+    const same =
+      merged.length === currentNamed.length && merged.every((n, i) => n === currentNamed[i]);
+    const result = (same ? fm : rewriteFrontmatterSpeakers(fm, merged)) + newBody;
+    if (result !== this.current) this.pushEdit(result);
+  }
+
   // --- All structural operations use parse-modify-serialize ---
 
   private editSegments(fn: (segs: Segment[]) => boolean) {
@@ -459,6 +482,7 @@ import {
   renameSpeakerInRuns,
   namedSpeakersInOrder,
   splitWord,
+  replaceWordRange,
 } from "$lib/transcript-words";
 
 function splitFrontmatter(doc: string): [string, string] {

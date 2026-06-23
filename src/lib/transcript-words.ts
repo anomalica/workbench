@@ -219,6 +219,62 @@ export function splitWord(
   };
 }
 
+/** Replace the inclusive word range [from, to] - which the selection editor
+ *  guarantees lies within ONE speaker run - with `newWords` (text + start),
+ *  keeping that run's speaker. The general splice behind the multi-word selection
+ *  editor: edit text, delete words, insert words, retime, in one operation.
+ *  Re-gIndexes; grows/shrinks the containing run by the size change (dropping it
+ *  if it empties); shifts later runs; and remaps line ends (breaks inside the
+ *  range drop as the text re-flows, a break at the range's end moves to the new
+ *  last word). Empty-text replacements are dropped, so passing [] deletes the
+ *  range. */
+export function replaceWordRange(
+  parsed: ParsedWords,
+  from: number,
+  to: number,
+  newWords: { text: string; start: number }[],
+): ParsedWords {
+  const { words, runs, lineEndWords, preamble } = parsed;
+  if (from < 0 || to >= words.length || from > to) return parsed;
+  const clean = newWords
+    .map((w) => ({ text: w.text.trim(), start: w.start }))
+    .filter((w) => w.text);
+  const delta = clean.length - (to - from + 1);
+
+  const out: Word[] = [];
+  for (let i = 0; i < from; i++) out.push({ ...words[i], gIndex: out.length });
+  for (const w of clean) out.push({ text: w.text, start: w.start, gIndex: out.length });
+  for (let i = to + 1; i < words.length; i++) out.push({ ...words[i], gIndex: out.length });
+
+  const newRuns: SpeakerRun[] = [];
+  for (const r of runs) {
+    if (from >= r.startWord && to <= r.endWord) {
+      const endWord = r.endWord + delta;
+      if (endWord >= r.startWord)
+        newRuns.push({ speaker: r.speaker, startWord: r.startWord, endWord });
+      // else: the run lost all its words - drop it (and its speaker comment)
+    } else if (r.startWord > to) {
+      newRuns.push({
+        speaker: r.speaker,
+        startWord: r.startWord + delta,
+        endWord: r.endWord + delta,
+      });
+    } else {
+      newRuns.push({ ...r }); // entirely before the range - unchanged
+    }
+  }
+
+  const newLineEndWords = new Set<number>();
+  const rangeEndedLine = lineEndWords.has(to);
+  for (const e of lineEndWords) {
+    if (e < from) newLineEndWords.add(e);
+    else if (e > to) newLineEndWords.add(e + delta);
+  }
+  if (rangeEndedLine && clean.length > 0) newLineEndWords.add(from + clean.length - 1);
+
+  return { words: out, runs: mergeAdjacentRuns(newRuns), lineEndWords: newLineEndWords, preamble };
+}
+
 /** Reassign the inclusive word range [fromGIndex, toGIndex] to `newSpeaker`,
  *  splitting the single containing run into up to three (before / reassigned /
  *  after) and merging any resulting adjacent same-speaker runs. The caller
