@@ -1,6 +1,6 @@
 <script lang="ts">
   import { untrack } from "svelte";
-  import { parseWords, wordsInTimeRange } from "$lib/transcript-words";
+  import { parseWords, wordsInTimeRange, wordActiveAt } from "$lib/transcript-words";
   import type { SpeakerRun } from "$lib/transcript-words";
   import {
     orderedNamedSpeakers,
@@ -61,8 +61,6 @@
     serverObserved = [],
     claimHighlight = null,
     onreassign,
-    onedit,
-    onsettime,
     onreplaceselection,
     onseek,
     onmarkresume,
@@ -97,10 +95,6 @@
     claimHighlight?: { start: number; end: number; seq: number } | null;
     /** Reassign the inclusive word range [from, to] to `speaker`. */
     onreassign: (from: number, to: number, speaker: string) => void;
-    /** Replace the text of a single word (keeps its timestamp). */
-    onedit: (gIndex: number, text: string) => void;
-    /** Set a single word's start time (clamped between its neighbours). */
-    onsettime: (gIndex: number, start: number) => void;
     /** Replace the selected word range [from, to] with edited words (text +
      *  start) - the multi-word selection editor's save. */
     onreplaceselection?: (
@@ -168,22 +162,7 @@
   // The word currently being spoken: the last word whose start time is at or
   // before the playback clock (each word runs until the next word's start).
   // Word starts are monotonic, so binary-search. -1 before the first word.
-  let activeWord = $derived.by(() => {
-    if (words.length === 0 || currentTime < words[0].start) return -1;
-    let lo = 0;
-    let hi = words.length - 1;
-    let ans = -1;
-    while (lo <= hi) {
-      const mid = (lo + hi) >> 1;
-      if (words[mid].start <= currentTime) {
-        ans = mid;
-        lo = mid + 1;
-      } else {
-        hi = mid - 1;
-      }
-    }
-    return ans;
-  });
+  let activeWord = $derived(wordActiveAt(words, currentTime));
 
   // Map each word gIndex to the run that owns it, so a click can clamp the
   // selection to a single speaker turn.
@@ -230,11 +209,9 @@
   // startWord of the run whose header picker is open (header click reassigns
   // the whole turn), or null.
   let headerPicker = $state<number | null>(null);
-  // Single-word text edit state.
-  let editingWord = $state(false);
-  let editValue = $state("");
-  let editWordEl = $state<HTMLInputElement>();
-  // Multi-word selection editor (text + timing + add/delete) over the range.
+  // Word/selection editor (text + timing + add/delete) over the range. Labelled
+  // "Edit word" for a single word, "Edit selection" for several - one modal.
+
   let editingSelection = $state(false);
   let selectionInfo = $derived.by(() => {
     if (!range) return null;
@@ -247,8 +224,6 @@
       speaker,
     };
   });
-  // Single-word time-adjust mode.
-  let adjustingTime = $state(false);
 
   // Floating selection bar: positioned just above (or below) the first
   // selected word, in the offsetParent's coordinate space.
@@ -319,7 +294,16 @@
       const prev = lastPlayTime;
       lastPlayTime = t;
       if (prev < 0 || t - prev <= 0 || t - prev > 2) return;
-      const fresh = wordsInTimeRange(words, prev, t).filter((g) => !observed.has(g));
+      // Words whose start falls in (prev, t], PLUS the word under the playhead at
+      // the interval start. After a skip-irrelevant seek the playhead lands
+      // exactly on the first relevant word (its start == prev), which the open
+      // lower bound of (prev, t] would exclude forever - so without this that
+      // word could never be auto-observed even though it plays through. Adding
+      // the word at `prev` is idempotent during normal continuous play.
+      const landing = wordActiveAt(words, prev);
+      const crossed = wordsInTimeRange(words, prev, t);
+      const candidates = landing >= 0 ? [landing, ...crossed] : crossed;
+      const fresh = candidates.filter((g) => !observed.has(g));
       if (fresh.length) {
         const next = new Set(observed);
         for (const g of fresh) next.add(g);
@@ -412,7 +396,6 @@
   function selectBlock(run: SpeakerRun) {
     headerPicker = null;
     pickerOpen = false;
-    editingWord = false;
     anchor = run.startWord;
     range = { from: run.startWord, to: run.endWord };
   }
@@ -493,12 +476,6 @@
   }
 
   function onWindowKeydown(e: KeyboardEvent) {
-    // Esc backs out of the time-adjust mode (the slider can hold focus).
-    if (e.key === "Escape" && adjustingTime) {
-      e.preventDefault();
-      clearSelection();
-      return;
-    }
     if (e.key !== "v" || e.ctrlKey || e.metaKey || e.altKey) return;
     const t = e.target;
     if (
@@ -528,13 +505,6 @@
     const h = Math.floor(t / 3600);
     const m = Math.floor((t % 3600) / 60);
     return h > 0 ? `${h}:${pad(m)}:${pad(t % 60)}` : `${m}:${pad(t % 60)}`;
-  }
-
-  // Clock with two decimals, for the millisecond-level time-adjust readout.
-  function secondsToClockMs(s: number): string {
-    const cs = Math.round(Math.max(0, s) * 100);
-    const frac = String(cs % 100).padStart(2, "0");
-    return `${secondsToClock(Math.floor(cs / 100))}.${frac}`;
   }
 
   function positionBar() {
@@ -577,9 +547,8 @@
   }
 
   $effect(() => {
-    // Track selection and edit mode (bar width changes when editing).
+    // Reposition the floating bar when the selection changes.
     void range;
-    void editingWord;
     if (range) schedulePositionBar();
   });
 
@@ -632,50 +601,11 @@
     anchor = null;
     range = null;
     pickerOpen = false;
-    editingWord = false;
-    adjustingTime = false;
-  }
-
-  // Time-adjust bounds for the single selected word: its current start and the
-  // neighbours' starts it can't pass (so it stays in order).
-  let timeBounds = $derived.by(() => {
-    if (!range || range.from !== range.to || !words[range.from]) return null;
-    const g = range.from;
-    const cur = words[g].start;
-    const prev = g > 0 ? words[g - 1].start : 0;
-    const next = g + 1 < words.length ? words[g + 1].start : cur + 2;
-    return { g, cur, prev, next };
-  });
-
-  function nudgeTime(deltaSec: number) {
-    if (!timeBounds) return;
-    const target = Math.max(timeBounds.prev, Math.min(timeBounds.next, timeBounds.cur + deltaSec));
-    onsettime(timeBounds.g, target);
-    onseek?.(target);
-  }
-
-  function sliderTime(fraction: number) {
-    if (timeBounds) onsettime(timeBounds.g, timeBounds.prev + fraction * (timeBounds.next - timeBounds.prev));
+    editingSelection = false;
   }
 
   function chooseSpeaker(name: string) {
     if (range) onreassign(range.from, range.to, name);
-    clearSelection();
-  }
-
-  function startEditWord() {
-    if (!range || range.from !== range.to) return;
-    editValue = words[range.from].text;
-    pickerOpen = false;
-    editingWord = true;
-    setTimeout(() => {
-      editWordEl?.focus();
-      editWordEl?.select();
-    }, 0);
-  }
-
-  function commitEditWord() {
-    if (range && editingWord) onedit(range.from, editValue);
     clearSelection();
   }
 
@@ -839,117 +769,6 @@
     class="absolute z-30 flex items-center gap-2
       bg-surface-raised border border-primary/60 ring-2 ring-primary/25 rounded-full shadow-xl px-3 py-1.5"
   >
-    {#if editingWord}
-      <input
-        bind:this={editWordEl}
-        type="text"
-        bind:value={editValue}
-        onkeydown={(e) => {
-          if (e.key === "Enter") {
-            e.preventDefault();
-            commitEditWord();
-          } else if (e.key === "Escape") {
-            e.preventDefault();
-            clearSelection();
-          }
-        }}
-        title="Type a space to split into separate, separately-timestamped words"
-        class="text-sm font-ui bg-surface border border-primary rounded px-2 py-0.5 text-on-surface outline-none min-w-32"
-      />
-      <button
-        onclick={commitEditWord}
-        class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
-        title="Save (Enter)"
-      >
-        Save
-      </button>
-      <button
-        onclick={clearSelection}
-        class="p-0.5 rounded cursor-pointer text-on-surface-muted/60 hover:text-on-surface hover:bg-surface-alt transition-colors"
-        title="Cancel (Esc)"
-        aria-label="Cancel"
-      >
-        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          <path stroke-linecap="round" d="M6 18L18 6M6 6l12 12" />
-        </svg>
-      </button>
-    {:else if adjustingTime && timeBounds}
-      <span
-        class="text-xs font-ui font-medium text-on-surface tabular-nums whitespace-nowrap"
-        title="Start time of this word"
-      >
-        {secondsToClockMs(timeBounds.cur)}
-      </span>
-      <input
-        type="range"
-        min="0"
-        max="1"
-        step="0.001"
-        value={(timeBounds.cur - timeBounds.prev) / (timeBounds.next - timeBounds.prev || 1)}
-        oninput={(e) => sliderTime(Number(e.currentTarget.value))}
-        class="w-28 accent-primary cursor-pointer"
-        title="Drag between the previous and next word's start"
-        aria-label="Word start time"
-      />
-      <div class="flex items-center gap-0.5 font-ui tabular-nums">
-        <button
-          onclick={() => nudgeTime(-1)}
-          class="text-xs font-medium text-primary cursor-pointer hover:bg-surface-alt rounded px-1 py-0.5"
-          title="Earlier by 1 second"
-        >
-          -1s
-        </button>
-        <button
-          onclick={() => nudgeTime(-0.1)}
-          class="text-xs font-medium text-primary cursor-pointer hover:bg-surface-alt rounded px-1 py-0.5"
-          title="Earlier by 100 ms"
-        >
-          -100
-        </button>
-        <button
-          onclick={() => nudgeTime(-0.01)}
-          class="text-xs font-medium text-primary cursor-pointer hover:bg-surface-alt rounded px-1 py-0.5"
-          title="Earlier by 10 ms"
-        >
-          -10
-        </button>
-        <button
-          onclick={() => nudgeTime(0.01)}
-          class="text-xs font-medium text-primary cursor-pointer hover:bg-surface-alt rounded px-1 py-0.5"
-          title="Later by 10 ms"
-        >
-          +10
-        </button>
-        <button
-          onclick={() => nudgeTime(0.1)}
-          class="text-xs font-medium text-primary cursor-pointer hover:bg-surface-alt rounded px-1 py-0.5"
-          title="Later by 100 ms"
-        >
-          +100
-        </button>
-        <button
-          onclick={() => nudgeTime(1)}
-          class="text-xs font-medium text-primary cursor-pointer hover:bg-surface-alt rounded px-1 py-0.5"
-          title="Later by 1 second"
-        >
-          +1s
-        </button>
-      </div>
-      <button
-        onclick={() => onseek?.(timeBounds.cur)}
-        class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
-        title="Play from this word's start"
-      >
-        Play
-      </button>
-      <button
-        onclick={clearSelection}
-        class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
-        title="Done (Esc)"
-      >
-        Done
-      </button>
-    {:else}
       <span class="text-xs font-ui text-on-surface-secondary tabular-nums">
         {count} word{count === 1 ? "" : "s"}
       </span>
@@ -987,31 +806,12 @@
       <button
         onclick={() => { pickerOpen = false; editingSelection = true; }}
         class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
-        title="Edit the selected words together: text, timing, and add/delete words"
+        title={single
+          ? "Edit this word: text, timing, split or delete"
+          : "Edit the selected words together: text, timing, add/delete words"}
       >
-        Edit selection
+        {single ? "Edit word" : "Edit selection"}
       </button>
-      {#if single}
-        <div class="w-px h-4 bg-border" aria-hidden="true"></div>
-        <button
-          onclick={startEditWord}
-          class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
-          title="Edit this word's text (type a space to split it into separate words)"
-        >
-          Edit word
-        </button>
-        <div class="w-px h-4 bg-border" aria-hidden="true"></div>
-        <button
-          onclick={() => {
-            pickerOpen = false;
-            adjustingTime = true;
-          }}
-          class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
-          title="Adjust when this word starts"
-        >
-          Adjust time
-        </button>
-      {/if}
       <div class="w-px h-4 bg-border" aria-hidden="true"></div>
       <button
         onclick={() => {
@@ -1032,7 +832,6 @@
           <path stroke-linecap="round" d="M6 18L18 6M6 6l12 12" />
         </svg>
       </button>
-    {/if}
   </div>
 {/if}
 

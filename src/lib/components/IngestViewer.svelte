@@ -3210,8 +3210,6 @@
             serverObserved={serverObservedWords}
             {claimHighlight}
             onreassign={(from, to, speaker) => doc.reassignWords(from, to, speaker)}
-            onedit={(gIndex, text) => doc.editWord(gIndex, text)}
-            onsettime={(gIndex, start) => doc.setWordTime(gIndex, start)}
             onreplaceselection={(from, to, w) => doc.replaceSelection(from, to, w)}
             onseek={(seconds) => {
               if (ytPlayer && playerReady) {
