@@ -38,6 +38,13 @@ describe("provenanceOf", () => {
     expect(p).toEqual({ kind: "unknown", label: "Origin unknown", traceable: false });
   });
 
+  it("treats an archived source_hash as traceable even when provenance is unknown", () => {
+    // The ebook case: no source_url/source_file, provenance "unknown", but the
+    // original epub is archived by its sha256 - a recoverable origin.
+    const p = provenanceOf({ provenance: "unknown", source_hash: "sha256:549791432c8b" });
+    expect(p).toEqual({ kind: "file", label: "Archived source file", traceable: true });
+  });
+
   it("marks a record with no acquisition fields as untraceable", () => {
     const p = provenanceOf({});
     expect(p.kind).toBe("none");
