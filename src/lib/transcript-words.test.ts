@@ -8,6 +8,7 @@ import {
   namedSpeakersInOrder,
   wordsInTimeRange,
   nextRelevantWordStartAfter,
+  speakerWordCounts,
   splitWord,
   type SpeakerRun,
   type Word,
@@ -43,6 +44,23 @@ const W: Word[] = [
   { text: "c", start: 2.0, gIndex: 2 },
   { text: "d", start: 3.0, gIndex: 3 },
 ];
+
+describe("speakerWordCounts", () => {
+  it("counts words per speaker in first-appearance order, including specials", () => {
+    const p = parseWords(
+      "<!-- speaker: Speaker 1 -->\n{{t:0}}a {{t:1}}b {{t:2}}c\n" +
+        "<!-- speaker: [irrelevant] -->\n{{t:3}}x {{t:4}}y\n" +
+        "<!-- speaker: Speaker 1 -->\n{{t:5}}d",
+    );
+    expect(speakerWordCounts(p.runs)).toEqual([
+      { id: "Speaker 1", total: 4 },
+      { id: "[irrelevant]", total: 2 },
+    ]);
+  });
+  it("is empty for no runs", () => {
+    expect(speakerWordCounts([])).toEqual([]);
+  });
+});
 
 describe("nextRelevantWordStartAfter (per-word skip-irrelevant)", () => {
   const body =
