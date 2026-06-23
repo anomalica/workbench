@@ -343,10 +343,12 @@
               aria-label="Toggle read"
             ></button>
           {/if}
+          <!-- Colours come from the .prose token mapping in app.css (every prose
+               element wired to the brand semantic tokens, light + dark); only
+               structural image utilities are set here. -->
           <div
             class="prose prose-sm max-w-none flex-1 py-1 select-none
-              text-on-surface prose-headings:text-on-surface prose-a:text-primary
-              prose-img:rounded prose-img:max-w-full prose-hr:border-border
+              prose-img:rounded prose-img:max-w-full
               {state === 'none' && !structural ? 'opacity-70' : ''}"
           >
             <!-- eslint-disable-next-line svelte/no-at-html-tags -->
