@@ -300,6 +300,25 @@ export function namedSpeakersInOrder(runs: SpeakerRun[]): string[] {
   return out;
 }
 
+/** Per-speaker WORD counts for the speaker panel, in first-appearance order:
+ *  `{ id, total }` where total is the number of words that speaker owns across
+ *  all their runs (adjacent same-speaker runs already merge in the run model).
+ *  The word-format analogue of counting segments per speaker - segments don't
+ *  exist for a record/2 body, so the panel counts words instead. Includes
+ *  special speakers ([irrelevant], [narrator], ...) so they stay filterable. */
+export function speakerWordCounts(runs: SpeakerRun[]): { id: string; total: number }[] {
+  const firstSeen = new Map<string, number>();
+  const totals = new Map<string, number>();
+  for (const r of runs) {
+    if (!r.speaker) continue;
+    if (!firstSeen.has(r.speaker)) firstSeen.set(r.speaker, r.startWord);
+    totals.set(r.speaker, (totals.get(r.speaker) ?? 0) + (r.endWord - r.startWord + 1));
+  }
+  return [...firstSeen.entries()]
+    .sort((a, b) => a[1] - b[1])
+    .map(([id]) => ({ id, total: totals.get(id) ?? 0 }));
+}
+
 /** gIndices of words whose start falls in the half-open interval
  *  (fromTime, toTime]. Used to mark words observed as playback advances past
  *  them - the caller only calls this for a continuous forward step (it ignores

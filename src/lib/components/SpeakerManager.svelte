@@ -5,6 +5,7 @@
 
   let {
     segments,
+    rows = null,
     namedSpeakers,
     selectedSpeakers,
     filteredSpeakers,
@@ -18,6 +19,10 @@
     onrenamenamed,
   }: {
     segments: Segment[];
+    /** Pre-computed speaker rows (id + count) in first-appearance order. When
+     *  given (per-word records, where total is a WORD count) it replaces the
+     *  segment-derived rows; null falls back to counting segments (v1). */
+    rows?: { id: string; total: number }[] | null;
     namedSpeakers: string[];
     selectedSpeakers: Set<string>;
     filteredSpeakers: Set<string>;
@@ -36,8 +41,10 @@
     total: number;
   }
 
-  // Build speaker rows from segments, sorted by first appearance
+  // Speaker rows: pre-computed when given (word records), else built from
+  // segments, sorted by first appearance.
   let speakerRows = $derived((): SpeakerRow[] => {
+    if (rows) return rows;
     const firstSeen = new Map<string, number>();
     const totals = new Map<string, number>();
     for (let i = 0; i < segments.length; i++) {

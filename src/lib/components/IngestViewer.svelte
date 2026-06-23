@@ -45,7 +45,7 @@
   import ReadableText from "./ReadableText.svelte";
   import EditableMetadata from "./EditableMetadata.svelte";
   import ReviewHistory from "./ReviewHistory.svelte";
-  import { hasWordTimestamps, parseWords, nextRelevantWordStartAfter } from "$lib/transcript-words";
+  import { hasWordTimestamps, parseWords, nextRelevantWordStartAfter, speakerWordCounts } from "$lib/transcript-words";
   import { untrack } from "svelte";
   import { marked } from "marked";
   import yaml from "js-yaml";
@@ -180,6 +180,9 @@
   // Parsed word runs for word records (drives the per-word playback skip below);
   // null otherwise. Memoised on the live body.
   let parsedWords = $derived(isWordRecord ? parseWords(currentBody()) : null);
+  // Per-speaker WORD counts for the speaker panel (word records); null for v1,
+  // where the panel counts segments instead.
+  let wordSpeakerRows = $derived(parsedWords ? speakerWordCounts(parsedWords.runs) : null);
   // Latest observation verdict reported by the word editor (word-index spans +
   // coverage fraction + digestible + total words), persisted on review submit.
   let wordVerdict = $state<{
@@ -1774,13 +1777,26 @@
   let visibleGroups = $derived(groupSegmentsBySpeaker(visibleSegments));
 
   // Derived: speakers visible in current filter mode
-  let visibleSpeakerIds = $derived(new Set(
-    segments
-      .filter((s) => !hideIrrelevant || !isSegmentIrrelevant(s))
-      .map((s) => s.speaker),
-  ));
+  let visibleSpeakerIds = $derived(
+    wordSpeakerRows
+      ? new Set(
+          wordSpeakerRows
+            .filter((r) => !hideIrrelevant || r.id !== SPEAKER_IRRELEVANT)
+            .map((r) => r.id),
+        )
+      : new Set(
+          segments.filter((s) => !hideIrrelevant || !isSegmentIrrelevant(s)).map((s) => s.speaker),
+        ),
+  );
 
-  let irrelevantCount = $derived(segments.filter((s) => isSegmentIrrelevant(s)).length);
+  // Count of irrelevant units for the show/hide eye toggle: irrelevant WORDS for
+  // a word record (segments don't exist), irrelevant segments for v1. Drives
+  // whether the eye icon shows at all.
+  let irrelevantCount = $derived(
+    wordSpeakerRows
+      ? (wordSpeakerRows.find((r) => r.id === SPEAKER_IRRELEVANT)?.total ?? 0)
+      : segments.filter((s) => isSegmentIrrelevant(s)).length,
+  );
 
   // Ordered list of unique speaker names for the speaker picker
   let allSpeakerNames = $derived((): string[] => {
@@ -2555,6 +2571,7 @@
       <div class="px-3 py-2">
         <SpeakerManager
           {segments}
+          rows={wordSpeakerRows}
           {namedSpeakers}
           {selectedSpeakers}
           {filteredSpeakers}
@@ -2883,8 +2900,8 @@
                   ? 'bg-primary/10 text-primary'
                   : 'text-on-surface-muted hover:text-on-surface hover:bg-surface'}"
               title={skipIrrelevant
-                ? "Skipping irrelevant segments during playback - click to play through them"
-                : "Playing through irrelevant segments - click to skip them"}
+                ? "Skipping irrelevant content during playback - click to play through it"
+                : "Playing through irrelevant content - click to skip it"}
             >
               <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M4 5v14l8-7zM13 5v14l8-7z" />
@@ -2903,8 +2920,8 @@
                     ? 'text-on-surface-muted hover:bg-surface'
                     : 'bg-warning-container text-on-warning-container hover:opacity-80'}"
                 title={hideIrrelevant
-                  ? `${irrelevantCount} irrelevant segments hidden - click to show`
-                  : `Showing ${irrelevantCount} irrelevant segments - click to hide`}
+                  ? `${irrelevantCount} irrelevant ${isWordRecord ? "words" : "segments"} hidden - click to show`
+                  : `Showing ${irrelevantCount} irrelevant ${isWordRecord ? "words" : "segments"} - click to hide`}
               >
                 {#if hideIrrelevant}
                   <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
