@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Word } from "$lib/transcript-words";
+  import { tick, onMount } from "svelte";
 
   // Unified multi-word editor: edit text, delete/insert words, and retime - all
   // in one modal over a selected word range. Replaces the separate edit-word +
@@ -41,6 +42,21 @@
   let items = $state<Item[]>(words.map((w) => ({ text: w.text, start: w.start, auto: false })));
   // The row whose timestamp the arrow keys nudge.
   let selected = $state(0);
+  // Per-row text inputs, for moving focus when navigating or splitting words.
+  let inputs: (HTMLInputElement | null)[] = [];
+
+  // Select row `i`, focus its text input and place the caret (default: end).
+  // Waits a tick so the input exists after an items reassign (split/navigate).
+  async function focusRow(i: number, caret: number | "end" = "end") {
+    selected = i;
+    await tick();
+    const el = inputs[i];
+    if (!el) return;
+    el.focus();
+    const pos = caret === "end" ? el.value.length : caret;
+    el.setSelectionRange(pos, pos);
+    el.scrollIntoView({ block: "nearest" });
+  }
 
   function lowerBound(i: number): number {
     return i > 0 ? items[i - 1].start : (prevStart ?? 0);
@@ -73,9 +89,33 @@
     selected = items.length - 1;
   }
 
-  // A space typed into a word splits it into separately-timestamped words: the
+  // Pressing space in a word starts a NEW word at the caret: the text before
+  // the caret keeps the current time, the text after it becomes a new,
+  // auto-positioned word. Focus follows to the new word so continued typing
+  // lands there - the "hit space -> new timestamp" behaviour, without the space
+  // ever entering the value (which previously re-split on every keystroke and
+  // stranded focus on the first word).
+  function splitAtCaret(i: number, caret: number) {
+    const before = items[i].text.slice(0, caret);
+    const after = items[i].text.slice(caret);
+    const newStart = (items[i].start + upperBound(i)) / 2;
+    const next = items.slice();
+    next[i] = { ...next[i], text: before };
+    next.splice(i + 1, 0, { text: after, start: newStart, auto: true });
+    items = next;
+    focusRow(i + 1, 0);
+  }
+
+  function onWordKeydown(e: KeyboardEvent, i: number) {
+    if (e.key !== " ") return;
+    e.preventDefault();
+    const input = e.target as HTMLInputElement;
+    splitAtCaret(i, input.selectionStart ?? items[i].text.length);
+  }
+
+  // Pasted text containing spaces splits into separately-timestamped words: the
   // first piece keeps the time, the rest are auto-positioned across the gap to
-  // the next word (the "hit space -> new timestamp" behaviour).
+  // the next word. Typed spaces are handled by splitAtCaret; this covers paste.
   function splitOnSpace(i: number) {
     const parts = items[i].text.split(/\s+/).filter(Boolean);
     if (parts.length <= 1) return;
@@ -87,6 +127,7 @@
       auto: p !== 0,
     }));
     items = [...items.slice(0, i), ...pieces, ...items.slice(i + 1)];
+    focusRow(i + parts.length - 1, "end");
   }
 
   function onKeydown(e: KeyboardEvent) {
@@ -95,8 +136,20 @@
       oncancel();
       return;
     }
-    // Arrow nudge only when focus isn't in a text input (so editing text with
-    // the arrows still works).
+    // Up/down move the selection box to the previous/next word (and focus it),
+    // even from within a text input - single-line inputs ignore up/down anyway.
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (selected > 0) focusRow(selected - 1, "end");
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (selected < items.length - 1) focusRow(selected + 1, "end");
+      return;
+    }
+    // Left/right nudge the selected timestamp only when focus isn't in a text
+    // input (so editing text with the arrows still works).
     const inInput = (e.target as HTMLElement)?.tagName === "INPUT";
     if (!inInput && items[selected]) {
       if (e.key === "ArrowLeft") {
@@ -112,6 +165,13 @@
   function save() {
     onsave(items.filter((it) => it.text.trim()).map((it) => ({ text: it.text.trim(), start: it.start })));
   }
+
+  // Focus the first word on open so keyboard control is immediate, and so the
+  // host viewer's global Up/Down shortcuts (which bail when focus is in an
+  // input) don't fire underneath the dialog.
+  onMount(() => {
+    focusRow(0);
+  });
 </script>
 
 <svelte:window onkeydown={onKeydown} />
@@ -129,9 +189,10 @@
     </div>
 
     <p class="px-4 pt-2 text-xs text-on-surface-muted">
-      Edit the text, delete or add words, and retime. Click a timestamp to select it,
-      then nudge with the arrow keys (50ms) or the buttons. Click &#9658; to play from a word.
-      Amber timestamps were auto-positioned - click to confirm.
+      Edit the text, delete or add words, and retime. Up/down move between words;
+      a timestamp nudge (buttons, or left/right arrows at 50ms) plays from the new
+      position, and &#9658; replays. Space starts a new word at the caret. Amber
+      timestamps were auto-positioned - click to confirm.
     </p>
 
     <div class="flex-1 overflow-auto px-3 py-2 space-y-1">
@@ -140,16 +201,6 @@
           class="flex items-center gap-2 rounded px-2 py-1 transition-colors
             {selected === i ? 'bg-primary/10' : 'hover:bg-surface-alt/50'}"
         >
-          <!-- Play from this word -->
-          <button
-            onclick={() => onseek(item.start)}
-            class="flex-none text-on-surface-muted hover:text-primary cursor-pointer p-1"
-            title="Play from here"
-            aria-label="Play from this word"
-          >
-            <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20"><path d="M6 4l10 6-10 6V4z" /></svg>
-          </button>
-
           <!-- Timestamp chip: click to select; colour distinguishes auto vs set -->
           <button
             onclick={() => { selected = i; onseek(item.start); }}
@@ -164,24 +215,44 @@
             {item.start.toFixed(2)}s
           </button>
 
-          <!-- Per-row time nudge, shown for the selected row -->
+          <!-- Per-row time nudge with a centred play, shown for the selected
+               row. Each nudge plays from the new position; the centre play
+               replays from the current one. -->
           {#if selected === i}
             <div class="flex-none flex items-center gap-0.5">
-              {#each [-0.1, -0.01, 0.01, 0.1] as d (d)}
+              {#each [-0.1, -0.01] as d (d)}
                 <button
-                  onclick={() => nudge(i, d)}
+                  onclick={() => { nudge(i, d); onseek(items[i].start); }}
                   class="text-[10px] tabular-nums rounded px-1 py-0.5 bg-surface-alt text-on-surface-secondary
                     hover:bg-surface-alt/70 cursor-pointer"
-                  title="{d > 0 ? '+' : ''}{d * 1000}ms"
-                >{d > 0 ? "+" : ""}{(d * 1000).toFixed(0)}</button>
+                  title="{d * 1000}ms, then play"
+                >{(d * 1000).toFixed(0)}</button>
+              {/each}
+              <button
+                onclick={() => onseek(items[i].start)}
+                class="flex-none text-primary hover:text-primary-hover cursor-pointer px-0.5"
+                title="Play from here"
+                aria-label="Play from here"
+              >
+                <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20"><path d="M6 4l10 6-10 6V4z" /></svg>
+              </button>
+              {#each [0.01, 0.1] as d (d)}
+                <button
+                  onclick={() => { nudge(i, d); onseek(items[i].start); }}
+                  class="text-[10px] tabular-nums rounded px-1 py-0.5 bg-surface-alt text-on-surface-secondary
+                    hover:bg-surface-alt/70 cursor-pointer"
+                  title="+{d * 1000}ms, then play"
+                >+{(d * 1000).toFixed(0)}</button>
               {/each}
             </div>
           {/if}
 
-          <!-- Word text. A space splits it into separately-timed words. -->
+          <!-- Word text. Space starts a new word at the caret; pasted spaces split. -->
           <input
+            bind:this={inputs[i]}
             bind:value={item.text}
             onfocus={() => (selected = i)}
+            onkeydown={(e) => onWordKeydown(e, i)}
             oninput={() => { if (/\s/.test(item.text)) splitOnSpace(i); }}
             class="flex-1 min-w-0 bg-surface border border-border rounded px-2 py-1 text-sm
               text-on-surface focus:outline-none focus:border-primary"
