@@ -66,6 +66,27 @@ def _git(*args: str) -> str:
     ).stdout.strip()
 
 
+def advance_to_origin() -> None:
+    """Bring local main up to origin/main.
+
+    Fast-forwards in the normal case. When the clone carries a local-only
+    commit (e.g. a .githooksrc policy override), the branch has diverged and
+    `merge --ff-only` aborts every cycle - silently wedging the daemon and
+    leaving the workbench reading a stale clone. Fall back to rebasing the
+    local commit onto origin so the clone keeps advancing. On an unexpected
+    conflict, abort so the clone stays clean and the error surfaces rather
+    than leaving a half-applied rebase behind.
+    """
+    try:
+        _git("merge", "--ff-only", "origin/main")
+    except subprocess.CalledProcessError:
+        try:
+            _git("rebase", "origin/main")
+        except subprocess.CalledProcessError:
+            _git("rebase", "--abort")
+            raise
+
+
 def changed_record_hashes(old: str, new: str) -> set[str]:
     """Content hashes of records touched by commits in old..new."""
     out: set[str] = set()
@@ -138,7 +159,7 @@ def main() -> int:
             remote = _git("rev-parse", "origin/main")
             if remote != last:
                 hashes = changed_record_hashes(last, remote)
-                _git("merge", "--ff-only", "origin/main")
+                advance_to_origin()
                 last = remote
                 if hashes:
                     prerender_records_only(SNAPSHOT, list(hashes))
