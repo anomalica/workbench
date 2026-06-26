@@ -475,15 +475,64 @@
     addNoteAt(currentTime);
   }
 
-  function onWindowKeydown(e: KeyboardEvent) {
-    if (e.key !== "v" || e.ctrlKey || e.metaKey || e.altKey) return;
-    const t = e.target;
-    if (
+  /** Plain text of the current word selection, words space-joined as shown. */
+  function selectionText(): string {
+    if (!range) return "";
+    return words
+      .slice(range.from, range.to + 1)
+      .map((w) => w.text)
+      .join(" ");
+  }
+
+  /** Put the selected words on the clipboard. The selection is a custom word
+   *  range and the transcript is `select-none`, so the browser has nothing to
+   *  copy natively - we write the text ourselves. Falls back to execCommand for
+   *  non-secure contexts where navigator.clipboard is unavailable. */
+  async function copySelection(): Promise<void> {
+    const text = selectionText();
+    if (!text) return;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return;
+      }
+    } catch {
+      /* fall through to the legacy path */
+    }
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      document.execCommand("copy");
+    } finally {
+      document.body.removeChild(ta);
+    }
+  }
+
+  function inEditableTarget(t: EventTarget | null): boolean {
+    return (
       t instanceof HTMLInputElement ||
       t instanceof HTMLTextAreaElement ||
       (t instanceof HTMLElement && t.isContentEditable)
-    )
+    );
+  }
+
+  function onWindowKeydown(e: KeyboardEvent) {
+    // Ctrl/Cmd-C copies the selected words. Defer to the browser when focus is
+    // in a field or there's a real text selection (e.g. note text), so normal
+    // copy keeps working there.
+    if ((e.ctrlKey || e.metaKey) && (e.key === "c" || e.key === "C") && !e.altKey) {
+      const nativeSelection = (window.getSelection()?.toString() ?? "").length > 0;
+      if (!range || nativeSelection || inEditableTarget(e.target)) return;
+      e.preventDefault();
+      void copySelection();
       return;
+    }
+    if (e.key !== "v" || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (inEditableTarget(e.target)) return;
     e.preventDefault();
     addNoteAtCurrentTime();
   }
@@ -576,11 +625,15 @@
     if (e.button !== 0) return;
     if (e.shiftKey) {
       selectWord(g, true);
-    } else {
-      selectWord(g, false);
-      dragging = true;
-      if (onseek && words[g]) onseek(words[g].start);
+      return;
     }
+    // Ctrl/Alt/Cmd+click (or drag) selects without moving playback, so you can
+    // grab words to copy or edit while the audio keeps its place. A plain click
+    // still seeks there.
+    const selectOnly = e.ctrlKey || e.altKey || e.metaKey;
+    selectWord(g, false);
+    dragging = true;
+    if (!selectOnly && onseek && words[g]) onseek(words[g].start);
   }
 
   function onWordPointerEnter(g: number) {
