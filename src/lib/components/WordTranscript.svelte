@@ -376,16 +376,67 @@
     return true;
   }
 
-  function toggleSeen() {
+  function rangeNoneObserved(): boolean {
+    if (!range) return true;
+    for (let g = range.from; g <= range.to; g++) if (observed.has(g)) return false;
+    return true;
+  }
+
+  // Explicitly set the selected words observed (seen) or not. The seen/unseen
+  // marking now lives in the top observation toolbar, not the floating bar.
+  function setSelectionObserved(seen: boolean) {
     if (!range) return;
-    const all = rangeAllObserved();
     const next = new Set(observed);
     for (let g = range.from; g <= range.to; g++) {
-      if (all) next.delete(g);
-      else next.add(g);
+      if (seen) next.add(g);
+      else next.delete(g);
     }
     observed = next;
   }
+
+  // Word-case cycling for the selection: lower -> Title -> UPPER -> lower,
+  // starting from whatever the current case is. The floating bar's case button
+  // shows the current case and advances it on each click.
+  type CaseMode = "lower" | "title" | "upper";
+  function titleCase(w: string): string {
+    const lw = w.toLowerCase();
+    const idx = lw.search(/[a-z]/);
+    return idx < 0 ? lw : lw.slice(0, idx) + lw[idx].toUpperCase() + lw.slice(idx + 1);
+  }
+  function applyCase(w: string, mode: CaseMode): string {
+    if (mode === "lower") return w.toLowerCase();
+    if (mode === "upper") return w.toUpperCase();
+    return titleCase(w);
+  }
+  function detectCase(texts: string[]): CaseMode | "mixed" {
+    const letters = texts.join("").replace(/[^a-zA-Z]/g, "");
+    if (!letters) return "mixed";
+    if (letters === letters.toLowerCase()) return "lower";
+    if (letters === letters.toUpperCase()) return "upper";
+    return texts.every((w) => w === titleCase(w)) ? "title" : "mixed";
+  }
+  function nextCase(c: CaseMode | "mixed"): CaseMode {
+    const order: CaseMode[] = ["lower", "title", "upper"];
+    return c === "mixed" ? "title" : order[(order.indexOf(c) + 1) % order.length];
+  }
+  // Advance the selection to the next case, writing the cased text back but
+  // keeping the selection so repeated clicks keep cycling.
+  function cycleCase() {
+    if (!range) return;
+    const sel = words.slice(range.from, range.to + 1);
+    const mode = nextCase(detectCase(sel.map((w) => w.text)));
+    onreplaceselection?.(
+      range.from,
+      range.to,
+      sel.map((w) => ({ text: applyCase(w.text, mode), start: w.start })),
+    );
+  }
+  // Label showing the selection's current case for the bar button.
+  let caseLabel = $derived.by(() => {
+    if (!range) return "Aa";
+    const c = detectCase(words.slice(range.from, range.to + 1).map((w) => w.text));
+    return { lower: "abc", title: "Abc", upper: "ABC", mixed: "Aa" }[c];
+  });
 
   function observedInRun(run: SpeakerRun): number {
     let n = 0;
@@ -846,14 +897,11 @@
       </div>
       <div class="w-px h-4 bg-border" aria-hidden="true"></div>
       <button
-        onclick={toggleSeen}
-        class="text-xs font-ui font-medium cursor-pointer hover:underline
-          {rangeAllObserved() ? 'text-on-surface-muted' : 'text-primary'}"
-        title={rangeAllObserved()
-          ? "Mark these words as not yet observed"
-          : "Mark these words as observed"}
+        onclick={cycleCase}
+        class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline tabular-nums min-w-7 text-center"
+        title="Cycle case: lowercase -> Capitalised -> UPPERCASE"
       >
-        {rangeAllObserved() ? "Mark unseen" : "Mark seen"}
+        {caseLabel}
       </button>
       <div class="w-px h-4 bg-border" aria-hidden="true"></div>
       <button
@@ -903,20 +951,45 @@
     Add visual note
   </button>
   <span class="text-xs font-ui text-on-surface-muted tabular-nums">at {secondsToClock(currentTime)}</span>
-  <span
-    class="ml-auto text-xs font-ui font-medium tabular-nums {observedPct >= 100 ? 'text-success' : 'text-on-surface-secondary'}"
-    title="Share of this record's words you've observed"
-  >
-    {observedPct}% observed
-  </span>
-  {#if observedPct < 100}
+  {#if range}
+    {@const selN = range.to - range.from + 1}
+    <span class="ml-auto text-xs font-ui text-on-surface-muted tabular-nums">
+      {selN} selected
+    </span>
     <button
-      onclick={jumpToFirstUnobserved}
-      class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
-      title="Scroll to the first word you haven't observed yet"
+      onclick={() => setSelectionObserved(true)}
+      disabled={rangeAllObserved()}
+      class="text-xs font-ui font-medium hover:underline
+        {rangeAllObserved() ? 'text-on-surface-muted/50 cursor-default' : 'text-primary cursor-pointer'}"
+      title="Mark the selected words as observed"
     >
-      Jump to unobserved
+      Set observed
     </button>
+    <button
+      onclick={() => setSelectionObserved(false)}
+      disabled={rangeNoneObserved()}
+      class="text-xs font-ui font-medium hover:underline
+        {rangeNoneObserved() ? 'text-on-surface-muted/50 cursor-default' : 'text-primary cursor-pointer'}"
+      title="Mark the selected words as not observed"
+    >
+      Set not observed
+    </button>
+  {:else}
+    <span
+      class="ml-auto text-xs font-ui font-medium tabular-nums {observedPct >= 100 ? 'text-success' : 'text-on-surface-secondary'}"
+      title="Share of this record's words you've observed"
+    >
+      {observedPct}% observed
+    </span>
+    {#if observedPct < 100}
+      <button
+        onclick={jumpToFirstUnobserved}
+        class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
+        title="Scroll to the first word you haven't observed yet"
+      >
+        Jump to unobserved
+      </button>
+    {/if}
   {/if}
   <span class="text-xs font-ui text-on-surface-muted/60">{notes.length} note{notes.length === 1 ? "" : "s"}</span>
 </div>
