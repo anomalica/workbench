@@ -1091,6 +1091,13 @@
     cols = next;
   }
 
+  // Jump to the diff view from the unsaved-changes indicators. The diff tab
+  // lives in the ingest column, so make sure that column is showing first.
+  function showDiff() {
+    if (!cols.ingest) cols = { ...cols, ingest: true };
+    view = "diff";
+  }
+
   // PDF page sync
   let pdfPage = $state(1);
   let pdfSrc = $derived(
@@ -2346,7 +2353,11 @@
           <span>{segments.length} segments</span>
         {/if}
         {#if doc.dirty}
-          <span class="text-warning font-medium">unsaved changes</span>
+          <button
+            onclick={showDiff}
+            class="text-warning font-medium underline decoration-dotted underline-offset-2 hover:decoration-solid cursor-pointer"
+            title="View what changed (diff)"
+          >unsaved changes</button>
         {/if}
       </div>
     </div>
@@ -2423,7 +2434,11 @@
       <svg class="w-3.5 h-3.5 flex-none" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
         <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
       </svg>
-      <span>You have unsubmitted changes (saved locally)</span>
+      <button
+        onclick={showDiff}
+        class="underline decoration-dotted underline-offset-2 hover:decoration-solid cursor-pointer"
+        title="View what changed (diff)"
+      >You have unsubmitted changes (saved locally) - view diff</button>
     {:else if user}
       <svg class="w-3.5 h-3.5 flex-none" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
