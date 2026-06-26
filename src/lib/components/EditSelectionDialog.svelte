@@ -136,6 +136,12 @@
       oncancel();
       return;
     }
+    // Ctrl/Cmd+Enter saves and exits, the keyboard equivalent of Save.
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+      e.preventDefault();
+      save();
+      return;
+    }
     // Up/down move the selection box to the previous/next word (and focus it),
     // even from within a text input - single-line inputs ignore up/down anyway.
     if (e.key === "ArrowUp") {
@@ -191,8 +197,8 @@
     <p class="px-4 pt-2 text-xs text-on-surface-muted">
       Edit the text, delete or add words, and retime. Up/down move between words;
       a timestamp nudge (buttons, or left/right arrows at 50ms) plays from the new
-      position, and &#9658; replays. Space starts a new word at the caret. Amber
-      timestamps were auto-positioned - click to confirm.
+      position, and &#9658; replays. Space starts a new word at the caret;
+      Ctrl+Enter saves. Amber timestamps were auto-positioned - click to confirm.
     </p>
 
     <div class="flex-1 overflow-auto px-3 py-2 space-y-1">
@@ -282,6 +288,7 @@
       >Cancel</button>
       <button
         onclick={save}
+        title="Save and close (Ctrl+Enter)"
         class="text-sm px-3 py-1.5 rounded bg-primary text-on-primary hover:bg-primary-hover cursor-pointer"
       >Save</button>
     </div>
