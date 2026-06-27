@@ -47,6 +47,58 @@ body {
   --tw-prose-td-borders: var(--color-border);
 }
 
+/* Word-level video transcript (WordTranscript.svelte). The highlight state of
+   each word - selected, active (karaoke), resume marker, deep-linked claim,
+   observed/unobserved - is driven imperatively via classList so a selection or
+   playback change touches only the handful of words that changed, not all of
+   them (a long record has tens of thousands of word spans). These rules carry
+   the look; the component just toggles the classes.
+
+   Precedence runs by source order: each state below overrides the ones above
+   it. Every state that can win sets background, colour AND box-shadow in full
+   so the highest-priority class present wins every property outright. Base is
+   the unobserved (faded) look; `.wt-observed` lifts it to full colour. */
+.wt-word {
+  cursor: text;
+  border-radius: 0.125rem;
+  padding-inline: 1px;
+  transition:
+    background-color 150ms ease,
+    color 150ms ease;
+  color: color-mix(in srgb, var(--color-on-surface-muted) 40%, transparent);
+}
+.wt-word.wt-observed {
+  color: var(--color-on-surface);
+}
+.wt-word.wt-active {
+  color: var(--color-on-surface);
+  background-color: color-mix(in srgb, #fbbf24 40%, transparent);
+}
+.wt-word.wt-resume {
+  color: var(--color-on-surface);
+  background-color: color-mix(in srgb, #0ea5e9 20%, transparent);
+  box-shadow: 0 0 0 1px #0ea5e9;
+}
+.wt-word.wt-resume::before {
+  content: "\25B8";
+  color: #0284c7;
+  font-weight: 700;
+  margin-right: 2px;
+}
+.wt-word.wt-claim {
+  color: var(--color-on-surface);
+  background-color: color-mix(in srgb, #fde047 60%, transparent);
+  box-shadow: 0 0 0 1px #eab308;
+}
+.wt-word.wt-sel {
+  color: var(--color-on-surface);
+  background-color: color-mix(in srgb, var(--color-primary) 30%, transparent);
+  box-shadow: none;
+}
+.wt-word:not(.wt-sel):not(.wt-claim):not(.wt-resume):not(.wt-active):hover {
+  background-color: color-mix(in srgb, var(--color-primary-container) 30%, transparent);
+}
+
 .redaction {
   display: inline-block;
   height: 0.9em;

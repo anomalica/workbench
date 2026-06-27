@@ -45,15 +45,16 @@ function props(currentTime: number, serverObserved: number[], onverdict?: (v: Ve
 }
 
 const tick = () => new Promise((r) => setTimeout(r, 30));
+// Highlight state is applied imperatively as `wt-*` classes (see app.css).
 const amberIndex = () => {
   const el = [...document.querySelectorAll<HTMLElement>("[data-word-index]")].find((e) =>
-    /amber/.test(e.className),
+    e.classList.contains("wt-active"),
   );
   return el ? Number(el.dataset.wordIndex) : -1;
 };
 const claimIndices = () =>
   [...document.querySelectorAll<HTMLElement>("[data-word-index]")]
-    .filter((e) => /ring-yellow/.test(e.className))
+    .filter((e) => e.classList.contains("wt-claim"))
     .map((e) => Number(e.dataset.wordIndex))
     .sort((a, b) => a - b);
 const observedFromVerdict = (v: Verdict | null) =>
@@ -216,14 +217,14 @@ describe("word coverage recall + playback highlight", () => {
     await fireEvent.click(getByRole("button", { name: "Jump to unobserved" }));
     await waitFor(() => {
       const marked = [...document.querySelectorAll<HTMLElement>("[data-word-index]")].find((e) =>
-        /ring-sky/.test(e.className),
+        e.classList.contains("wt-resume"),
       );
       expect(marked).toBeTruthy();
       expect(Number(marked!.dataset.wordIndex)).toBe(2); // last observed, not the target (3)
     });
     // The first unobserved word (the review target) carries no marker.
     const target = document.querySelector<HTMLElement>('[data-word-index="3"]');
-    expect(/ring-sky/.test(target!.className)).toBe(false);
+    expect(target!.classList.contains("wt-resume")).toBe(false);
     // Playback is positioned at the marker's timestamp (word 2 starts at 2.00s).
     expect(resumeSeconds).toBeCloseTo(2.0, 5);
   });

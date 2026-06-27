@@ -253,6 +253,7 @@
       lastPlayTime = -1;
       resumeWord = null;
       observed = new Set([...restored, ...serverObserved]);
+      styleEpoch++;
     });
   });
 
@@ -272,7 +273,10 @@
           changed = true;
         }
       }
-      if (changed) observed = next;
+      if (changed) {
+        observed = next;
+        styleEpoch++;
+      }
     });
   });
 
@@ -308,6 +312,7 @@
         const next = new Set(observed);
         for (const g of fresh) next.add(g);
         observed = next;
+        for (const g of fresh) applyWord(g);
       }
     });
   });
@@ -335,10 +340,6 @@
       });
     });
   });
-
-  function isObserved(g: number): boolean {
-    return observed.has(g);
-  }
 
   // The observation verdict for this record: observed word-index spans, the
   // coverage fraction, the digestible flag (observed-only 100%), and the total
@@ -392,6 +393,7 @@
       else next.delete(g);
     }
     observed = next;
+    for (let g = range.from; g <= range.to; g++) applyWord(g);
   }
 
   // Word-case cycling for the selection: lower -> Title -> UPPER -> lower,
@@ -652,6 +654,167 @@
     if (range) schedulePositionBar();
   });
 
+  // --- Imperative per-word highlighting -------------------------------------
+  // Each word span carries a static class; its highlight state (selected,
+  // active/karaoke, resume marker, deep-linked claim, observed) is applied here
+  // by toggling classes on only the words that changed. This keeps a selection
+  // drag or a playback tick O(words changed), not O(all words): with tens of
+  // thousands of word spans, a reactive per-word class re-evaluated the lot on
+  // every change, which made selection crawl. The looks live in app.css
+  // (`.wt-word`); precedence is by source order there.
+
+  // gIndex -> the rendered word span. Rebuilt whenever the rendered run set
+  // changes (record load, filter, edit). Off-screen words under
+  // content-visibility are still in the DOM, so they stay addressable here.
+  let wordEls = new Map<number, HTMLElement>();
+  // Bumped to force a full restyle when `observed` changes with no DOM delta to
+  // drive an incremental update from (draft restore, async server-coverage
+  // merge). In-session marks (auto-observe, set seen/unseen) apply their own
+  // deltas directly and don't bump this.
+  let styleEpoch = $state(0);
+
+  function rebuildWordEls() {
+    wordEls = new Map();
+    if (!scrollEl) return;
+    for (const el of scrollEl.querySelectorAll<HTMLElement>("[data-word-index]")) {
+      wordEls.set(Number(el.dataset.wordIndex), el);
+    }
+  }
+
+  // Set word g's classes from the current highlight state. Idempotent. Reads
+  // state non-reactively - callers run inside untrack or an event handler.
+  function applyWord(g: number) {
+    const el = wordEls.get(g);
+    if (!el) return;
+    const c = el.classList;
+    c.toggle("wt-sel", range !== null && g >= range.from && g <= range.to);
+    c.toggle("wt-claim", claimWords.has(g));
+    c.toggle("wt-resume", g === resumeWord);
+    c.toggle("wt-active", g === activeWord);
+    c.toggle("wt-observed", observed.has(g));
+  }
+
+  function reapplyAll() {
+    for (const g of wordEls.keys()) applyWord(g);
+  }
+
+  // Restyle only the words whose membership of the selection changed between two
+  // ranges. For overlapping ranges that's just the moved edge, so extending a
+  // drag by one word is one update, not one per word in the selection.
+  function applyRangeDelta(
+    a: { from: number; to: number } | null,
+    b: { from: number; to: number } | null,
+  ) {
+    if (!a && !b) return;
+    if (!a) {
+      for (let g = b!.from; g <= b!.to; g++) applyWord(g);
+      return;
+    }
+    if (!b) {
+      for (let g = a.from; g <= a.to; g++) applyWord(g);
+      return;
+    }
+    if (b.to < a.from || a.to < b.from) {
+      for (let g = a.from; g <= a.to; g++) applyWord(g);
+      for (let g = b.from; g <= b.to; g++) applyWord(g);
+      return;
+    }
+    for (let g = Math.min(a.from, b.from); g < Math.max(a.from, b.from); g++) applyWord(g);
+    for (let g = Math.min(a.to, b.to) + 1; g <= Math.max(a.to, b.to); g++) applyWord(g);
+  }
+
+  // Per-word estimate for content-visibility's contain-intrinsic-size, so the
+  // scrollbar and jump targets are about right before a run has been rendered
+  // once. The `auto` keyword (in the style attribute) then caches the real
+  // height after first paint, so the estimate only matters initially.
+  function runIntrinsic(run: SpeakerRun): number {
+    const n = run.endWord - run.startWord + 1;
+    return 56 + Math.ceil(n / 11) * 23;
+  }
+
+  // Pointer interaction is delegated from the words container: `pointerenter`
+  // doesn't bubble, so per-word handlers meant tens of thousands of listeners.
+  // One pointerdown + one pointerover (which does bubble) read the word from the
+  // event target instead.
+  function onContainerPointerDown(e: PointerEvent) {
+    if (e.button !== 0) return;
+    const el = (e.target as HTMLElement | null)?.closest?.("[data-word-index]") as HTMLElement | null;
+    if (!el) return;
+    onWordPointerDown(e, Number(el.dataset.wordIndex));
+  }
+
+  function onContainerPointerOver(e: PointerEvent) {
+    if (!dragging) return;
+    const el = (e.target as HTMLElement | null)?.closest?.("[data-word-index]") as HTMLElement | null;
+    if (!el) return;
+    onWordPointerEnter(Number(el.dataset.wordIndex));
+  }
+
+  // Trackers mirroring the DOM's applied state, so each effect diffs and touches
+  // only what moved.
+  let appliedRange: { from: number; to: number } | null = null;
+  let appliedActive = -1;
+  let appliedResume: number | null = null;
+  let appliedClaim = new Set<number>();
+
+  // Full restyle when the rendered word set changes (load/filter/edit) or after
+  // an observed change with no DOM delta (epoch bump). Deliberately tracks only
+  // those signals - NOT range/active/etc - so a selection never triggers it.
+  $effect(() => {
+    void visibleRuns;
+    void styleEpoch;
+    const el = scrollEl;
+    untrack(() => {
+      if (!el) return;
+      rebuildWordEls();
+      reapplyAll();
+      appliedRange = range ? { from: range.from, to: range.to } : null;
+      appliedActive = activeWord;
+      appliedResume = resumeWord;
+      appliedClaim = new Set(claimWords);
+    });
+  });
+
+  $effect(() => {
+    const r = range;
+    untrack(() => {
+      const prev = appliedRange;
+      appliedRange = r ? { from: r.from, to: r.to } : null;
+      applyRangeDelta(prev, appliedRange);
+    });
+  });
+
+  $effect(() => {
+    const a = activeWord;
+    untrack(() => {
+      if (a === appliedActive) return;
+      const prev = appliedActive;
+      appliedActive = a;
+      if (prev >= 0) applyWord(prev);
+      if (a >= 0) applyWord(a);
+    });
+  });
+
+  $effect(() => {
+    const r = resumeWord;
+    untrack(() => {
+      if (r === appliedResume) return;
+      const prev = appliedResume;
+      appliedResume = r;
+      if (prev !== null) applyWord(prev);
+      if (r !== null) applyWord(r);
+    });
+  });
+
+  $effect(() => {
+    const cw = claimWords;
+    untrack(() => {
+      for (const g of appliedClaim) if (!cw.has(g)) applyWord(g);
+      for (const g of cw) if (!appliedClaim.has(g)) applyWord(g);
+      appliedClaim = new Set(cw);
+    });
+  });
+
   function clampToRun(a: number, b: number): { from: number; to: number } | null {
     const run = runOfWord.get(a);
     if (!run) return null;
@@ -695,10 +858,6 @@
 
   function stopDrag() {
     dragging = false;
-  }
-
-  function isSelected(g: number): boolean {
-    return range !== null && g >= range.from && g <= range.to;
   }
 
   function clearSelection() {
@@ -1002,11 +1161,26 @@
 >
   <!-- Top headroom so the selection bar always has room to sit above even the
        first line, and never has to flip below it. -->
-  <div class="select-none pt-12">
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div
+    class="select-none pt-12"
+    onpointerdown={onContainerPointerDown}
+    onpointerover={onContainerPointerOver}
+  >
     {#each visibleRuns as run (run.startWord)}
       {@const obs = observedInRun(run)}
       {@const total = run.endWord - run.startWord + 1}
-      <div class="border-b border-border/50 px-4 pt-3 pb-2">
+      <!-- content-visibility:auto lets the browser skip layout/paint for runs
+           off-screen while keeping their words in the DOM (so jump-to-word,
+           claim links and karaoke centring still find them). It clips overflow,
+           which would cut off this run's speaker dropdown, so the run with an
+           open header picker switches to visible. -->
+      <div
+        class="border-b border-border/50 px-4 pt-3 pb-2"
+        style="content-visibility:{headerPicker === run.startWord
+          ? 'visible'
+          : 'auto'};contain-intrinsic-size:auto {runIntrinsic(run)}px"
+      >
         <div class="flex items-center justify-between gap-2 pb-1">
           <!-- Clickable speaker chip: reassigns the whole turn. -->
           <div class="relative inline-block">
@@ -1054,30 +1228,9 @@
           </button>
         </div>
         <p class="pl-6 text-sm text-on-surface leading-relaxed">
-          {#each Array.from({ length: run.endWord - run.startWord + 1 }, (_, k) => run.startWord + k) as g (g)}
-            {#if g === resumeWord}<span
-                class="text-sky-600 font-bold not-italic select-none"
-                title="Resume point - press play to continue from here"
-                aria-label="Resume point"
-              >&#9656;</span>{/if}<span
+          {#each Array.from({ length: run.endWord - run.startWord + 1 }, (_, k) => run.startWord + k) as g (g)}<span
               data-word-index={g}
-              role="button"
-              tabindex="-1"
-              onpointerdown={(e) => onWordPointerDown(e, g)}
-              onpointerenter={() => onWordPointerEnter(g)}
-              class="cursor-text rounded-sm px-px transition-colors
-                {isSelected(g)
-                ? 'bg-primary/30 text-on-surface'
-                : claimWords.has(g)
-                  ? 'bg-yellow-300/60 ring-1 ring-yellow-500 text-on-surface'
-                  : g === resumeWord
-                    ? 'bg-sky-500/20 ring-1 ring-sky-500 text-on-surface'
-                    : g === activeWord
-                      ? 'bg-amber-400/40 text-on-surface'
-                      : isObserved(g)
-                        ? 'hover:bg-primary-container/30'
-                        : 'text-on-surface-muted/40 hover:bg-primary-container/30'}"
-            >{words[g].text}</span>{" "}
+              class="wt-word">{words[g].text}</span>{" "}
             {#each notesByAnchorWord.get(g) ?? [] as note (note.id)}
               <!-- Reviewer visual note: rendered inline at its moment but
                    clearly markup, not speech (playback ignores it - it isn't a
