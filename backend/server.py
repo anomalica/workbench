@@ -21,6 +21,7 @@ import secrets
 import string
 import time
 from abc import ABC, abstractmethod
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -155,6 +156,33 @@ def _needs_body_for_digestibility(sidecar: dict | None) -> bool:
     )
 
 
+# Pipeline versioning + supersession (anomalica decision 0040). A record's
+# `processing.pipeline_version` is the per-media-type extraction generation; a
+# record is STALE only when that value is PRESENT and below the current version
+# for its media type (absent = "generation not declared", no badge). Supersession
+# is the `superseded_by` frontmatter flag (a retired re-acquisition); the browse
+# list hides any record carrying it, with source_url newest-wins as belt-and-braces.
+def _pipeline_version_of(frontmatter: dict) -> int | None:
+    """The record's extraction generation, or None if not declared."""
+    raw = frontmatter.get("processing.pipeline_version")
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    return int(text) if text.lstrip("-").isdigit() else None
+
+
+def _date_sort_key(value: str | None) -> float:
+    """A comparable POSIX timestamp for an ISO date_extracted, tolerant of the
+    store's mixed forms (`...+00:00` and `...Z`). Unparseable/empty sorts oldest
+    so a record with a real date always wins the newest-extraction tiebreak."""
+    if not value:
+        return float("-inf")
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return float("-inf")
+
+
 class IngestSource(ABC):
     """Abstract source of ingest records. Concrete implementations
     read from a local git clone or from the GitHub API."""
@@ -272,10 +300,57 @@ class LocalIngestSource(IngestSource):
                 digested.add(ch)
         return digested
 
+    def _pipeline_versions(self) -> dict[str, int]:
+        """Current extraction generation per media type, from
+        `store/_pipeline_versions.yaml` ({media_type: int}) - a flat map the
+        ingester upserts each run (decision 0040). Parsed without a YAML
+        dependency; a missing file yields an empty map (nothing badges)."""
+        path = self.store / "_pipeline_versions.yaml"
+        versions: dict[str, int] = {}
+        try:
+            text = path.read_text()
+        except OSError:
+            return versions
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or ":" not in line:
+                continue
+            key, _, value = line.partition(":")
+            value = value.strip()
+            if value.lstrip("-").isdigit():
+                versions[key.strip()] = int(value)
+        return versions
+
+    def _dedup_by_source(self, ingests: list[dict]) -> list[dict]:
+        """Belt-and-braces for supersession: at most one record per source_url,
+        newest `date_ingested` winning. The deterministic rule is the
+        superseded_by flag (filtered in list_ingests); this catches a retired
+        record that slipped its store/v1/ move. Records with no source_url pass
+        through untouched (no logical-source key to dedup on)."""
+        best: dict[str, dict] = {}
+        passthrough: list[dict] = []
+        for ing in ingests:
+            src = ing.get("source_url") or ""
+            if not src:
+                passthrough.append(ing)
+                continue
+            cur = best.get(src)
+            if cur is None or _date_sort_key(ing.get("date_ingested")) > _date_sort_key(
+                cur.get("date_ingested")
+            ):
+                best[src] = ing
+        return passthrough + list(best.values())
+
     def list_ingests(self) -> list[dict]:
         ingests: list[dict] = []
         digested_hashes = self._digested_content_hashes()
+        manifest = self._pipeline_versions()
         for content_hash, (md_path, frontmatter) in self._scan().items():
+            # Supersession: a retired re-acquisition is hidden from the browse
+            # list (decision 0040). The flag is the source of truth; the file's
+            # store/v1/ move is a derived convenience.
+            if frontmatter.get("superseded_by"):
+                continue
             # The spec field is `creators`; older records used `authors`.
             creators = frontmatter.get("creators") or frontmatter.get("authors") or []
             if not isinstance(creators, list):
@@ -303,6 +378,13 @@ class LocalIngestSource(IngestSource):
                         "date_extracted", frontmatter.get("date_accessed", "")
                     ),
                     "source_type": frontmatter.get("source_type", ""),
+                    # Extraction generation vs the current per-media-type version
+                    # (decision 0040). The frontend badges "outdated" only when
+                    # pipeline_version is present and below pipeline_current.
+                    "pipeline_version": _pipeline_version_of(frontmatter),
+                    "pipeline_current": manifest.get(
+                        frontmatter.get("source_type", "")
+                    ),
                     "source_url": frontmatter.get("source_url", ""),
                     # Acquisition provenance: source_url (http origin),
                     # source_file (local origin filename), source_hash (the
@@ -332,6 +414,7 @@ class LocalIngestSource(IngestSource):
                     ),
                 }
             )
+        ingests = self._dedup_by_source(ingests)
         ingests.sort(key=lambda x: (x.get("date", ""), x.get("title", "")))
         return ingests
 

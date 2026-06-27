@@ -134,6 +134,12 @@
             <span class="text-warning flex-none" title="Untraceable: no recoverable source/origin">&#9888;</span>
           {/if}
           <span class="text-sm text-on-surface truncate">{ingest.title}</span>
+          {#if ingest.pipeline_version != null && ingest.pipeline_current != null && ingest.pipeline_version < ingest.pipeline_current}
+            <span
+              class="flex-none text-[10px] font-ui font-medium px-1.5 py-0.5 rounded bg-warning-container/40 text-on-warning-container tabular-nums"
+              title="Extraction is behind the current pipeline (v{ingest.pipeline_version} of {ingest.pipeline_current}) - pending re-ingest"
+            >outdated v{ingest.pipeline_version}/{ingest.pipeline_current}</span>
+          {/if}
         </div>
         <span class="text-xs text-on-surface-secondary w-36 flex-none truncate">
           {#each ingest.creators ?? [] as creator, idx}

@@ -20,6 +20,12 @@ export interface IngestSummary {
   date_ingested: string;
   source_type: string;
   source_url: string;
+  /** Extraction generation that produced this record (anomalica decision 0040),
+   *  or null when not declared. Below `pipeline_current` = stale (badged). */
+  pipeline_version?: number | null;
+  /** Current extraction generation for this record's media type, from the
+   *  ingester's manifest, or null when the media type isn't in the manifest. */
+  pipeline_current?: number | null;
   /** Local-file origin filename (PDFs ingested from disk). */
   source_file: string;
   /** sha256 of the archived original source file (ebooks/PDFs ingested from a
