@@ -21,6 +21,7 @@
   import ArticlesView from "$lib/components/ArticlesView.svelte";
   import { carryoverState } from "$lib/carryover";
   import { themeState } from "$lib/theme.svelte";
+  import { trackView, trackEvent } from "$lib/umami";
 
   let user = $state<User | null>(null);
   // Top-level view: record review (default), knowledge-graph review, or curation.
@@ -60,6 +61,16 @@
   let filterUntraceable = $state(false);
   let reviewedTimes = $state<Record<string, string>>({});
   let reviewedHashes = $derived(new Set(Object.keys(reviewedTimes)));
+
+  // Analytics pageview: a plain SPA has no route changes, so derive a logical
+  // path from the open record (else the current mode) and report it whenever it
+  // changes. Fires once on mount with the initial view too.
+  let analyticsPath = $derived(
+    selectedIngest ? `/record/${selectedIngest.public_hash}` : `/${appMode}`,
+  );
+  $effect(() => {
+    trackView(analyticsPath);
+  });
   // Records whose review was carried over from a re-ingest and not yet
   // re-verified - they must read as "verify", never "reviewed", even though a
   // stale review trailer exists for the (hash-stable) record.
@@ -476,7 +487,10 @@
         {hasPrev}
         onnext={goNext}
         onprev={goPrev}
-        onreviewedchange={(hash, reviewed) => setReviewed(hash, reviewed)}
+        onreviewedchange={(hash, reviewed) => {
+          setReviewed(hash, reviewed);
+          if (reviewed) trackEvent("review-submitted");
+        }}
         onback={goBack}
       />
     {:else}
