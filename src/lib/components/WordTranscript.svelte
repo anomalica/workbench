@@ -770,6 +770,14 @@
     onWordPointerEnter(Number(el.dataset.wordIndex));
   }
 
+  // Double-click a word to jump straight into the editor on that single word.
+  function onContainerDblClick(e: MouseEvent) {
+    const el = (e.target as HTMLElement | null)?.closest?.("[data-word-index]") as HTMLElement | null;
+    if (!el) return;
+    selectWord(Number(el.dataset.wordIndex), false);
+    editingSelection = true;
+  }
+
   // Trackers mirroring the DOM's applied state, so each effect diffs and touches
   // only what moved.
   let appliedRange: { from: number; to: number } | null = null;
@@ -1189,6 +1197,7 @@
     class="select-none pt-12"
     onpointerdown={onContainerPointerDown}
     onpointerover={onContainerPointerOver}
+    ondblclick={onContainerDblClick}
   >
     {#each visibleRuns as run (run.startWord)}
       {@const obs = observedInRun(run)}

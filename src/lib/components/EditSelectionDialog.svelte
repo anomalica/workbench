@@ -46,15 +46,20 @@
   let inputs: (HTMLInputElement | null)[] = [];
 
   // Select row `i`, focus its text input and place the caret (default: end).
+  // `caret: "all"` selects the whole word so typing replaces it outright.
   // Waits a tick so the input exists after an items reassign (split/navigate).
-  async function focusRow(i: number, caret: number | "end" = "end") {
+  async function focusRow(i: number, caret: number | "end" | "all" = "end") {
     selected = i;
     await tick();
     const el = inputs[i];
     if (!el) return;
     el.focus();
-    const pos = caret === "end" ? el.value.length : caret;
-    el.setSelectionRange(pos, pos);
+    if (caret === "all") {
+      el.select();
+    } else {
+      const pos = caret === "end" ? el.value.length : caret;
+      el.setSelectionRange(pos, pos);
+    }
     el.scrollIntoView({ block: "nearest" });
   }
 
@@ -172,11 +177,11 @@
     onsave(items.filter((it) => it.text.trim()).map((it) => ({ text: it.text.trim(), start: it.start })));
   }
 
-  // Focus the first word on open so keyboard control is immediate, and so the
-  // host viewer's global Up/Down shortcuts (which bail when focus is in an
-  // input) don't fire underneath the dialog.
+  // Focus the first word on open with its text fully selected, so it can be
+  // retyped immediately and keyboard control is live (the host viewer's global
+  // Up/Down shortcuts bail when focus is in an input).
   onMount(() => {
-    focusRow(0);
+    focusRow(0, "all");
   });
 </script>
 
