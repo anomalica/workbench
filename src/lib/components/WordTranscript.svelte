@@ -453,14 +453,28 @@
     range = { from: run.startWord, to: run.endWord };
   }
 
-  // --- Time-anchored visual notes (reviewer observations of the video's visual
-  // channel, anchored to a moment, not a word). Persisted locally for now; the
-  // committed {hash}.visual-notes.json sidecar is the follow-up. ---
+  // --- Time-anchored notes: reviewer annotations pinned to a moment, not a
+  // word - what's on screen, an action, or a non-verbal event (laughter,
+  // applause, a pause) the speech transcript can't carry. Persisted locally for
+  // now; the committed {hash}.notes.json sidecar is the follow-up. ---
   interface VisualNote {
     id: string;
     at: number;
     text: string;
   }
+
+  // Quick tags for non-verbal events - the things speech transcription drops.
+  // Picking one writes a bracketed marker (e.g. `[laughs]`) so it reads like a
+  // standard transcript event, as opposed to a free-text note about the visuals.
+  const NOTE_PRESETS = [
+    "laughs",
+    "laughter",
+    "applause",
+    "pause",
+    "music",
+    "crosstalk",
+    "inaudible",
+  ] as const;
 
   let notes = $state<VisualNote[]>([]);
   let editingNoteId = $state<string | null>(null);
@@ -594,6 +608,12 @@
     // Drop a note left empty (e.g. opened then dismissed without typing).
     notes = notes.filter((n) => n.id !== id || n.text.trim() !== "");
     editingNoteId = null;
+  }
+
+  /** Fill a note with a preset event marker and close the editor. */
+  function applyPreset(note: VisualNote, label: string) {
+    note.text = `[${label}]`;
+    commitNote(note.id);
   }
 
   function deleteNote(id: string) {
@@ -1078,7 +1098,7 @@
           if (range && words[range.from]) addNoteAt(words[range.from].start);
         }}
         class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
-        title="Add a visual note at this word's moment"
+        title="Add a note at this word's moment"
       >
         Add note
       </button>
@@ -1095,19 +1115,22 @@
   </div>
 {/if}
 
-<!-- Top toolbar: drop a time-anchored visual note at the current playback
-     moment (also bound to the `v` key, handled in IngestViewer). -->
+<!-- Top toolbar: drop a time-anchored note at the current playback moment
+     (also bound to the `v` key, handled in IngestViewer). -->
 <div class="flex-none flex items-center gap-2 px-4 py-1.5 border-b border-border bg-surface-alt">
   <button
     onclick={() => addNoteAtCurrentTime()}
     class="flex items-center gap-1.5 text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
-    title="Add a visual note at the current playback time (v)"
+    title="Add a note at the current playback time - what's on screen, an action, a sound (v)"
   >
     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-      <path stroke-linecap="round" stroke-linejoin="round" d="M3 7h2l2-3h10l2 3h2v12H3z" />
-      <circle cx="12" cy="13" r="3.5" />
+      <path
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"
+      />
     </svg>
-    Add visual note
+    Add note
   </button>
   <span class="text-xs font-ui text-on-surface-muted tabular-nums">at {secondsToClock(currentTime)}</span>
   {#if range}
@@ -1232,9 +1255,9 @@
               data-word-index={g}
               class="wt-word">{words[g].text}</span>{" "}
             {#each notesByAnchorWord.get(g) ?? [] as note (note.id)}
-              <!-- Reviewer visual note: rendered inline at its moment but
-                   clearly markup, not speech (playback ignores it - it isn't a
-                   word). display:block breaks it onto its own line. -->
+              <!-- Reviewer note: rendered inline at its moment but clearly
+                   markup, not speech (playback ignores it - it isn't a word).
+                   display:flex breaks it onto its own line. -->
               <span
                 style="display:flex"
                 class="my-1.5 items-start gap-1.5 rounded border border-warning/50 bg-warning-container/20 px-2 py-1 text-xs not-italic text-on-surface select-text"
@@ -1246,28 +1269,52 @@
                   stroke-width="2"
                   viewBox="0 0 24 24"
                 >
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M3 7h2l2-3h10l2 3h2v12H3z" />
-                  <circle cx="12" cy="13" r="3.5" />
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"
+                  />
                 </svg>
                 {#if editingNoteId === note.id}
-                  <textarea
-                    bind:this={noteInputEl}
-                    bind:value={note.text}
-                    onblur={() => commitNote(note.id)}
-                    onkeydown={(e) => {
-                      if (e.key === "Escape") {
-                        e.preventDefault();
-                        commitNote(note.id);
-                      }
-                    }}
-                    rows="2"
-                    placeholder="What's on screen at this moment..."
-                    class="flex-1 min-w-0 bg-surface border border-primary rounded px-1.5 py-1 text-xs text-on-surface outline-none resize-y"
-                  ></textarea>
-                  <button
-                    onclick={() => commitNote(note.id)}
-                    class="flex-none text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
-                  >Save</button>
+                  <span style="display:flex" class="flex-1 min-w-0 flex-col gap-1.5">
+                    <textarea
+                      bind:this={noteInputEl}
+                      bind:value={note.text}
+                      onblur={() => commitNote(note.id)}
+                      onkeydown={(e) => {
+                        if (e.key === "Escape") {
+                          e.preventDefault();
+                          commitNote(note.id);
+                        }
+                      }}
+                      rows="2"
+                      placeholder="Note this moment - what's on screen, an action, a sound..."
+                      class="w-full bg-surface border border-primary rounded px-1.5 py-1 text-xs text-on-surface outline-none resize-y"
+                    ></textarea>
+                    <!-- Quick event tags. preventDefault on pointerdown keeps the
+                         textarea focused so its onblur doesn't bin the empty note
+                         before this click sets the text. -->
+                    <span style="display:flex" class="flex-wrap items-center gap-1">
+                      <span class="text-[10px] font-ui uppercase tracking-wide text-on-surface-muted/70 mr-0.5"
+                        >Quick</span
+                      >
+                      {#each NOTE_PRESETS as preset}
+                        <button
+                          type="button"
+                          onpointerdown={(e) => e.preventDefault()}
+                          onclick={() => applyPreset(note, preset)}
+                          class="px-1.5 py-0.5 rounded-full border border-border text-[11px] font-ui text-on-surface-secondary hover:bg-primary-container/30 hover:border-primary/50 cursor-pointer"
+                          title={`Tag this moment as [${preset}]`}
+                        >{preset}</button>
+                      {/each}
+                    </span>
+                    <span style="display:flex" class="items-center gap-3">
+                      <button
+                        onclick={() => commitNote(note.id)}
+                        class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
+                      >Save</button>
+                    </span>
+                  </span>
                 {:else}
                   <button
                     onclick={() => onseek?.(note.at)}
