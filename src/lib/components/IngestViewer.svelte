@@ -1429,9 +1429,12 @@
   });
 
   // Drop filter/selection entries for speakers that no longer exist
-  // (e.g. after rename, merge, or assign).
+  // (e.g. after rename, merge, or assign). A word record has no segments - its
+  // speakers come from the parsed word runs - so include those, else every
+  // filter is pruned the instant it's set and speaker filtering never works.
   $effect(() => {
     const existing = new Set(segments.map((s) => s.speaker));
+    for (const r of wordSpeakerRows ?? []) existing.add(r.id);
     const prunedFilter = new Set([...filteredSpeakers].filter((id) => existing.has(id)));
     if (prunedFilter.size !== filteredSpeakers.size) filteredSpeakers = prunedFilter;
     const prunedSelection = new Set([...selectedSpeakers].filter((id) => existing.has(id)));
@@ -2596,10 +2599,12 @@
           {filteredSpeakers}
           onselect={handleSpeakerSelection}
           onfilter={(id) => {
-            const next = new Set(filteredSpeakers);
-            if (next.has(id)) next.delete(id);
-            else next.add(id);
-            filteredSpeakers = next;
+            // Show only this speaker; clicking the sole-filtered speaker clears
+            // it. Multi-speaker filters are still built via the section eye.
+            filteredSpeakers =
+              filteredSpeakers.size === 1 && filteredSpeakers.has(id)
+                ? new Set()
+                : new Set([id]);
           }}
           onsetfilter={(ids) => { filteredSpeakers = new Set(ids); }}
           onrename={renameSpeaker}

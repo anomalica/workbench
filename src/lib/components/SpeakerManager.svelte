@@ -177,14 +177,14 @@
   </div>
 
   {#each named as row}
-    {@const isSelected = selectedSpeakers.has(row.id)}
+    {@const isSelected = filteredSpeakers.has(row.id)}
     <div
       class="group flex items-center gap-2 px-2 py-1.5 rounded text-sm cursor-pointer transition-colors select-none
         {isSelected ? 'bg-primary-container/30 ring-1 ring-primary/30' : 'hover:bg-surface-alt'}"
       role="button"
       tabindex="0"
-      onclick={(e) => { if (editingId !== row.id && mergingId !== row.id) onselect(row.id, e); }}
-      onkeydown={(e) => { if (editingId !== row.id && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onselect(row.id); } }}
+      onclick={(e) => { if (editingId !== row.id && mergingId !== row.id) onfilter(row.id); }}
+      onkeydown={(e) => { if (editingId !== row.id && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onfilter(row.id); } }}
     >
       <button
         onclick={(e) => { e.stopPropagation(); onfilter(row.id); }}
@@ -281,8 +281,8 @@
     <div class="group flex items-center gap-2 px-2 py-1.5 rounded text-sm cursor-pointer transition-colors select-none hover:bg-surface-alt"
       role="button"
       tabindex="0"
-      onclick={(e) => onselect(name, e)}
-      onkeydown={(e) => { if (editingId !== name && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onselect(name); } }}
+      onclick={() => onfilter(name)}
+      onkeydown={(e) => { if (editingId !== name && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onfilter(name); } }}
     >
       <SpeakerDot speaker={name} size="md" />
       {#if editingId === name}
@@ -358,14 +358,14 @@
     </div>
 
     {#each special as row}
-      {@const isSelected = selectedSpeakers.has(row.id)}
+      {@const isSelected = filteredSpeakers.has(row.id)}
       <div
         class="group flex items-center gap-2 px-2 py-1.5 rounded text-sm cursor-pointer transition-colors select-none
           {isSelected ? 'bg-primary-container/30 ring-1 ring-primary/30' : 'hover:bg-surface-alt'}"
         role="button"
         tabindex="0"
-        onclick={(e) => onselect(row.id, e)}
-        onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onselect(row.id); } }}
+        onclick={(e) => onfilter(row.id)}
+        onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onfilter(row.id); } }}
       >
         <button
           onclick={(e) => { e.stopPropagation(); onfilter(row.id); }}
@@ -409,14 +409,14 @@
     </div>
 
     {#each unnamed as row}
-      {@const isSelected = selectedSpeakers.has(row.id)}
+      {@const isSelected = filteredSpeakers.has(row.id)}
       <div
         class="group flex items-center gap-2 px-2 py-1.5 rounded text-sm cursor-pointer transition-colors select-none
           {isSelected ? 'bg-primary-container/30 ring-1 ring-primary/30' : 'hover:bg-surface-alt'}"
         role="button"
         tabindex="0"
-        onclick={(e) => { if (assigningId !== row.id && editingId !== row.id) onselect(row.id, e); }}
-        onkeydown={(e) => { if (editingId !== row.id && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onselect(row.id); } }}
+        onclick={(e) => { if (assigningId !== row.id && editingId !== row.id) onfilter(row.id); }}
+        onkeydown={(e) => { if (editingId !== row.id && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onfilter(row.id); } }}
       >
         <button
           onclick={(e) => { e.stopPropagation(); onfilter(row.id); }}
