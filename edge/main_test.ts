@@ -438,6 +438,42 @@ Deno.test("review history: public read, maps git commits, drops reviewer email",
   assert(!JSON.stringify(body).includes("@x.com"), "reviewer email must not leak");
 });
 
+Deno.test("review history: surfaces reviewer notes, strips identity trailers", async () => {
+  const gh = new FakeGitHub();
+  gh.put("ingests", `store/${HASH}.v2.md`, "body\n");
+  gh.commits.set(`ingests/store/${HASH}.v2.md`, [
+    {
+      by: "Mark",
+      email: "mark@x.com",
+      at: "2026-06-30T02:04:45Z",
+      message:
+        "review: The DANGEROUS Truth About UFOs\n\nReviewed up to 20%\n\n" +
+        "Reviewed-Record: url:https://www.youtube.com/watch?v=idBryc0eWww\n" +
+        "Reviewed-Record: content:73be106d406f6d35a063a894e8384e7da0918eb8597d2107a9e3653becca2bdc",
+    },
+    {
+      by: "Sam",
+      email: "sam@x.com",
+      at: "2026-06-21T09:00:00Z",
+      message: "feat: add 1 record(s) from audio ingestion",
+    },
+  ]);
+  const res = await handleRequest(req(`/api/ingests/${HASH}/history`), ENV, deps(gh));
+  const body = await res.json();
+  assertEquals(body.history, [
+    {
+      by: "Mark",
+      at: "2026-06-30T02:04:45Z",
+      summary: "review: The DANGEROUS Truth About UFOs - Reviewed up to 20%",
+    },
+    {
+      by: "Sam",
+      at: "2026-06-21T09:00:00Z",
+      summary: "feat: add 1 record(s) from audio ingestion",
+    },
+  ]);
+});
+
 Deno.test("unknown route -> 404", async () => {
   const res = await handleRequest(req("/api/nope"), ENV, deps(new FakeGitHub()));
   assertEquals(res.status, 404);

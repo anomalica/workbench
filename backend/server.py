@@ -580,7 +580,15 @@ class LocalIngestSource(IngestSource):
 
     def review_history(self, full_hash: str) -> list[dict]:
         """Every reviewer's edits to this record, newest first: the git log of
-        the record's canonical body file. {by, at, summary} - no email."""
+        the record's canonical body file. {by, at, summary} - no email.
+
+        summary is the subject line plus the reviewer's notes ("Reviewed up to
+        20%"), if any were given - the detail a reviewer resuming later
+        actually needs, not just the commit title. Notes are the commit body
+        with blank lines and Reviewed-Record: identity trailers (see
+        architecture/review-workbench.md) stripped, since those aren't for
+        humans.
+        """
         import subprocess
 
         entry = self._scan().get(full_hash)
@@ -589,8 +597,10 @@ class LocalIngestSource(IngestSource):
         md_path, _ = entry
         repo_dir = self.store.parent
         rel = str(md_path.relative_to(repo_dir))
+        # %x03 (end-of-text) separates commits so a multi-line %b body can't be
+        # mistaken for the next commit's fields; %x00 separates fields within one.
         proc = subprocess.run(
-            ["git", "log", "--format=%an%x00%aI%x00%s", "--", rel],
+            ["git", "log", "--format=%an%x00%aI%x00%s%x00%b%x03", "--", rel],
             cwd=repo_dir,
             capture_output=True,
             text=True,
@@ -599,10 +609,21 @@ class LocalIngestSource(IngestSource):
         if proc.returncode != 0:
             return []
         history = []
-        for line in proc.stdout.splitlines():
-            parts = line.split("\x00")
-            if len(parts) == 3:
-                history.append({"by": parts[0], "at": parts[1], "summary": parts[2]})
+        for record in proc.stdout.split("\x03"):
+            record = record.strip("\n")
+            if not record:
+                continue
+            parts = record.split("\x00")
+            if len(parts) != 4:
+                continue
+            by, at, subject, body = parts
+            notes = "\n".join(
+                line
+                for line in body.splitlines()
+                if line.strip() and not line.startswith("Reviewed-Record:")
+            ).strip()
+            summary = f"{subject} - {notes}" if notes else subject
+            history.append({"by": by, "at": at, "summary": summary})
         return history
 
     def _scan_git_reviews(self) -> dict[str, list[tuple[str, str, str]]]:

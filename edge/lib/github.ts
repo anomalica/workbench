@@ -98,7 +98,11 @@ export class GitHubClient {
       by: c.commit.author.name,
       email: c.commit.author.email,
       at: c.commit.author.date,
-      message: c.commit.message.split("\n")[0],
+      // Full message (subject + body), not just the subject line: the
+      // reviewer's notes ("Reviewed up to 20%") live in the body, and a
+      // reviewer resuming later needs that, not just the commit title.
+      // handleHistory derives the display summary from it.
+      message: c.commit.message,
     }));
   }
 

@@ -451,6 +451,20 @@ async function handleCuration(
   return notFound();
 }
 
+// Reviewer-facing summary of a commit: the subject line, plus the reviewer's
+// notes ("Reviewed up to 20%") if any were given - the detail a reviewer
+// resuming later actually needs, not just the commit title. Notes are the
+// commit body with blank lines and Reviewed-Record: identity trailers (see
+// architecture/review-workbench.md) stripped, since those aren't for humans.
+function commitSummary(message: string): string {
+  const [subject, ...rest] = message.split("\n");
+  const notes = rest
+    .filter((line) => line.trim() && !line.startsWith("Reviewed-Record:"))
+    .join("\n")
+    .trim();
+  return notes ? `${subject} - ${notes}` : subject;
+}
+
 // The review history of a record: every reviewer's edits to the canonical body,
 // from git. Live (not the static snapshot, which lags), public read. Reviewer
 // EMAIL is dropped - only name + date + summary reach the client.
@@ -459,7 +473,7 @@ async function handleHistory(hash: string, env: Env, deps: Deps): Promise<Respon
   const bodyPath = await resolveBodyPath(env, deps, hash);
   const commits = await deps.github.listCommits(env.ingestsRepo, bodyPath);
   return json({
-    history: commits.map((c) => ({ by: c.by, at: c.at, summary: c.message })),
+    history: commits.map((c) => ({ by: c.by, at: c.at, summary: commitSummary(c.message) })),
   });
 }
 
