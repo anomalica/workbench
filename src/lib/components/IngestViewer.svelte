@@ -2430,10 +2430,23 @@
     {/if}
   </div>
 
-  <!-- Status bar -->
+  <!-- Status bar. saveFailed takes priority over every other state: the
+       in-memory edit exists nowhere else, so this must be the loudest, hardest
+       to miss thing on the page until it clears (next successful save) or the
+       reviewer submits. Never silent - this is the fix for a review that once
+       looked fine on screen for hours and then simply wasn't there on reload. -->
   <div class="px-4 py-1.5 border-b border-border flex items-center gap-2 flex-none text-xs font-ui
-    {doc.dirty ? 'bg-warning-container/30 text-on-warning-container' : user ? 'bg-success-container/30 text-on-success-container' : 'bg-surface-alt text-on-surface-muted'}">
-    {#if doc.dirty}
+    {doc.saveFailed ? 'bg-error text-on-error' : doc.dirty ? 'bg-warning-container/30 text-on-warning-container' : user ? 'bg-success-container/30 text-on-success-container' : 'bg-surface-alt text-on-surface-muted'}">
+    {#if doc.saveFailed}
+      <svg class="w-3.5 h-3.5 flex-none animate-pulse" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+      </svg>
+      <span class="font-semibold">Your last edit could NOT be saved in this browser (storage full) - do not reload or close this tab.</span>
+      <button
+        onclick={() => { if (user) showSubmitForm = true; }}
+        class="ml-1 underline font-semibold cursor-pointer hover:no-underline"
+      >Submit now</button>
+    {:else if doc.dirty}
       <svg class="w-3.5 h-3.5 flex-none" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
         <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
       </svg>

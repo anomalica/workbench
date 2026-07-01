@@ -22,6 +22,7 @@
   import { carryoverState } from "$lib/carryover";
   import { themeState } from "$lib/theme.svelte";
   import { trackView, trackEvent } from "$lib/umami";
+  import { pruneOrphanedDrafts } from "$lib/storage";
 
   let user = $state<User | null>(null);
   // Top-level view: record review (default), knowledge-graph review, or curation.
@@ -217,6 +218,18 @@
   async function loadIngests() {
     try {
       ingests = await fetchIngests();
+      // Garbage-collect local drafts (doc/notes/observed/coverage/etc.) for
+      // records no longer in the active corpus at all - dead weight silently
+      // eating into the ~5MB per-origin localStorage quota that a live record's
+      // own draft needs to fit into. Never prune on a failed/empty fetch - see
+      // pruneOrphanedDrafts's own guard for why.
+      const liveHashes = new Set(ingests.map((i) => i.content_hash));
+      const { removed, freedBytes } = pruneOrphanedDrafts(liveHashes);
+      if (removed > 0) {
+        console.info(
+          `[storage] pruned ${removed} orphaned draft key(s) for records no longer in the corpus (~${Math.round(freedBytes / 1024)}KB freed)`,
+        );
+      }
     } catch (e) {
       error = "Could not connect to the backend. Is the API server running?";
     } finally {

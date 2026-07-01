@@ -15,6 +15,12 @@ export class DocumentStore {
   past = $state<string[]>([]);
   future = $state<string[]>([]);
   storageKey = $state("");
+  /** True when the last local save attempt failed (e.g. localStorage quota
+   *  exceeded) - the in-memory edit is NOT durably saved. Must never fail
+   *  silently: the viewer shows a persistent warning banner while this is
+   *  true, because a page reload from here loses the edit entirely. Cleared
+   *  on the next successful save. */
+  saveFailed = $state(false);
 
   get dirty() {
     return this.current !== this.original;
@@ -98,17 +104,26 @@ export class DocumentStore {
     });
     try {
       localStorage.setItem(this.storageKey, payload);
+      this.saveFailed = false;
+      return;
     } catch (e) {
       // Quota exceeded - try again with no history at all
       console.warn("[doc.save] localStorage quota exceeded, saving without history");
-      try {
-        localStorage.setItem(
-          this.storageKey,
-          JSON.stringify({ current: this.current, past: [], future: [] }),
-        );
-      } catch {
-        console.error("[doc.save] localStorage save failed entirely");
-      }
+    }
+    try {
+      localStorage.setItem(
+        this.storageKey,
+        JSON.stringify({ current: this.current, past: [], future: [] }),
+      );
+      this.saveFailed = false;
+    } catch {
+      // Both attempts failed: the edit exists only in this tab's memory. This
+      // must NEVER fail silently - a reload from here loses it for good (this
+      // is exactly what happened to a 3-hour review once). saveFailed drives a
+      // blocking banner in the viewer; nothing else can substitute for it,
+      // since there is no other durable place this edit exists yet.
+      console.error("[doc.save] localStorage save failed entirely - edit is NOT saved");
+      this.saveFailed = true;
     }
   }
 

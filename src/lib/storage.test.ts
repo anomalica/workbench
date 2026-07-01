@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { safeLocalSet } from "./storage";
+import { pruneOrphanedDrafts, safeLocalSet } from "./storage";
 
 /**
  * A localStorage stand-in with a byte budget, so we can exercise the real
@@ -97,5 +97,58 @@ describe("safeLocalSet", () => {
     expect(localStorage.getItem("workbench:doc:a")).not.toBeNull();
     expect(localStorage.getItem("workbench:notes:b")).not.toBeNull();
     expect(localStorage.getItem("workbench:lastseg:c")).toBeNull(); // evicted to make room
+  });
+});
+
+describe("pruneOrphanedDrafts", () => {
+  let original: Storage;
+  afterEach(() => {
+    Object.defineProperty(globalThis, "localStorage", { value: original, configurable: true });
+  });
+  beforeEach(() => {
+    original = globalThis.localStorage;
+  });
+
+  function install(s: Storage) {
+    Object.defineProperty(globalThis, "localStorage", { value: s, configurable: true });
+  }
+
+  it("removes doc/notes/observed for a hash absent from the live corpus", () => {
+    install(makeQuotaStorage(10_000));
+    localStorage.setItem("workbench:doc:dead", "old body draft");
+    localStorage.setItem("workbench:notes:dead", "[]");
+    localStorage.setItem("workbench:observed:dead", "[[0,5]]");
+    const { removed } = pruneOrphanedDrafts(new Set(["alive"]));
+    expect(removed).toBe(3);
+    expect(localStorage.getItem("workbench:doc:dead")).toBeNull();
+    expect(localStorage.getItem("workbench:notes:dead")).toBeNull();
+    expect(localStorage.getItem("workbench:observed:dead")).toBeNull();
+  });
+
+  it("keeps every key for a hash present in the live corpus, doc included", () => {
+    install(makeQuotaStorage(10_000));
+    localStorage.setItem("workbench:doc:alive", "unsubmitted edit");
+    localStorage.setItem("workbench:notes:alive", "[]");
+    const { removed } = pruneOrphanedDrafts(new Set(["alive"]));
+    expect(removed).toBe(0);
+    expect(localStorage.getItem("workbench:doc:alive")).toBe("unsubmitted edit");
+  });
+
+  it("leaves everything untouched when the live set is empty (refuses to prune)", () => {
+    install(makeQuotaStorage(10_000));
+    localStorage.setItem("workbench:doc:a", "edit");
+    const { removed, freedBytes } = pruneOrphanedDrafts(new Set());
+    expect(removed).toBe(0);
+    expect(freedBytes).toBe(0);
+    expect(localStorage.getItem("workbench:doc:a")).toBe("edit");
+  });
+
+  it("does not touch non-workbench or non-hash-keyed keys", () => {
+    install(makeQuotaStorage(10_000));
+    localStorage.setItem("some-other-app:setting", "x");
+    localStorage.setItem("workbench:digest-collapsed", "{}"); // not hash-keyed
+    pruneOrphanedDrafts(new Set(["alive"]));
+    expect(localStorage.getItem("some-other-app:setting")).toBe("x");
+    expect(localStorage.getItem("workbench:digest-collapsed")).toBe("{}");
   });
 });

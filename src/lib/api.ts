@@ -220,6 +220,14 @@ export async function ingestExists(fullHash: string): Promise<boolean> {
 /** Submit a review: save changes and commit with reviewer identity.
  *  Optional spans are coverage assertions over the body's line indices,
  *  appended to the record's review-coverage sidecar. */
+// A submit request must never hang indefinitely with no feedback - a stuck
+// backend/network once left the submit dialog silently open for an hour with
+// no error, so the reviewer had no signal to retry before the browser crashed
+// and the (unsaved) review was lost. 45s is generous for a large record's PUT
+// on a slow connection but still bounds the wait to something a reviewer would
+// notice and can act on.
+const SUBMIT_TIMEOUT_MS = 45_000;
+
 export async function submitReview(
   fullHash: string,
   content: string,
@@ -227,16 +235,32 @@ export async function submitReview(
   spans?: KindedSpan[],
   verdict?: { observed_coverage: number; digestible: boolean; total_units: number },
 ): Promise<{ ok: boolean; error?: string }> {
-  const res = await fetch(`/api/ingests/${fullHash}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      content,
-      notes,
-      ...(spans && spans.length > 0 ? { spans } : {}),
-      ...(verdict ? { verdict } : {}),
-    }),
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), SUBMIT_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(`/api/ingests/${fullHash}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        content,
+        notes,
+        ...(spans && spans.length > 0 ? { spans } : {}),
+        ...(verdict ? { verdict } : {}),
+      }),
+      signal: controller.signal,
+    });
+  } catch (e) {
+    const timedOut = e instanceof DOMException && e.name === "AbortError";
+    return {
+      ok: false,
+      error: timedOut
+        ? "Submit timed out - your edits are still safe in this browser. Check your connection and try again."
+        : "Network error while submitting - your edits are still safe in this browser. Try again.",
+    };
+  } finally {
+    clearTimeout(timer);
+  }
   if (res.ok) return { ok: true };
   const data = await res.json().catch(() => ({}));
   return { ok: false, error: data.detail || `Error ${res.status}` };
