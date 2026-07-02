@@ -225,3 +225,66 @@ def test_get_grading_serves_results_keyed_by_body_hash(client, tmp_path):
 def test_endpoints_reject_malformed_hash(client):
     for path in ("body", "highlights", "grading"):
         assert client.get(f"/api/ingests/nothex/{path}").status_code == 404
+
+
+# --- archived (store/v1/) records stay annotatable ---
+
+ARCHIVED_HASH = "d" * 64
+
+ARCHIVED_RECORD = f"""---
+schema: anomalica/record/1
+content_hash: {ARCHIVED_HASH}
+title: Retired Record
+---
+
+Retired but still ground truth.
+"""
+
+
+@pytest.fixture
+def archived_client(ingests_repo, monkeypatch):
+    v1 = ingests_repo / "store" / "v1"
+    v1.mkdir()
+    (v1 / f"{ARCHIVED_HASH}.md").write_text(ARCHIVED_RECORD)
+    subprocess.run(["git", "add", "-A"], cwd=ingests_repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "archive record"], cwd=ingests_repo, check=True
+    )
+    monkeypatch.setattr(server, "source", LocalIngestSource(ingests_repo))
+    monkeypatch.setattr(
+        server,
+        "_require_user",
+        lambda request: {"email": "reviewer@example.invalid", "name": "Reviewer"},
+    )
+    return TestClient(server.app)
+
+
+def test_archived_record_body_is_served(archived_client):
+    res = archived_client.get(f"/api/ingests/{ARCHIVED_HASH}/body")
+    assert res.status_code == 200
+    assert "Retired but still ground truth." in res.json()["body"]
+
+    detail = archived_client.get(f"/api/ingests/{ARCHIVED_HASH}")
+    assert detail.status_code == 200
+    assert detail.json()["frontmatter"]["title"] == "Retired Record"
+
+
+def test_archived_record_highlights_sidecar_lives_in_v1(archived_client, ingests_repo):
+    body = parse_frontmatter(ARCHIVED_RECORD)[1]
+    text = "still ground truth"
+    start = body.index(text)
+    res = archived_client.put(
+        f"/api/ingests/{ARCHIVED_HASH}/highlights",
+        json={
+            "complete": False,
+            "spans": [{"start": start, "end": start + len(text), "text": text}],
+        },
+    )
+    assert res.status_code == 200
+
+    sidecar_path = ingests_repo / "store" / "v1" / f"{ARCHIVED_HASH}.highlights.json"
+    assert sidecar_path.exists()
+    assert not (ingests_repo / "store" / f"{ARCHIVED_HASH}.highlights.json").exists()
+
+    data = archived_client.get(f"/api/ingests/{ARCHIVED_HASH}/highlights").json()
+    assert data["highlights"]["spans"][0]["text"] == text

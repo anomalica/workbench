@@ -633,7 +633,10 @@ class LocalIngestSource(IngestSource):
         return ingests
 
     def get_ingest(self, full_hash: str) -> dict | None:
-        entry = self._scan().get(full_hash)
+        # Archived (store/v1/) records stay fetchable by full hash: the
+        # Archived list links to them, and tuning-mode ground truth is often
+        # annotated on a retired body (stable, never edited by reviews).
+        entry = self._scan().get(full_hash) or self._scan_archived().get(full_hash)
         if entry is None:
             return None
         md_path, _ = entry
@@ -974,12 +977,18 @@ class LocalIngestSource(IngestSource):
     def _coverage_path(self, full_hash: str) -> Path:
         return self.store / f"{full_hash}.review.json"
 
-    def _highlights_path(self, full_hash: str) -> Path:
-        return self.store / f"{full_hash}.highlights.json"
+    def _highlights_path(self, full_hash: str) -> Path | None:
+        """The highlights sidecar sits next to the record file, so an
+        archived (store/v1/) record's sidecar lives in store/v1/ too."""
+        entry = self._scan().get(full_hash) or self._scan_archived().get(full_hash)
+        if entry is None:
+            return None
+        md_path, _ = entry
+        return md_path.parent / f"{full_hash}.highlights.json"
 
     def load_highlights(self, full_hash: str) -> dict | None:
         path = self._highlights_path(full_hash)
-        if not path.exists():
+        if path is None or not path.exists():
             return None
         with open(path) as f:
             return json.load(f)
@@ -991,7 +1000,7 @@ class LocalIngestSource(IngestSource):
         author_name: str,
         author_email: str,
     ) -> bool:
-        entry = self._scan().get(full_hash)
+        entry = self._scan().get(full_hash) or self._scan_archived().get(full_hash)
         if entry is None:
             return False
         _, frontmatter = entry
