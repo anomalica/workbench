@@ -367,8 +367,10 @@ export interface HighlightsSidecar {
   record_hash: string;
   body_sha256: string;
   complete: boolean;
+  /** Pseudonymous author; "fable-draft" for an unconfirmed AI draft. */
   reviewed_by: string;
-  reviewed_at: string;
+  /** Null on an AI draft that no reviewer has saved yet. */
+  reviewed_at: string | null;
   spans: HighlightSpan[];
   rejected: HighlightSpan[];
 }

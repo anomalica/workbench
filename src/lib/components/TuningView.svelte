@@ -43,7 +43,7 @@
   let loadError = $state<string | null>(null);
   let saving = $state(false);
   let saveError = $state<string | null>(null);
-  let lastReviewed = $state<{ by: string; at: string } | null>(null);
+  let lastReviewed = $state<{ by: string; at: string | null } | null>(null);
   // Set when the sidecar was made against an older body and spans had to be
   // re-anchored by text search. `lost` spans could not be re-found.
   let reanchorNotice = $state<{ moved: number; lost: UiSpan[] } | null>(null);
@@ -388,7 +388,11 @@
 
           {#if lastReviewed}
             <p class="text-xs font-ui text-on-surface-muted">
-              Last saved {lastReviewed.at.slice(0, 16).replace("T", " ")} by {lastReviewed.by}
+              {#if lastReviewed.at}
+                Last saved {lastReviewed.at.slice(0, 16).replace("T", " ")} by {lastReviewed.by}
+              {:else}
+                Unconfirmed draft by {lastReviewed.by} - correct it and save.
+              {/if}
             </p>
           {/if}
 
