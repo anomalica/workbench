@@ -14,6 +14,7 @@ function ingest(over: Partial<IngestSummary>): IngestSummary {
     content_hash: "h",
     public_hash: "h",
     title: "T",
+    schema_version: 1,
     creators: [],
     date: "",
     date_ingested: "",

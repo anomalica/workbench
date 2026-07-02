@@ -435,7 +435,7 @@ class LocalIngestSource(IngestSource):
         slug = re.sub(r"-+", "-", slug)
         return f"{date_val}-{stype}-{slug}.md"
 
-    def _git_archive_commit(
+    def _git_commit_paths(
         self,
         paths: list[Path],
         message: str,
@@ -450,7 +450,23 @@ class LocalIngestSource(IngestSource):
             "GIT_AUTHOR_NAME": author_name,
             "GIT_AUTHOR_EMAIL": author_email,
         }
-        rel_paths = [str(p.relative_to(repo_dir)) for p in paths]
+        # A moved-from path no longer exists on disk; `git add` stages its
+        # deletion only if it is tracked, and errors on an untracked missing
+        # path - so filter those out rather than aborting the whole commit.
+        rel_paths = []
+        for p in paths:
+            rel = str(p.relative_to(repo_dir))
+            if (
+                p.exists()
+                or p.is_symlink()
+                or subprocess.run(
+                    ["git", "ls-files", "--error-unmatch", rel],
+                    cwd=repo_dir,
+                    capture_output=True,
+                ).returncode
+                == 0
+            ):
+                rel_paths.append(rel)
         subprocess.run(
             ["git", "add", *rel_paths],
             cwd=repo_dir,
@@ -475,14 +491,16 @@ class LocalIngestSource(IngestSource):
         dest = archive_dir / md_path.name
         md_path.rename(dest)
 
-        paths: list[Path] = [dest]
+        # Both sides of the move: staging only the destination leaves the
+        # source tracked in git and its deletion dangling in the work tree.
+        paths: list[Path] = [dest, md_path]
         symlink = self._symlink_for_hash(full_hash)
         if symlink:
             symlink.unlink()
             paths.append(symlink)
 
         title = frontmatter.get("title", full_hash[:12])
-        self._git_archive_commit(
+        self._git_commit_paths(
             paths,
             f"archive: {title}",
             author_name=user.get("name", "Workbench"),
@@ -500,7 +518,7 @@ class LocalIngestSource(IngestSource):
         dest = self.store / md_path.name
         md_path.rename(dest)
 
-        paths: list[Path] = [dest]
+        paths: list[Path] = [dest, md_path]
         symlink_name = self._make_symlink_name(frontmatter)
         records_dir = self.store.parent / "records"
         if records_dir.exists():
@@ -509,7 +527,7 @@ class LocalIngestSource(IngestSource):
             paths.append(link_path)
 
         title = frontmatter.get("title", full_hash[:12])
-        self._git_archive_commit(
+        self._git_commit_paths(
             paths,
             f"unarchive: {title}",
             author_name=user.get("name", "Workbench"),
