@@ -10,8 +10,11 @@
     needsVerifyHashes = new Set(),
     reviewedTimes = {},
     dateField = "published",
+    archived = false,
     onsort,
     onselect,
+    onarchive,
+    onunarchive,
     onfiltercreator,
     onfilterpublisher,
   }: {
@@ -22,8 +25,11 @@
     needsVerifyHashes?: Set<string>;
     reviewedTimes?: Record<string, string>;
     dateField?: "published" | "ingested" | "reviewed";
+    archived?: boolean;
     onsort: (field: string) => void;
     onselect: (hash: string) => void;
+    onarchive?: (hash: string) => void;
+    onunarchive?: (hash: string) => void;
     onfiltercreator?: (creator: string) => void;
     onfilterpublisher?: (publisher: string) => void;
   } = $props();
@@ -52,8 +58,11 @@
 <!-- Column headers -->
 <div class="flex items-center gap-3 px-6 py-2 border-b border-border bg-surface-alt text-xs font-ui text-on-surface-muted select-none sticky top-0 z-10">
   <span class="w-6 flex-none" aria-hidden="true"></span>
-  <button onclick={() => onsort("type")} class="w-12 flex-none cursor-pointer hover:text-on-surface text-left" title="Sort by type">
+  <button onclick={() => onsort("type")} class="w-14 flex-none cursor-pointer hover:text-on-surface text-left" title="Sort by type">
     Type {sortBy === "type" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
+  </button>
+  <button onclick={() => onsort("version")} class="w-10 flex-none cursor-pointer hover:text-on-surface text-left tabular-nums" title="Sort by format version">
+    Ver {sortBy === "version" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
   </button>
   <button onclick={() => onsort("date")} class="w-20 flex-none cursor-pointer hover:text-on-surface text-left" title="Sort by date">
     Date {sortBy === "date" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
@@ -111,9 +120,10 @@
             <span class="text-on-surface-muted/40" aria-label="Not yet reviewed">&#x2022;</span>
           {/if}
         </span>
-        <span class="text-xs font-ui font-medium text-primary uppercase w-12 flex-none">
+        <span class="text-xs font-ui font-medium text-primary uppercase w-14 flex-none">
           {typeLabels[ingest.source_type] ?? ingest.source_type}
         </span>
+        <span class="w-10 flex-none text-xs text-on-surface-muted tabular-nums">v{ingest.schema_version}</span>
         <span
           class="text-xs text-on-surface-muted font-mono w-20 flex-none"
           title={dateValueFor(ingest) || "no value"}
@@ -176,6 +186,21 @@
         >
           {isPubliclyViewable(ingest.copyright_status) ? "Yes" : "No"}
         </span>
+        {#if archived && onunarchive}
+          <button
+            onclick={(e) => { e.stopPropagation(); onunarchive(ingest.content_hash); }}
+            class="flex-none w-8 h-8 flex items-center justify-center rounded
+              hover:bg-surface text-on-surface-muted hover:text-on-surface transition-colors cursor-pointer"
+            title="Restore from archive"
+          >&#x21B6;</button>
+        {:else if !archived && onarchive}
+          <button
+            onclick={(e) => { e.stopPropagation(); onarchive(ingest.content_hash); }}
+            class="flex-none w-8 h-8 flex items-center justify-center rounded
+              hover:bg-surface text-on-surface-muted hover:text-warning transition-colors cursor-pointer"
+            title="Archive"
+          ><svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"/></svg></button>
+        {/if}
       </div>
     </div>
   {/each}

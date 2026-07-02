@@ -73,6 +73,15 @@ STATIC_PAGE_SECTIONS = frozenset(
 WORKBENCH_LANG = "en"
 
 
+def _schema_version(schema: str) -> int:
+    """Extract the record format version from `schema` (e.g. `anomalica/record/2` → 2).
+    Returns 1 as fallback for absent/unparseable values (old records)."""
+    try:
+        return int(schema.rstrip("/").rsplit("/", 1)[-1])
+    except (ValueError, IndexError):
+        return 1
+
+
 def _unquote(value: str) -> str:
     """Strip surrounding YAML quotes and unescape a double-quoted scalar, so a
     title like '"He said \\"hi\\""' renders with real quotes, not backslashes."""
@@ -341,6 +350,173 @@ class LocalIngestSource(IngestSource):
                 best[src] = ing
         return passthrough + list(best.values())
 
+    def _scan_archived(self) -> dict[str, tuple[Path, dict]]:
+        """Walk store/v1/, return {content_hash: (path, frontmatter)}."""
+        index: dict[str, tuple[Path, dict]] = {}
+        archive = self.store / "v1"
+        if not archive.exists():
+            return index
+        for md_path in sorted(archive.glob("*.md")):
+            with open(md_path) as f:
+                frontmatter, _, _ = parse_frontmatter(f.read())
+            content_hash = normalise_hash(frontmatter.get("content_hash"))
+            if not content_hash:
+                continue
+            index[content_hash] = (md_path, frontmatter)
+        return index
+
+    def list_archived_ingests(self) -> list[dict]:
+        """Summary metadata for every record in store/v1/."""
+        ingests: list[dict] = []
+        for content_hash, (md_path, frontmatter) in self._scan_archived().items():
+            creators = frontmatter.get("creators") or frontmatter.get("authors") or []
+            if not isinstance(creators, list):
+                creators = []
+            schema_version = _schema_version(frontmatter.get("schema", ""))
+            ingests.append(
+                {
+                    "content_hash": content_hash,
+                    "public_hash": content_hash[:PUBLIC_HASH_LENGTH],
+                    "title": frontmatter.get("title", "Untitled"),
+                    "schema_version": schema_version,
+                    "creators": creators,
+                    "digestible": False,
+                    "observed_coverage": 0,
+                    "digested": False,
+                    "date": frontmatter.get(
+                        "date_published", frontmatter.get("date", "")
+                    ),
+                    "date_ingested": frontmatter.get(
+                        "date_extracted", frontmatter.get("date_accessed", "")
+                    ),
+                    "source_type": frontmatter.get("source_type", ""),
+                    "pipeline_version": None,
+                    "pipeline_current": None,
+                    "source_url": frontmatter.get("source_url", ""),
+                    "source_file": frontmatter.get("source_file", ""),
+                    "source_hash": frontmatter.get("source_hash", ""),
+                    "provenance": frontmatter.get("provenance", ""),
+                    "publisher": frontmatter.get("publisher", ""),
+                    "copyright_status": frontmatter.get(
+                        "copyright.status", "restricted"
+                    ),
+                    "review_carryover": None,
+                }
+            )
+        ingests.sort(key=lambda x: (x.get("date", ""), x.get("title", "")))
+        return ingests
+
+    def _symlink_for_hash(self, full_hash: str) -> Path | None:
+        """Find the records/ symlink pointing at store/{hash}.md, if any."""
+        records_dir = self.store.parent / "records"
+        if not records_dir.exists():
+            return None
+        for symlink in records_dir.glob("*.md"):
+            if not symlink.is_symlink():
+                continue
+            target = symlink.resolve()
+            if full_hash in target.name:
+                return symlink
+        return None
+
+    def _make_symlink_name(self, frontmatter: dict) -> str:
+        """Generate a human-readable symlink name from frontmatter.
+
+        Pattern: {date}-{source_type}-{slugified-title}.md
+        """
+        date_val = (
+            frontmatter.get("date_published")
+            or frontmatter.get("date", "")
+            or "unknown"
+        )[:10]
+        stype = frontmatter.get("source_type", "unknown")
+        title = frontmatter.get("title", "untitled")
+        slug = re.sub(r"[^a-zA-Z0-9]+", "-", title.lower()).strip("-")
+        slug = re.sub(r"-+", "-", slug)
+        return f"{date_val}-{stype}-{slug}.md"
+
+    def _git_archive_commit(
+        self,
+        paths: list[Path],
+        message: str,
+        author_name: str,
+        author_email: str,
+    ) -> None:
+        import subprocess
+
+        repo_dir = self.store.parent
+        env = {
+            **os.environ,
+            "GIT_AUTHOR_NAME": author_name,
+            "GIT_AUTHOR_EMAIL": author_email,
+        }
+        rel_paths = [str(p.relative_to(repo_dir)) for p in paths]
+        subprocess.run(
+            ["git", "add", *rel_paths],
+            cwd=repo_dir,
+            check=True,
+            env=env,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", message],
+            cwd=repo_dir,
+            check=True,
+            env=env,
+        )
+
+    def archive_ingest(self, full_hash: str, user: dict) -> bool:
+        """Move a record from store/ to store/v1/ and remove its records/ symlink."""
+        entry = self._scan().get(full_hash)
+        if entry is None:
+            return False
+        md_path, frontmatter = entry
+        archive_dir = self.store / "v1"
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        dest = archive_dir / md_path.name
+        md_path.rename(dest)
+
+        paths: list[Path] = [dest]
+        symlink = self._symlink_for_hash(full_hash)
+        if symlink:
+            symlink.unlink()
+            paths.append(symlink)
+
+        title = frontmatter.get("title", full_hash[:12])
+        self._git_archive_commit(
+            paths,
+            f"archive: {title}",
+            author_name=user.get("name", "Workbench"),
+            author_email=user.get("email", "workbench@anomalica.com"),
+        )
+        return True
+
+    def unarchive_ingest(self, full_hash: str, user: dict) -> bool:
+        """Move a record from store/v1/ back to store/ and recreate its symlink."""
+        entry = self._scan_archived().get(full_hash)
+        if entry is None:
+            return False
+        md_path, frontmatter = entry
+
+        dest = self.store / md_path.name
+        md_path.rename(dest)
+
+        paths: list[Path] = [dest]
+        symlink_name = self._make_symlink_name(frontmatter)
+        records_dir = self.store.parent / "records"
+        if records_dir.exists():
+            link_path = records_dir / symlink_name
+            link_path.symlink_to(Path("../store") / md_path.name)
+            paths.append(link_path)
+
+        title = frontmatter.get("title", full_hash[:12])
+        self._git_archive_commit(
+            paths,
+            f"unarchive: {title}",
+            author_name=user.get("name", "Workbench"),
+            author_email=user.get("email", "workbench@anomalica.com"),
+        )
+        return True
+
     def list_ingests(self) -> list[dict]:
         ingests: list[dict] = []
         digested_hashes = self._digested_content_hashes()
@@ -362,11 +538,13 @@ class LocalIngestSource(IngestSource):
                 md_path.read_text() if _needs_body_for_digestibility(sidecar) else None
             )
             verdict = digestibility(record_text, sidecar)
+            schema_version = _schema_version(frontmatter.get("schema", ""))
             ingests.append(
                 {
                     "content_hash": content_hash,
                     "public_hash": content_hash[:PUBLIC_HASH_LENGTH],
                     "title": frontmatter.get("title", "Untitled"),
+                    "schema_version": schema_version,
                     "creators": creators,
                     "digestible": verdict.digestible,
                     "observed_coverage": verdict.observed_coverage,
@@ -922,6 +1100,34 @@ def list_ingests() -> list[dict]:
     should return only public hashes to non-authenticated callers.
     """
     return source.list_ingests()
+
+
+@app.get("/api/ingests/archived")
+def list_archived_ingests() -> list[dict]:
+    """Return summary metadata for archived (store/v1/) records."""
+    return source.list_archived_ingests()
+
+
+@app.post("/api/ingests/{full_hash}/archive")
+def archive_ingest(full_hash: str, request: Request) -> JSONResponse:
+    """Move a record to the archive (store/v1/). Requires authentication."""
+    user = _require_user(request)
+    if not FULL_HASH_PATTERN.match(full_hash):
+        raise HTTPException(status_code=404, detail="Not found")
+    if not source.archive_ingest(full_hash, user):
+        raise HTTPException(status_code=404, detail="Not found")
+    return JSONResponse({"archived": True})
+
+
+@app.post("/api/ingests/{full_hash}/unarchive")
+def unarchive_ingest(full_hash: str, request: Request) -> JSONResponse:
+    """Restore a record from the archive back to the active store. Requires auth."""
+    user = _require_user(request)
+    if not FULL_HASH_PATTERN.match(full_hash):
+        raise HTTPException(status_code=404, detail="Not found")
+    if not source.unarchive_ingest(full_hash, user):
+        raise HTTPException(status_code=404, detail="Not found")
+    return JSONResponse({"unarchived": True})
 
 
 def list_articles() -> list[dict]:

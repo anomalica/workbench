@@ -12,6 +12,7 @@ export interface IngestSummary {
   content_hash: string;
   public_hash: string;
   title: string;
+  schema_version: number;
   /** Spec field `creators` (was `authors`); UI labels it "Authors / Creators". */
   creators: string[];
   /** date_published from frontmatter. */
@@ -108,6 +109,28 @@ export async function fetchIngests(): Promise<IngestSummary[]> {
   const res = await fetch(readPath("/api/ingests"));
   if (!res.ok) throw new Error(`Failed to fetch ingests: ${res.status}`);
   return res.json();
+}
+
+export async function fetchArchivedIngests(): Promise<IngestSummary[]> {
+  const res = await fetch(readPath("/api/ingests/archived"));
+  if (!res.ok) throw new Error(`Failed to fetch archived ingests: ${res.status}`);
+  return res.json();
+}
+
+export async function archiveIngest(hash: string): Promise<void> {
+  const res = await fetch(`/api/ingests/${hash}/archive`, { method: "POST" });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail || `Archive failed (${res.status})`);
+  }
+}
+
+export async function unarchiveIngest(hash: string): Promise<void> {
+  const res = await fetch(`/api/ingests/${hash}/unarchive`, { method: "POST" });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail || `Unarchive failed (${res.status})`);
+  }
 }
 
 /** An assembled knowledge-article page (the public, post-digest content layer).

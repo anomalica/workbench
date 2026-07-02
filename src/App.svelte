@@ -1,6 +1,9 @@
 <script lang="ts">
   import {
     fetchIngests,
+    fetchArchivedIngests,
+    archiveIngest,
+    unarchiveIngest,
     fetchIngest,
     fetchDigest,
     fetchCurrentUser,
@@ -45,6 +48,8 @@
   });
 
   let ingests = $state<IngestSummary[]>([]);
+  let archivedIngests = $state<IngestSummary[]>([]);
+  let showArchived = $state(false);
   let selectedIngest = $state<IngestDetail | null>(null);
   let selectedDigest = $state<DigestDocument | null>(null);
   let sourceFile = $state<File | null>(null);
@@ -90,6 +95,7 @@
     | "date"
     | "title"
     | "type"
+    | "version"
     | "publisher"
     | "creator"
     | "digestible"
@@ -200,6 +206,10 @@
         }
         else if (sortBy === "title") { va = a.title.toLowerCase(); vb = b.title.toLowerCase(); }
         else if (sortBy === "type") { va = a.source_type; vb = b.source_type; }
+        else if (sortBy === "version") {
+          const cmp = a.schema_version - b.schema_version;
+          return sortAsc ? cmp : -cmp;
+        }
         else if (sortBy === "publisher") { va = a.publisher || "zzz"; vb = b.publisher || "zzz"; }
         else if (sortBy === "creator") {
           va = (a.creators[0] || "zzz").toLowerCase();
@@ -214,6 +224,39 @@
   let sourceTypes = $derived(
     [...new Set(ingests.map((i) => i.source_type))].sort(),
   );
+
+  async function loadArchivedIngests() {
+    try {
+      archivedIngests = await fetchArchivedIngests();
+    } catch {
+      archivedIngests = [];
+    }
+  }
+
+  function toggleArchived() {
+    showArchived = !showArchived;
+    if (showArchived && !archivedIngests.length) loadArchivedIngests();
+  }
+
+  async function handleArchive(hash: string) {
+    try {
+      await archiveIngest(hash);
+      ingests = ingests.filter((i) => i.content_hash !== hash);
+      loadArchivedIngests();
+    } catch {
+      error = "Failed to archive record.";
+    }
+  }
+
+  async function handleUnarchive(hash: string) {
+    try {
+      await unarchiveIngest(hash);
+      archivedIngests = archivedIngests.filter((i) => i.content_hash !== hash);
+      loadIngests();
+    } catch {
+      error = "Failed to restore record from archive.";
+    }
+  }
 
   async function loadIngests() {
     try {
@@ -510,113 +553,124 @@
       <div class="flex-1 flex flex-col min-h-0">
         <!-- Search and filter bar -->
         <div class="px-6 py-3 border-b border-border bg-surface-alt flex items-center gap-3 flex-none">
-          <input
-            type="search"
-            placeholder="Search ingests..."
-            bind:value={searchQuery}
-            class="flex-1 max-w-md text-sm bg-surface border border-border rounded px-3 py-1.5
-              text-on-surface outline-none focus:border-primary placeholder:text-on-surface-muted/50"
-          />
-          <div class="flex items-center gap-1">
-            <button
-              onclick={() => { filterType = "all"; }}
-              class="text-xs font-ui px-2 py-1 rounded cursor-pointer transition-colors
-                {filterType === 'all' ? 'bg-primary text-on-primary' : 'text-on-surface-secondary hover:bg-surface'}"
-            >All</button>
-            {#each sourceTypes as type}
+          {#if !showArchived}
+            <input
+              type="search"
+              placeholder="Search ingests..."
+              bind:value={searchQuery}
+              class="flex-1 max-w-md text-sm bg-surface border border-border rounded px-3 py-1.5
+                text-on-surface outline-none focus:border-primary placeholder:text-on-surface-muted/50"
+            />
+            <div class="flex items-center gap-1">
               <button
-                onclick={() => { filterType = type; }}
+                onclick={() => { filterType = "all"; }}
                 class="text-xs font-ui px-2 py-1 rounded cursor-pointer transition-colors
-                  {filterType === type ? 'bg-primary text-on-primary' : 'text-on-surface-secondary hover:bg-surface'}"
-              >{type.charAt(0).toUpperCase() + type.slice(1)}</button>
-            {/each}
-          </div>
-          {#if user}
-            <div class="flex items-center gap-1 border-l border-border pl-3">
-              {#each [["all", "All"], ["pending", "Pending"], ["reviewed", "Reviewed"]] as [id, label]}
+                  {filterType === 'all' ? 'bg-primary text-on-primary' : 'text-on-surface-secondary hover:bg-surface'}"
+              >All</button>
+              {#each sourceTypes as type}
                 <button
-                  onclick={() => { filterReviewed = id as typeof filterReviewed; }}
+                  onclick={() => { filterType = type; }}
                   class="text-xs font-ui px-2 py-1 rounded cursor-pointer transition-colors
-                    {filterReviewed === id ? 'bg-primary text-on-primary' : 'text-on-surface-secondary hover:bg-surface'}"
-                >{label}</button>
+                    {filterType === type ? 'bg-primary text-on-primary' : 'text-on-surface-secondary hover:bg-surface'}"
+                >{type.charAt(0).toUpperCase() + type.slice(1)}</button>
               {/each}
             </div>
-          {/if}
-
-          <div class="flex items-center gap-1 border-l border-border pl-3">
-            <button
-              onclick={() => { filterDigestible = !filterDigestible; }}
-              class="text-xs font-ui px-2 py-1 rounded cursor-pointer transition-colors
-                {filterDigestible ? 'bg-success/20 text-success' : 'text-on-surface-secondary hover:bg-surface'}"
-              title="Show only records that are digestible (100% observed)"
-            >Digestible</button>
-            <button
-              onclick={() => { filterUntraceable = !filterUntraceable; }}
-              class="text-xs font-ui px-2 py-1 rounded cursor-pointer transition-colors
-                {filterUntraceable ? 'bg-warning/20 text-warning' : 'text-on-surface-secondary hover:bg-surface'}"
-              title="Show only records with no recoverable source/origin"
-            >Untraceable</button>
-          </div>
-
-          <!-- Date-field selector: what value the Date column shows
-               and what "Date" sort uses. Lives in the toolbar so the
-               column header itself stays a plain sort-direction toggle. -->
-          <div class="flex items-center gap-2 border-l border-border pl-3 relative">
-            <span class="text-xs font-ui text-on-surface-muted">Date:</span>
-            <button
-              data-date-menu-trigger="1"
-              onclick={() => { dateMenuOpen = !dateMenuOpen; }}
-              class="text-xs font-ui px-2 py-1 rounded cursor-pointer transition-colors
-                flex items-center gap-1 bg-surface text-on-surface-secondary
-                hover:bg-surface/60 border border-border"
-              title="Change which date the Date column shows"
-            >
-              {DATE_FIELD_LABELS[dateField]}
-              <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6" />
-              </svg>
-            </button>
-            {#if dateMenuOpen}
-              <div
-                data-date-menu
-                class="absolute top-full left-0 mt-1 min-w-32 z-30 bg-surface border border-border rounded shadow-lg py-1"
-              >
-                {#each (["published", "ingested", "reviewed"] as Array<typeof dateField>) as f}
+            {#if user}
+              <div class="flex items-center gap-1 border-l border-border pl-3">
+                {#each [["all", "All"], ["pending", "Pending"], ["reviewed", "Reviewed"]] as [id, label]}
                   <button
-                    onclick={() => pickDateField(f)}
-                    class="w-full text-left text-xs font-ui px-3 py-1.5 hover:bg-surface-alt cursor-pointer
-                      {dateField === f ? 'text-primary font-medium' : 'text-on-surface'}"
-                  >
-                    {DATE_FIELD_LABELS[f]}
-                  </button>
+                    onclick={() => { filterReviewed = id as typeof filterReviewed; }}
+                    class="text-xs font-ui px-2 py-1 rounded cursor-pointer transition-colors
+                      {filterReviewed === id ? 'bg-primary text-on-primary' : 'text-on-surface-secondary hover:bg-surface'}"
+                  >{label}</button>
                 {/each}
               </div>
             {/if}
+
+            <div class="flex items-center gap-1 border-l border-border pl-3">
+              <button
+                onclick={() => { filterDigestible = !filterDigestible; }}
+                class="text-xs font-ui px-2 py-1 rounded cursor-pointer transition-colors
+                  {filterDigestible ? 'bg-success/20 text-success' : 'text-on-surface-secondary hover:bg-surface'}"
+                title="Show only records that are digestible (100% observed)"
+              >Digestible</button>
+              <button
+                onclick={() => { filterUntraceable = !filterUntraceable; }}
+                class="text-xs font-ui px-2 py-1 rounded cursor-pointer transition-colors
+                  {filterUntraceable ? 'bg-warning/20 text-warning' : 'text-on-surface-secondary hover:bg-surface'}"
+                title="Show only records with no recoverable source/origin"
+              >Untraceable</button>
+            </div>
+
+            <!-- Date-field selector: what value the Date column shows
+                 and what "Date" sort uses. Lives in the toolbar so the
+                 column header itself stays a plain sort-direction toggle. -->
+            <div class="flex items-center gap-2 border-l border-border pl-3 relative">
+              <span class="text-xs font-ui text-on-surface-muted">Date:</span>
+              <button
+                data-date-menu-trigger="1"
+                onclick={() => { dateMenuOpen = !dateMenuOpen; }}
+                class="text-xs font-ui px-2 py-1 rounded cursor-pointer transition-colors
+                  flex items-center gap-1 bg-surface text-on-surface-secondary
+                  hover:bg-surface/60 border border-border"
+                title="Change which date the Date column shows"
+              >
+                {DATE_FIELD_LABELS[dateField]}
+                <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6" />
+                </svg>
+              </button>
+              {#if dateMenuOpen}
+                <div
+                  data-date-menu
+                  class="absolute top-full left-0 mt-1 min-w-32 z-30 bg-surface border border-border rounded shadow-lg py-1"
+                >
+                  {#each (["published", "ingested", "reviewed"] as Array<typeof dateField>) as f}
+                    <button
+                      onclick={() => pickDateField(f)}
+                      class="w-full text-left text-xs font-ui px-3 py-1.5 hover:bg-surface-alt cursor-pointer
+                        {dateField === f ? 'text-primary font-medium' : 'text-on-surface'}"
+                    >
+                      {DATE_FIELD_LABELS[f]}
+                    </button>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+
+            {#if filterCreator}
+              <button
+                onclick={() => { filterCreator = ""; }}
+                class="text-xs font-ui px-2 py-1 rounded cursor-pointer bg-primary/10 text-primary hover:bg-primary/20 flex items-center gap-1"
+                title="Clear creator filter"
+              >
+                {filterCreator}
+                <span aria-hidden="true">&#x2715;</span>
+              </button>
+            {/if}
+            {#if filterPublisher}
+              <button
+                onclick={() => { filterPublisher = ""; }}
+                class="text-xs font-ui px-2 py-1 rounded cursor-pointer bg-primary/10 text-primary hover:bg-primary/20 flex items-center gap-1"
+                title="Clear publisher filter"
+              >
+                {filterPublisher}
+                <span aria-hidden="true">&#x2715;</span>
+              </button>
+            {/if}
+          {/if}
+
+          <div class="flex items-center gap-1 {!showArchived ? 'border-l border-border pl-3' : ''}">
+            <button
+              onclick={toggleArchived}
+              class="text-xs font-ui px-2 py-1 rounded cursor-pointer transition-colors
+                {showArchived ? 'bg-primary text-on-primary' : 'text-on-surface-secondary hover:bg-surface'}"
+              title={showArchived ? 'Show active records' : 'Show archived records'}
+            >Archived</button>
           </div>
 
-          {#if filterCreator}
-            <button
-              onclick={() => { filterCreator = ""; }}
-              class="text-xs font-ui px-2 py-1 rounded cursor-pointer bg-primary/10 text-primary hover:bg-primary/20 flex items-center gap-1"
-              title="Clear creator filter"
-            >
-              {filterCreator}
-              <span aria-hidden="true">&#x2715;</span>
-            </button>
-          {/if}
-          {#if filterPublisher}
-            <button
-              onclick={() => { filterPublisher = ""; }}
-              class="text-xs font-ui px-2 py-1 rounded cursor-pointer bg-primary/10 text-primary hover:bg-primary/20 flex items-center gap-1"
-              title="Clear publisher filter"
-            >
-              {filterPublisher}
-              <span aria-hidden="true">&#x2715;</span>
-            </button>
-          {/if}
-
           <span class="text-xs text-on-surface-muted">
-            {filteredIngests.length}{filteredIngests.length !== ingests.length ? ` of ${ingests.length}` : ''} records
+            {showArchived ? archivedIngests.length : filteredIngests.length}{showArchived ? '' : (filteredIngests.length !== ingests.length ? ` of ${ingests.length}` : '')} records
           </span>
         </div>
 
@@ -628,7 +682,25 @@
             </div>
           {/if}
 
-          {#if loading}
+          {#if showArchived}
+            {#if archivedIngests.length > 0}
+              <IngestList
+                ingests={archivedIngests}
+                archived={true}
+                {sortBy}
+                {sortAsc}
+                {dateField}
+                onsort={(field) => {
+                  if (sortBy === field) { sortAsc = !sortAsc; }
+                  else { sortBy = field as typeof sortBy; sortAsc = field === "title" || field === "creator"; }
+                }}
+                onselect={(hash) => selectIngest(hash)}
+                onunarchive={handleUnarchive}
+              />
+            {:else}
+              <p class="text-on-surface-muted text-sm p-6">No archived records.</p>
+            {/if}
+          {:else if loading}
             <p class="text-on-surface-muted text-sm p-6">Loading ingests...</p>
           {:else if filteredIngests.length > 0}
             <IngestList
@@ -644,6 +716,7 @@
                 else { sortBy = field as typeof sortBy; sortAsc = field === "title" || field === "creator"; }
               }}
               onselect={(hash) => selectIngest(hash)}
+              onarchive={handleArchive}
               onfiltercreator={(c) => { filterCreator = filterCreator === c ? "" : c; }}
               onfilterpublisher={(p) => { filterPublisher = filterPublisher === p ? "" : p; }}
             />
