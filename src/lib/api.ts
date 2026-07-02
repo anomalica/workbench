@@ -407,7 +407,11 @@ export async function saveHighlights(
   return res.json();
 }
 
-export interface GradingItem extends HighlightSpan {
+export interface GradingItem {
+  /** Null when the re-aligner could not map the item's quote to a span. */
+  start: number | null;
+  end: number | null;
+  text: string;
   kind?: "claim" | "node";
   summary?: string;
   overlap_fraction?: number;

@@ -6,6 +6,16 @@
  * which diverge on astral characters, so the UI works in UTF-16 throughout
  * and converts at the API boundary (loadSpans/saveSpans).
  *
+ * The page never shows the raw body. It renders a pre-processed readable
+ * view (buildDisplay): annotation comments become non-selectable speaker
+ * labels or vanish, word-timing tokens and line timecodes vanish, and the
+ * remaining prose is merged into a few large segments - one element per
+ * speaker turn, not one per word. (Rendering a chunk per word froze the
+ * tab on long word-timed records: the browser recalculates the selection
+ * across tens of thousands of inline elements during the drag.) Each
+ * segment carries a piecewise map from display offsets back to raw-body
+ * offsets, so saved spans still index the raw body exactly.
+ *
  * Spec: anomalica/decisions/drafts/relevance-tuning-mode.md.
  */
 
@@ -52,8 +62,8 @@ export function codePointToUtf16(body: string, cpIndex: number): number {
 /** Sidecar (code-point) spans to UI (UTF-16) spans. */
 export function loadSpans(body: string, spans: WireSpan[]): UiSpan[] {
   return spans.map((s) => {
-    const start = codePointToUtf16(body, s.start);
-    const end = codePointToUtf16(body, s.end);
+    const start = codePointToUtf16(body, s.start ?? 0);
+    const end = codePointToUtf16(body, s.end ?? 0);
     return { ...s, start, end, text: body.slice(start, end) };
   });
 }
@@ -147,89 +157,196 @@ export function overlapFraction(span: UiSpan, spans: UiSpan[]): number {
   return Math.min(1, covered / length);
 }
 
-/** How the raw body is displayed. `text` renders normally, `meta` renders
- *  dimmed (annotation comments and fences the digester's input retains),
- *  `hidden` is not rendered at all ({{t:}} word-timing tokens - ~65% of a
- *  record/2 body). Offsets stay exact because runs partition the body. */
-export type RunKind = "text" | "meta" | "hidden";
+// --- readable display model --------------------------------------------------
 
-export interface Run {
-  /** UTF-16 offset of the run's first character in the body. */
-  start: number;
+/** One visible slice of a text segment: `len` chars starting at display
+ *  offset `d` within the segment, coming from raw offset `raw`. */
+export interface SegPart {
+  d: number;
+  raw: number;
+  len: number;
+}
+
+/** A block of the readable view: prose (selectable, offset-mapped) or a
+ *  speaker label (decorative, never selectable). */
+export interface DisplaySegment {
+  kind: "text" | "label";
+  index: number;
+  /** Speaker name for kind=label. */
+  label?: string;
+  /** Concatenated visible text for kind=text ("" for labels). */
   text: string;
-  kind: RunKind;
+  parts: SegPart[];
+  rawStart: number;
+  rawEnd: number;
 }
 
 const WORD_TIMING = /\{\{t:[0-9.]+\}\}/g;
 const HTML_COMMENT = /<!--[\s\S]*?-->/g;
 // An annotation fence: a line of ---, its YAML lines, and the closing ---.
 const ANNOTATION_FENCE = /^---\n[\s\S]*?\n---$/gm;
+// A sentence-level timecode prefixing a transcript line, e.g. "00:01:24.1 ".
+const LINE_TIMECODE = /^\d{2}:\d{2}:\d{2}(?:\.\d+)?[ \t]/gm;
 
-/** Partition the raw body into contiguous display runs. */
-export function buildRuns(body: string): Run[] {
-  // Collect non-text intervals first, then emit the gaps as text runs.
-  const marks: Array<{ start: number; end: number; kind: RunKind }> = [];
-  for (const re of [WORD_TIMING, HTML_COMMENT, ANNOTATION_FENCE]) {
+const SPEAKER_IN_COMMENT = /speaker:\s*(.+?)\s*(?:\n|-->)/;
+
+/** Build the readable view: prose merged into large segments with a
+ *  display->raw offset map; annotations hidden or turned into labels. */
+export function buildDisplay(body: string): DisplaySegment[] {
+  const marks: Array<{ start: number; end: number; label?: string }> = [];
+  for (const re of [HTML_COMMENT, ANNOTATION_FENCE, WORD_TIMING, LINE_TIMECODE]) {
     re.lastIndex = 0;
     for (const m of body.matchAll(re)) {
-      marks.push({
+      const mark: { start: number; end: number; label?: string } = {
         start: m.index,
         end: m.index + m[0].length,
-        kind: re === WORD_TIMING ? "hidden" : "meta",
-      });
+      };
+      if (re === HTML_COMMENT) {
+        const speaker = m[0].match(SPEAKER_IN_COMMENT);
+        if (speaker) mark.label = speaker[1];
+      }
+      marks.push(mark);
     }
   }
   marks.sort((a, b) => a.start - b.start || a.end - b.end);
 
-  const runs: Run[] = [];
+  const segments: DisplaySegment[] = [];
+  let parts: SegPart[] = [];
+  let text = "";
+
+  const flushText = () => {
+    if (parts.length === 0) return;
+    segments.push({
+      kind: "text",
+      index: segments.length,
+      text,
+      parts,
+      rawStart: parts[0].raw,
+      rawEnd: parts[parts.length - 1].raw + parts[parts.length - 1].len,
+    });
+    parts = [];
+    text = "";
+  };
+  const pushVisible = (from: number, to: number) => {
+    if (to <= from) return;
+    parts.push({ d: text.length, raw: from, len: to - from });
+    text += body.slice(from, to);
+  };
+
   let pos = 0;
   for (const mark of marks) {
     if (mark.start < pos) continue; // nested/overlapping match already covered
-    if (mark.start > pos) {
-      runs.push({ start: pos, text: body.slice(pos, mark.start), kind: "text" });
+    pushVisible(pos, mark.start);
+    if (mark.label) {
+      flushText();
+      segments.push({
+        kind: "label",
+        index: segments.length,
+        label: mark.label,
+        text: "",
+        parts: [],
+        rawStart: mark.start,
+        rawEnd: mark.end,
+      });
     }
-    runs.push({ start: mark.start, text: body.slice(mark.start, mark.end), kind: mark.kind });
     pos = mark.end;
   }
-  if (pos < body.length) {
-    runs.push({ start: pos, text: body.slice(pos), kind: "text" });
-  }
-  return runs;
+  pushVisible(pos, body.length);
+  flushText();
+  return segments;
 }
 
-/** A run further split against span boundaries for rendering: each chunk is
- *  either fully inside a highlight (spanIndex >= 0) or fully outside. */
-export interface Chunk {
-  start: number;
+/** Map a display offset within a segment to a raw-body offset. At a hidden
+ *  gap boundary, `start` bias rounds forward past the gap and `end` bias
+ *  rounds backward, so spans never begin or end inside hidden text. */
+export function displayToRaw(seg: DisplaySegment, d: number, bias: "start" | "end"): number {
+  const parts = seg.parts;
+  if (parts.length === 0) return seg.rawStart;
+  if (d <= 0) return parts[0].raw;
+  const last = parts[parts.length - 1];
+  if (d >= last.d + last.len) return last.raw + last.len;
+  if (bias === "start") {
+    for (let i = parts.length - 1; i >= 0; i--) {
+      const p = parts[i];
+      if (d >= p.d && d <= p.d + p.len) return p.raw + (d - p.d);
+    }
+  } else {
+    for (const p of parts) {
+      if (d >= p.d && d <= p.d + p.len) return p.raw + (d - p.d);
+    }
+  }
+  return seg.rawStart;
+}
+
+/** Map a raw-body offset to a display offset within a segment (clamped).
+ *  Raw offsets inside hidden gaps round forward (`start`) or backward
+ *  (`end`) to the nearest visible character. */
+export function rawToDisplay(seg: DisplaySegment, raw: number, bias: "start" | "end"): number {
+  const parts = seg.parts;
+  if (parts.length === 0) return 0;
+  if (raw <= parts[0].raw) return 0;
+  const last = parts[parts.length - 1];
+  if (raw >= last.raw + last.len) return last.d + last.len;
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i];
+    if (raw >= p.raw && raw <= p.raw + p.len) return p.d + (raw - p.raw);
+    const next = parts[i + 1];
+    if (next && raw > p.raw + p.len && raw < next.raw) {
+      return bias === "start" ? next.d : p.d + p.len;
+    }
+  }
+  return 0;
+}
+
+/** A slice of a text segment for rendering: either inside the highlight
+ *  with the given span index, or plain (spanIndex -1). */
+export interface SegChunk {
+  d: number;
   text: string;
-  kind: RunKind;
-  /** Index into the span list, or -1 when not highlighted. */
   spanIndex: number;
 }
 
-/** Split runs at span boundaries so each chunk maps to one highlight state. */
-export function buildChunks(runs: Run[], spans: UiSpan[]): Chunk[] {
-  const chunks: Chunk[] = [];
-  for (const run of runs) {
-    const runEnd = run.start + run.text.length;
-    // Boundaries inside this run: run edges plus any span edge that cuts it.
-    const cuts = new Set<number>([run.start, runEnd]);
-    for (const s of spans) {
-      if (s.start > run.start && s.start < runEnd) cuts.add(s.start);
-      if (s.end > run.start && s.end < runEnd) cuts.add(s.end);
-    }
-    const edges = [...cuts].sort((a, b) => a - b);
-    for (let i = 0; i < edges.length - 1; i++) {
-      const start = edges[i];
-      const end = edges[i + 1];
-      const spanIndex = spans.findIndex((s) => s.start <= start && s.end >= end);
-      chunks.push({
-        start,
-        text: run.text.slice(start - run.start, end - run.start),
-        kind: run.kind,
-        spanIndex,
-      });
-    }
+/** Split a text segment's display text at highlight boundaries. */
+export function segmentChunks(seg: DisplaySegment, spans: UiSpan[]): SegChunk[] {
+  if (seg.kind !== "text" || seg.text.length === 0) return [];
+  const intervals: Array<{ from: number; to: number; spanIndex: number }> = [];
+  for (let i = 0; i < spans.length; i++) {
+    const s = spans[i];
+    if (s.end <= seg.rawStart || s.start >= seg.rawEnd) continue;
+    const from = rawToDisplay(seg, Math.max(s.start, seg.rawStart), "start");
+    const to = rawToDisplay(seg, Math.min(s.end, seg.rawEnd), "end");
+    if (from < to) intervals.push({ from, to, spanIndex: i });
+  }
+  if (intervals.length === 0) {
+    return [{ d: 0, text: seg.text, spanIndex: -1 }];
+  }
+  const cuts = new Set<number>([0, seg.text.length]);
+  for (const iv of intervals) {
+    cuts.add(iv.from);
+    cuts.add(iv.to);
+  }
+  const edges = [...cuts].sort((a, b) => a - b);
+  const chunks: SegChunk[] = [];
+  for (let i = 0; i < edges.length - 1; i++) {
+    const from = edges[i];
+    const to = edges[i + 1];
+    const hit = intervals.find((iv) => iv.from <= from && iv.to >= to);
+    chunks.push({
+      d: from,
+      text: seg.text.slice(from, to),
+      spanIndex: hit ? hit.spanIndex : -1,
+    });
   }
   return chunks;
+}
+
+/** Strip annotation noise from a raw-body excerpt for sidebar display. */
+export function cleanExcerpt(text: string, max = 90): string {
+  const clean = text
+    .replace(WORD_TIMING, "")
+    .replace(HTML_COMMENT, "")
+    .replace(/\d{2}:\d{2}:\d{2}(?:\.\d+)?[ \t]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return clean.length > max ? `${clean.slice(0, max)}…` : clean;
 }

@@ -10,15 +10,18 @@
   } from "$lib/api";
   import {
     addSpan,
-    buildChunks,
-    buildRuns,
+    buildDisplay,
+    cleanExcerpt,
+    displayToRaw,
     loadSpans,
     overlapFraction,
     reanchorSpans,
     saveSpans,
+    segmentChunks,
     trimSpan,
     type UiSpan,
   } from "$lib/highlights";
+  import { speakerColour } from "$lib/transcript";
 
   let {
     ingest,
@@ -50,8 +53,7 @@
 
   let bodyEl: HTMLElement | undefined = $state();
 
-  let runs = $derived(buildRuns(body));
-  let chunks = $derived(buildChunks(runs, spans));
+  let segments = $derived(buildDisplay(body));
 
   $effect(() => {
     void load(ingest.content_hash);
@@ -108,23 +110,35 @@
     }
   }
 
-  /** Map a DOM selection boundary to a UTF-16 offset into the raw body.
-   *  Every rendered chunk carries data-o (its raw offset); hidden runs are
-   *  not in the DOM, so boundaries can only land on rendered chunks. */
-  function pointToRaw(node: Node, offset: number): number | null {
+  /** Map a DOM selection boundary to (segment index, display offset).
+   *  Selectable chunks carry data-seg + data-d; speaker labels do not and
+   *  are user-select:none, so boundaries only land on prose. */
+  function pointToPos(node: Node, offset: number): { seg: number; d: number } | null {
     if (node.nodeType === Node.TEXT_NODE) {
-      const el = node.parentElement?.closest("[data-o]") as HTMLElement | null;
-      return el ? Number(el.dataset.o) + offset : null;
+      const el = node.parentElement?.closest("[data-seg]") as HTMLElement | null;
+      if (!el) return null;
+      return { seg: Number(el.dataset.seg), d: Number(el.dataset.d) + offset };
     }
+    // Element boundary (e.g. triple-click): resolve to the next chunk.
     const el = node as HTMLElement;
     const children = Array.from(el.childNodes);
     for (let i = offset; i < children.length; i++) {
       const child = children[i] as HTMLElement;
-      if (child?.dataset?.o != null) return Number(child.dataset.o);
-      const inner = child?.querySelector?.("[data-o]") as HTMLElement | null;
-      if (inner?.dataset?.o != null) return Number(inner.dataset.o);
+      const marked =
+        child?.dataset?.seg != null
+          ? child
+          : (child?.querySelector?.("[data-seg]") as HTMLElement | null);
+      if (marked?.dataset?.seg != null) {
+        return { seg: Number(marked.dataset.seg), d: Number(marked.dataset.d) };
+      }
     }
-    return body.length;
+    // Past the last chunk: end of the final text segment.
+    for (let i = segments.length - 1; i >= 0; i--) {
+      if (segments[i].kind === "text") {
+        return { seg: i, d: segments[i].text.length };
+      }
+    }
+    return null;
   }
 
   function handleMouseUp() {
@@ -133,10 +147,13 @@
     if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
     const range = sel.getRangeAt(0);
     if (!bodyEl || !bodyEl.contains(range.commonAncestorContainer)) return;
-    const start = pointToRaw(range.startContainer, range.startOffset);
-    const end = pointToRaw(range.endContainer, range.endOffset);
-    if (start === null || end === null || start === end) return;
-    const span = trimSpan(body, Math.min(start, end), Math.max(start, end));
+    let a = pointToPos(range.startContainer, range.startOffset);
+    let b = pointToPos(range.endContainer, range.endOffset);
+    if (!a || !b || (a.seg === b.seg && a.d === b.d)) return;
+    if (a.seg > b.seg || (a.seg === b.seg && a.d > b.d)) [a, b] = [b, a];
+    const start = displayToRaw(segments[a.seg], a.d, "start");
+    const end = displayToRaw(segments[b.seg], b.d, "end");
+    const span = trimSpan(body, start, end);
     if (!span) return;
     spans = addSpan(body, spans, span);
     dirty = true;
@@ -190,24 +207,41 @@
 
   // --- grading: accept/reject loop ---
 
-  /** Grading item offsets are code points; convert to a UI span. */
-  function toUiSpan(item: { start: number; end: number; text: string }): UiSpan {
-    return loadSpans(body, [item])[0];
+  /** An off-target item the re-aligner could not map to a source span has
+   *  null offsets - it can be shown but not accepted/rejected (there is no
+   *  span triple to record). */
+  function locatable(item: { start: number | null; end: number | null }): boolean {
+    return (
+      Number.isInteger(item.start) &&
+      Number.isInteger(item.end) &&
+      (item.end as number) > (item.start as number)
+    );
   }
 
-  function isAdjudicated(item: { start: number; end: number; text: string }): boolean {
+  type GradingSpan = { start: number | null; end: number | null; text: string };
+
+  /** Grading item offsets are code points; convert to a UI span. Callers
+   *  must check locatable() first. */
+  function toUiSpan(item: GradingSpan): UiSpan {
+    return loadSpans(body, [{ start: item.start ?? 0, end: item.end ?? 0, text: item.text }])[0];
+  }
+
+  function isAdjudicated(item: GradingSpan): boolean {
+    if (!locatable(item)) return false;
     const span = toUiSpan(item);
     if (overlapFraction(span, spans) >= 0.8) return true;
     return rejected.some((r) => r.start === span.start && r.end === span.end);
   }
 
-  function accept(item: { start: number; end: number; text: string }) {
+  function accept(item: GradingSpan) {
+    if (!locatable(item)) return;
     const span = toUiSpan(item);
     spans = addSpan(body, spans, { start: span.start, end: span.end, text: span.text });
     dirty = true;
   }
 
-  function reject(item: { start: number; end: number; text: string }) {
+  function reject(item: GradingSpan) {
+    if (!locatable(item)) return;
     const span = toUiSpan(item);
     rejected = [...rejected, { start: span.start, end: span.end, text: span.text }];
     dirty = true;
@@ -218,10 +252,7 @@
     dirty = true;
   }
 
-  function excerpt(text: string, max = 90): string {
-    const clean = text.replace(/\{\{t:[0-9.]+\}\}/g, "").replace(/\s+/g, " ").trim();
-    return clean.length > max ? `${clean.slice(0, max)}…` : clean;
-  }
+  const excerpt = cleanExcerpt;
 
   function pct(n: number): string {
     return `${Math.round(n * 100)}%`;
@@ -269,31 +300,42 @@
     <p class="text-error text-sm p-6">{loadError}</p>
   {:else}
     <div class="flex-1 flex min-h-0">
-      <!-- Left: the raw body, selectable -->
+      <!-- Left: the readable view. Prose only - annotations are hidden or
+           rendered as non-selectable speaker labels; offsets map back to the
+           raw body underneath. -->
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div
         bind:this={bodyEl}
         onmouseup={handleMouseUp}
-        class="flex-1 overflow-y-auto px-8 py-6 whitespace-pre-wrap font-serif text-[15px] leading-7 text-on-surface selection:bg-primary/30 min-w-0"
+        class="flex-1 overflow-y-auto px-8 py-6 font-serif text-[15px] leading-7 text-on-surface selection:bg-primary/30 min-w-0"
       >
-        {#each chunks as chunk}
-          {#if chunk.kind !== "hidden"}
-            {#if chunk.spanIndex >= 0}
-              <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+        {#each segments as segment (segment.index)}
+          {#if segment.kind === "label"}
+            <div class="select-none mt-5 mb-1 flex items-center gap-2 font-ui text-xs font-semibold">
               <span
-                data-o={chunk.start}
-                data-span={chunk.spanIndex}
-                onclick={() => (selectedSpan = chunk.spanIndex)}
-                class="bg-primary/20 cursor-pointer
-                  {chunk.kind === 'meta' ? 'text-on-surface-muted/50 text-xs font-mono' : ''}
-                  {selectedSpan === chunk.spanIndex ? 'bg-primary/35 outline outline-1 outline-primary/60' : ''}"
-              >{chunk.text}</span>
-            {:else}
-              <span
-                data-o={chunk.start}
-                class={chunk.kind === "meta" ? "text-on-surface-muted/50 text-xs font-mono" : ""}
-              >{chunk.text}</span>
-            {/if}
+                class="w-2 h-2 rounded-full flex-none"
+                style="background: {speakerColour(segment.label ?? '')}"
+              ></span>
+              <span class="text-on-surface-secondary">{segment.label}</span>
+            </div>
+          {:else}
+            <div class="whitespace-pre-wrap">
+              {#each segmentChunks(segment, spans) as chunk}
+                {#if chunk.spanIndex >= 0}
+                  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+                  <span
+                    data-seg={segment.index}
+                    data-d={chunk.d}
+                    data-span={chunk.spanIndex}
+                    onclick={() => (selectedSpan = chunk.spanIndex)}
+                    class="bg-primary/20 cursor-pointer
+                      {selectedSpan === chunk.spanIndex ? 'bg-primary/35 outline outline-1 outline-primary/60' : ''}"
+                  >{chunk.text}</span>
+                {:else}
+                  <span data-seg={segment.index} data-d={chunk.d}>{chunk.text}</span>
+                {/if}
+              {/each}
+            </div>
           {/if}
         {/each}
       </div>
@@ -469,7 +511,11 @@
                             <span class="text-xs font-ui text-on-surface">{item.summary}</span>
                           {/if}
                           <span class="text-xs text-on-surface-muted italic">"{excerpt(item.text)}"</span>
-                          {#if user}
+                          {#if !locatable(item)}
+                            <span class="text-xs font-ui text-on-surface-muted">
+                              Could not be located in the source - no span to adjudicate.
+                            </span>
+                          {:else if user}
                             <div class="flex gap-1.5">
                               <button
                                 onclick={() => accept(item)}

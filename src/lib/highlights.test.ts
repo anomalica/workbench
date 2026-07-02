@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
   addSpan,
-  buildChunks,
-  buildRuns,
+  buildDisplay,
+  cleanExcerpt,
   codePointToUtf16,
+  displayToRaw,
   loadSpans,
   overlapFraction,
+  rawToDisplay,
   reanchorSpans,
   saveSpans,
+  segmentChunks,
   trimSpan,
   utf16ToCodePoint,
 } from "./highlights";
@@ -113,44 +116,64 @@ describe("overlapFraction", () => {
   });
 });
 
-describe("buildRuns", () => {
-  it("hides word-timing tokens and dims comments", () => {
+describe("buildDisplay", () => {
+  it("merges word-timed text into one segment per speaker turn", () => {
     const body = "<!-- speaker: A -->\n{{t:1.00}}hello {{t:1.50}}world";
-    const runs = buildRuns(body);
-    expect(runs.map((r) => [r.kind, r.text])).toEqual([
-      ["meta", "<!-- speaker: A -->"],
-      ["text", "\n"],
-      ["hidden", "{{t:1.00}}"],
-      ["text", "hello "],
-      ["hidden", "{{t:1.50}}"],
-      ["text", "world"],
+    const segments = buildDisplay(body);
+    expect(segments.map((s) => [s.kind, s.kind === "label" ? s.label : s.text])).toEqual([
+      ["label", "A"],
+      ["text", "\nhello world"],
     ]);
+    // ONE text segment despite two timing tokens - not a chunk per word.
+    expect(segments[1].parts.length).toBe(3);
   });
 
-  it("partitions the body exactly (offsets are continuous)", () => {
-    const body = "a---\nfile_page: 2\n---b<!-- c -->d";
-    const runs = buildRuns(body);
-    let pos = 0;
-    for (const run of runs) {
-      expect(run.start).toBe(pos);
-      pos += run.text.length;
-    }
-    expect(pos).toBe(body.length);
+  it("hides sentence timecodes and annotation fences", () => {
+    const body = "---\nfile_page: 2\n---\n00:01:24.1 Some testimony here.";
+    const segments = buildDisplay(body);
+    expect(segments).toHaveLength(1);
+    expect(segments[0].text).toBe("\nSome testimony here.");
   });
 
-  it("marks annotation fences as meta", () => {
-    const body = "before\n---\nfile_page: 2\n---\nafter";
-    const runs = buildRuns(body);
-    const fence = runs.find((r) => r.kind === "meta");
-    expect(fence?.text).toBe("---\nfile_page: 2\n---");
+  it("turns old-format block speaker comments into labels", () => {
+    const body = "<!--\nspeaker: David Fravor\ntime: 00:07:17\n-->\nText content here.";
+    const segments = buildDisplay(body);
+    expect(segments[0]).toMatchObject({ kind: "label", label: "David Fravor" });
+    expect(segments[1].text).toBe("\nText content here.");
+  });
+
+  it("maps display offsets back to raw offsets exactly", () => {
+    const body = "{{t:1.00}}alpha {{t:2.00}}beta";
+    const [seg] = buildDisplay(body);
+    expect(seg.text).toBe("alpha beta");
+    // "beta" starts at display 6, raw 26 (after the second token).
+    expect(displayToRaw(seg, 6, "start")).toBe(26);
+    expect(body.slice(displayToRaw(seg, 6, "start"), displayToRaw(seg, 10, "end"))).toBe("beta");
+  });
+
+  it("start bias skips a hidden gap, end bias stops before it", () => {
+    const body = "one{{t:2.00}}two";
+    const [seg] = buildDisplay(body);
+    // Display offset 3 is the boundary between "one" and "two".
+    expect(displayToRaw(seg, 3, "start")).toBe(13); // start of "two"
+    expect(displayToRaw(seg, 3, "end")).toBe(3); // end of "one"
+  });
+
+  it("rawToDisplay rounds gap offsets to visible text", () => {
+    const body = "one{{t:2.00}}two";
+    const [seg] = buildDisplay(body);
+    // Raw offset 8 sits inside the hidden token.
+    expect(rawToDisplay(seg, 8, "start")).toBe(3);
+    expect(rawToDisplay(seg, 8, "end")).toBe(3);
+    expect(rawToDisplay(seg, 14, "start")).toBe(4); // inside "two"
   });
 });
 
-describe("buildChunks", () => {
-  it("splits runs at span boundaries", () => {
+describe("segmentChunks", () => {
+  it("splits a segment at highlight boundaries", () => {
     const body = "hello brave world";
-    const spans = [{ start: 6, end: 11, text: "brave" }];
-    const chunks = buildChunks(buildRuns(body), spans);
+    const [seg] = buildDisplay(body);
+    const chunks = segmentChunks(seg, [{ start: 6, end: 11, text: "brave" }]);
     expect(chunks.map((c) => [c.text, c.spanIndex])).toEqual([
       ["hello ", -1],
       ["brave", 0],
@@ -158,15 +181,23 @@ describe("buildChunks", () => {
     ]);
   });
 
-  it("carries highlights across hidden runs", () => {
+  it("renders a highlight spanning hidden tokens as continuous", () => {
     const body = "{{t:1.00}}alpha {{t:2.00}}beta";
+    const [seg] = buildDisplay(body);
     const spans = [{ start: 10, end: body.length, text: "alpha {{t:2.00}}beta" }];
-    const chunks = buildChunks(buildRuns(body), spans);
-    // Every chunk after the first hidden token is inside the span,
-    // including the hidden token in the middle.
-    expect(chunks[0]).toMatchObject({ kind: "hidden", spanIndex: -1 });
-    for (const chunk of chunks.slice(1)) {
-      expect(chunk.spanIndex).toBe(0);
-    }
+    const chunks = segmentChunks(seg, spans);
+    expect(chunks).toEqual([{ d: 0, text: "alpha beta", spanIndex: 0 }]);
+  });
+
+  it("returns the whole segment as one plain chunk with no spans", () => {
+    const [seg] = buildDisplay("just prose");
+    expect(segmentChunks(seg, [])).toEqual([{ d: 0, text: "just prose", spanIndex: -1 }]);
+  });
+});
+
+describe("cleanExcerpt", () => {
+  it("strips timing tokens, comments, and timecodes", () => {
+    const text = "00:01:24.1 The {{t:84.1}}craft <!-- speaker: A --> hovered";
+    expect(cleanExcerpt(text)).toBe("The craft hovered");
   });
 });
