@@ -1,0 +1,505 @@
+<script lang="ts">
+  import {
+    fetchGrading,
+    fetchHighlights,
+    fetchRawBody,
+    saveHighlights,
+    type GradingResults,
+    type IngestDetail,
+    type User,
+  } from "$lib/api";
+  import {
+    addSpan,
+    buildChunks,
+    buildRuns,
+    loadSpans,
+    overlapFraction,
+    reanchorSpans,
+    saveSpans,
+    trimSpan,
+    type UiSpan,
+  } from "$lib/highlights";
+
+  let {
+    ingest,
+    user,
+    onback,
+  }: {
+    ingest: IngestDetail;
+    user: User | null;
+    onback: () => void;
+  } = $props();
+
+  let body = $state("");
+  let bodySha = $state("");
+  let spans = $state<UiSpan[]>([]);
+  let rejected = $state<UiSpan[]>([]);
+  let complete = $state(false);
+  let dirty = $state(false);
+  let loading = $state(true);
+  let loadError = $state<string | null>(null);
+  let saving = $state(false);
+  let saveError = $state<string | null>(null);
+  let lastReviewed = $state<{ by: string; at: string } | null>(null);
+  // Set when the sidecar was made against an older body and spans had to be
+  // re-anchored by text search. `lost` spans could not be re-found.
+  let reanchorNotice = $state<{ moved: number; lost: UiSpan[] } | null>(null);
+  let grading = $state<GradingResults | null>(null);
+  let selectedSpan = $state<number>(-1);
+  let showRejected = $state(false);
+
+  let bodyEl: HTMLElement | undefined = $state();
+
+  let runs = $derived(buildRuns(body));
+  let chunks = $derived(buildChunks(runs, spans));
+
+  $effect(() => {
+    void load(ingest.content_hash);
+  });
+
+  async function load(hash: string) {
+    loading = true;
+    loadError = null;
+    try {
+      const [raw, hl, grades] = await Promise.all([
+        fetchRawBody(hash),
+        fetchHighlights(hash),
+        fetchGrading(hash),
+      ]);
+      body = raw.body;
+      bodySha = raw.body_sha256;
+      grading = grades;
+      const sidecar = hl.highlights;
+      if (sidecar) {
+        complete = sidecar.complete;
+        lastReviewed = { by: sidecar.reviewed_by, at: sidecar.reviewed_at };
+        if (sidecar.body_sha256 === raw.body_sha256) {
+          spans = loadSpans(body, sidecar.spans ?? []);
+          rejected = loadSpans(body, sidecar.rejected ?? []);
+          reanchorNotice = null;
+          dirty = false;
+        } else {
+          // Sidecar predates a body edit: offsets are unreliable, re-anchor
+          // every span by its text and flag what was lost. Saving rewrites
+          // the sidecar against the current body.
+          const spanResult = reanchorSpans(body, sidecar.spans ?? []);
+          const rejectedResult = reanchorSpans(body, sidecar.rejected ?? []);
+          spans = spanResult.anchored;
+          rejected = rejectedResult.anchored;
+          reanchorNotice = {
+            moved: spanResult.anchored.length,
+            lost: [...spanResult.lost, ...rejectedResult.lost],
+          };
+          dirty = true;
+        }
+      } else {
+        spans = [];
+        rejected = [];
+        complete = false;
+        lastReviewed = null;
+        reanchorNotice = null;
+        dirty = false;
+      }
+      selectedSpan = -1;
+    } catch (e) {
+      loadError = e instanceof Error ? e.message : String(e);
+    } finally {
+      loading = false;
+    }
+  }
+
+  /** Map a DOM selection boundary to a UTF-16 offset into the raw body.
+   *  Every rendered chunk carries data-o (its raw offset); hidden runs are
+   *  not in the DOM, so boundaries can only land on rendered chunks. */
+  function pointToRaw(node: Node, offset: number): number | null {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const el = node.parentElement?.closest("[data-o]") as HTMLElement | null;
+      return el ? Number(el.dataset.o) + offset : null;
+    }
+    const el = node as HTMLElement;
+    const children = Array.from(el.childNodes);
+    for (let i = offset; i < children.length; i++) {
+      const child = children[i] as HTMLElement;
+      if (child?.dataset?.o != null) return Number(child.dataset.o);
+      const inner = child?.querySelector?.("[data-o]") as HTMLElement | null;
+      if (inner?.dataset?.o != null) return Number(inner.dataset.o);
+    }
+    return body.length;
+  }
+
+  function handleMouseUp() {
+    if (!user) return;
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    if (!bodyEl || !bodyEl.contains(range.commonAncestorContainer)) return;
+    const start = pointToRaw(range.startContainer, range.startOffset);
+    const end = pointToRaw(range.endContainer, range.endOffset);
+    if (start === null || end === null || start === end) return;
+    const span = trimSpan(body, Math.min(start, end), Math.max(start, end));
+    if (!span) return;
+    spans = addSpan(body, spans, span);
+    dirty = true;
+    selectedSpan = spans.findIndex((s) => s.start <= span.start && s.end >= span.end);
+    sel.removeAllRanges();
+  }
+
+  function removeSpan(index: number) {
+    spans = spans.filter((_, i) => i !== index);
+    selectedSpan = -1;
+    dirty = true;
+  }
+
+  function setNote(index: number, note: string) {
+    spans = spans.map((s, i) => (i === index ? { ...s, note } : s));
+    dirty = true;
+  }
+
+  function scrollToSpan(index: number) {
+    selectedSpan = index;
+    bodyEl
+      ?.querySelector(`[data-span="${index}"]`)
+      ?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+
+  async function save() {
+    if (!user || saving) return;
+    saving = true;
+    saveError = null;
+    try {
+      const res = await saveHighlights(ingest.content_hash, {
+        complete,
+        spans: saveSpans(body, spans),
+        rejected: saveSpans(body, rejected),
+      });
+      bodySha = res.body_sha256;
+      dirty = false;
+      reanchorNotice = null;
+      lastReviewed = { by: user.email, at: new Date().toISOString() };
+    } catch (e) {
+      saveError = e instanceof Error ? e.message : String(e);
+    } finally {
+      saving = false;
+    }
+  }
+
+  function handleBack() {
+    if (dirty && !confirm("Unsaved highlight changes will be lost. Leave anyway?")) return;
+    onback();
+  }
+
+  // --- grading: accept/reject loop ---
+
+  /** Grading item offsets are code points; convert to a UI span. */
+  function toUiSpan(item: { start: number; end: number; text: string }): UiSpan {
+    return loadSpans(body, [item])[0];
+  }
+
+  function isAdjudicated(item: { start: number; end: number; text: string }): boolean {
+    const span = toUiSpan(item);
+    if (overlapFraction(span, spans) >= 0.8) return true;
+    return rejected.some((r) => r.start === span.start && r.end === span.end);
+  }
+
+  function accept(item: { start: number; end: number; text: string }) {
+    const span = toUiSpan(item);
+    spans = addSpan(body, spans, { start: span.start, end: span.end, text: span.text });
+    dirty = true;
+  }
+
+  function reject(item: { start: number; end: number; text: string }) {
+    const span = toUiSpan(item);
+    rejected = [...rejected, { start: span.start, end: span.end, text: span.text }];
+    dirty = true;
+  }
+
+  function unreject(index: number) {
+    rejected = rejected.filter((_, i) => i !== index);
+    dirty = true;
+  }
+
+  function excerpt(text: string, max = 90): string {
+    const clean = text.replace(/\{\{t:[0-9.]+\}\}/g, "").replace(/\s+/g, " ").trim();
+    return clean.length > max ? `${clean.slice(0, max)}…` : clean;
+  }
+
+  function pct(n: number): string {
+    return `${Math.round(n * 100)}%`;
+  }
+</script>
+
+<div class="flex-1 flex flex-col min-h-0">
+  <!-- Title bar -->
+  <div class="px-4 py-3 border-b border-border bg-surface-alt flex items-center gap-3 flex-none">
+    <button
+      onclick={handleBack}
+      class="p-2 rounded text-on-surface-muted hover:text-on-surface hover:bg-surface transition-colors cursor-pointer flex-none"
+      title="Back to review mode"
+    >
+      <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />
+      </svg>
+    </button>
+    <div class="flex-1 min-w-0">
+      <h2 class="font-ui font-semibold text-on-surface truncate">
+        {ingest.frontmatter.title ?? "Untitled"}
+      </h2>
+      <p class="text-xs text-on-surface-muted font-ui">
+        Relevance tuning - highlight every span relevant to the subject
+      </p>
+    </div>
+    {#if dirty}
+      <span class="text-xs font-ui font-medium text-warning flex-none">unsaved changes</span>
+    {/if}
+    <button
+      onclick={save}
+      disabled={!user || !dirty || saving}
+      class="px-3 py-1.5 rounded text-sm font-ui font-medium transition-colors flex-none
+        {user && dirty && !saving
+          ? 'bg-primary text-on-primary hover:opacity-90 cursor-pointer'
+          : 'bg-surface text-on-surface-muted cursor-default'}"
+    >
+      {saving ? "Saving..." : "Save highlights"}
+    </button>
+  </div>
+
+  {#if loading}
+    <p class="text-on-surface-muted text-sm p-6">Loading body...</p>
+  {:else if loadError}
+    <p class="text-error text-sm p-6">{loadError}</p>
+  {:else}
+    <div class="flex-1 flex min-h-0">
+      <!-- Left: the raw body, selectable -->
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div
+        bind:this={bodyEl}
+        onmouseup={handleMouseUp}
+        class="flex-1 overflow-y-auto px-8 py-6 whitespace-pre-wrap font-serif text-[15px] leading-7 text-on-surface selection:bg-primary/30 min-w-0"
+      >
+        {#each chunks as chunk}
+          {#if chunk.kind !== "hidden"}
+            {#if chunk.spanIndex >= 0}
+              <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+              <span
+                data-o={chunk.start}
+                data-span={chunk.spanIndex}
+                onclick={() => (selectedSpan = chunk.spanIndex)}
+                class="bg-primary/20 cursor-pointer
+                  {chunk.kind === 'meta' ? 'text-on-surface-muted/50 text-xs font-mono' : ''}
+                  {selectedSpan === chunk.spanIndex ? 'bg-primary/35 outline outline-1 outline-primary/60' : ''}"
+              >{chunk.text}</span>
+            {:else}
+              <span
+                data-o={chunk.start}
+                class={chunk.kind === "meta" ? "text-on-surface-muted/50 text-xs font-mono" : ""}
+              >{chunk.text}</span>
+            {/if}
+          {/if}
+        {/each}
+      </div>
+
+      <!-- Right: controls + results -->
+      <div class="w-96 flex-none border-l border-border overflow-y-auto bg-surface-alt">
+        <div class="p-4 flex flex-col gap-4">
+          {#if !user}
+            <p class="text-xs font-ui text-on-surface-muted">
+              View only - <a href="/api/auth/login" class="underline hover:text-on-surface">log in</a> to annotate.
+            </p>
+          {/if}
+
+          {#if reanchorNotice}
+            <div class="text-xs font-ui rounded border border-warning/40 bg-warning-container/30 text-on-warning-container p-3 flex flex-col gap-1">
+              <span class="font-semibold">The record body changed since these highlights were saved.</span>
+              <span>{reanchorNotice.moved} spans were re-anchored by text search{reanchorNotice.lost.length
+                ? `; ${reanchorNotice.lost.length} could not be re-found and were dropped:`
+                : "."} Save to confirm the new offsets.</span>
+              {#each reanchorNotice.lost as lostSpan}
+                <span class="italic">"{excerpt(lostSpan.text, 60)}"</span>
+              {/each}
+            </div>
+          {/if}
+
+          {#if saveError}
+            <div class="text-xs font-ui rounded border border-error/40 bg-error/10 text-error p-3">
+              Save failed: {saveError}
+            </div>
+          {/if}
+
+          <!-- Reviewed in full: what makes precision measurable -->
+          <label class="flex items-start gap-2.5 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              bind:checked={complete}
+              onchange={() => (dirty = true)}
+              disabled={!user}
+              class="mt-0.5 accent-[var(--color-primary)] w-4 h-4"
+            />
+            <span class="text-sm font-ui text-on-surface">
+              Reviewed in full
+              <span class="block text-xs text-on-surface-muted mt-0.5">
+                Every relevant span in the whole document is highlighted. Only
+                then can extractions outside the highlights be graded as
+                over-extraction.
+              </span>
+            </span>
+          </label>
+
+          {#if lastReviewed}
+            <p class="text-xs font-ui text-on-surface-muted">
+              Last saved {lastReviewed.at.slice(0, 16).replace("T", " ")} by {lastReviewed.by}
+            </p>
+          {/if}
+
+          <!-- Highlight list -->
+          <div class="flex flex-col gap-1.5">
+            <h3 class="text-xs font-ui font-semibold text-on-surface-muted uppercase tracking-wide">
+              Highlights ({spans.length})
+            </h3>
+            {#if spans.length === 0}
+              <p class="text-xs font-ui text-on-surface-muted">
+                Select text in the document to add a highlight.
+              </p>
+            {/if}
+            {#each spans as span, i}
+              <div
+                class="rounded border p-2 flex flex-col gap-1.5 bg-surface
+                  {selectedSpan === i ? 'border-primary' : 'border-border'}"
+              >
+                <div class="flex items-start gap-2">
+                  <button
+                    onclick={() => scrollToSpan(i)}
+                    class="flex-1 text-left text-xs text-on-surface cursor-pointer hover:text-primary min-w-0"
+                    title="Scroll to this span"
+                  >{excerpt(span.text)}</button>
+                  {#if user}
+                    <button
+                      onclick={() => removeSpan(i)}
+                      class="flex-none p-0.5 rounded text-on-surface-muted hover:text-error hover:bg-surface-alt cursor-pointer"
+                      title="Remove highlight"
+                      aria-label="Remove highlight"
+                    >
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  {/if}
+                </div>
+                {#if selectedSpan === i && user}
+                  <input
+                    type="text"
+                    placeholder="Note (optional)"
+                    value={span.note ?? ""}
+                    oninput={(e) => setNote(i, (e.target as HTMLInputElement).value)}
+                    class="text-xs bg-surface-alt border border-border rounded px-2 py-1
+                      text-on-surface outline-none focus:border-primary placeholder:text-on-surface-muted/50"
+                  />
+                {:else if span.note}
+                  <p class="text-xs text-on-surface-muted italic">{span.note}</p>
+                {/if}
+              </div>
+            {/each}
+          </div>
+
+          <!-- Rejected (adjudicated over-extractions) -->
+          {#if rejected.length > 0}
+            <div class="flex flex-col gap-1.5">
+              <button
+                onclick={() => (showRejected = !showRejected)}
+                class="text-xs font-ui font-semibold text-on-surface-muted uppercase tracking-wide text-left cursor-pointer hover:text-on-surface"
+              >
+                Rejected as over-extraction ({rejected.length}) {showRejected ? "▴" : "▾"}
+              </button>
+              {#if showRejected}
+                {#each rejected as r, i}
+                  <div class="rounded border border-border bg-surface p-2 flex items-start gap-2">
+                    <span class="flex-1 text-xs text-on-surface-muted line-through min-w-0">{excerpt(r.text)}</span>
+                    {#if user}
+                      <button
+                        onclick={() => unreject(i)}
+                        class="flex-none text-xs font-ui text-on-surface-muted hover:text-on-surface underline cursor-pointer"
+                        title="Remove from rejected list"
+                      >undo</button>
+                    {/if}
+                  </div>
+                {/each}
+              {/if}
+            </div>
+          {/if}
+
+          <!-- Grading results -->
+          <div class="flex flex-col gap-2">
+            <h3 class="text-xs font-ui font-semibold text-on-surface-muted uppercase tracking-wide">
+              Model grading
+            </h3>
+            {#if !grading}
+              <p class="text-xs font-ui text-on-surface-muted">
+                No grading results for this body yet. The digester writes them
+                after a model run.
+              </p>
+            {:else}
+              {#each grading.models as m}
+                {@const pending = m.off_target.filter((item) => !isAdjudicated(item))}
+                <div class="rounded border border-border bg-surface p-2.5 flex flex-col gap-2">
+                  <div class="flex items-baseline gap-2">
+                    <span class="text-xs font-ui font-medium text-on-surface flex-1 truncate">{m.model}</span>
+                    <span class="text-xs font-mono text-on-surface-muted tabular-nums" title="recall / precision / F1">
+                      R {pct(m.recall)} &middot; P {pct(m.precision)} &middot; F1 {pct(m.f1)}
+                    </span>
+                  </div>
+                  {#if m.missed.length > 0}
+                    <details class="text-xs">
+                      <summary class="font-ui text-on-surface-muted cursor-pointer">
+                        Missed highlights ({m.missed.length})
+                      </summary>
+                      <ul class="mt-1 flex flex-col gap-1">
+                        {#each m.missed as miss}
+                          <li class="text-on-surface-muted italic">"{excerpt(miss.text)}"</li>
+                        {/each}
+                      </ul>
+                    </details>
+                  {/if}
+                  {#if pending.length > 0}
+                    <div class="flex flex-col gap-1.5">
+                      <span class="text-xs font-ui text-on-surface-muted">
+                        Outside highlights ({pending.length}) - accept genuine misses, reject padding:
+                      </span>
+                      {#each pending as item}
+                        <div class="rounded bg-surface-alt border border-border p-2 flex flex-col gap-1.5">
+                          {#if item.summary}
+                            <span class="text-xs font-ui text-on-surface">{item.summary}</span>
+                          {/if}
+                          <span class="text-xs text-on-surface-muted italic">"{excerpt(item.text)}"</span>
+                          {#if user}
+                            <div class="flex gap-1.5">
+                              <button
+                                onclick={() => accept(item)}
+                                class="px-2 py-0.5 rounded text-xs font-ui font-medium bg-success/15 text-success hover:bg-success/25 cursor-pointer"
+                                title="A genuine miss - add to highlights"
+                              >Accept</button>
+                              <button
+                                onclick={() => reject(item)}
+                                class="px-2 py-0.5 rounded text-xs font-ui font-medium bg-error/10 text-error hover:bg-error/20 cursor-pointer"
+                                title="Over-extraction - record as rejected"
+                              >Reject</button>
+                              {#if item.kind}
+                                <span class="ml-auto text-[10px] font-ui text-on-surface-muted self-center uppercase">{item.kind}</span>
+                              {/if}
+                            </div>
+                          {/if}
+                        </div>
+                      {/each}
+                    </div>
+                  {:else if m.off_target.length > 0}
+                    <span class="text-xs font-ui text-on-surface-muted">
+                      All {m.off_target.length} off-target items adjudicated.
+                    </span>
+                  {/if}
+                </div>
+              {/each}
+            {/if}
+          </div>
+        </div>
+      </div>
+    </div>
+  {/if}
+</div>

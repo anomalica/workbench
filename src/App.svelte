@@ -19,6 +19,7 @@
   import FileDropZone from "$lib/components/FileDropZone.svelte";
   import IngestList from "$lib/components/IngestList.svelte";
   import IngestViewer from "$lib/components/IngestViewer.svelte";
+  import TuningView from "$lib/components/TuningView.svelte";
   import GraphView from "$lib/components/GraphView.svelte";
   import CurationView from "$lib/components/CurationView.svelte";
   import ArticlesView from "$lib/components/ArticlesView.svelte";
@@ -52,6 +53,8 @@
   let showArchived = $state(false);
   let selectedIngest = $state<IngestDetail | null>(null);
   let selectedDigest = $state<DigestDocument | null>(null);
+  // Relevance-tuning mode for the open record (highlight annotation page).
+  let tuningOpen = $state(false);
   let sourceFile = $state<File | null>(null);
   let error = $state<string | null>(null);
   let loading = $state(true);
@@ -316,6 +319,7 @@
       selectedIngest = ingest;
       selectedDigest = digest;
       sourceFile = file;
+      tuningOpen = false;
       error = null;
       // Put the public hash in the URL so password managers can associate
       // with it. Preserve any existing fragment (e.g. #claim-<uuid> from a
@@ -342,6 +346,7 @@
     selectedIngest = null;
     selectedDigest = null;
     sourceFile = null;
+    tuningOpen = false;
     error = null;
     appMode = "records";
     history.pushState(null, "", "/");
@@ -530,6 +535,12 @@
         </svg>
         <p class="text-sm font-ui">{openingLabel}</p>
       </div>
+    {:else if selectedIngest && tuningOpen}
+      <TuningView
+        ingest={selectedIngest}
+        {user}
+        onback={() => (tuningOpen = false)}
+      />
     {:else if selectedIngest}
       <IngestViewer
         ingest={selectedIngest}
@@ -548,6 +559,7 @@
           if (reviewed) trackEvent("review-submitted");
         }}
         onback={goBack}
+        ontuning={() => (tuningOpen = true)}
       />
     {:else}
       <div class="flex-1 flex flex-col min-h-0">

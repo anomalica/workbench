@@ -22,6 +22,7 @@ import string
 import time
 from abc import ABC, abstractmethod
 from datetime import datetime
+from datetime import timezone as dt_timezone
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -29,7 +30,7 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from anomalica_common.review_gate import digestibility
 
-from backend import curation, graph, models
+from backend import curation, graph, models, tuning
 from backend.auth import setup_auth
 
 FULL_HASH_LENGTH = 64
@@ -51,6 +52,9 @@ DEFAULT_INGESTS_PATH = Path(__file__).resolve().parents[2] / "ingests"
 DEFAULT_SOURCES_PATH = Path(__file__).resolve().parents[2] / "sources"
 DEFAULT_DIGESTS_PATH = Path(__file__).resolve().parents[2] / "digests"
 DEFAULT_CONTENT_PATH = Path(__file__).resolve().parents[2] / "content"
+# Grading results the digester emits for the relevance-tuning loop
+# (grading/{body_sha256}.grading.json in the digester repo). Read-only.
+DEFAULT_GRADING_PATH = Path(__file__).resolve().parents[2] / "digester" / "grading"
 
 # Sections under content/pages/ that are hand-authored static/explainer pages
 # (translated ~30 ways), NOT assembled knowledge articles. Excluded from the
@@ -236,6 +240,20 @@ class IngestSource(ABC):
     ) -> bool:
         """Append one review entry to the coverage sidecar (creating it if
         missing). Returns True on success."""
+
+    @abstractmethod
+    def load_highlights(self, full_hash: str) -> dict | None:
+        """Load the relevance-tuning highlights sidecar, or None if absent."""
+
+    @abstractmethod
+    def save_highlights(
+        self,
+        full_hash: str,
+        sidecar: dict,
+        author_name: str,
+        author_email: str,
+    ) -> bool:
+        """Write the highlights sidecar and commit it. Returns True on success."""
 
     @abstractmethod
     def reviewed_by_email(self, email: str) -> dict[str, str]:
@@ -956,6 +974,40 @@ class LocalIngestSource(IngestSource):
     def _coverage_path(self, full_hash: str) -> Path:
         return self.store / f"{full_hash}.review.json"
 
+    def _highlights_path(self, full_hash: str) -> Path:
+        return self.store / f"{full_hash}.highlights.json"
+
+    def load_highlights(self, full_hash: str) -> dict | None:
+        path = self._highlights_path(full_hash)
+        if not path.exists():
+            return None
+        with open(path) as f:
+            return json.load(f)
+
+    def save_highlights(
+        self,
+        full_hash: str,
+        sidecar: dict,
+        author_name: str,
+        author_email: str,
+    ) -> bool:
+        entry = self._scan().get(full_hash)
+        if entry is None:
+            return False
+        _, frontmatter = entry
+        path = self._highlights_path(full_hash)
+        with open(path, "w") as f:
+            json.dump(sidecar, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+        title = frontmatter.get("title", full_hash[:12])
+        self._git_commit_paths(
+            [path],
+            f"highlights: {title}",
+            author_name=author_name,
+            author_email=author_email,
+        )
+        return True
+
     def load_coverage(self, full_hash: str) -> dict | None:
         path = self._coverage_path(full_hash)
         if not path.exists():
@@ -1064,6 +1116,12 @@ class GitHubIngestSource(IngestSource):
     def append_coverage(self, **kwargs: object) -> bool:
         raise NotImplementedError("GitHubIngestSource is not yet implemented")
 
+    def load_highlights(self, full_hash: str) -> dict | None:
+        raise NotImplementedError("GitHubIngestSource is not yet implemented")
+
+    def save_highlights(self, **kwargs: object) -> bool:
+        raise NotImplementedError("GitHubIngestSource is not yet implemented")
+
     def reviewed_by_email(self, email: str) -> dict[str, str]:
         # TODO: query the GitHub REST API for commits authored by this email
         # under store/ in the ingests repo. Returning an empty dict is correct
@@ -1096,6 +1154,7 @@ sources_path = Path(os.environ.get("SOURCES_PATH", str(DEFAULT_SOURCES_PATH)))
 ingests_path = Path(os.environ.get("INGESTS_PATH", str(DEFAULT_INGESTS_PATH)))
 digests_path = Path(os.environ.get("DIGESTS_PATH", str(DEFAULT_DIGESTS_PATH)))
 content_path = Path(os.environ.get("CONTENT_PATH", str(DEFAULT_CONTENT_PATH)))
+grading_path = Path(os.environ.get("GRADING_PATH", str(DEFAULT_GRADING_PATH)))
 # Public site base for linking assembled article pages (the live, post-digest layer).
 site_base_url = os.environ.get("SITE_BASE_URL", "https://anomalica.is").rstrip("/")
 
@@ -2122,6 +2181,104 @@ def get_coverage(full_hash: str) -> JSONResponse:
         raise HTTPException(status_code=404, detail="Not found")
     sidecar = source.load_coverage(full_hash)
     return JSONResponse({"reviews": (sidecar or {}).get("reviews", [])})
+
+
+# Relevance-tuning highlights (anomalica/highlights/1). Span offsets are
+# Unicode code points into the raw stored body - the verbatim text after the
+# closing frontmatter fence, exactly as parse_frontmatter returns it. See
+# anomalica/decisions/drafts/relevance-tuning-mode.md. These endpoints follow
+# the same access posture as the record body itself (get_ingest).
+
+
+@app.get("/api/ingests/{full_hash}/body")
+def get_raw_body(full_hash: str) -> JSONResponse:
+    """The raw stored body and its hash - the reference text that highlight
+    span offsets index. The digester pins body_sha256 from this endpoint so
+    both sides agree byte-for-byte."""
+    if not FULL_HASH_PATTERN.match(full_hash):
+        raise HTTPException(status_code=404, detail="Not found")
+    ingest = source.get_ingest(full_hash)
+    if ingest is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    body = ingest["body"]
+    return JSONResponse({"body": body, "body_sha256": tuning.body_sha256(body)})
+
+
+@app.get("/api/ingests/{full_hash}/highlights")
+def get_highlights(full_hash: str) -> JSONResponse:
+    """The highlights sidecar (null if none yet) plus the current body's
+    hash so the client can detect a stale sidecar and re-anchor."""
+    if not FULL_HASH_PATTERN.match(full_hash):
+        raise HTTPException(status_code=404, detail="Not found")
+    ingest = source.get_ingest(full_hash)
+    if ingest is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return JSONResponse(
+        {
+            "highlights": source.load_highlights(full_hash),
+            "body_sha256": tuning.body_sha256(ingest["body"]),
+        }
+    )
+
+
+@app.put("/api/ingests/{full_hash}/highlights")
+def put_highlights(full_hash: str, body: dict, request: Request) -> JSONResponse:
+    """Replace the highlights sidecar and commit it to the ingests repo.
+
+    Expects {"complete": bool, "spans": [{start,end,text,note?}],
+    "rejected": [{start,end,text}]}. Offsets are validated against the
+    current body (code points, text must match exactly); highlight spans
+    must be non-overlapping. Requires authentication.
+    """
+    user = _require_user(request)
+    if not FULL_HASH_PATTERN.match(full_hash):
+        raise HTTPException(status_code=404, detail="Not found")
+    ingest = source.get_ingest(full_hash)
+    if ingest is None:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    record_body = ingest["body"]
+    try:
+        spans = tuning.validate_spans(body.get("spans"), record_body)
+        rejected = tuning.validate_spans(
+            body.get("rejected"), record_body, field="rejected", allow_overlap=True
+        )
+    except tuning.SpanError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    sidecar = tuning.build_sidecar(
+        record_hash=full_hash,
+        body=record_body,
+        complete=bool(body.get("complete", False)),
+        spans=spans,
+        rejected=rejected,
+        reviewed_by=user["email"],
+        reviewed_at=datetime.now(dt_timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    )
+    if not source.save_highlights(
+        full_hash, sidecar, author_name=user["name"], author_email=user["email"]
+    ):
+        raise HTTPException(status_code=404, detail="Not found")
+    return JSONResponse({"saved": True, "body_sha256": sidecar["body_sha256"]})
+
+
+@app.get("/api/ingests/{full_hash}/grading")
+def get_grading(full_hash: str) -> JSONResponse:
+    """Grading results the digester emitted for this record's current body
+    (grading/{body_sha256}.grading.json in the digester repo). Read-only;
+    accept/reject adjudications write back only to the highlights sidecar."""
+    if not FULL_HASH_PATTERN.match(full_hash):
+        raise HTTPException(status_code=404, detail="Not found")
+    ingest = source.get_ingest(full_hash)
+    if ingest is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    sha = tuning.body_sha256(ingest["body"])
+    path = grading_path / f"{sha}.grading.json"
+    if not path.exists():
+        return JSONResponse({"available": False, "body_sha256": sha})
+    with open(path) as f:
+        grading = json.load(f)
+    return JSONResponse({"available": True, "body_sha256": sha, "grading": grading})
 
 
 @app.get("/api/ingests/{full_hash}/history")

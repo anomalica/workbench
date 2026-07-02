@@ -63,6 +63,7 @@
     onprev,
     onreviewedchange,
     onback,
+    ontuning,
   }: {
     ingest: IngestDetail;
     digest?: DigestDocument | null;
@@ -80,6 +81,8 @@
     onprev?: () => void;
     onreviewedchange?: (hash: string, reviewed: boolean) => void;
     onback: () => void;
+    /** Switch this record into relevance-tuning mode. */
+    ontuning?: () => void;
   } = $props();
 
   const doc = new DocumentStore();
@@ -2406,6 +2409,15 @@
         {/if}
       </button>
     </div>
+
+    {#if ontuning && !STATIC_READS}
+      <button
+        onclick={ontuning}
+        class="px-2 py-1 rounded text-xs font-ui font-medium flex-none border border-border
+          text-on-surface-secondary hover:bg-surface transition-colors cursor-pointer"
+        title="Relevance tuning: highlight the spans a good extraction should cover"
+      >Tuning</button>
+    {/if}
 
     {#if reviewed}
       <span

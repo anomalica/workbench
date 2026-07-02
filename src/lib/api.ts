@@ -351,6 +351,95 @@ export async function fetchHistory(hash: string): Promise<ReviewHistoryEntry[]> 
   return Array.isArray(data?.history) ? data.history : [];
 }
 
+// Relevance-tuning highlights (anomalica/highlights/1). Span offsets are
+// Unicode code points into the raw stored body - src/lib/highlights.ts
+// converts to/from the UI's UTF-16 offsets.
+
+export interface HighlightSpan {
+  start: number;
+  end: number;
+  text: string;
+  note?: string;
+}
+
+export interface HighlightsSidecar {
+  schema: string;
+  record_hash: string;
+  body_sha256: string;
+  complete: boolean;
+  reviewed_by: string;
+  reviewed_at: string;
+  spans: HighlightSpan[];
+  rejected: HighlightSpan[];
+}
+
+/** The raw stored body (the reference text highlight offsets index) and its
+ *  hash. This is the same text the digester pins body_sha256 from.
+ *  DYNAMIC (the live FastAPI only) - tuning mode is not part of the static
+ *  snapshot, and its entry point is hidden on static builds. */
+export async function fetchRawBody(hash: string): Promise<{ body: string; body_sha256: string }> {
+  const res = await fetch(`/api/ingests/${hash}/body`);
+  if (!res.ok) throw new Error(`Failed to fetch body: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchHighlights(
+  hash: string,
+): Promise<{ highlights: HighlightsSidecar | null; body_sha256: string }> {
+  const res = await fetch(`/api/ingests/${hash}/highlights`);
+  if (!res.ok) throw new Error(`Failed to fetch highlights: ${res.status}`);
+  return res.json();
+}
+
+export async function saveHighlights(
+  hash: string,
+  payload: { complete: boolean; spans: HighlightSpan[]; rejected: HighlightSpan[] },
+): Promise<{ saved: boolean; body_sha256: string }> {
+  const res = await fetch(`/api/ingests/${hash}/highlights`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail || `Save failed (${res.status})`);
+  }
+  return res.json();
+}
+
+export interface GradingItem extends HighlightSpan {
+  kind?: "claim" | "node";
+  summary?: string;
+  overlap_fraction?: number;
+}
+
+export interface GradingModelResult {
+  model: string;
+  recall: number;
+  precision: number;
+  f1: number;
+  missed: HighlightSpan[];
+  off_target: GradingItem[];
+}
+
+export interface GradingResults {
+  schema: string;
+  record_hash: string;
+  body_sha256: string;
+  graded_at?: string;
+  models: GradingModelResult[];
+}
+
+/** Grading results the digester emitted for this record's current body.
+ *  Null when no grading exists (or on any error) - the tuning page then
+ *  simply shows no results section. DYNAMIC (the live FastAPI only). */
+export async function fetchGrading(hash: string): Promise<GradingResults | null> {
+  const res = await fetch(`/api/ingests/${hash}/grading`);
+  if (!res.ok) return null;
+  const data = await res.json().catch(() => null);
+  return data?.available ? (data.grading as GradingResults) : null;
+}
+
 export interface User {
   name: string;
   email: string;

@@ -1,0 +1,235 @@
+/**
+ * Relevance-tuning highlights: span logic for the tuning-mode page.
+ *
+ * The sidecar contract (anomalica/highlights/1) indexes spans by Unicode
+ * CODE POINTS into the raw stored body. JS strings index UTF-16 code units,
+ * which diverge on astral characters, so the UI works in UTF-16 throughout
+ * and converts at the API boundary (loadSpans/saveSpans).
+ *
+ * Spec: anomalica/decisions/drafts/relevance-tuning-mode.md.
+ */
+
+/** A span in UTF-16 code units (UI-internal representation). */
+export interface UiSpan {
+  start: number;
+  end: number;
+  text: string;
+  note?: string;
+}
+
+/** A span as stored in the sidecar (Unicode code points). */
+export interface WireSpan {
+  start: number;
+  end: number;
+  text: string;
+  note?: string;
+}
+
+/** Convert a UTF-16 index into a code-point index. */
+export function utf16ToCodePoint(body: string, utf16Index: number): number {
+  let cp = 0;
+  for (let i = 0; i < utf16Index && i < body.length; i++) {
+    const code = body.charCodeAt(i);
+    // Skip the low half of a surrogate pair (counted with its high half).
+    if (code >= 0xdc00 && code <= 0xdfff) continue;
+    cp++;
+  }
+  return cp;
+}
+
+/** Convert a code-point index into a UTF-16 index. */
+export function codePointToUtf16(body: string, cpIndex: number): number {
+  let cp = 0;
+  let i = 0;
+  while (i < body.length && cp < cpIndex) {
+    const code = body.charCodeAt(i);
+    i += code >= 0xd800 && code <= 0xdbff ? 2 : 1;
+    cp++;
+  }
+  return i;
+}
+
+/** Sidecar (code-point) spans to UI (UTF-16) spans. */
+export function loadSpans(body: string, spans: WireSpan[]): UiSpan[] {
+  return spans.map((s) => {
+    const start = codePointToUtf16(body, s.start);
+    const end = codePointToUtf16(body, s.end);
+    return { ...s, start, end, text: body.slice(start, end) };
+  });
+}
+
+/** UI (UTF-16) spans to sidecar (code-point) spans. */
+export function saveSpans(body: string, spans: UiSpan[]): WireSpan[] {
+  return spans.map((s) => {
+    const out: WireSpan = {
+      start: utf16ToCodePoint(body, s.start),
+      end: utf16ToCodePoint(body, s.end),
+      text: body.slice(s.start, s.end),
+    };
+    if (s.note) out.note = s.note;
+    return out;
+  });
+}
+
+/** Trim a selection to non-whitespace content. Returns null if nothing left. */
+export function trimSpan(body: string, start: number, end: number): UiSpan | null {
+  while (start < end && /\s/.test(body[start])) start++;
+  while (end > start && /\s/.test(body[end - 1])) end--;
+  if (start >= end) return null;
+  return { start, end, text: body.slice(start, end) };
+}
+
+/** Insert a new span, merging any existing spans it touches into one.
+ *  The merged span keeps the first non-empty note among the merged. */
+export function addSpan(body: string, spans: UiSpan[], next: UiSpan): UiSpan[] {
+  let { start, end } = next;
+  let note = next.note;
+  const kept: UiSpan[] = [];
+  for (const s of spans) {
+    if (s.end < start || s.start > end) {
+      kept.push(s);
+    } else {
+      start = Math.min(start, s.start);
+      end = Math.max(end, s.end);
+      if (!note && s.note) note = s.note;
+    }
+  }
+  const merged: UiSpan = { start, end, text: body.slice(start, end) };
+  if (note) merged.note = note;
+  kept.push(merged);
+  kept.sort((a, b) => a.start - b.start || a.end - b.end);
+  return kept;
+}
+
+/** Re-anchor spans from an older body onto the current one by exact text
+ *  search (nearest occurrence to the original offset wins). Spans whose
+ *  text no longer occurs are returned in `lost`. */
+export function reanchorSpans(
+  body: string,
+  spans: UiSpan[],
+): { anchored: UiSpan[]; lost: UiSpan[] } {
+  const anchored: UiSpan[] = [];
+  const lost: UiSpan[] = [];
+  for (const s of spans) {
+    const positions: number[] = [];
+    let idx = body.indexOf(s.text);
+    while (idx !== -1) {
+      positions.push(idx);
+      idx = body.indexOf(s.text, idx + 1);
+    }
+    if (positions.length === 0) {
+      lost.push(s);
+      continue;
+    }
+    let best = positions[0];
+    for (const p of positions) {
+      if (Math.abs(p - s.start) < Math.abs(best - s.start)) best = p;
+    }
+    const span: UiSpan = { start: best, end: best + s.text.length, text: s.text };
+    if (s.note) span.note = s.note;
+    anchored.push(span);
+  }
+  let merged: UiSpan[] = [];
+  for (const s of anchored.sort((a, b) => a.start - b.start || a.end - b.end)) {
+    merged = addSpan(body, merged, s);
+  }
+  return { anchored: merged, lost };
+}
+
+/** Fraction of a span's characters that fall inside any of the given spans. */
+export function overlapFraction(span: UiSpan, spans: UiSpan[]): number {
+  const length = span.end - span.start;
+  if (length <= 0) return 0;
+  let covered = 0;
+  for (const s of spans) {
+    covered += Math.max(0, Math.min(span.end, s.end) - Math.max(span.start, s.start));
+  }
+  return Math.min(1, covered / length);
+}
+
+/** How the raw body is displayed. `text` renders normally, `meta` renders
+ *  dimmed (annotation comments and fences the digester's input retains),
+ *  `hidden` is not rendered at all ({{t:}} word-timing tokens - ~65% of a
+ *  record/2 body). Offsets stay exact because runs partition the body. */
+export type RunKind = "text" | "meta" | "hidden";
+
+export interface Run {
+  /** UTF-16 offset of the run's first character in the body. */
+  start: number;
+  text: string;
+  kind: RunKind;
+}
+
+const WORD_TIMING = /\{\{t:[0-9.]+\}\}/g;
+const HTML_COMMENT = /<!--[\s\S]*?-->/g;
+// An annotation fence: a line of ---, its YAML lines, and the closing ---.
+const ANNOTATION_FENCE = /^---\n[\s\S]*?\n---$/gm;
+
+/** Partition the raw body into contiguous display runs. */
+export function buildRuns(body: string): Run[] {
+  // Collect non-text intervals first, then emit the gaps as text runs.
+  const marks: Array<{ start: number; end: number; kind: RunKind }> = [];
+  for (const re of [WORD_TIMING, HTML_COMMENT, ANNOTATION_FENCE]) {
+    re.lastIndex = 0;
+    for (const m of body.matchAll(re)) {
+      marks.push({
+        start: m.index,
+        end: m.index + m[0].length,
+        kind: re === WORD_TIMING ? "hidden" : "meta",
+      });
+    }
+  }
+  marks.sort((a, b) => a.start - b.start || a.end - b.end);
+
+  const runs: Run[] = [];
+  let pos = 0;
+  for (const mark of marks) {
+    if (mark.start < pos) continue; // nested/overlapping match already covered
+    if (mark.start > pos) {
+      runs.push({ start: pos, text: body.slice(pos, mark.start), kind: "text" });
+    }
+    runs.push({ start: mark.start, text: body.slice(mark.start, mark.end), kind: mark.kind });
+    pos = mark.end;
+  }
+  if (pos < body.length) {
+    runs.push({ start: pos, text: body.slice(pos), kind: "text" });
+  }
+  return runs;
+}
+
+/** A run further split against span boundaries for rendering: each chunk is
+ *  either fully inside a highlight (spanIndex >= 0) or fully outside. */
+export interface Chunk {
+  start: number;
+  text: string;
+  kind: RunKind;
+  /** Index into the span list, or -1 when not highlighted. */
+  spanIndex: number;
+}
+
+/** Split runs at span boundaries so each chunk maps to one highlight state. */
+export function buildChunks(runs: Run[], spans: UiSpan[]): Chunk[] {
+  const chunks: Chunk[] = [];
+  for (const run of runs) {
+    const runEnd = run.start + run.text.length;
+    // Boundaries inside this run: run edges plus any span edge that cuts it.
+    const cuts = new Set<number>([run.start, runEnd]);
+    for (const s of spans) {
+      if (s.start > run.start && s.start < runEnd) cuts.add(s.start);
+      if (s.end > run.start && s.end < runEnd) cuts.add(s.end);
+    }
+    const edges = [...cuts].sort((a, b) => a - b);
+    for (let i = 0; i < edges.length - 1; i++) {
+      const start = edges[i];
+      const end = edges[i + 1];
+      const spanIndex = spans.findIndex((s) => s.start <= start && s.end >= end);
+      chunks.push({
+        start,
+        text: run.text.slice(start - run.start, end - run.start),
+        kind: run.kind,
+        spanIndex,
+      });
+    }
+  }
+  return chunks;
+}
