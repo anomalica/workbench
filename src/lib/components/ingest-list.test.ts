@@ -34,11 +34,12 @@ function ingest(over: Partial<IngestSummary>): IngestSummary {
 
 function bars(container: HTMLElement) {
   return [...container.querySelectorAll('span[title*="observed"]')].map((cell) => {
-    const fill = [...cell.querySelectorAll("span")].pop() as HTMLElement;
+    const fill = cell.querySelector('span[style*="width"]') as HTMLElement;
     return {
       width: fill.style.width,
       className: fill.className,
       title: cell.getAttribute("title"),
+      label: cell.lastElementChild?.textContent?.trim(),
     };
   });
 }
@@ -65,11 +66,28 @@ describe("IngestList digestible progress bar", () => {
     expect(done.width).toBe("100%");
     expect(done.className).toContain("bg-success");
     expect(done.title).toContain("100% observed");
+    expect(done.label).toBe("Yes");
 
     expect(wip.width).toBe("20%"); // floored from 20.5
     expect(wip.className).toContain("bg-primary");
     expect(wip.title).toContain("20% observed");
+    expect(wip.label).toBe("20%");
 
     expect(fresh.width).toBe("0%");
+    expect(fresh.label).toBe("0%");
+  });
+
+  it("labels a digestible-but-undigested record Ready, never a bare No", () => {
+    const { container } = render(IngestList, {
+      props: props([
+        ingest({ content_hash: "ready", digestible: true, digested: false }),
+        ingest({ content_hash: "built", digestible: true, digested: true }),
+        ingest({ content_hash: "todo", digestible: false, digested: false }),
+      ]),
+    });
+    const cells = [...container.querySelectorAll("div[role='button'] .w-20.font-ui")].map((c) =>
+      c.textContent?.trim(),
+    );
+    expect(cells).toEqual(["Ready", "Yes", "No"]);
   });
 });

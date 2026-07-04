@@ -85,6 +85,9 @@
   <button onclick={() => onsort("copyright")} class="w-16 flex-none cursor-pointer hover:text-on-surface text-left" title="Sort by access (publicly viewable?)">
     Public {sortBy === "copyright" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
   </button>
+  <!-- Matches the archive/restore button cell in each row, so header labels
+       sit exactly over their column values. -->
+  <span class="w-8 flex-none" aria-hidden="true"></span>
 </div>
 
 <!-- Rows. The row is a role="button" div (not a <button>) so the publisher and
@@ -161,7 +164,7 @@
           {/each}
         </span>
         <span
-          class="w-28 flex-none flex items-center"
+          class="w-28 flex-none flex items-center gap-1.5"
           title={`${observedPercent(ingest.observed_coverage)}% observed${ingest.digestible ? " - digestible" : " - not yet digestible"}`}
         >
           <span class="flex-1 h-1.5 rounded-full bg-border overflow-hidden">
@@ -170,12 +173,18 @@
               style="width:{observedPercent(ingest.observed_coverage)}%"
             ></span>
           </span>
+          <span
+            class="w-9 flex-none text-right text-xs font-ui tabular-nums
+              {ingest.digestible ? 'font-medium text-success' : 'text-on-surface-muted'}"
+          >
+            {ingest.digestible ? "Yes" : `${observedPercent(ingest.observed_coverage)}%`}
+          </span>
         </span>
         <span class="w-20 flex-none text-xs font-ui">
           {#if ingest.digested}
             <span class="text-on-surface" title="A digest has been built">Yes</span>
           {:else if ingest.digestible}
-            <span class="font-medium text-primary" title="Digestible but not yet digested">No</span>
+            <span class="font-medium text-primary" title="Fully reviewed - ready for the digester; no digest built yet">Ready</span>
           {:else}
             <span class="text-on-surface-muted" title="Not digested">No</span>
           {/if}
