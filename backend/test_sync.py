@@ -155,6 +155,31 @@ def test_sync_once_never_pulls_over_dirty_tree(repos):
     assert "Mid-edit." in content  # the edit is untouched
 
 
+def test_untracked_files_never_pause_sync(repos):
+    """The scheduler intake writes an untracked incoming/ dir into the
+    ingests clone - untracked files must not read as dirty or block pulls."""
+    origin, local = repos
+    (local / "incoming").mkdir()
+    (local / "incoming" / "queued-source.bin").write_text("raw bytes")
+
+    other = origin.parent / "advance3"
+    subprocess.run(["git", "clone", "-q", str(origin), str(other)], check=True)
+    _git(other, "config", "user.name", "Edge")
+    _git(other, "config", "user.email", "edge@example.invalid")
+    (other / "new.md").write_text("from origin\n")
+    _git(other, "add", "-A")
+    _git(other, "commit", "-q", "-m", "review: origin advance")
+    _git(other, "push", "-q", "origin", "main")
+
+    from backend.sync import SyncManager
+
+    mgr = SyncManager(local)
+    status = mgr.sync_once()
+    assert status["dirty"] is False
+    assert status["behind"] == 0  # pulled despite the untracked files
+    assert (local / "incoming" / "queued-source.bin").exists()
+
+
 def test_sync_once_reports_offline(repos, tmp_path):
     origin, local = repos
     _git(local, "remote", "set-url", "origin", str(tmp_path / "gone.git"))
