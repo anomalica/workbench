@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
-"""Tests for pushing local review commits to origin (the sync half that
-keeps localhost work from silently drifting away from the live site)."""
+"""Tests for the commit-only sync model: the workbench commits, the
+operations auto-push watcher is the single pusher, and this code only
+OBSERVES (fetch, fast-forward when purely behind, report divergence).
+It must never rebase - two processes rebasing one clone corrupted
+FETCH_HEAD ("cannot rebase onto multiple branches")."""
 
 import subprocess
 
 import pytest
 
 from backend.server import LocalIngestSource
+from backend.sync import SyncManager
 
 CONTENT_HASH = "e" * 64
 
@@ -61,98 +65,62 @@ def origin_head_subject(origin) -> str:
     ).stdout.strip()
 
 
-def test_commit_review_pushes_to_origin(repos):
+def advance_origin(origin, name: str) -> None:
+    other = origin.parent / f"advance-{name}"
+    subprocess.run(["git", "clone", "-q", str(origin), str(other)], check=True)
+    _git(other, "config", "user.name", "Edge")
+    _git(other, "config", "user.email", "edge@example.invalid")
+    (other / f"{name}.md").write_text("from origin\n")
+    _git(other, "add", "-A")
+    _git(other, "commit", "-q", "-m", f"review: origin advance {name}")
+    _git(other, "push", "-q", "origin", "main")
+
+
+def test_commit_review_is_commit_only(repos):
+    """The review commit lands locally and origin is untouched - pushing
+    belongs to the auto-push watcher, never this process."""
     origin, local = repos
     src = LocalIngestSource(local)
     src.save_ingest(CONTENT_HASH, RECORD.replace("Line one.", "Line edited."))
-    synced, detail = src.commit_review(
+    src.commit_review(
         full_hash=CONTENT_HASH,
         author_name="Reviewer",
         author_email="reviewer@example.invalid",
         notes="",
     )
-    assert synced, detail
-    assert origin_head_subject(origin) == "review: Sync Record"
-
-
-def test_push_rebases_when_origin_advanced(repos):
-    origin, local = repos
-    # Origin advances independently (an edge review from the live site).
-    other = origin.parent / "other"
-    subprocess.run(["git", "clone", "-q", str(origin), str(other)], check=True)
-    _git(other, "config", "user.name", "Edge")
-    _git(other, "config", "user.email", "edge@example.invalid")
-    (other / "elsewhere.md").write_text("edge write\n")
-    _git(other, "add", "-A")
-    _git(other, "commit", "-q", "-m", "review: from the edge")
-    _git(other, "push", "-q", "origin", "main")
-
-    src = LocalIngestSource(local)
-    src.save_ingest(CONTENT_HASH, RECORD.replace("Line one.", "Local edit."))
-    synced, detail = src.commit_review(
-        full_hash=CONTENT_HASH,
-        author_name="Reviewer",
-        author_email="reviewer@example.invalid",
-        notes="",
-    )
-    assert synced, detail
-    # Both commits are on origin: the local one rebased on top of the edge one.
-    log = subprocess.run(
-        ["git", "log", "--format=%s", "main"],
-        cwd=origin,
+    local_subject = subprocess.run(
+        ["git", "log", "-1", "--format=%s"],
+        cwd=local,
         capture_output=True,
         text=True,
         check=True,
-    ).stdout.splitlines()
-    assert log[0] == "review: Sync Record"
-    assert "review: from the edge" in log
+    ).stdout.strip()
+    assert local_subject == "review: Sync Record"
+    assert origin_head_subject(origin) == "initial"
 
 
-def test_sync_once_pulls_when_behind_and_clean(repos):
+def test_sync_once_fast_forwards_when_purely_behind(repos):
     origin, local = repos
-    other = origin.parent / "advance"
-    subprocess.run(["git", "clone", "-q", str(origin), str(other)], check=True)
-    _git(other, "config", "user.name", "Edge")
-    _git(other, "config", "user.email", "edge@example.invalid")
-    (other / "new.md").write_text("from origin\n")
-    _git(other, "add", "-A")
-    _git(other, "commit", "-q", "-m", "review: origin advance")
-    _git(other, "push", "-q", "origin", "main")
-
-    from backend.sync import SyncManager
-
+    advance_origin(origin, "ff")
     mgr = SyncManager(local)
     status = mgr.sync_once()
     assert status["behind"] == 0
     assert status["ahead"] == 0
     assert not status["offline"]
-    assert (local / "new.md").exists()
+    assert (local / "ff.md").exists()
 
 
 def test_sync_once_never_pulls_over_dirty_tree(repos):
     origin, local = repos
-    other = origin.parent / "advance2"
-    subprocess.run(["git", "clone", "-q", str(origin), str(other)], check=True)
-    _git(other, "config", "user.name", "Edge")
-    _git(other, "config", "user.email", "edge@example.invalid")
-    (other / "new.md").write_text("from origin\n")
-    _git(other, "add", "-A")
-    _git(other, "commit", "-q", "-m", "review: origin advance")
-    _git(other, "push", "-q", "origin", "main")
-
-    # Local tracked modification (a review being edited right now).
+    advance_origin(origin, "dirty")
     (local / "store" / f"{CONTENT_HASH}.md").write_text(
         RECORD.replace("Line one.", "Mid-edit.")
     )
-
-    from backend.sync import SyncManager
-
     mgr = SyncManager(local)
     status = mgr.sync_once()
     assert status["dirty"] is True
     assert status["behind"] == 1  # fetched, but never pulled over the dirt
-    content = (local / "store" / f"{CONTENT_HASH}.md").read_text()
-    assert "Mid-edit." in content  # the edit is untouched
+    assert "Mid-edit." in (local / "store" / f"{CONTENT_HASH}.md").read_text()
 
 
 def test_untracked_files_never_pause_sync(repos):
@@ -161,94 +129,84 @@ def test_untracked_files_never_pause_sync(repos):
     origin, local = repos
     (local / "incoming").mkdir()
     (local / "incoming" / "queued-source.bin").write_text("raw bytes")
-
-    other = origin.parent / "advance3"
-    subprocess.run(["git", "clone", "-q", str(origin), str(other)], check=True)
-    _git(other, "config", "user.name", "Edge")
-    _git(other, "config", "user.email", "edge@example.invalid")
-    (other / "new.md").write_text("from origin\n")
-    _git(other, "add", "-A")
-    _git(other, "commit", "-q", "-m", "review: origin advance")
-    _git(other, "push", "-q", "origin", "main")
-
-    from backend.sync import SyncManager
-
+    advance_origin(origin, "untracked")
     mgr = SyncManager(local)
     status = mgr.sync_once()
     assert status["dirty"] is False
-    assert status["behind"] == 0  # pulled despite the untracked files
+    assert status["behind"] == 0
     assert (local / "incoming" / "queued-source.bin").exists()
 
 
 def test_sync_once_reports_offline(repos, tmp_path):
     origin, local = repos
     _git(local, "remote", "set-url", "origin", str(tmp_path / "gone.git"))
-
-    from backend.sync import SyncManager
-
     mgr = SyncManager(local)
     status = mgr.sync_once()
     assert status["offline"] is True
     assert status["last_error"]
 
 
-def test_sync_once_pushes_ahead_commits(repos):
+def test_sync_once_nudges_plain_push_when_purely_ahead(repos):
+    """Reconnect recovery: the watcher wakes on commits, so old offline
+    commits get one plain (never rebasing) push nudge."""
     origin, local = repos
     (local / "store" / f"{CONTENT_HASH}.md").write_text(
         RECORD.replace("Line one.", "Offline review.")
     )
     _git(local, "add", "-A")
     _git(local, "commit", "-q", "-m", "review: made while offline")
-
-    from backend.sync import SyncManager
-
     mgr = SyncManager(local)
     status = mgr.sync_once()
     assert status["ahead"] == 0
     assert origin_head_subject(origin) == "review: made while offline"
 
 
-def test_push_failure_is_reported_not_silent(repos, tmp_path):
+def test_sync_once_leaves_divergence_to_the_watcher(repos):
+    """Ahead AND behind: no pull, no push, no rebase - just honest counts.
+    The watcher integrates on its next push."""
     origin, local = repos
-    # Point origin at a URL that cannot exist so the push fails.
-    _git(local, "remote", "set-url", "origin", str(tmp_path / "gone.git"))
-    src = LocalIngestSource(local)
-    src.save_ingest(CONTENT_HASH, RECORD.replace("Line one.", "Offline edit."))
-    synced, detail = src.commit_review(
-        full_hash=CONTENT_HASH,
-        author_name="Reviewer",
-        author_email="reviewer@example.invalid",
-        notes="",
+    (local / "store" / f"{CONTENT_HASH}.md").write_text(
+        RECORD.replace("Line one.", "Local edit.")
     )
-    assert not synced
-    assert detail  # a reason is surfaced
-    # The review commit itself is safe locally.
-    subject = subprocess.run(
+    _git(local, "add", "-A")
+    _git(local, "commit", "-q", "-m", "review: local")
+    advance_origin(origin, "diverge")
+
+    mgr = SyncManager(local)
+    status = mgr.sync_once()
+    assert status["ahead"] == 1
+    assert status["behind"] == 1
+    # Origin untouched by us; local history not rewritten.
+    assert origin_head_subject(origin) == "review: origin advance diverge"
+    local_subject = subprocess.run(
         ["git", "log", "-1", "--format=%s"],
         cwd=local,
         capture_output=True,
         text=True,
         check=True,
     ).stdout.strip()
-    assert subject == "review: Sync Record"
+    assert local_subject == "review: local"
 
 
-def test_commit_review_with_push_deferred(repos):
+def test_wait_for_push_confirms_when_watcher_lands_it(repos):
     origin, local = repos
-    src = LocalIngestSource(local)
-    src.save_ingest(CONTENT_HASH, RECORD.replace("Line one.", "Deferred edit."))
-    synced, detail = src.commit_review(
-        full_hash=CONTENT_HASH,
-        author_name="Reviewer",
-        author_email="reviewer@example.invalid",
-        notes="",
-        push=False,
+    mgr = SyncManager(local)
+    # Nothing ahead: confirmed immediately.
+    synced, detail = mgr.wait_for_push(timeout_seconds=0.5)
+    assert synced, detail
+
+    # Ahead with no watcher: times out with an honest message.
+    (local / "store" / f"{CONTENT_HASH}.md").write_text(
+        RECORD.replace("Line one.", "Waiting.")
     )
+    _git(local, "add", "-A")
+    _git(local, "commit", "-q", "-m", "review: waiting")
+    synced, detail = mgr.wait_for_push(timeout_seconds=1.0)
     assert not synced
-    assert detail == "push deferred"
-    # The commit exists locally but origin has NOT moved.
-    assert origin_head_subject(origin) == "initial"
-    # The explicit push phase then lands it.
-    pushed, push_detail = src.push_origin()
-    assert pushed, push_detail
-    assert origin_head_subject(origin) == "review: Sync Record"
+    assert "auto-push watcher" in detail
+
+    # The "watcher" pushes (simulated); the next wait confirms without
+    # this process ever pushing.
+    _git(local, "push", "-q", "origin", "HEAD")
+    synced, detail = mgr.wait_for_push(timeout_seconds=0.5)
+    assert synced, detail

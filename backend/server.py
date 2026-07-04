@@ -236,12 +236,11 @@ class IngestSource(ABC):
         author_name: str,
         author_email: str,
         notes: str,
-        push: bool = True,
-    ) -> tuple[bool, str]:
-        """Commit the current state of the file as a review and sync it to
-        origin. Returns (synced, detail): synced False means the review is
-        safe locally but has NOT reached GitHub - callers must surface it.
-        push=False defers the sync (the caller runs it as a separate step)."""
+    ) -> None:
+        """Commit the current state of the file as a review. COMMIT-ONLY:
+        pushing is the operations auto-push watcher's job (the single
+        pusher for the ingests clone); callers observe the sync state via
+        the SyncManager rather than driving it."""
 
     @abstractmethod
     def load_verification(self, full_hash: str) -> dict | None:
@@ -693,54 +692,18 @@ class LocalIngestSource(IngestSource):
             f.write(content)
         return True
 
-    def push_origin(self) -> tuple[bool, str]:
-        """Push local commits to origin so localhost work reaches the live
-        site immediately (a local commit that only ever sits on this machine
-        is exactly the drift the sync work exists to kill). If the push is
-        rejected because origin advanced (edge reviews land there directly),
-        rebase onto origin and retry. Never forces; on any failure the local
-        commit stays safe and (ok=False, detail) is returned for the caller
-        to surface - never strand silently."""
-        import subprocess
-
-        repo_dir = self.store.parent
-
-        def run(*args: str) -> subprocess.CompletedProcess:
-            return subprocess.run(
-                ["git", *args], cwd=repo_dir, capture_output=True, text=True
-            )
-
-        with GIT_LOCK:
-            last = ""
-            for _ in range(3):
-                push = run("push", "origin", "HEAD")
-                if push.returncode == 0:
-                    return True, ""
-                last = (push.stderr or push.stdout).strip()[-300:]
-                # Explicit branch: a bare `pull --rebase origin` reads
-                # FETCH_HEAD, which a concurrent fetch (the operations
-                # auto-push watcher) can turn into "cannot rebase onto
-                # multiple branches".
-                rebase = run("pull", "--rebase", "origin", "main")
-                if rebase.returncode != 0:
-                    run("rebase", "--abort")
-                    detail = (rebase.stderr or rebase.stdout).strip()[-300:]
-                    return False, detail or last
-            return False, last
-
     def commit_review(
         self,
         full_hash: str,
         author_name: str,
         author_email: str,
         notes: str,
-        push: bool = True,
-    ) -> tuple[bool, str]:
+    ) -> None:
         import subprocess
 
         entry = self._scan().get(full_hash)
         if entry is None:
-            return False, "record not found"
+            return
         md_path, frontmatter = entry
         title = frontmatter.get("title", full_hash[:12])
 
@@ -810,13 +773,9 @@ class LocalIngestSource(IngestSource):
             # Invalidate the cached review index so the new commit shows up
             # in /api/me/reviews on the next read.
             self._reviewed_cache = None
-
-            # Local commits must reach origin immediately, or localhost
-            # reviews silently drift from the live site. A deferred push
-            # (two-phase submit) runs via POST /api/sync/push instead.
-            if not push:
-                return False, "push deferred"
-            return self.push_origin()
+            # COMMIT-ONLY: the operations auto-push watcher (the single
+            # pusher for this clone) sees the new reflog entry and pushes
+            # within seconds; the submit flow observes it via wait_for_push.
 
     # Per-email list of (kind, value, iso_ts) trailers. Cross-referenced
     # against record frontmatter identities in reviewed_by_email.
@@ -1085,7 +1044,7 @@ class LocalIngestSource(IngestSource):
             author_name=author_name,
             author_email=author_email,
         )
-        self.push_origin()
+        # Commit-only: the auto-push watcher lands it on origin.
         return True
 
     def load_coverage(self, full_hash: str) -> dict | None:
@@ -1184,7 +1143,7 @@ class GitHubIngestSource(IngestSource):
     def save_ingest(self, full_hash: str, content: str) -> bool:
         raise NotImplementedError("GitHubIngestSource is not yet implemented")
 
-    def commit_review(self, **kwargs: object) -> tuple[bool, str]:
+    def commit_review(self, **kwargs: object) -> None:
         raise NotImplementedError("GitHubIngestSource is not yet implemented")
 
     def load_verification(self, full_hash: str) -> dict | None:
@@ -2526,34 +2485,34 @@ def submit_review(full_hash: str, body: dict, request: Request) -> JSONResponse:
             total_units=total_units,
         )
 
-    # Git commit with reviewer as author, then sync to origin. A failed
-    # push is NOT a failed review (the commit is safe locally), but it must
-    # be surfaced - unsynced local reviews never reach the live site.
-    # `push: false` defers the push so the client can run it as a separate
-    # step (POST /api/sync/push) and show save/push progress distinctly.
-    synced, sync_detail = source.commit_review(
+    # Git commit with reviewer as author. COMMIT-ONLY: the operations
+    # auto-push watcher is the single pusher for the ingests clone (two
+    # concurrent rebasers corrupted FETCH_HEAD); the client's second phase
+    # (POST /api/sync/push) OBSERVES the watcher landing the commit.
+    source.commit_review(
         full_hash=full_hash,
         author_name=user["name"],
         author_email=user["email"],
         notes=notes,
-        push=bool(body.get("push", True)),
     )
 
     return JSONResponse(
-        {"submitted": True, "synced": synced, "sync_detail": sync_detail}
+        {"submitted": True, "synced": False, "sync_detail": "auto-push pending"}
     )
 
 
 @app.post("/api/sync/push")
 def sync_push(request: Request) -> JSONResponse:
-    """Push local ingests commits to origin now. The second phase of a
-    review submit (the slow half - a pull-rebase-push can take seconds), so
-    the client can report save and push progress separately. Requires
-    authentication; local-clone deployments only."""
+    """Confirm local ingests commits reached origin - the second phase of a
+    review submit. OBSERVES the operations auto-push watcher (the single
+    pusher, ~2s after any commit) by polling the ahead count until it hits
+    zero or a short timeout passes; never pushes or rebases itself, so it
+    cannot race the watcher. Requires authentication; local-clone
+    deployments only."""
     _require_user(request)
-    if not isinstance(source, LocalIngestSource):
+    if sync_manager is None:
         raise HTTPException(status_code=404, detail="Not found")
-    synced, detail = source.push_origin()
+    synced, detail = sync_manager.wait_for_push()
     return JSONResponse({"synced": synced, "sync_detail": detail})
 
 

@@ -1,20 +1,28 @@
 #!/usr/bin/env python3
-"""Keep the local ingests clone in step with origin.
+"""Keep the local ingests clone in step with origin - as an OBSERVER.
 
-The local workbench exists to test UI changes, never to hold a private data
-state - so the clone must track origin both ways: local review commits push
-up immediately (LocalIngestSource.push_origin) and origin advances (edge
-reviews from the live site) pull down here. This module adds the down/idle
-half: a fetch on startup and every few minutes, pulling with --rebase when
-the tree is clean, plus a status snapshot the UI header renders so any
-divergence is visible instead of silent.
+The single pusher for the ingests clone is the operations auto-push
+watcher (anomalica-autopush.service: inotify on .git/logs/HEAD, pushes
+within ~2s of any commit, rebasing onto origin only when a push is
+rejected). The workbench used to push and rebase too, and the two
+processes raced on fetch/rebase ("cannot rebase onto multiple
+branches"). So the workbench is now COMMIT-ONLY and this module never
+rebases:
 
-Guard rails: never force-push, never pull over a dirty tree (the dirt is
-surfaced in the status instead), abort a conflicted rebase and report it.
+- fetch on startup and every few minutes, to see where origin is;
+- pull --ff-only when purely behind with a clean tree (a fast-forward
+  can't conflict with anything);
+- a plain, no-rebase push ONLY when ahead and not behind - reconnect
+  recovery for commits made offline, since the watcher only wakes on new
+  commits. A concurrent watcher push just wins the race; a rejected
+  plain push is reported, never force-resolved here;
+- diverged (ahead AND behind) is reported and left for the watcher,
+  which integrates on its next push.
 
-GIT_LOCK serialises every mutating git operation on the clone between the
-sync thread and request handlers (commit + push during a review submit), so
-a background rebase can never interleave with a review commit.
+The status snapshot drives the header indicator so any divergence is
+visible instead of silent. GIT_LOCK serialises this loop against the
+request handlers' commits within this process; cross-process safety
+comes from never rebasing.
 """
 
 from __future__ import annotations
@@ -30,7 +38,7 @@ SYNC_INTERVAL_SECONDS = 180
 
 
 class SyncManager:
-    """Background fetch/pull loop + status snapshot for one git clone."""
+    """Background fetch/observe loop + status snapshot for one git clone."""
 
     def __init__(self, repo_dir: Path, interval: int = SYNC_INTERVAL_SECONDS):
         self.repo_dir = Path(repo_dir)
@@ -51,7 +59,9 @@ class SyncManager:
         )
 
     def counts(self) -> tuple[int, int]:
-        """(ahead, behind) of HEAD vs origin/main - no network involved."""
+        """(ahead, behind) of HEAD vs origin/main - no network involved.
+        The auto-push watcher shares this clone, so its successful push
+        updates origin/main here and ahead drops to 0 without a fetch."""
         out = self._run("rev-list", "--left-right", "--count", "HEAD...origin/main")
         if out.returncode != 0:
             return 0, 0
@@ -60,7 +70,7 @@ class SyncManager:
 
     def dirty(self) -> bool:
         """Tracked modifications in the work tree (untracked files don't
-        block a rebase, so they don't count)."""
+        block a fast-forward, so they don't count)."""
         out = self._run("status", "--porcelain")
         return any(
             line and not line.startswith("??") for line in out.stdout.splitlines()
@@ -78,7 +88,8 @@ class SyncManager:
         }
 
     def sync_once(self) -> dict:
-        """One fetch + (when clean) pull --rebase + push round."""
+        """One fetch + observe round. Fast-forwards when purely behind;
+        nudges a plain push when purely ahead; never rebases."""
         with GIT_LOCK:
             fetch = self._run("fetch", "origin")
             if fetch.returncode != 0:
@@ -87,28 +98,38 @@ class SyncManager:
             else:
                 self.offline = False
                 self.last_error = ""
-                if not self.dirty():
-                    _, behind = self.counts()
-                    if behind:
-                        # Explicit branch - a bare `pull --rebase origin` reads
-                        # FETCH_HEAD, which a concurrent fetch from another
-                        # process can turn into "cannot rebase onto multiple
-                        # branches".
-                        pull = self._run("pull", "--rebase", "origin", "main")
-                        if pull.returncode != 0:
-                            self._run("rebase", "--abort")
-                            self.last_error = (pull.stderr or pull.stdout).strip()[
-                                -300:
-                            ]
-                    ahead, _ = self.counts()
-                    if ahead and not self.last_error:
-                        push = self._run("push", "origin", "HEAD")
-                        if push.returncode != 0:
-                            self.last_error = (push.stderr or push.stdout).strip()[
-                                -300:
-                            ]
+                ahead, behind = self.counts()
+                if behind and not ahead and not self.dirty():
+                    pull = self._run("pull", "--ff-only", "origin", "main")
+                    if pull.returncode != 0:
+                        self.last_error = (pull.stderr or pull.stdout).strip()[-300:]
+                elif ahead and not behind:
+                    # Reconnect recovery: the watcher wakes on commits, not on
+                    # connectivity, so old offline commits need one nudge. A
+                    # plain push cannot corrupt anything - if the watcher gets
+                    # there first this is a no-op or a clean rejection.
+                    push = self._run("push", "origin", "HEAD")
+                    if push.returncode != 0:
+                        self.last_error = (push.stderr or push.stdout).strip()[-300:]
             self.checked_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             return self.status()
+
+    def wait_for_push(self, timeout_seconds: float = 12.0) -> tuple[bool, str]:
+        """Observe the auto-push watcher landing local commits on origin:
+        poll the ahead count until it reaches 0 or the timeout passes.
+        Never pushes - the watcher owns that."""
+        deadline = datetime.now(timezone.utc).timestamp() + timeout_seconds
+        while True:
+            ahead, _ = self.counts()
+            if ahead == 0:
+                return True, ""
+            if datetime.now(timezone.utc).timestamp() >= deadline:
+                return (
+                    False,
+                    f"{ahead} commit{'s' if ahead != 1 else ''} committed locally; "
+                    "the auto-push watcher hasn't confirmed the push yet",
+                )
+            self._stop.wait(0.4)
 
     def _loop(self) -> None:
         while not self._stop.wait(self.interval):
@@ -118,8 +139,8 @@ class SyncManager:
                 self.last_error = str(e)[-300:]
 
     def start(self) -> None:
-        """Run one sync now (startup pull), then keep syncing in the
-        background for the life of the process."""
+        """Run one sync now (startup fetch/fast-forward), then keep
+        observing in the background for the life of the process."""
         if self._thread is not None:
             return
         try:
