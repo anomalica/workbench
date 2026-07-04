@@ -1206,7 +1206,7 @@
     body = body.replace(
       /<!--\s*file_page:\s*(\d+)\s*-->\s*\n\s*<!--\s*printed_page:\s*([A-Za-z0-9]+)\s*-->/g,
       (_, filePage, printedPage) =>
-        `<div class="page-marker" data-file-page="${filePage}"><span class="page-label">Page ${printedPage}</span></div>`,
+        `\n\n<div class="page-marker" data-file-page="${filePage}"><span class="page-label">Page ${printedPage}</span></div>\n\n`,
     );
     return body.replace(
       /<!--\s*([\s\S]*?)-->/g,
@@ -1215,13 +1215,15 @@
         // Page marker (PDFs)
         const pageMatch = trimmed.match(/^file_page:\s*(\d+)/);
         if (pageMatch) {
-          return `<div class="page-marker" data-file-page="${pageMatch[1]}"><span class="page-label">Page ${pageMatch[1]}</span></div>`;
+          // Blank lines around the raw div, or CommonMark's HTML block runs
+          // to the next blank line and swallows an adjacent heading.
+          return `\n\n<div class="page-marker" data-file-page="${pageMatch[1]}"><span class="page-label">Page ${pageMatch[1]}</span></div>\n\n`;
         }
         // Page marker (ebooks): printed_page stands alone - EPUB pagebreaks
         // have no file_page - and must render as a visible divider.
         const printedMatch = trimmed.match(/^printed_page:\s*([A-Za-z0-9]+)$/);
         if (printedMatch) {
-          return `<div class="page-marker" data-printed-page="${printedMatch[1]}"><span class="page-label">Page ${printedMatch[1]}</span></div>`;
+          return `\n\n<div class="page-marker" data-printed-page="${printedMatch[1]}"><span class="page-label">Page ${printedMatch[1]}</span></div>\n\n`;
         }
         // Structural markers: suppress in body (used for nav, not display)
         if (/^(chapter|chapter_title|speaker)\s*:/.test(trimmed)) {
