@@ -352,10 +352,13 @@
         {selectionAllMarked ? "Mark unread" : "Mark read"}
       </button>
       {#if selectionMarkable}
+        <!-- Guidance summarised from the canonical list in
+             architecture/review-workbench.md#what-to-mark-irrelevant -
+             link/summarise, never duplicate. -->
         <button
           onclick={markSelectionIrrelevant}
           class="font-medium text-warning cursor-pointer hover:underline whitespace-nowrap"
-          title="Wrap the selected blocks in irrelevant markers - kept in the record but excluded from extraction"
+          title="Kept in the record, excluded from extraction. Mark anything that is not domain content: marketing and self-promotion, copyright/legal pages, contents and indices, bibliographies and endnote lists, dedication-style filler, ads and AV filler. Full guidance: review-workbench.md - What to mark irrelevant."
         >
           Mark irrelevant
         </button>
