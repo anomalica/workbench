@@ -2,6 +2,7 @@
   import type { IngestDetail, DigestDocument, User } from "$lib/api";
   import {
     submitReview,
+    pushOrigin,
     fetchCoverage,
     provenanceOf,
     submitVerification,
@@ -1518,6 +1519,11 @@
 
   // Submit review state
   let submitting = $state(false);
+  // Which submit phase is running, for the inline progress text: the push is
+  // the slow half (a pull-rebase-push can take seconds) and must not read as
+  // a hang. "synced" flashes briefly once the push lands.
+  let submitPhase = $state<"saving" | "pushing" | "synced" | null>(null);
+  let syncedFlashTimer: ReturnType<typeof setTimeout> | undefined;
   // Approve is a no-op empty commit on top of an existing reviewed record.
   // Still informational for labels/titles, but no longer disables submit:
   // a reviewed record can take a fresh zero-edit submission carrying
@@ -1740,13 +1746,36 @@
           total_units: recordVerdict.total_units,
         }
       : undefined;
-    const result = await submitReview(ingest.content_hash, doc.current, reviewNotes, spans, verdict);
+    // Two-phase on the local backend so the slow push reports as its own
+    // step; the edge deploy writes straight to GitHub in one call.
+    submitPhase = "saving";
+    const result = await submitReview(ingest.content_hash, doc.current, reviewNotes, spans, verdict, {
+      deferPush: !STATIC_READS,
+    });
+    let synced = result.synced !== false;
+    let syncDetail = result.syncDetail || "";
+    if (result.ok && !STATIC_READS) {
+      submitPhase = "pushing";
+      const push = await pushOrigin();
+      // null = no push endpoint (edge-style deploy): already on GitHub.
+      synced = push ? push.synced : true;
+      syncDetail = push?.syncDetail || "";
+    }
     submitting = false;
+    if (result.ok && synced) {
+      submitPhase = "synced";
+      clearTimeout(syncedFlashTimer);
+      syncedFlashTimer = setTimeout(() => {
+        if (submitPhase === "synced") submitPhase = null;
+      }, 4000);
+    } else {
+      submitPhase = null;
+    }
     if (result.ok) {
       // Committed locally but not pushed to origin - the live site will not
       // see this review until sync succeeds. Loud, never silent.
-      syncWarning = result.synced === false
-        ? `Review saved and committed locally, but NOT yet synced to GitHub - the live site will not show it. ${result.syncDetail || ""}`.trim()
+      syncWarning = !synced
+        ? `Review saved and committed locally, but NOT yet synced to GitHub - the live site will not show it. ${syncDetail}`.trim()
         : null;
       showSubmitForm = false;
       reviewNotes = "";
@@ -2498,7 +2527,11 @@
       <svg class="w-3.5 h-3.5 flex-none" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
       </svg>
-      <span>Reviewing as {user.name}</span>
+      {#if submitPhase === "synced"}
+        <span class="font-medium">Review synced to GitHub</span>
+      {:else}
+        <span>Reviewing as {user.name}</span>
+      {/if}
     {:else}
       <svg class="w-3.5 h-3.5 flex-none" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
         <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" />
@@ -2606,6 +2639,18 @@
         {/if}
 
         <div class="flex items-center gap-2 mt-4">
+          {#if submitting}
+            <!-- Save is quick; the push (pull-rebase-push against GitHub) is the
+                 slow half - naming the phase keeps a multi-second push from
+                 reading as a hang. -->
+            <span class="flex items-center gap-1.5 text-xs font-ui text-on-surface-muted whitespace-nowrap">
+              <svg class="w-3 h-3 animate-spin text-primary flex-none" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+              </svg>
+              {submitPhase === "pushing" ? "Pushing to GitHub..." : "Saving..."}
+            </span>
+          {/if}
           <div class="flex-1"></div>
           <button
             onclick={() => { showSubmitForm = false; submitAndAdvance = false; }}
@@ -2614,7 +2659,8 @@
           <button
             onclick={() => { submitAndAdvance = false; handleSubmit(); }}
             disabled={submitting}
-            class="text-xs font-ui font-medium px-4 py-1.5 bg-primary text-on-primary rounded cursor-pointer hover:bg-primary-hover"
+            class="text-xs font-ui font-medium px-4 py-1.5 bg-primary text-on-primary rounded cursor-pointer hover:bg-primary-hover
+              {submitting ? 'opacity-60' : ''}"
           >
             {submitting ? "Submitting..." : doc.dirty ? "Submit review" : "Approve"}
           </button>

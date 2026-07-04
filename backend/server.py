@@ -220,10 +220,12 @@ class IngestSource(ABC):
         author_name: str,
         author_email: str,
         notes: str,
+        push: bool = True,
     ) -> tuple[bool, str]:
         """Commit the current state of the file as a review and sync it to
         origin. Returns (synced, detail): synced False means the review is
-        safe locally but has NOT reached GitHub - callers must surface it."""
+        safe locally but has NOT reached GitHub - callers must surface it.
+        push=False defers the sync (the caller runs it as a separate step)."""
 
     @abstractmethod
     def load_verification(self, full_hash: str) -> dict | None:
@@ -712,6 +714,7 @@ class LocalIngestSource(IngestSource):
         author_name: str,
         author_email: str,
         notes: str,
+        push: bool = True,
     ) -> tuple[bool, str]:
         import subprocess
 
@@ -789,7 +792,10 @@ class LocalIngestSource(IngestSource):
             self._reviewed_cache = None
 
             # Local commits must reach origin immediately, or localhost
-            # reviews silently drift from the live site.
+            # reviews silently drift from the live site. A deferred push
+            # (two-phase submit) runs via POST /api/sync/push instead.
+            if not push:
+                return False, "push deferred"
             return self.push_origin()
 
     # Per-email list of (kind, value, iso_ts) trailers. Cross-referenced
@@ -1158,7 +1164,7 @@ class GitHubIngestSource(IngestSource):
     def save_ingest(self, full_hash: str, content: str) -> bool:
         raise NotImplementedError("GitHubIngestSource is not yet implemented")
 
-    def commit_review(self, **kwargs: str) -> tuple[bool, str]:
+    def commit_review(self, **kwargs: object) -> tuple[bool, str]:
         raise NotImplementedError("GitHubIngestSource is not yet implemented")
 
     def load_verification(self, full_hash: str) -> dict | None:
@@ -2414,16 +2420,32 @@ def submit_review(full_hash: str, body: dict, request: Request) -> JSONResponse:
     # Git commit with reviewer as author, then sync to origin. A failed
     # push is NOT a failed review (the commit is safe locally), but it must
     # be surfaced - unsynced local reviews never reach the live site.
+    # `push: false` defers the push so the client can run it as a separate
+    # step (POST /api/sync/push) and show save/push progress distinctly.
     synced, sync_detail = source.commit_review(
         full_hash=full_hash,
         author_name=user["name"],
         author_email=user["email"],
         notes=notes,
+        push=bool(body.get("push", True)),
     )
 
     return JSONResponse(
         {"submitted": True, "synced": synced, "sync_detail": sync_detail}
     )
+
+
+@app.post("/api/sync/push")
+def sync_push(request: Request) -> JSONResponse:
+    """Push local ingests commits to origin now. The second phase of a
+    review submit (the slow half - a pull-rebase-push can take seconds), so
+    the client can report save and push progress separately. Requires
+    authentication; local-clone deployments only."""
+    _require_user(request)
+    if not isinstance(source, LocalIngestSource):
+        raise HTTPException(status_code=404, detail="Not found")
+    synced, detail = source.push_origin()
+    return JSONResponse({"synced": synced, "sync_detail": detail})
 
 
 @app.get("/api/me/reviews")

@@ -257,6 +257,7 @@ export async function submitReview(
   notes: string,
   spans?: KindedSpan[],
   verdict?: { observed_coverage: number; digestible: boolean; total_units: number },
+  options?: { deferPush?: boolean },
 ): Promise<{ ok: boolean; error?: string; synced?: boolean; syncDetail?: string }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), SUBMIT_TIMEOUT_MS);
@@ -270,6 +271,9 @@ export async function submitReview(
         notes,
         ...(spans && spans.length > 0 ? { spans } : {}),
         ...(verdict ? { verdict } : {}),
+        // Two-phase submit (local backend): save+commit now, push as its own
+        // step via pushOrigin() so the UI can report the slow half distinctly.
+        ...(options?.deferPush ? { push: false } : {}),
       }),
       signal: controller.signal,
     });
@@ -475,6 +479,23 @@ export async function fetchSyncStatus(): Promise<SyncStatus | null> {
     return await res.json();
   } catch {
     return null;
+  }
+}
+
+/** Push local ingests commits to origin - the deferred second phase of a
+ *  review submit. Null ONLY when the deployment has no local clone (404:
+ *  the edge writes straight to GitHub, so the review is already synced).
+ *  Any other failure reports synced: false - the commit is safe locally
+ *  but did not reach GitHub. */
+export async function pushOrigin(): Promise<{ synced: boolean; syncDetail: string } | null> {
+  try {
+    const res = await fetch("/api/sync/push", { method: "POST" });
+    if (res.status === 404) return null;
+    if (!res.ok) return { synced: false, syncDetail: `push endpoint error ${res.status}` };
+    const data = await res.json();
+    return { synced: data.synced !== false, syncDetail: data.sync_detail || "" };
+  } catch {
+    return { synced: false, syncDetail: "network error during push" };
   }
 }
 

@@ -231,3 +231,24 @@ def test_push_failure_is_reported_not_silent(repos, tmp_path):
         check=True,
     ).stdout.strip()
     assert subject == "review: Sync Record"
+
+
+def test_commit_review_with_push_deferred(repos):
+    origin, local = repos
+    src = LocalIngestSource(local)
+    src.save_ingest(CONTENT_HASH, RECORD.replace("Line one.", "Deferred edit."))
+    synced, detail = src.commit_review(
+        full_hash=CONTENT_HASH,
+        author_name="Reviewer",
+        author_email="reviewer@example.invalid",
+        notes="",
+        push=False,
+    )
+    assert not synced
+    assert detail == "push deferred"
+    # The commit exists locally but origin has NOT moved.
+    assert origin_head_subject(origin) == "initial"
+    # The explicit push phase then lands it.
+    pushed, push_detail = src.push_origin()
+    assert pushed, push_detail
+    assert origin_head_subject(origin) == "review: Sync Record"
