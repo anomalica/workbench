@@ -187,7 +187,12 @@
           </span>
         </span>
         <span class="w-20 flex-none text-xs font-ui">
-          {#if ingest.digested}
+          {#if ingest.digested && !ingest.digestible}
+            <span
+              class="font-medium text-warning"
+              title="Digested under the old gate before review sign-off - review it, then re-digest"
+            >Yes</span>
+          {:else if ingest.digested}
             <span class="text-on-surface" title="A digest has been built">Yes</span>
           {:else if ingest.digestible}
             <span class="font-medium text-primary" title="Fully reviewed - ready for the digester; no digest built yet">Ready</span>

@@ -60,7 +60,10 @@
   let loading = $state(true);
   let searchQuery = $state("");
   let filterType = $state<string>("all");
-  let filterReviewed = $state<"all" | "pending" | "reviewed">("all");
+  let filterReviewed = $state<"all" | "needs_review" | "reviewed">("all");
+  // The cleanup worklist: records digested under the old gate before review
+  // sign-off - they block a clean re-digest until reviewed.
+  let filterBlocksRedigest = $state(false);
   // Click-to-filter on a creator or publisher value (empty = no filter).
   let filterCreator = $state<string>("");
   let filterPublisher = $state<string>("");
@@ -162,12 +165,13 @@
         if (filterPublisher && i.publisher !== filterPublisher) return false;
         if (filterDigestible && !i.digestible) return false;
         if (filterUntraceable && provenanceOf(i).traceable) return false;
-        // A carried-over record awaiting verification counts as pending, not
-        // reviewed, even though a stale trailer marks its hash reviewed.
+        if (filterBlocksRedigest && !(i.digested && !i.digestible)) return false;
+        // A carried-over record awaiting verification still needs review,
+        // even though a stale trailer marks its hash reviewed.
         const isReviewed =
           reviewedHashes.has(i.content_hash) && !needsVerifyHashes.has(i.content_hash);
         if (filterReviewed === "reviewed" && !isReviewed) return false;
-        if (filterReviewed === "pending" && isReviewed) return false;
+        if (filterReviewed === "needs_review" && isReviewed) return false;
         if (searchQuery.trim()) {
           const q = searchQuery.toLowerCase();
           return (
@@ -180,6 +184,13 @@
         return true;
       })
       .sort((a, b) => {
+        // In the Needs review view, the digest-blocked records (digested under
+        // the old gate, not yet signed off) are the priority - always on top.
+        if (filterReviewed === "needs_review") {
+          const blockDelta =
+            Number(b.digested && !b.digestible) - Number(a.digested && !a.digestible);
+          if (blockDelta !== 0) return blockDelta;
+        }
         let va: string;
         let vb: string;
         if (sortBy === "digestible") {
@@ -226,6 +237,10 @@
 
   let sourceTypes = $derived(
     [...new Set(ingests.map((i) => i.source_type))].sort(),
+  );
+
+  let blocksRedigestCount = $derived(
+    ingests.filter((i) => i.digested && !i.digestible).length,
   );
 
   async function loadArchivedIngests() {
@@ -589,7 +604,7 @@
             </div>
             {#if user}
               <div class="flex items-center gap-1 border-l border-border pl-3">
-                {#each [["all", "All"], ["pending", "Pending"], ["reviewed", "Reviewed"]] as [id, label]}
+                {#each [["all", "All"], ["needs_review", "Needs review"], ["reviewed", "Reviewed"]] as [id, label]}
                   <button
                     onclick={() => { filterReviewed = id as typeof filterReviewed; }}
                     class="text-xs font-ui px-2 py-1 rounded cursor-pointer transition-colors
@@ -612,6 +627,14 @@
                   {filterUntraceable ? 'bg-warning/20 text-warning' : 'text-on-surface-secondary hover:bg-surface'}"
                 title="Show only records with no recoverable source/origin"
               >Untraceable</button>
+              {#if blocksRedigestCount > 0}
+                <button
+                  onclick={() => { filterBlocksRedigest = !filterBlocksRedigest; }}
+                  class="text-xs font-ui px-2 py-1 rounded cursor-pointer transition-colors
+                    {filterBlocksRedigest ? 'bg-warning/20 text-warning' : 'text-on-surface-secondary hover:bg-surface'}"
+                  title="Records digested under the old gate before review sign-off - review them to unblock a clean re-digest"
+                >Blocks re-digest ({blocksRedigestCount})</button>
+              {/if}
             </div>
 
             <!-- Date-field selector: what value the Date column shows
