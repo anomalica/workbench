@@ -461,6 +461,30 @@ export async function fetchGrading(hash: string): Promise<GradingResults | null>
   return data?.available ? (data.grading as GradingResults) : null;
 }
 
+/** The materialised pre-digest (ADR 0042): the exact model input plus the
+ *  versioned prompt(s) sent with it. Read-only; corrections go to the
+ *  ingest. Null when not yet materialised (or on any error). DYNAMIC (the
+ *  live FastAPI only). */
+export interface Predigest {
+  predigest_sha256: string;
+  prep_version: string | number | null;
+  generated_at: string | null;
+  body: string;
+  /** The active extraction passes (nodes, claims) - what the next run sends. */
+  prompts: { name: string; version: string; text: string }[];
+}
+
+export async function fetchPredigest(hash: string): Promise<Predigest | null> {
+  try {
+    const res = await fetch(`/api/ingests/${hash}/predigest`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data?.available ? (data as Predigest) : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Sync state of the local ingests clone vs origin (local backend only -
  *  the static deploy has no clone and 404s, which callers treat as null). */
 export interface SyncStatus {

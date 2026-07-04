@@ -3,6 +3,8 @@
   import {
     submitReview,
     pushOrigin,
+    fetchPredigest,
+    type Predigest,
     fetchCoverage,
     provenanceOf,
     submitVerification,
@@ -211,7 +213,23 @@
 
   // View mode for the ingest column's sub-tabs (rendered/edit/raw/diff).
   // Digest is no longer a sub-tab; it lives in its own column.
-  let view = $state<"ingest" | "edit" | "diff" | "raw">("ingest");
+  let view = $state<"ingest" | "edit" | "diff" | "raw" | "predigest">("ingest");
+  // The materialised pre-digest (ADR 0042), fetched lazily on first tab
+  // open and re-fetched when the record changes. "missing" = the digester
+  // has not materialised one for this record yet.
+  let predigest = $state<Predigest | "loading" | "missing" | null>(null);
+  $effect(() => {
+    void ingest.content_hash;
+    predigest = null;
+  });
+  $effect(() => {
+    if (view !== "predigest" || predigest !== null) return;
+    predigest = "loading";
+    const hash = ingest.content_hash;
+    fetchPredigest(hash).then((p) => {
+      if (ingest.content_hash === hash) predigest = p ?? "missing";
+    });
+  });
   // In-editor find/replace bar over the raw body textarea (Ctrl-F / Ctrl-H).
   let findOpen = $state(false);
   let rawTextarea = $state<HTMLTextAreaElement>();
@@ -2966,7 +2984,7 @@
       <!-- Panel header with view tabs and controls. flex-wrap so the strip
            reflows cleanly when the column is narrow (three-column layout). -->
       <div class="px-3 py-2 bg-surface-alt border-b border-border flex flex-wrap items-center gap-x-1 gap-y-1.5">
-        {#each [["ingest", "Ingest", "Rendered view"], ["edit", "Edit", "Rich markdown editor"], ["raw", "Raw", "Edit raw markdown with frontmatter"], ["diff", "Diff", "View changes from original"]] as [id, label, tip]}
+        {#each [["ingest", "Ingest", "Rendered view"], ["edit", "Edit", "Rich markdown editor"], ["raw", "Raw", "Edit raw markdown with frontmatter"], ["diff", "Diff", "View changes from original"], ["predigest", "Pre-digest", "Exactly what the model receives - read-only (ADR 0042)"]] as [id, label, tip]}
           <button
             onclick={() => { view = id as typeof view; }}
             class="text-xs font-ui font-medium px-2 py-1 rounded transition-colors cursor-pointer
@@ -3267,6 +3285,58 @@
       {:else if view === "diff"}
         <div class="flex-1 overflow-auto" data-scroll-sync onscroll={handleContentScroll}>
           <DiffViewer original={doc.original} modified={doc.current} />
+        </div>
+
+      {:else if view === "predigest"}
+        <div class="flex-1 overflow-auto" data-scroll-sync onscroll={handleContentScroll}>
+          {#if predigest === "loading" || predigest === null}
+            <p class="text-on-surface-muted text-sm p-6">Loading pre-digest...</p>
+          {:else if predigest === "missing"}
+            <div class="p-6 text-sm text-on-surface-muted max-w-xl">
+              <p class="font-ui font-medium text-on-surface mb-1">No pre-digest materialised yet.</p>
+              <p>
+                The pre-digest is the exact model input - the ingest after
+                irrelevant regions are removed, footnotes inlined, and
+                word-timestamps stripped. The digester materialises it when a
+                record is (re-)digested.
+              </p>
+            </div>
+          {:else}
+            <!-- Provenance strip: what pins this exact model input. -->
+            <div class="px-4 py-1.5 border-b border-border bg-surface-alt/60 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs font-ui text-on-surface-muted">
+              <span class="font-medium text-on-surface-secondary uppercase tracking-wide">Read-only</span>
+              <span>the exact model input - corrections go to the ingest</span>
+              <span class="ml-auto font-mono" title="Pre-digest content hash: {predigest.predigest_sha256}">
+                {predigest.predigest_sha256.slice(0, 12)}
+              </span>
+              {#if predigest.prep_version}
+                <span title="Deterministic prep version">prep {predigest.prep_version}</span>
+              {/if}
+              {#if predigest.generated_at}
+                <span title="Materialised at">{predigest.generated_at.slice(0, 16).replace("T", " ")}</span>
+              {/if}
+            </div>
+
+            <!-- The exact versioned prompt(s), collapsible, in a colour distinct
+                 from record content so prompt text never reads as source text. -->
+            {#each predigest.prompts as prompt (prompt.name)}
+              <details class="mx-4 mt-3 rounded border border-[#7B4DAA]/40 bg-[#7B4DAA]/5">
+                <summary class="px-3 py-2 cursor-pointer select-none text-xs font-ui font-medium text-[#7B4DAA] flex items-center gap-2">
+                  Prompt: {prompt.name}
+                  <span class="font-normal opacity-70">({prompt.version})</span>
+                  <span class="ml-auto font-normal opacity-70">{prompt.text.length.toLocaleString()} chars</span>
+                </summary>
+                <pre class="px-3 pb-3 text-xs leading-relaxed whitespace-pre-wrap font-mono text-[#7B4DAA] dark:text-[#b794d9] max-h-96 overflow-y-auto">{prompt.text}</pre>
+              </details>
+            {/each}
+
+            <!-- The model input itself, rendered like the ingest view. -->
+            {@const predigestHtml = renderRedactions(marked.parse(preprocessAnnotations(predigest.body)) as string)}
+            <div class="px-8 py-6 prose max-w-none text-on-surface prose-headings:text-on-surface prose-a:text-primary prose-img:rounded prose-img:max-w-full prose-hr:border-border">
+              <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+              {@html predigestHtml}
+            </div>
+          {/if}
         </div>
 
       {:else if view === "edit"}

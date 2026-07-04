@@ -56,6 +56,21 @@ DEFAULT_CONTENT_PATH = Path(__file__).resolve().parents[2] / "content"
 # Grading results the digester emits for the relevance-tuning loop
 # (grading/{body_sha256}.grading.json in the digester repo). Read-only.
 DEFAULT_GRADING_PATH = Path(__file__).resolve().parents[2] / "digester" / "grading"
+# Materialised pre-digests (ADR 0042): the exact model input, content-addressed,
+# with a by-record pointer. Read-only from the digester repo (gitignored there -
+# pre-digests carry near-whole copyrighted bodies and the repo is public).
+DEFAULT_PREDIGESTS_PATH = (
+    Path(__file__).resolve().parents[2] / "digester" / "predigests"
+)
+# The digester's versioned extraction prompts: registry.yaml maps each prompt
+# id (nodes, claims) to its active version's file.
+DEFAULT_PROMPTS_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "digester"
+    / "workspace"
+    / "digester"
+    / "prompts"
+)
 
 # Sections under content/pages/ that are hand-authored static/explainer pages
 # (translated ~30 ways), NOT assembled knowledge articles. Excluded from the
@@ -1215,6 +1230,8 @@ ingests_path = Path(os.environ.get("INGESTS_PATH", str(DEFAULT_INGESTS_PATH)))
 digests_path = Path(os.environ.get("DIGESTS_PATH", str(DEFAULT_DIGESTS_PATH)))
 content_path = Path(os.environ.get("CONTENT_PATH", str(DEFAULT_CONTENT_PATH)))
 grading_path = Path(os.environ.get("GRADING_PATH", str(DEFAULT_GRADING_PATH)))
+predigests_path = Path(os.environ.get("PREDIGESTS_PATH", str(DEFAULT_PREDIGESTS_PATH)))
+prompts_path = Path(os.environ.get("PROMPTS_PATH", str(DEFAULT_PROMPTS_PATH)))
 
 # Two-way sync of the local ingests clone with origin: pull on startup and
 # every few minutes (when clean), so localhost never silently drifts from the
@@ -2345,6 +2362,81 @@ def put_highlights(full_hash: str, body: dict, request: Request) -> JSONResponse
     ):
         raise HTTPException(status_code=404, detail="Not found")
     return JSONResponse({"saved": True, "body_sha256": sidecar["body_sha256"]})
+
+
+def _active_prompts() -> list[dict]:
+    """The extraction prompts that WILL be sent with the next digest run:
+    each prompt id's active version, resolved through the digester's
+    registry.yaml (prompts.{id}.active -> versions.{v}.file, file paths
+    relative to the prompts dir). Retired ids (active: null) are skipped."""
+    import yaml as _yaml
+
+    registry_path = prompts_path / "registry.yaml"
+    if not registry_path.is_file():
+        return []
+    try:
+        registry = _yaml.safe_load(registry_path.read_text()) or {}
+    except _yaml.YAMLError:
+        return []
+    root = prompts_path.resolve()
+    prompts: list[dict] = []
+    for prompt_id, spec in (registry.get("prompts") or {}).items():
+        active = (spec or {}).get("active")
+        if not active:
+            continue
+        version = (spec.get("versions") or {}).get(active) or {}
+        file_rel = str(version.get("file", ""))
+        p = (root / file_rel).resolve()
+        if not p.is_relative_to(root) or not p.is_file():
+            continue
+        prompts.append({"name": prompt_id, "version": active, "text": p.read_text()})
+    return prompts
+
+
+def _load_predigest(full_hash: str) -> dict | None:
+    """Resolve the materialised pre-digest for a record (ADR 0042).
+
+    Contract (agreed with the digester): `predigests/by-record/
+    {record_hash}.json` points at the current artefact -
+    {"predigest_sha256", "prep_version", "generated_at"} - and the body
+    lives at `predigests/{sha}.md`, verbatim. The pre-digest is
+    prompt-independent (deterministic prep only); the prompts shown are the
+    registry's active pair - exactly what the next digest run sends."""
+    pointer_path = predigests_path / "by-record" / f"{full_hash}.json"
+    if not pointer_path.exists():
+        return None
+    with open(pointer_path) as f:
+        pointer = json.load(f)
+    sha = pointer.get("predigest_sha256", "")
+    if not FULL_HASH_PATTERN.match(sha):
+        return None
+    body_path = predigests_path / f"{sha}.md"
+    if not body_path.exists():
+        return None
+
+    return {
+        "predigest_sha256": sha,
+        "prep_version": pointer.get("prep_version"),
+        "generated_at": pointer.get("generated_at"),
+        "body": body_path.read_text(),
+        "prompts": _active_prompts(),
+    }
+
+
+@app.get("/api/ingests/{full_hash}/predigest")
+def get_predigest(full_hash: str) -> JSONResponse:
+    """The materialised pre-digest for a record: the exact model input
+    (irrelevant regions removed, footnotes inlined, timestamps stripped)
+    plus the versioned prompt(s) sent with it. Read-only - corrections go
+    to the ingest, never here (ADR 0042)."""
+    if not FULL_HASH_PATTERN.match(full_hash):
+        raise HTTPException(status_code=404, detail="Not found")
+    if source.get_ingest(full_hash) is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    predigest = _load_predigest(full_hash)
+    if predigest is None:
+        return JSONResponse({"available": False})
+    return JSONResponse({"available": True, **predigest})
 
 
 @app.get("/api/ingests/{full_hash}/grading")
