@@ -6,6 +6,10 @@ import {
   observedLineSpans,
   blocksCoveredBySpans,
   unitsInSpans,
+  markIrrelevantLines,
+  unmarkIrrelevantAt,
+  shiftSpansForMark,
+  shiftSpansForRemoval,
 } from "./text-blocks";
 
 describe("isContentLine", () => {
@@ -74,5 +78,86 @@ describe("observed line spans and coverage", () => {
     // Even if a span covers the comment block's line, it has no units so it is
     // never reported as covered.
     expect(blocksCoveredBySpans(cb, [{ from: 0, to: 2 }])).toEqual(new Set([0]));
+  });
+});
+
+describe("irrelevant regions", () => {
+  const body = "Intro paragraph.\n\nAd for the sequel.\n\nBuy it now.\n\nAppendix A.";
+  // blocks: 0 Intro [0,0], 1 Ad [2,2], 2 Buy [4,4], 3 Appendix [6,6]
+
+  it("marks a block range and parses it back as irrelevant", () => {
+    const marked = markIrrelevantLines(body, 2, 4);
+    expect(marked).toBe(
+      "Intro paragraph.\n\n<!-- irrelevant: start -->\n\nAd for the sequel.\n\nBuy it now.\n\n<!-- irrelevant: end -->\n\nAppendix A.",
+    );
+    const blocks = parseTextBlocks(marked);
+    expect(blocks.map((b) => [b.source, b.irrelevant])).toEqual([
+      ["Intro paragraph.", false],
+      ["Ad for the sequel.", true],
+      ["Buy it now.", true],
+      ["Appendix A.", false],
+    ]);
+  });
+
+  it("irrelevant blocks carry no reviewable units", () => {
+    const blocks = parseTextBlocks(markIrrelevantLines(body, 2, 4));
+    expect(totalUnits(blocks)).toBe(2); // only Intro + Appendix count
+    expect(blocks[1].contentLines).toEqual([]);
+  });
+
+  it("unmark restores the original body exactly", () => {
+    const marked = markIrrelevantLines(body, 2, 4);
+    const regionLine = parseTextBlocks(marked).find((b) => b.irrelevant)?.lineFrom ?? -1;
+    const result = unmarkIrrelevantAt(marked, regionLine);
+    expect(result.body).toBe(body);
+    expect(result.removed).toEqual([2, 3, 7, 8]);
+  });
+
+  it("unmark outside any region is a no-op", () => {
+    const marked = markIrrelevantLines(body, 2, 4);
+    expect(unmarkIrrelevantAt(marked, 0)).toEqual({ body: marked, removed: [] });
+  });
+
+  it("tolerates the no-space marker form when parsing", () => {
+    const legacy = "Keep.\n\n<!-- irrelevant:start -->\nJunk.\n<!-- irrelevant:end -->";
+    const blocks = parseTextBlocks(legacy);
+    expect(blocks.map((b) => [b.source, b.irrelevant])).toEqual([
+      ["Keep.", false],
+      ["Junk.", true],
+    ]);
+  });
+
+  it("supports multiple regions without nesting", () => {
+    const two = markIrrelevantLines(markIrrelevantLines(body, 6, 6), 0, 0);
+    const blocks = parseTextBlocks(two);
+    expect(blocks.map((b) => b.irrelevant)).toEqual([true, false, false, true]);
+  });
+
+  it("shifts session coverage spans past inserted markers", () => {
+    const spans = [
+      { from: 0, to: 0 }, // before the region - unmoved
+      { from: 2, to: 4 }, // inside - shifted by the start-side insert
+      { from: 6, to: 6 }, // after - shifted by both inserts
+    ];
+    expect(shiftSpansForMark(spans, 2, 4)).toEqual([
+      { from: 0, to: 0 },
+      { from: 4, to: 6 },
+      { from: 10, to: 10 },
+    ]);
+  });
+});
+
+describe("shiftSpansForRemoval", () => {
+  it("shifts spans down past removed marker lines", () => {
+    const spans = [
+      { from: 0, to: 0 },
+      { from: 4, to: 6 },
+      { from: 12, to: 12 },
+    ];
+    expect(shiftSpansForRemoval(spans, [2, 3, 7, 8])).toEqual([
+      { from: 0, to: 0 },
+      { from: 2, to: 4 },
+      { from: 8, to: 8 },
+    ]);
   });
 });

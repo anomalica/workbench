@@ -25,8 +25,13 @@ export interface TextBlock {
   lineTo: number;
   /** The block's verbatim source text. */
   source: string;
-  /** Source line indices within the block that count as reviewable units. */
+  /** Source line indices within the block that count as reviewable units.
+   *  Empty for blocks inside an irrelevant region - they are excluded from
+   *  extraction, so they are not reviewable content either. */
   contentLines: number[];
+  /** True when the block sits inside an irrelevant region (between
+   *  irrelevant:start/end markers). */
+  irrelevant: boolean;
 }
 
 /** A body line is a reviewable unit iff it is non-blank and is not an HTML
@@ -36,32 +41,148 @@ export function isContentLine(line: string): boolean {
   return s !== "" && !s.startsWith("<!--");
 }
 
+// Block-level irrelevant regions for prose records: whole blocks wrapped in
+// marker comment lines. The text is never deleted - the digester strips the
+// region before extraction. Non-nesting; multiple regions per body. The
+// canonical form is `<!-- irrelevant: start -->` (record-format.md - the
+// space makes it a YAML mapping); parsing tolerates a missing space.
+const IRRELEVANT_START = /^<!--\s*irrelevant:\s*start\s*-->$/;
+const IRRELEVANT_END = /^<!--\s*irrelevant:\s*end\s*-->$/;
+
+export function isIrrelevantStart(line: string): boolean {
+  return IRRELEVANT_START.test(line.trim());
+}
+
+export function isIrrelevantEnd(line: string): boolean {
+  return IRRELEVANT_END.test(line.trim());
+}
+
 /** Split a record body (frontmatter already stripped) into blocks of
- *  consecutive non-blank lines. */
+ *  consecutive non-blank lines. Irrelevant markers act as block boundaries
+ *  and belong to no block; blocks between a marker pair carry
+ *  `irrelevant: true` and no reviewable units. */
 export function parseTextBlocks(body: string): TextBlock[] {
   const lines = body.split("\n");
   const blocks: TextBlock[] = [];
   let i = 0;
   let index = 0;
+  let inIrrelevant = false;
   while (i < lines.length) {
     if (lines[i].trim() === "") {
       i++;
       continue;
     }
+    if (isIrrelevantStart(lines[i])) {
+      inIrrelevant = true;
+      i++;
+      continue;
+    }
+    if (isIrrelevantEnd(lines[i])) {
+      inIrrelevant = false;
+      i++;
+      continue;
+    }
     const from = i;
-    while (i < lines.length && lines[i].trim() !== "") i++;
+    while (
+      i < lines.length &&
+      lines[i].trim() !== "" &&
+      !isIrrelevantStart(lines[i]) &&
+      !isIrrelevantEnd(lines[i])
+    ) {
+      i++;
+    }
     const to = i - 1;
     const contentLines: number[] = [];
-    for (let j = from; j <= to; j++) if (isContentLine(lines[j])) contentLines.push(j);
+    if (!inIrrelevant) {
+      for (let j = from; j <= to; j++) if (isContentLine(lines[j])) contentLines.push(j);
+    }
     blocks.push({
       index: index++,
       lineFrom: from,
       lineTo: to,
       source: lines.slice(from, to + 1).join("\n"),
       contentLines,
+      irrelevant: inIrrelevant,
     });
   }
   return blocks;
+}
+
+/** Wrap the inclusive line range in irrelevant markers, each on its own
+ *  blank-line-separated annotation line (the canonical record-format.md
+ *  layout). The range must be block-aligned (the caller passes block
+ *  boundaries); the wrapped text itself is untouched. Returns the new body. */
+export function markIrrelevantLines(body: string, lineFrom: number, lineTo: number): string {
+  const lines = body.split("\n");
+  lines.splice(lineTo + 1, 0, "", "<!-- irrelevant: end -->");
+  lines.splice(lineFrom, 0, "<!-- irrelevant: start -->", "");
+  return lines.join("\n");
+}
+
+/** Remove the marker pair enclosing `line` (any line inside the region),
+ *  along with the blank spacer lines markIrrelevantLines added, restoring
+ *  the pre-mark body exactly. Returns the new body plus the removed line
+ *  indices (pre-removal coordinates) so callers can shift line-anchored
+ *  coverage spans. The body comes back unchanged (removed: []) when no
+ *  enclosing region exists. */
+export function unmarkIrrelevantAt(
+  body: string,
+  line: number,
+): { body: string; removed: number[] } {
+  const lines = body.split("\n");
+  let start = -1;
+  for (let i = Math.min(line, lines.length - 1); i >= 0; i--) {
+    if (isIrrelevantEnd(lines[i]) && i < line) return { body, removed: [] };
+    if (isIrrelevantStart(lines[i])) {
+      start = i;
+      break;
+    }
+  }
+  if (start === -1) return { body, removed: [] };
+  let end = -1;
+  for (let i = Math.max(line, start + 1); i < lines.length; i++) {
+    if (isIrrelevantEnd(lines[i])) {
+      end = i;
+      break;
+    }
+  }
+  if (end === -1) return { body, removed: [] };
+  // Delete from the highest index down so earlier splices don't shift later
+  // ones. Adjacent spacer blanks are removed only where present, so a
+  // hand-authored region without them unmarks cleanly too.
+  const remove = [end];
+  if (end - 1 > start && lines[end - 1].trim() === "") remove.push(end - 1);
+  if (start + 1 < end && lines[start + 1].trim() === "") remove.push(start + 1);
+  remove.push(start);
+  const removed = [...new Set(remove)].sort((a, b) => b - a);
+  for (const i of removed) lines.splice(i, 1);
+  return { body: lines.join("\n"), removed: removed.reverse() };
+}
+
+/** Shift line spans down past removed lines (pre-removal coordinates).
+ *  Removed lines are markers/spacers, never inside a coverage span. */
+export function shiftSpansForRemoval(spans: CoverageSpan[], removed: number[]): CoverageSpan[] {
+  return spans.map((s) => ({
+    ...s,
+    from: s.from - removed.filter((r) => r < s.from).length,
+    to: s.to - removed.filter((r) => r < s.to).length,
+  }));
+}
+
+/** Shift line spans to follow a marker insertion: two lines (marker +
+ *  spacer) land before original line `lineFrom` and two more after original
+ *  line `lineTo`. Keeps this session's read-coverage aligned with the
+ *  edited body. */
+export function shiftSpansForMark(
+  spans: CoverageSpan[],
+  lineFrom: number,
+  lineTo: number,
+): CoverageSpan[] {
+  return spans.map((s) => {
+    const shiftFrom = s.from >= lineFrom ? (s.from > lineTo ? 4 : 2) : 0;
+    const shiftTo = s.to >= lineFrom ? (s.to > lineTo ? 4 : 2) : 0;
+    return { ...s, from: s.from + shiftFrom, to: s.to + shiftTo };
+  });
 }
 
 /** Total reviewable units across the whole body. */

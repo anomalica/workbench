@@ -3798,6 +3798,7 @@
             bind:containerEl={proseContainer}
             onscroll={handleContentScroll}
             onverdict={(v) => (textVerdict = v)}
+            onbodyedit={user ? (b) => doc.editBody(b) : undefined}
           />
         {:else}
           {@const processedBody = preprocessAnnotations(currentBody())}

@@ -6,6 +6,11 @@
     observedLineSpans,
     blocksCoveredBySpans,
     unitsInSpans,
+    markIrrelevantLines,
+    unmarkIrrelevantAt,
+    shiftSpansForMark,
+    shiftSpansForRemoval,
+    type TextBlock,
   } from "$lib/text-blocks";
   import { safeLocalSet } from "$lib/storage";
 
@@ -17,6 +22,7 @@
     containerEl = $bindable(),
     onscroll,
     onverdict,
+    onbodyedit,
   }: {
     /** Record body with the frontmatter already stripped. */
     body: string;
@@ -31,6 +37,10 @@
     containerEl?: HTMLDivElement;
     /** Forwarded scroll handler (digest scroll-sync). */
     onscroll?: (e: Event) => void;
+    /** Apply a body edit (mark/unmark irrelevant) through the parent's
+     *  DocumentStore, so it undoes and commits like any review edit.
+     *  Absent in view-only contexts - the marking UI hides. */
+    onbodyedit?: (newBody: string) => void;
     /** Report the coverage verdict whenever it changes, so a review submit can
      *  persist the observed line spans + fraction to the sidecar. */
     onverdict?: (v: {
@@ -45,8 +55,73 @@
   let renderedBlocks = $derived(
     blocks
       .map((b) => ({ block: b, html: renderBlock(b.source) }))
-      .filter((r) => r.html.trim() !== ""),
+      .filter((r) => r.html.trim() !== "" || r.block.irrelevant),
   );
+
+  // Group runs of consecutive irrelevant blocks into one collapsible region
+  // strip; everything else renders as ordinary blocks.
+  type Rendered = { block: TextBlock; html: string };
+  type DisplayItem =
+    | { kind: "block"; block: TextBlock; html: string }
+    | { kind: "region"; blocks: Rendered[] };
+  let displayItems = $derived.by(() => {
+    const items: DisplayItem[] = [];
+    for (const r of renderedBlocks) {
+      const last = items[items.length - 1];
+      if (r.block.irrelevant) {
+        if (last?.kind === "region") last.blocks.push(r);
+        else items.push({ kind: "region", blocks: [r] });
+      } else {
+        items.push({ kind: "block", block: r.block, html: r.html });
+      }
+    }
+    return items;
+  });
+
+  // Regions are collapsed by default; expansion is keyed by the region's
+  // first source line (stable for a given body version).
+  let expandedRegions = $state<number[]>([]);
+
+  function regionKey(region: { blocks: Rendered[] }): number {
+    return region.blocks[0].block.lineFrom;
+  }
+
+  function toggleRegion(key: number) {
+    expandedRegions = expandedRegions.includes(key)
+      ? expandedRegions.filter((k) => k !== key)
+      : [...expandedRegions, key];
+  }
+
+  // Marking is offered only when the parent wired an edit path and the
+  // selection holds at least one markable (non-irrelevant, content) block.
+  let selectionMarkable = $derived.by(() => {
+    if (!onbodyedit || !range) return false;
+    const chosen = selectedIndices()
+      .map((i) => blocks.find((b) => b.index === i))
+      .filter((b): b is TextBlock => !!b);
+    return chosen.length > 0 && chosen.every((b) => !b.irrelevant);
+  });
+
+  function markSelectionIrrelevant() {
+    if (!onbodyedit || !range) return;
+    const chosen = selectedIndices()
+      .map((i) => blocks.find((b) => b.index === i))
+      .filter((b): b is TextBlock => !!b && !b.irrelevant);
+    if (chosen.length === 0) return;
+    const lineFrom = Math.min(...chosen.map((b) => b.lineFrom));
+    const lineTo = Math.max(...chosen.map((b) => b.lineTo));
+    observedSpans = shiftSpansForMark(observedSpans, lineFrom, lineTo);
+    onbodyedit(markIrrelevantLines(body, lineFrom, lineTo));
+    clearSelection();
+  }
+
+  function unmarkRegion(region: { blocks: Rendered[] }) {
+    if (!onbodyedit) return;
+    const { body: newBody, removed } = unmarkIrrelevantAt(body, regionKey(region));
+    if (removed.length === 0) return;
+    observedSpans = shiftSpansForRemoval(observedSpans, removed);
+    onbodyedit(newBody);
+  }
 
   // This session's pending marks, persisted as line spans (stable across the
   // block re-indexing an edit would cause). Prior committed coverage is shown
@@ -270,6 +345,15 @@
       >
         {selectionAllMarked ? "Mark unread" : "Mark read"}
       </button>
+      {#if selectionMarkable}
+        <button
+          onclick={markSelectionIrrelevant}
+          class="font-medium text-warning cursor-pointer hover:underline whitespace-nowrap"
+          title="Wrap the selected blocks in irrelevant markers - kept in the record but excluded from extraction"
+        >
+          Mark irrelevant
+        </button>
+      {/if}
       <button
         onclick={clearSelection}
         class="text-on-surface-muted hover:text-on-surface cursor-pointer whitespace-nowrap"
@@ -308,7 +392,47 @@
     class="flex-1 overflow-auto px-4 py-4"
   >
     <div class="mx-auto max-w-3xl flex flex-col">
-      {#each renderedBlocks as { block, html } (block.index)}
+      {#each displayItems as item (item.kind === "block" ? item.block.index : `r${regionKey(item)}`)}
+        {#if item.kind === "region"}
+          {@const key = regionKey(item)}
+          {@const expanded = expandedRegions.includes(key)}
+          <div class="my-2 rounded border border-border bg-surface-alt/50">
+            <div class="flex items-center gap-2 px-3 py-1.5 text-xs font-ui">
+              <span class="font-medium text-on-surface-muted uppercase tracking-wide">Irrelevant</span>
+              <span class="text-on-surface-muted">
+                {item.blocks.length} block{item.blocks.length === 1 ? "" : "s"} excluded from extraction
+              </span>
+              <button
+                onclick={() => toggleRegion(key)}
+                class="ml-auto text-on-surface-secondary hover:text-on-surface cursor-pointer whitespace-nowrap"
+                title={expanded ? "Collapse the excluded text" : "Show the excluded text"}
+              >
+                {expanded ? "Hide" : "Show"}
+              </button>
+              {#if onbodyedit}
+                <button
+                  onclick={() => unmarkRegion(item)}
+                  class="font-medium text-primary hover:underline cursor-pointer whitespace-nowrap"
+                  title="Remove the irrelevant markers - the text returns to the record's content"
+                >
+                  Unmark
+                </button>
+              {/if}
+            </div>
+            {#if expanded}
+              <div class="px-3 pb-2 opacity-50">
+                {#each item.blocks as { html: regionHtml }}
+                  <div class="prose prose-sm max-w-none select-none prose-img:rounded prose-img:max-w-full">
+                    <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+                    {@html regionHtml}
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        {:else}
+        {@const block = item.block}
+        {@const html = item.html}
         {@const state = blockState(block.index)}
         {@const structural = block.contentLines.length === 0}
         <!-- Drag-to-select is a pointer enhancement; keyboard users mark via the
@@ -355,6 +479,7 @@
             {@html html}
           </div>
         </div>
+        {/if}
       {/each}
     </div>
   </div>
