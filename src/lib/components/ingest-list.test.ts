@@ -66,7 +66,7 @@ describe("IngestList digestible progress bar", () => {
     expect(done.width).toBe("100%");
     expect(done.className).toContain("bg-success");
     expect(done.title).toContain("100% observed");
-    expect(done.label).toBe("Yes");
+    expect(done.label).toBe("100%");
 
     expect(wip.width).toBe("20%"); // floored from 20.5
     expect(wip.className).toContain("bg-primary");

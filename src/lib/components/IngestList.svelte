@@ -70,20 +70,20 @@
   <button onclick={() => onsort("publisher")} class="w-28 flex-none cursor-pointer hover:text-on-surface text-left" title="Sort by publisher">
     Publisher {sortBy === "publisher" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
   </button>
+  <button onclick={() => onsort("copyright")} class="w-16 flex-none cursor-pointer hover:text-on-surface text-left" title="Sort by access (publicly viewable?)">
+    Public {sortBy === "copyright" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
+  </button>
   <button onclick={() => onsort("title")} class="flex-1 min-w-0 cursor-pointer hover:text-on-surface text-left" title="Sort by title">
     Title {sortBy === "title" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
   </button>
   <button onclick={() => onsort("creator")} class="w-36 flex-none cursor-pointer hover:text-on-surface text-left" title="Sort by creator">
     Authors / Creators {sortBy === "creator" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
   </button>
-  <button onclick={() => onsort("digestible")} class="w-28 flex-none cursor-pointer hover:text-on-surface text-left" title="Sort by digestibility (how much has been observed)">
-    Digestible {sortBy === "digestible" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
+  <button onclick={() => onsort("digestible")} class="w-28 flex-none cursor-pointer hover:text-on-surface text-left" title="Sort by review coverage of the ingest (digestible at 100%)">
+    Reviewed {sortBy === "digestible" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
   </button>
   <button onclick={() => onsort("digested")} class="w-20 flex-none cursor-pointer hover:text-on-surface text-left" title="Sort by whether a digest has been built">
     Digested {sortBy === "digested" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
-  </button>
-  <button onclick={() => onsort("copyright")} class="w-16 flex-none cursor-pointer hover:text-on-surface text-left" title="Sort by access (publicly viewable?)">
-    Public {sortBy === "copyright" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
   </button>
   <!-- Matches the archive/restore button cell in each row, so header labels
        sit exactly over their column values. -->
@@ -142,6 +142,12 @@
             >{ingest.publisher}</button>
           {/if}
         </span>
+        <span
+          class="w-16 flex-none text-xs font-ui {isPubliclyViewable(ingest.copyright_status) ? 'text-success' : 'text-on-surface-muted'}"
+          title={copyrightLabels[ingest.copyright_status] ?? ingest.copyright_status}
+        >
+          {isPubliclyViewable(ingest.copyright_status) ? "Yes" : "No"}
+        </span>
         <div class="flex items-baseline gap-1.5 flex-1 min-w-0">
           {#if !provenanceOf(ingest).traceable}
             <span class="text-warning flex-none" title="Untraceable: no recoverable source/origin">&#9888;</span>
@@ -177,7 +183,7 @@
             class="w-9 flex-none text-right text-xs font-ui tabular-nums
               {ingest.digestible ? 'font-medium text-success' : 'text-on-surface-muted'}"
           >
-            {ingest.digestible ? "Yes" : `${observedPercent(ingest.observed_coverage)}%`}
+            {observedPercent(ingest.observed_coverage)}%
           </span>
         </span>
         <span class="w-20 flex-none text-xs font-ui">
@@ -188,12 +194,6 @@
           {:else}
             <span class="text-on-surface-muted" title="Not digested">No</span>
           {/if}
-        </span>
-        <span
-          class="w-16 flex-none text-xs font-ui {isPubliclyViewable(ingest.copyright_status) ? 'text-success' : 'text-on-surface-muted'}"
-          title={copyrightLabels[ingest.copyright_status] ?? ingest.copyright_status}
-        >
-          {isPubliclyViewable(ingest.copyright_status) ? "Yes" : "No"}
         </span>
         {#if archived && onunarchive}
           <button
