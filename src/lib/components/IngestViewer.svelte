@@ -214,21 +214,28 @@
   // View mode for the ingest column's sub-tabs (rendered/edit/raw/diff).
   // Digest is no longer a sub-tab; it lives in its own column.
   let view = $state<"ingest" | "edit" | "diff" | "raw" | "predigest">("ingest");
-  // The materialised pre-digest (ADR 0042), fetched lazily on first tab
-  // open and re-fetched when the record changes. "missing" = the digester
-  // has not materialised one for this record yet.
-  let predigest = $state<Predigest | "loading" | "missing" | null>(null);
+  // The pre-digest (ADR 0042), computed LIVE from the working body so the
+  // reviewer can mark a section irrelevant and re-preview before submitting.
+  // Recomputes (debounced) while the tab is open and the body changes. The
+  // effect must never READ `predigest` (it writes it - reading too would
+  // loop); null renders as the computing state until the first result.
+  let predigest = $state<Predigest | "error" | null>(null);
+  let predigestTimer: ReturnType<typeof setTimeout> | undefined;
+  $effect(() => {
+    if (view !== "predigest") return;
+    const hash = ingest.content_hash;
+    const working = currentBody();
+    clearTimeout(predigestTimer);
+    predigestTimer = setTimeout(() => {
+      fetchPredigest(hash, working).then((p) => {
+        if (ingest.content_hash === hash) predigest = p ?? "error";
+      });
+    }, 250);
+    return () => clearTimeout(predigestTimer);
+  });
   $effect(() => {
     void ingest.content_hash;
     predigest = null;
-  });
-  $effect(() => {
-    if (view !== "predigest" || predigest !== null) return;
-    predigest = "loading";
-    const hash = ingest.content_hash;
-    fetchPredigest(hash).then((p) => {
-      if (ingest.content_hash === hash) predigest = p ?? "missing";
-    });
   });
   // In-editor find/replace bar over the raw body textarea (Ctrl-F / Ctrl-H).
   let findOpen = $state(false);
@@ -779,7 +786,14 @@
       }
       return;
     }
-    if (hash !== ingest.content_hash) {
+    // Local backend: the body is already served, the gate is a possession
+    // check only. Accept the source FILE's hash (the possession key the
+    // caption asks for - it differs from content_hash for ebooks/web) as
+    // well as the record hash.
+    const sourceHash = (ingest.frontmatter.source_hash ?? "")
+      .replace(/^sha256:/, "")
+      .toLowerCase();
+    if (hash !== ingest.content_hash && hash !== sourceHash) {
       hashError = "Hash does not match this record";
       return;
     }
@@ -3289,31 +3303,27 @@
 
       {:else if view === "predigest"}
         <div class="flex-1 overflow-auto" data-scroll-sync onscroll={handleContentScroll}>
-          {#if predigest === "loading" || predigest === null}
-            <p class="text-on-surface-muted text-sm p-6">Loading pre-digest...</p>
-          {:else if predigest === "missing"}
-            <div class="p-6 text-sm text-on-surface-muted max-w-xl">
-              <p class="font-ui font-medium text-on-surface mb-1">No pre-digest materialised yet.</p>
-              <p>
-                The pre-digest is the exact model input - the ingest after
-                irrelevant regions are removed, footnotes inlined, and
-                word-timestamps stripped. The digester materialises it when a
-                record is (re-)digested.
-              </p>
-            </div>
+          {#if predigest === null}
+            <p class="text-on-surface-muted text-sm p-6">Computing pre-digest...</p>
+          {:else if predigest === "error"}
+            <p class="text-error text-sm p-6">Could not compute the pre-digest - is the local backend running?</p>
           {:else}
             <!-- Provenance strip: what pins this exact model input. -->
             <div class="px-4 py-1.5 border-b border-border bg-surface-alt/60 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs font-ui text-on-surface-muted">
               <span class="font-medium text-on-surface-secondary uppercase tracking-wide">Read-only</span>
-              <span>the exact model input - corrections go to the ingest</span>
+              <span>the exact model input, computed live from your working copy - corrections go to the ingest</span>
               <span class="ml-auto font-mono" title="Pre-digest content hash: {predigest.predigest_sha256}">
                 {predigest.predigest_sha256.slice(0, 12)}
               </span>
               {#if predigest.prep_version}
                 <span title="Deterministic prep version">prep {predigest.prep_version}</span>
               {/if}
-              {#if predigest.generated_at}
-                <span title="Materialised at">{predigest.generated_at.slice(0, 16).replace("T", " ")}</span>
+              {#if predigest.stored_matches === true}
+                <span class="text-success" title="The last digest read exactly this input">matches last digest</span>
+              {:else if predigest.stored_matches === false}
+                <span class="text-warning font-medium" title="The record changed since the last digest read it (stored {predigest.stored?.predigest_sha256.slice(0, 12)}) - a re-digest would see this new input">
+                  differs from last digest
+                </span>
               {/if}
             </div>
 

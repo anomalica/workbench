@@ -28,6 +28,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 
+from anomalica_common import pre_digest
 from anomalica_common.review_gate import digestibility
 
 from backend import curation, graph, models, tuning
@@ -2393,15 +2394,10 @@ def _active_prompts() -> list[dict]:
     return prompts
 
 
-def _load_predigest(full_hash: str) -> dict | None:
-    """Resolve the materialised pre-digest for a record (ADR 0042).
-
-    Contract (agreed with the digester): `predigests/by-record/
-    {record_hash}.json` points at the current artefact -
-    {"predigest_sha256", "prep_version", "generated_at"} - and the body
-    lives at `predigests/{sha}.md`, verbatim. The pre-digest is
-    prompt-independent (deterministic prep only); the prompts shown are the
-    registry's active pair - exactly what the next digest run sends."""
+def _stored_predigest_pointer(full_hash: str) -> dict | None:
+    """The digester's stored pre-digest pointer for a record, if it has
+    materialised one (at digest time): {"predigest_sha256", "prep_version",
+    "generated_at"} from `predigests/by-record/{record_hash}.json`."""
     pointer_path = predigests_path / "by-record" / f"{full_hash}.json"
     if not pointer_path.exists():
         return None
@@ -2410,33 +2406,50 @@ def _load_predigest(full_hash: str) -> dict | None:
     sha = pointer.get("predigest_sha256", "")
     if not FULL_HASH_PATTERN.match(sha):
         return None
-    body_path = predigests_path / f"{sha}.md"
-    if not body_path.exists():
-        return None
-
     return {
         "predigest_sha256": sha,
         "prep_version": pointer.get("prep_version"),
         "generated_at": pointer.get("generated_at"),
-        "body": body_path.read_text(),
-        "prompts": _active_prompts(),
     }
 
 
-@app.get("/api/ingests/{full_hash}/predigest")
-def get_predigest(full_hash: str) -> JSONResponse:
-    """The materialised pre-digest for a record: the exact model input
-    (irrelevant regions removed, footnotes inlined, timestamps stripped)
-    plus the versioned prompt(s) sent with it. Read-only - corrections go
-    to the ingest, never here (ADR 0042)."""
+@app.post("/api/ingests/{full_hash}/predigest")
+def compute_predigest(full_hash: str, body: dict) -> JSONResponse:
+    """The pre-digest computed LIVE (ADR 0042): the exact model input,
+    derived on demand with the same anomalica_common.pre_digest.materialise
+    the digester runs, so what the reviewer previews is byte-for-byte what a
+    digest would read. Computes from the posted working body when given
+    (unsubmitted irrelevant marks preview immediately - mark, re-preview,
+    adjust), else from the record's current stored body. Includes the
+    registry's active prompts (what the next run sends) and, when the
+    digester has a stored artefact from the LAST digest, whether the live
+    input still matches it."""
     if not FULL_HASH_PATTERN.match(full_hash):
         raise HTTPException(status_code=404, detail="Not found")
-    if source.get_ingest(full_hash) is None:
+    ingest = source.get_ingest(full_hash)
+    if ingest is None:
         raise HTTPException(status_code=404, detail="Not found")
-    predigest = _load_predigest(full_hash)
-    if predigest is None:
-        return JSONResponse({"available": False})
-    return JSONResponse({"available": True, **predigest})
+
+    raw = body.get("body")
+    if raw is not None and not isinstance(raw, str):
+        raise HTTPException(status_code=400, detail="body must be a string")
+    live = pre_digest.materialise(raw if raw is not None else ingest["body"])
+    stored = _stored_predigest_pointer(full_hash)
+    live_sha = pre_digest.pre_digest_hash(live)
+    return JSONResponse(
+        {
+            "available": True,
+            "body": live,
+            "predigest_sha256": live_sha,
+            "prep_version": pre_digest.PREP_VERSION,
+            "generated_at": None,
+            "prompts": _active_prompts(),
+            "stored": stored,
+            "stored_matches": (
+                stored["predigest_sha256"] == live_sha if stored else None
+            ),
+        }
+    )
 
 
 @app.get("/api/ingests/{full_hash}/grading")

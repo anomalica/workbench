@@ -464,10 +464,10 @@ export async function fetchGrading(hash: string): Promise<GradingResults | null>
   return data?.available ? (data.grading as GradingResults) : null;
 }
 
-/** The materialised pre-digest (ADR 0042): the exact model input plus the
- *  versioned prompt(s) sent with it. Read-only; corrections go to the
- *  ingest. Null when not yet materialised (or on any error). DYNAMIC (the
- *  live FastAPI only). */
+/** The pre-digest computed live (ADR 0042): the exact model input, derived
+ *  on demand by the same shared materialise() the digester runs - preview
+ *  equals digest input byte-for-byte. Read-only; corrections go to the
+ *  ingest. Null on any error. DYNAMIC (the live FastAPI only). */
 export interface Predigest {
   predigest_sha256: string;
   prep_version: string | number | null;
@@ -475,11 +475,29 @@ export interface Predigest {
   body: string;
   /** The active extraction passes (nodes, claims) - what the next run sends. */
   prompts: { name: string; version: string; text: string }[];
+  /** The digester's stored artefact from the LAST digest, if any. */
+  stored: {
+    predigest_sha256: string;
+    prep_version: string | number | null;
+    generated_at: string | null;
+  } | null;
+  /** Whether the live input still matches the last digested one (null when
+   *  nothing has been digested yet). */
+  stored_matches: boolean | null;
 }
 
-export async function fetchPredigest(hash: string): Promise<Predigest | null> {
+/** Compute the pre-digest for a record - from `workingBody` when given (so
+ *  unsubmitted irrelevant marks preview immediately), else the stored body. */
+export async function fetchPredigest(
+  hash: string,
+  workingBody?: string,
+): Promise<Predigest | null> {
   try {
-    const res = await fetch(`/api/ingests/${hash}/predigest`);
+    const res = await fetch(`/api/ingests/${hash}/predigest`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(workingBody !== undefined ? { body: workingBody } : {}),
+    });
     if (!res.ok) return null;
     const data = await res.json();
     return data?.available ? (data as Predigest) : null;

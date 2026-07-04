@@ -1,28 +1,36 @@
 #!/usr/bin/env python3
-"""Tests for the pre-digest inspection endpoint (ADR 0042)."""
+"""Tests for the live pre-digest endpoint (ADR 0042)."""
 
-import hashlib
 import json
 import subprocess
 
 import pytest
 from fastapi.testclient import TestClient
 
+from anomalica_common.pre_digest import PREP_VERSION, materialise, pre_digest_hash
+
 import backend.server as server
 from backend.server import LocalIngestSource
 
 CONTENT_HASH = "f" * 64
 
+BODY = """
+Keep this paragraph.
+
+<!-- irrelevant: start -->
+
+Publisher cross-sell advert.
+
+<!-- irrelevant: end -->
+
+Also keep this. {{t:12.00}}word
+"""
+
 RECORD = f"""---
 schema: anomalica/record/1
 content_hash: {CONTENT_HASH}
 title: Predigest Record
----
-Body text.
-"""
-
-PREDIGEST_BODY = "# Clean model input\n\nIrrelevant stripped, footnotes inlined.\n"
-PREDIGEST_SHA = hashlib.sha256(PREDIGEST_BODY.encode()).hexdigest()
+---{BODY}"""
 
 REGISTRY = """
 prompts:
@@ -30,15 +38,14 @@ prompts:
     active: v2
     versions:
       v2: {file: nodes.txt}
-      v1: {file: archive/nodes-v1.txt}
   claims:
     active: v2
     versions:
       v2: {file: claims.txt}
-  extraction:
+  retired:
     active: null
     versions:
-      v1: {file: archive/extraction.txt}
+      v1: {file: archive/old.txt}
   evil:
     active: v1
     versions:
@@ -60,7 +67,6 @@ def ingests_repo(tmp_path):
 def digester_repo(tmp_path):
     repo = tmp_path / "digester"
     (repo / "predigests" / "by-record").mkdir(parents=True)
-    (repo / "predigests" / f"{PREDIGEST_SHA}.md").write_text(PREDIGEST_BODY)
     prompts = repo / "workspace" / "digester" / "prompts"
     prompts.mkdir(parents=True)
     (prompts / "registry.yaml").write_text(REGISTRY)
@@ -79,52 +85,54 @@ def client(ingests_repo, digester_repo, monkeypatch):
     return TestClient(server.app)
 
 
-def write_pointer(digester_repo, extra: dict | None = None) -> None:
-    pointer = {
-        "predigest_sha256": PREDIGEST_SHA,
-        "prep_version": 1,
-        "generated_at": "2026-07-04T06:00:00Z",
-        **(extra or {}),
-    }
-    (digester_repo / "predigests" / "by-record" / f"{CONTENT_HASH}.json").write_text(
-        json.dumps(pointer)
-    )
-
-
-def test_predigest_unavailable_without_pointer(client):
-    res = client.get(f"/api/ingests/{CONTENT_HASH}/predigest")
-    assert res.status_code == 200
-    assert res.json() == {"available": False}
-
-
-def test_predigest_serves_body_and_active_prompt_pair(client, digester_repo):
-    write_pointer(digester_repo)
-    data = client.get(f"/api/ingests/{CONTENT_HASH}/predigest").json()
+def test_live_predigest_from_stored_body(client):
+    data = client.post(f"/api/ingests/{CONTENT_HASH}/predigest", json={}).json()
     assert data["available"] is True
-    assert data["body"] == PREDIGEST_BODY
-    assert data["predigest_sha256"] == PREDIGEST_SHA
-    assert data["prep_version"] == 1
+    assert "Keep this paragraph." in data["body"]
+    assert "cross-sell" not in data["body"]  # irrelevant region stripped
+    assert "{{t:" not in data["body"]  # word timestamps stripped
+    assert data["prep_version"] == PREP_VERSION
+    assert data["predigest_sha256"] == pre_digest_hash(data["body"])
+    # No stored artefact yet - live preview still works, no comparison.
+    assert data["stored"] is None
+    assert data["stored_matches"] is None
     by_name = {p["name"]: p for p in data["prompts"]}
-    # The two active passes, in registry order; retired ids skipped and the
-    # repo-escaping path dropped.
-    assert set(by_name) == {"nodes", "claims"}
-    assert by_name["nodes"] == {
-        "name": "nodes",
-        "version": "v2",
-        "text": "Nodes pass prompt.",
-    }
-    assert by_name["claims"]["text"] == "Claims pass prompt."
+    assert set(by_name) == {"nodes", "claims"}  # retired + escaping ids dropped
+    assert by_name["nodes"]["version"] == "v2"
 
 
-def test_predigest_missing_body_reads_unavailable(client, digester_repo):
-    write_pointer(digester_repo, {"predigest_sha256": "a" * 64})
-    data = client.get(f"/api/ingests/{CONTENT_HASH}/predigest").json()
-    assert data == {"available": False}
+def test_live_predigest_from_posted_working_body(client):
+    working = "Only this line.\n\n<!-- irrelevant: start -->\n\nGone.\n\n<!-- irrelevant: end -->"
+    data = client.post(
+        f"/api/ingests/{CONTENT_HASH}/predigest", json={"body": working}
+    ).json()
+    assert "Only this line." in data["body"]
+    assert "Gone." not in data["body"]
 
 
-def test_predigest_survives_missing_prompt_registry(client, digester_repo, monkeypatch):
-    write_pointer(digester_repo)
-    monkeypatch.setattr(server, "prompts_path", digester_repo / "nowhere")
-    data = client.get(f"/api/ingests/{CONTENT_HASH}/predigest").json()
-    assert data["available"] is True
-    assert data["prompts"] == []
+def test_live_predigest_reports_stored_match_and_divergence(client, digester_repo):
+    # The body as parse_frontmatter serves it: the fence consumes its
+    # trailing newline, so the body starts right after it.
+    live = materialise(BODY[1:])
+    pointer = digester_repo / "predigests" / "by-record" / f"{CONTENT_HASH}.json"
+    pointer.write_text(
+        json.dumps(
+            {
+                "predigest_sha256": pre_digest_hash(live),
+                "prep_version": PREP_VERSION,
+                "generated_at": "2026-07-04T06:00:00Z",
+            }
+        )
+    )
+    data = client.post(f"/api/ingests/{CONTENT_HASH}/predigest", json={}).json()
+    assert data["stored_matches"] is True
+
+    diverged = client.post(
+        f"/api/ingests/{CONTENT_HASH}/predigest", json={"body": "Different body."}
+    ).json()
+    assert diverged["stored_matches"] is False
+
+
+def test_live_predigest_rejects_non_string_body(client):
+    res = client.post(f"/api/ingests/{CONTENT_HASH}/predigest", json={"body": 42})
+    assert res.status_code == 400
