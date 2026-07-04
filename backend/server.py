@@ -32,6 +32,7 @@ from anomalica_common.review_gate import digestibility
 
 from backend import curation, graph, models, tuning
 from backend.auth import setup_auth
+from backend.sync import GIT_LOCK, SyncManager
 
 FULL_HASH_LENGTH = 64
 PUBLIC_HASH_LENGTH = 56
@@ -473,32 +474,33 @@ class LocalIngestSource(IngestSource):
         # A moved-from path no longer exists on disk; `git add` stages its
         # deletion only if it is tracked, and errors on an untracked missing
         # path - so filter those out rather than aborting the whole commit.
-        rel_paths = []
-        for p in paths:
-            rel = str(p.relative_to(repo_dir))
-            if (
-                p.exists()
-                or p.is_symlink()
-                or subprocess.run(
-                    ["git", "ls-files", "--error-unmatch", rel],
-                    cwd=repo_dir,
-                    capture_output=True,
-                ).returncode
-                == 0
-            ):
-                rel_paths.append(rel)
-        subprocess.run(
-            ["git", "add", *rel_paths],
-            cwd=repo_dir,
-            check=True,
-            env=env,
-        )
-        subprocess.run(
-            ["git", "commit", "-m", message],
-            cwd=repo_dir,
-            check=True,
-            env=env,
-        )
+        with GIT_LOCK:
+            rel_paths = []
+            for p in paths:
+                rel = str(p.relative_to(repo_dir))
+                if (
+                    p.exists()
+                    or p.is_symlink()
+                    or subprocess.run(
+                        ["git", "ls-files", "--error-unmatch", rel],
+                        cwd=repo_dir,
+                        capture_output=True,
+                    ).returncode
+                    == 0
+                ):
+                    rel_paths.append(rel)
+            subprocess.run(
+                ["git", "add", *rel_paths],
+                cwd=repo_dir,
+                check=True,
+                env=env,
+            )
+            subprocess.run(
+                ["git", "commit", "-m", message],
+                cwd=repo_dir,
+                check=True,
+                env=env,
+            )
 
     def archive_ingest(self, full_hash: str, user: dict) -> bool:
         """Move a record from store/ to store/v1/ and remove its records/ symlink."""
@@ -690,18 +692,19 @@ class LocalIngestSource(IngestSource):
                 ["git", *args], cwd=repo_dir, capture_output=True, text=True
             )
 
-        last = ""
-        for _ in range(3):
-            push = run("push", "origin", "HEAD")
-            if push.returncode == 0:
-                return True, ""
-            last = (push.stderr or push.stdout).strip()[-300:]
-            rebase = run("pull", "--rebase", "origin")
-            if rebase.returncode != 0:
-                run("rebase", "--abort")
-                detail = (rebase.stderr or rebase.stdout).strip()[-300:]
-                return False, detail or last
-        return False, last
+        with GIT_LOCK:
+            last = ""
+            for _ in range(3):
+                push = run("push", "origin", "HEAD")
+                if push.returncode == 0:
+                    return True, ""
+                last = (push.stderr or push.stdout).strip()[-300:]
+                rebase = run("pull", "--rebase", "origin")
+                if rebase.returncode != 0:
+                    run("rebase", "--abort")
+                    detail = (rebase.stderr or rebase.stdout).strip()[-300:]
+                    return False, detail or last
+            return False, last
 
     def commit_review(
         self,
@@ -731,29 +734,6 @@ class LocalIngestSource(IngestSource):
         coverage_path = self._coverage_path(full_hash)
         if coverage_path.exists():
             paths.append(str(coverage_path.relative_to(repo_dir)))
-        subprocess.run(
-            ["git", "add", *paths],
-            cwd=repo_dir,
-            check=True,
-            env=env,
-        )
-
-        # If save_ingest wrote the same bytes that were already on disk,
-        # there's nothing staged. That's the "approved as-is" case - record
-        # it as an empty commit so the review is still part of the audit
-        # trail and shows up in the same git log as content-changing reviews.
-        diff = subprocess.run(
-            ["git", "diff", "--cached", "--quiet"],
-            cwd=repo_dir,
-            env=env,
-        )
-        no_changes = diff.returncode == 0
-
-        message = f"review: {title}"
-        if no_changes:
-            message += " (approved as-is)"
-        if notes:
-            message += f"\n\n{notes}"
 
         # Reviewed-Record trailers: one per identity the record carries
         # at review time. Format is `<kind>:<value>` with kind in
@@ -769,20 +749,48 @@ class LocalIngestSource(IngestSource):
         if source_hash:
             trailers.append(f"Reviewed-Record: sha256:{source_hash}")
         trailers.append(f"Reviewed-Record: content:{full_hash}")
-        message += "\n\n" + "\n".join(trailers)
 
-        cmd = ["git", "commit", "-m", message]
-        if no_changes:
-            cmd.append("--allow-empty")
-        subprocess.run(cmd, cwd=repo_dir, check=True, env=env)
+        # Hold the git lock across stage+commit+push so the background sync
+        # thread can never rebase the clone mid-commit.
+        with GIT_LOCK:
+            subprocess.run(
+                ["git", "add", *paths],
+                cwd=repo_dir,
+                check=True,
+                env=env,
+            )
 
-        # Invalidate the cached review index so the new commit shows up
-        # in /api/me/reviews on the next read.
-        self._reviewed_cache = None
+            # If save_ingest wrote the same bytes that were already on disk,
+            # there's nothing staged. That's the "approved as-is" case -
+            # record it as an empty commit so the review is still part of the
+            # audit trail and shows up in the same git log as
+            # content-changing reviews.
+            diff = subprocess.run(
+                ["git", "diff", "--cached", "--quiet"],
+                cwd=repo_dir,
+                env=env,
+            )
+            no_changes = diff.returncode == 0
 
-        # Local commits must reach origin immediately, or localhost reviews
-        # silently drift from the live site.
-        return self.push_origin()
+            message = f"review: {title}"
+            if no_changes:
+                message += " (approved as-is)"
+            if notes:
+                message += f"\n\n{notes}"
+            message += "\n\n" + "\n".join(trailers)
+
+            cmd = ["git", "commit", "-m", message]
+            if no_changes:
+                cmd.append("--allow-empty")
+            subprocess.run(cmd, cwd=repo_dir, check=True, env=env)
+
+            # Invalidate the cached review index so the new commit shows up
+            # in /api/me/reviews on the next read.
+            self._reviewed_cache = None
+
+            # Local commits must reach origin immediately, or localhost
+            # reviews silently drift from the live site.
+            return self.push_origin()
 
     # Per-email list of (kind, value, iso_ts) trailers. Cross-referenced
     # against record frontmatter identities in reviewed_by_email.
@@ -1201,6 +1209,31 @@ ingests_path = Path(os.environ.get("INGESTS_PATH", str(DEFAULT_INGESTS_PATH)))
 digests_path = Path(os.environ.get("DIGESTS_PATH", str(DEFAULT_DIGESTS_PATH)))
 content_path = Path(os.environ.get("CONTENT_PATH", str(DEFAULT_CONTENT_PATH)))
 grading_path = Path(os.environ.get("GRADING_PATH", str(DEFAULT_GRADING_PATH)))
+
+# Two-way sync of the local ingests clone with origin: pull on startup and
+# every few minutes (when clean), so localhost never silently drifts from the
+# live site. Local-clone mode only - the GitHub source writes upstream anyway.
+sync_manager: SyncManager | None = (
+    SyncManager(ingests_path) if isinstance(source, LocalIngestSource) else None
+)
+
+
+@app.on_event("startup")
+def _start_ingests_sync() -> None:
+    if sync_manager is not None:
+        sync_manager.start()
+
+
+@app.get("/api/sync")
+def sync_status() -> JSONResponse:
+    """Sync state of the local ingests clone vs origin, for the header
+    indicator. 404 on deployments without a local clone (the static site
+    reads origin-fed snapshots and is in sync by construction)."""
+    if sync_manager is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return JSONResponse(sync_manager.status())
+
+
 # Public site base for linking assembled article pages (the live, post-digest layer).
 site_base_url = os.environ.get("SITE_BASE_URL", "https://anomalica.is").rstrip("/")
 

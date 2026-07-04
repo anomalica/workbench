@@ -457,6 +457,27 @@ export async function fetchGrading(hash: string): Promise<GradingResults | null>
   return data?.available ? (data.grading as GradingResults) : null;
 }
 
+/** Sync state of the local ingests clone vs origin (local backend only -
+ *  the static deploy has no clone and 404s, which callers treat as null). */
+export interface SyncStatus {
+  ahead: number;
+  behind: number;
+  dirty: boolean;
+  offline: boolean;
+  last_error: string;
+  checked_at: string | null;
+}
+
+export async function fetchSyncStatus(): Promise<SyncStatus | null> {
+  try {
+    const res = await fetch("/api/sync");
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
 export interface User {
   name: string;
   email: string;

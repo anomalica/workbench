@@ -8,12 +8,15 @@
     fetchDigest,
     fetchCurrentUser,
     fetchReviewedHashes,
+    fetchSyncStatus,
     provenanceOf,
+    STATIC_READS,
   } from "$lib/api";
   import type {
     IngestSummary,
     IngestDetail,
     DigestDocument,
+    SyncStatus,
     User,
   } from "$lib/api";
   import FileDropZone from "$lib/components/FileDropZone.svelte";
@@ -46,6 +49,26 @@
   fetchCurrentUser().then((u) => {
     user = u;
     if (u) loadReviews();
+  });
+
+  // Sync-state indicator for the local backend: localhost work must be
+  // visibly in sync with GitHub or visibly not - never silent drift. The
+  // static deploy has no /api/sync (reads are origin-fed) so this stays null
+  // and nothing renders.
+  let syncStatus = $state<SyncStatus | null>(null);
+  $effect(() => {
+    if (STATIC_READS) return;
+    let cancelled = false;
+    const poll = async () => {
+      const s = await fetchSyncStatus();
+      if (!cancelled) syncStatus = s;
+    };
+    poll();
+    const timer = setInterval(poll, 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
   });
 
   let ingests = $state<IngestSummary[]>([]);
@@ -499,6 +522,41 @@
       >Articles</button>
     </nav>
     <div class="flex-1"></div>
+    {#if syncStatus}
+      {#if syncStatus.offline}
+        <span
+          class="flex items-center gap-1.5 text-xs font-ui font-medium px-2 py-1 rounded bg-warning/20 text-warning"
+          title={`Cannot reach GitHub${syncStatus.ahead ? ` - ${syncStatus.ahead} local review${syncStatus.ahead === 1 ? "" : "s"} waiting to sync` : ""}. ${syncStatus.last_error}`}
+        >
+          <span class="w-1.5 h-1.5 rounded-full bg-warning"></span>
+          Offline{syncStatus.ahead ? ` - ${syncStatus.ahead} not on GitHub` : ""}
+        </span>
+      {:else if syncStatus.ahead > 0}
+        <span
+          class="flex items-center gap-1.5 text-xs font-ui font-medium px-2 py-1 rounded bg-warning/20 text-warning"
+          title={`Local commits not yet pushed to GitHub - the live site cannot see them. ${syncStatus.last_error}`}
+        >
+          <span class="w-1.5 h-1.5 rounded-full bg-warning"></span>
+          {syncStatus.ahead} not on GitHub
+        </span>
+      {:else if syncStatus.dirty}
+        <span
+          class="flex items-center gap-1.5 text-xs font-ui px-2 py-1 rounded text-bone/60"
+          title="The local ingests clone has uncommitted changes - submit or discard them; syncing pauses until the tree is clean"
+        >
+          <span class="w-1.5 h-1.5 rounded-full bg-warning"></span>
+          Uncommitted local changes
+        </span>
+      {:else}
+        <span
+          class="flex items-center gap-1.5 text-xs font-ui px-2 py-1 rounded text-bone/50"
+          title={`Local clone is in sync with GitHub (checked ${syncStatus.checked_at ?? "just now"})`}
+        >
+          <span class="w-1.5 h-1.5 rounded-full bg-success"></span>
+          Synced
+        </span>
+      {/if}
+    {/if}
     <button
       onclick={() => themeState.toggle()}
       class="p-1.5 rounded text-bone/60 hover:text-bone hover:bg-bone/10 transition-colors"

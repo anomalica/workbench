@@ -108,6 +108,81 @@ def test_push_rebases_when_origin_advanced(repos):
     assert "review: from the edge" in log
 
 
+def test_sync_once_pulls_when_behind_and_clean(repos):
+    origin, local = repos
+    other = origin.parent / "advance"
+    subprocess.run(["git", "clone", "-q", str(origin), str(other)], check=True)
+    _git(other, "config", "user.name", "Edge")
+    _git(other, "config", "user.email", "edge@example.invalid")
+    (other / "new.md").write_text("from origin\n")
+    _git(other, "add", "-A")
+    _git(other, "commit", "-q", "-m", "review: origin advance")
+    _git(other, "push", "-q", "origin", "main")
+
+    from backend.sync import SyncManager
+
+    mgr = SyncManager(local)
+    status = mgr.sync_once()
+    assert status["behind"] == 0
+    assert status["ahead"] == 0
+    assert not status["offline"]
+    assert (local / "new.md").exists()
+
+
+def test_sync_once_never_pulls_over_dirty_tree(repos):
+    origin, local = repos
+    other = origin.parent / "advance2"
+    subprocess.run(["git", "clone", "-q", str(origin), str(other)], check=True)
+    _git(other, "config", "user.name", "Edge")
+    _git(other, "config", "user.email", "edge@example.invalid")
+    (other / "new.md").write_text("from origin\n")
+    _git(other, "add", "-A")
+    _git(other, "commit", "-q", "-m", "review: origin advance")
+    _git(other, "push", "-q", "origin", "main")
+
+    # Local tracked modification (a review being edited right now).
+    (local / "store" / f"{CONTENT_HASH}.md").write_text(
+        RECORD.replace("Line one.", "Mid-edit.")
+    )
+
+    from backend.sync import SyncManager
+
+    mgr = SyncManager(local)
+    status = mgr.sync_once()
+    assert status["dirty"] is True
+    assert status["behind"] == 1  # fetched, but never pulled over the dirt
+    content = (local / "store" / f"{CONTENT_HASH}.md").read_text()
+    assert "Mid-edit." in content  # the edit is untouched
+
+
+def test_sync_once_reports_offline(repos, tmp_path):
+    origin, local = repos
+    _git(local, "remote", "set-url", "origin", str(tmp_path / "gone.git"))
+
+    from backend.sync import SyncManager
+
+    mgr = SyncManager(local)
+    status = mgr.sync_once()
+    assert status["offline"] is True
+    assert status["last_error"]
+
+
+def test_sync_once_pushes_ahead_commits(repos):
+    origin, local = repos
+    (local / "store" / f"{CONTENT_HASH}.md").write_text(
+        RECORD.replace("Line one.", "Offline review.")
+    )
+    _git(local, "add", "-A")
+    _git(local, "commit", "-q", "-m", "review: made while offline")
+
+    from backend.sync import SyncManager
+
+    mgr = SyncManager(local)
+    status = mgr.sync_once()
+    assert status["ahead"] == 0
+    assert origin_head_subject(origin) == "review: made while offline"
+
+
 def test_push_failure_is_reported_not_silent(repos, tmp_path):
     origin, local = repos
     # Point origin at a URL that cannot exist so the push fails.
