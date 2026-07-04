@@ -23,6 +23,7 @@
     onscroll,
     onverdict,
     onbodyedit,
+    onblockclick,
   }: {
     /** Record body with the frontmatter already stripped. */
     body: string;
@@ -41,6 +42,9 @@
      *  DocumentStore, so it undoes and commits like any review edit.
      *  Absent in view-only contexts - the marking UI hides. */
     onbodyedit?: (newBody: string) => void;
+    /** Fired with a clicked block's first source line - the parent's
+     *  follow-in-source uses it to jump the source pane to that page. */
+    onblockclick?: (lineFrom: number) => void;
     /** Report the coverage verdict whenever it changes, so a review submit can
      *  persist the observed line spans + fraction to the sidecar. */
     onverdict?: (v: {
@@ -207,6 +211,8 @@
     // Let clicks on links behave normally. Native text selection is suppressed
     // via `select-none` on the blocks, so only the block highlight shows.
     if ((e.target as HTMLElement).closest("a")) return;
+    const block = blocks.find((b) => b.index === i);
+    if (block) onblockclick?.(block.lineFrom);
     if (e.shiftKey) {
       selectBlock(i, true);
     } else {

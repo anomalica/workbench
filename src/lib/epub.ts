@@ -71,6 +71,20 @@ export function flattenEpubToHtml(parsed: ParsedEpub): string {
       styles.push(style.textContent || "");
     }
 
+    // Normalise EPUB3 pagebreak markers to id="page_{label}" anchors so the
+    // sandboxed iframe can be jumped to a page by URL fragment. The label
+    // priority mirrors the ingester's printed_page extraction exactly
+    // (epub_extract._pagebreak_label: title, else the trailing number/roman
+    // numeral of the id, else the element text), so fragments line up with
+    // the record's printed_page values.
+    if (doc.body) {
+      walk(doc.body, (el) => {
+        if (!isPagebreak(el)) return;
+        const label = pagebreakLabel(el);
+        if (label) el.id = `page_${label}`;
+      });
+    }
+
     const bodyContent = doc.body ? doc.body.innerHTML : chapter.html;
     const heading = chapter.title
       ? `<h2 class="epub-chapter-heading">${escapeHtml(chapter.title)}</h2>`
@@ -379,6 +393,31 @@ function walk(el: Element | null, fn: (el: Element) => void) {
   if (!el) return;
   fn(el);
   for (const child of Array.from(el.children)) walk(child, fn);
+}
+
+/** An EPUB3 print-page marker: `epub:type="pagebreak"` or
+ *  `role="doc-pagebreak"`, whatever namespace prefix the attribute carries. */
+export function isPagebreak(el: Element): boolean {
+  for (const attr of Array.from(el.attributes)) {
+    const local = attr.name.split(":").pop() ?? attr.name;
+    if (local === "type" && attr.value.includes("pagebreak")) return true;
+    if (local === "role" && attr.value.includes("doc-pagebreak")) return true;
+  }
+  return false;
+}
+
+/** The print-edition page label for a pagebreak element - `title` (e.g.
+ *  title="308"), else a trailing number/roman numeral in its id
+ *  (id="page_308"), else its text. Mirrors the ingester's extraction. */
+export function pagebreakLabel(el: Element): string | null {
+  const title = (el.getAttribute("title") ?? "").trim();
+  if (/^[0-9A-Za-z]+$/.test(title)) return title;
+  const id = (el.getAttribute("id") ?? "").trim();
+  const idMatch = id.match(/([0-9]+|[ivxlcdmIVXLCDM]+)$/);
+  if (idMatch) return idMatch[1];
+  const text = (el.textContent ?? "").trim();
+  if (/^[0-9A-Za-z]+$/.test(text)) return text;
+  return null;
 }
 
 function bytesToBase64(bytes: Uint8Array): string {

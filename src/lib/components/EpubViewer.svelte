@@ -1,7 +1,17 @@
 <script lang="ts">
   import { parseEpub, flattenEpubToHtml, type ParsedEpub } from "$lib/epub";
 
-  let { file }: { file: File } = $props();
+  let {
+    file,
+    pageAnchor = null,
+  }: {
+    file: File;
+    /** Print-page label to scroll to (the record's printed_page value).
+     *  Navigates the sandboxed frame by URL fragment to the normalised
+     *  id="page_{label}" anchor - fragment-only changes are same-document
+     *  navigation, so the book does not reload per jump. */
+    pageAnchor?: string | null;
+  } = $props();
 
   let parsed = $state<ParsedEpub | null>(null);
   let error = $state<string | null>(null);
@@ -27,6 +37,23 @@
   });
 
   let flattenedHtml = $derived(parsed ? flattenEpubToHtml(parsed) : "");
+
+  // A blob URL rather than srcdoc: fragment navigation (the page jump)
+  // needs a real URL. Revoked when the html changes or on unmount.
+  let blobUrl = $state<string | null>(null);
+  $effect(() => {
+    const html = flattenedHtml;
+    if (!html) {
+      blobUrl = null;
+      return;
+    }
+    const url = URL.createObjectURL(new Blob([html], { type: "text/html" }));
+    blobUrl = url;
+    return () => URL.revokeObjectURL(url);
+  });
+  let frameSrc = $derived(
+    blobUrl ? (pageAnchor ? `${blobUrl}#page_${pageAnchor}` : blobUrl) : null,
+  );
 </script>
 
 <div class="flex-1 flex flex-col min-h-0 bg-surface">
@@ -47,11 +74,11 @@
         <p class="text-xs">{error}</p>
       </div>
     </div>
-  {:else if parsed}
+  {:else if frameSrc}
     <iframe
       title="EPUB source"
       sandbox=""
-      srcdoc={flattenedHtml}
+      src={frameSrc}
       class="flex-1 w-full border-none bg-white"
     ></iframe>
   {/if}

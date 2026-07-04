@@ -1278,6 +1278,44 @@
 
 
 
+  // --- Follow in source: click an ingest block, the source pane jumps to
+  // its page. Off by default; page-level only (exact-text highlighting is
+  // out - sandbox="" on licensed EPUB content stays).
+  let followSource = $state(false);
+  let epubPageAnchor = $state<string | null>(null);
+  let pageAnchorLines = $derived.by(() => {
+    const out: { line: number; page: string; kind: "printed" | "file" }[] = [];
+    const lines = currentBody().split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      const t = lines[i].trim();
+      let m = t.match(/^<!--\s*printed_page:\s*([A-Za-z0-9]+)\s*-->$/);
+      if (m) {
+        out.push({ line: i, page: m[1], kind: "printed" });
+        continue;
+      }
+      m = t.match(/^<!--\s*file_page:\s*(\d+)\s*-->$/);
+      if (m) out.push({ line: i, page: m[1], kind: "file" });
+    }
+    return out;
+  });
+  let canFollowSource = $derived(
+    (isEbook && !!localSourceFile) || (isPdf && (!!localSourceFile || !!localSourceUrl)),
+  );
+
+  /** Jump the source pane to the page containing the clicked block. */
+  function followBlockToSource(lineFrom: number) {
+    if (!followSource || !canFollowSource) return;
+    let printed: string | null = null;
+    let filePage: number | null = null;
+    for (const a of pageAnchorLines) {
+      if (a.line > lineFrom) break;
+      if (a.kind === "printed") printed = a.page;
+      else filePage = parseInt(a.page, 10);
+    }
+    if (isEbook && printed) epubPageAnchor = printed;
+    else if (isPdf && filePage) navigatePdfToPage(filePage);
+  }
+
   function navigatePdfToPage(page: number) {
     if (!localSourceFile || page === pdfPage) return;
     if (pdfNavTimer) clearTimeout(pdfNavTimer);
@@ -2929,7 +2967,7 @@
             title="Archived source page"
           ></iframe>
         {:else if localSourceFile && isEbook}
-          <EpubViewer file={localSourceFile} />
+          <EpubViewer file={localSourceFile} pageAnchor={epubPageAnchor} />
         {:else}
           <!-- Drop target fills all available space -->
           <div
@@ -3037,6 +3075,25 @@
         </button>
 
         <div class="ml-auto flex items-center gap-1">
+          <!-- Follow in source: block clicks jump the source pane to the
+               block's page. Off by default. -->
+          {#if view === "ingest" && isTextRecord && canFollowSource}
+            <button
+              onclick={() => (followSource = !followSource)}
+              class="flex items-center gap-1 cursor-pointer px-1.5 py-0.5 rounded-full transition-colors text-xs font-ui font-medium
+                {followSource
+                  ? 'bg-primary/10 text-primary'
+                  : 'text-on-surface-muted hover:text-on-surface hover:bg-surface'}"
+              title={followSource
+                ? "Following: clicking a block jumps the source pane to its page"
+                : "Click to follow: clicking a block will jump the source pane to its page"}
+            >
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m13.35-.622l1.757-1.757a4.5 4.5 0 00-6.364-6.364l-4.5 4.5a4.5 4.5 0 001.242 7.244" />
+              </svg>
+              Follow in source
+            </button>
+          {/if}
           <!-- Playback mode toggle -->
           {#if view === "ingest" && hasTranscript && ytId}
             <button
@@ -3943,6 +4000,7 @@
             onscroll={handleContentScroll}
             onverdict={(v) => (textVerdict = v)}
             onbodyedit={user ? (b) => doc.editBody(b) : undefined}
+            onblockclick={followBlockToSource}
           />
         {:else}
           {@const processedBody = preprocessAnnotations(currentBody())}
