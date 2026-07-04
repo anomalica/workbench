@@ -257,7 +257,7 @@ export async function submitReview(
   notes: string,
   spans?: KindedSpan[],
   verdict?: { observed_coverage: number; digestible: boolean; total_units: number },
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; error?: string; synced?: boolean; syncDetail?: string }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), SUBMIT_TIMEOUT_MS);
   let res: Response;
@@ -284,7 +284,18 @@ export async function submitReview(
   } finally {
     clearTimeout(timer);
   }
-  if (res.ok) return { ok: true };
+  if (res.ok) {
+    // The local backend reports whether the review commit reached origin;
+    // synced false means it is safe locally but NOT on GitHub / the live
+    // site yet. The edge deploy writes to GitHub directly (always synced),
+    // and older backends omit the field - treat absence as synced.
+    const data = await res.json().catch(() => ({}));
+    return {
+      ok: true,
+      synced: data.synced !== false,
+      syncDetail: data.sync_detail || "",
+    };
+  }
   const data = await res.json().catch(() => ({}));
   return { ok: false, error: data.detail || `Error ${res.status}` };
 }

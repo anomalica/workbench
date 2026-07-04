@@ -668,6 +668,9 @@
   let showMetadata = $state(false);
   // Dedicated review-history panel (title-bar toggle) - provenance surface.
   let showHistory = $state(false);
+  // Set when a submitted review committed locally but failed to push to
+  // origin - shown in the status bar until dismissed.
+  let syncWarning = $state<string | null>(null);
 
   // Source
   let isPdf = $derived(ingest.frontmatter.source_type === "pdf");
@@ -1740,6 +1743,11 @@
     const result = await submitReview(ingest.content_hash, doc.current, reviewNotes, spans, verdict);
     submitting = false;
     if (result.ok) {
+      // Committed locally but not pushed to origin - the live site will not
+      // see this review until sync succeeds. Loud, never silent.
+      syncWarning = result.synced === false
+        ? `Review saved and committed locally, but NOT yet synced to GitHub - the live site will not show it. ${result.syncDetail || ""}`.trim()
+        : null;
       showSubmitForm = false;
       reviewNotes = "";
       myObservedSpans = mergeSpans([
@@ -2457,7 +2465,7 @@
        reviewer submits. Never silent - this is the fix for a review that once
        looked fine on screen for hours and then simply wasn't there on reload. -->
   <div class="px-4 py-1.5 border-b border-border flex items-center gap-2 flex-none text-xs font-ui
-    {doc.saveFailed ? 'bg-error text-on-error' : doc.dirty ? 'bg-warning-container/30 text-on-warning-container' : user ? 'bg-success-container/30 text-on-success-container' : 'bg-surface-alt text-on-surface-muted'}">
+    {doc.saveFailed ? 'bg-error text-on-error' : syncWarning ? 'bg-warning text-on-warning' : doc.dirty ? 'bg-warning-container/30 text-on-warning-container' : user ? 'bg-success-container/30 text-on-success-container' : 'bg-surface-alt text-on-surface-muted'}">
     {#if doc.saveFailed}
       <svg class="w-3.5 h-3.5 flex-none animate-pulse" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
@@ -2467,6 +2475,16 @@
         onclick={() => { if (user) showSubmitForm = true; }}
         class="ml-1 underline font-semibold cursor-pointer hover:no-underline"
       >Submit now</button>
+    {:else if syncWarning}
+      <svg class="w-3.5 h-3.5 flex-none" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+      </svg>
+      <span class="font-semibold">{syncWarning}</span>
+      <button
+        onclick={() => (syncWarning = null)}
+        class="ml-auto underline cursor-pointer hover:no-underline flex-none"
+        title="Dismiss"
+      >Dismiss</button>
     {:else if doc.dirty}
       <svg class="w-3.5 h-3.5 flex-none" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
         <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />

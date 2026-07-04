@@ -219,8 +219,10 @@ class IngestSource(ABC):
         author_name: str,
         author_email: str,
         notes: str,
-    ) -> None:
-        """Commit the current state of the file as a review."""
+    ) -> tuple[bool, str]:
+        """Commit the current state of the file as a review and sync it to
+        origin. Returns (synced, detail): synced False means the review is
+        safe locally but has NOT reached GitHub - callers must surface it."""
 
     @abstractmethod
     def load_verification(self, full_hash: str) -> dict | None:
@@ -671,18 +673,48 @@ class LocalIngestSource(IngestSource):
             f.write(content)
         return True
 
+    def push_origin(self) -> tuple[bool, str]:
+        """Push local commits to origin so localhost work reaches the live
+        site immediately (a local commit that only ever sits on this machine
+        is exactly the drift the sync work exists to kill). If the push is
+        rejected because origin advanced (edge reviews land there directly),
+        rebase onto origin and retry. Never forces; on any failure the local
+        commit stays safe and (ok=False, detail) is returned for the caller
+        to surface - never strand silently."""
+        import subprocess
+
+        repo_dir = self.store.parent
+
+        def run(*args: str) -> subprocess.CompletedProcess:
+            return subprocess.run(
+                ["git", *args], cwd=repo_dir, capture_output=True, text=True
+            )
+
+        last = ""
+        for _ in range(3):
+            push = run("push", "origin", "HEAD")
+            if push.returncode == 0:
+                return True, ""
+            last = (push.stderr or push.stdout).strip()[-300:]
+            rebase = run("pull", "--rebase", "origin")
+            if rebase.returncode != 0:
+                run("rebase", "--abort")
+                detail = (rebase.stderr or rebase.stdout).strip()[-300:]
+                return False, detail or last
+        return False, last
+
     def commit_review(
         self,
         full_hash: str,
         author_name: str,
         author_email: str,
         notes: str,
-    ) -> None:
+    ) -> tuple[bool, str]:
         import subprocess
 
         entry = self._scan().get(full_hash)
         if entry is None:
-            return
+            return False, "record not found"
         md_path, frontmatter = entry
         title = frontmatter.get("title", full_hash[:12])
 
@@ -747,6 +779,10 @@ class LocalIngestSource(IngestSource):
         # Invalidate the cached review index so the new commit shows up
         # in /api/me/reviews on the next read.
         self._reviewed_cache = None
+
+        # Local commits must reach origin immediately, or localhost reviews
+        # silently drift from the live site.
+        return self.push_origin()
 
     # Per-email list of (kind, value, iso_ts) trailers. Cross-referenced
     # against record frontmatter identities in reviewed_by_email.
@@ -1015,6 +1051,7 @@ class LocalIngestSource(IngestSource):
             author_name=author_name,
             author_email=author_email,
         )
+        self.push_origin()
         return True
 
     def load_coverage(self, full_hash: str) -> dict | None:
@@ -1113,7 +1150,7 @@ class GitHubIngestSource(IngestSource):
     def save_ingest(self, full_hash: str, content: str) -> bool:
         raise NotImplementedError("GitHubIngestSource is not yet implemented")
 
-    def commit_review(self, **kwargs: str) -> None:
+    def commit_review(self, **kwargs: str) -> tuple[bool, str]:
         raise NotImplementedError("GitHubIngestSource is not yet implemented")
 
     def load_verification(self, full_hash: str) -> dict | None:
@@ -2341,15 +2378,19 @@ def submit_review(full_hash: str, body: dict, request: Request) -> JSONResponse:
             total_units=total_units,
         )
 
-    # Git commit with reviewer as author
-    source.commit_review(
+    # Git commit with reviewer as author, then sync to origin. A failed
+    # push is NOT a failed review (the commit is safe locally), but it must
+    # be surfaced - unsynced local reviews never reach the live site.
+    synced, sync_detail = source.commit_review(
         full_hash=full_hash,
         author_name=user["name"],
         author_email=user["email"],
         notes=notes,
     )
 
-    return JSONResponse({"submitted": True})
+    return JSONResponse(
+        {"submitted": True, "synced": synced, "sync_detail": sync_detail}
+    )
 
 
 @app.get("/api/me/reviews")
