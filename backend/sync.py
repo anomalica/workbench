@@ -12,10 +12,10 @@ rebases:
 - fetch on startup and every few minutes, to see where origin is;
 - pull --ff-only when purely behind with a clean tree (a fast-forward
   can't conflict with anything);
-- a plain, no-rebase push ONLY when ahead and not behind - reconnect
-  recovery for commits made offline, since the watcher only wakes on new
-  commits. A concurrent watcher push just wins the race; a rejected
-  plain push is reported, never force-resolved here;
+- ahead commits are NEVER pushed from here - the watcher pushes within
+  seconds of a commit, and its 10-minute safety-net flush timer covers
+  commits made offline once connectivity returns. The workbench does not
+  write to origin at all;
 - diverged (ahead AND behind) is reported and left for the watcher,
   which integrates on its next push.
 
@@ -89,7 +89,7 @@ class SyncManager:
 
     def sync_once(self) -> dict:
         """One fetch + observe round. Fast-forwards when purely behind;
-        nudges a plain push when purely ahead; never rebases."""
+        never pushes, never rebases - origin writes belong to the watcher."""
         with GIT_LOCK:
             fetch = self._run("fetch", "origin")
             if fetch.returncode != 0:
@@ -103,14 +103,6 @@ class SyncManager:
                     pull = self._run("pull", "--ff-only", "origin", "main")
                     if pull.returncode != 0:
                         self.last_error = (pull.stderr or pull.stdout).strip()[-300:]
-                elif ahead and not behind:
-                    # Reconnect recovery: the watcher wakes on commits, not on
-                    # connectivity, so old offline commits need one nudge. A
-                    # plain push cannot corrupt anything - if the watcher gets
-                    # there first this is a no-op or a clean rejection.
-                    push = self._run("push", "origin", "HEAD")
-                    if push.returncode != 0:
-                        self.last_error = (push.stderr or push.stdout).strip()[-300:]
             self.checked_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             return self.status()
 

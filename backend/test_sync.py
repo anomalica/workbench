@@ -146,9 +146,10 @@ def test_sync_once_reports_offline(repos, tmp_path):
     assert status["last_error"]
 
 
-def test_sync_once_nudges_plain_push_when_purely_ahead(repos):
-    """Reconnect recovery: the watcher wakes on commits, so old offline
-    commits get one plain (never rebasing) push nudge."""
+def test_sync_once_never_pushes_ahead_commits(repos):
+    """Origin writes belong to the watcher alone - purely-ahead commits
+    are reported, not pushed (the watcher's safety-net timer flushes
+    offline commits once connectivity returns)."""
     origin, local = repos
     (local / "store" / f"{CONTENT_HASH}.md").write_text(
         RECORD.replace("Line one.", "Offline review.")
@@ -157,8 +158,8 @@ def test_sync_once_nudges_plain_push_when_purely_ahead(repos):
     _git(local, "commit", "-q", "-m", "review: made while offline")
     mgr = SyncManager(local)
     status = mgr.sync_once()
-    assert status["ahead"] == 0
-    assert origin_head_subject(origin) == "review: made while offline"
+    assert status["ahead"] == 1
+    assert origin_head_subject(origin) == "initial"
 
 
 def test_sync_once_leaves_divergence_to_the_watcher(repos):
