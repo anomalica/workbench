@@ -446,14 +446,14 @@
             {/each}
           </div>
 
-          <!-- Rejected (adjudicated over-extractions) -->
+          <!-- Dismissed unmarked extractions (recorded so they stay dismissed) -->
           {#if rejected.length > 0}
             <div class="flex flex-col gap-1.5">
               <button
                 onclick={() => (showRejected = !showRejected)}
                 class="text-xs font-ui font-semibold text-on-surface-muted uppercase tracking-wide text-left cursor-pointer hover:text-on-surface"
               >
-                Rejected as over-extraction ({rejected.length}) {showRejected ? "▴" : "▾"}
+                Dismissed ({rejected.length}) {showRejected ? "▴" : "▾"}
               </button>
               {#if showRejected}
                 {#each rejected as r, i}
@@ -484,12 +484,15 @@
               </p>
             {:else}
               {#each grading.models as m}
-                {@const pending = m.off_target.filter((item) => !isAdjudicated(item))}
+                {@const pending = m.unmarked.filter((item) => !isAdjudicated(item))}
                 <div class="rounded border border-border bg-surface p-2.5 flex flex-col gap-2">
                   <div class="flex items-baseline gap-2">
                     <span class="text-xs font-ui font-medium text-on-surface flex-1 truncate">{m.model}</span>
-                    <span class="text-xs font-mono text-on-surface-muted tabular-nums" title="recall / precision / F1">
-                      R {pct(m.recall)} &middot; P {pct(m.precision)} &middot; F1 {pct(m.f1)}
+                    <span
+                      class="text-xs font-mono text-on-surface-muted tabular-nums"
+                      title="Fraction of your highlighted spans that survived into this model's output. Partial highlights cannot grade precision - unmarked extractions are informational, not wrong."
+                    >
+                      coverage {pct(m.coverage)}
                     </span>
                   </div>
                   {#if m.missed.length > 0}
@@ -507,7 +510,8 @@
                   {#if pending.length > 0}
                     <div class="flex flex-col gap-1.5">
                       <span class="text-xs font-ui text-on-surface-muted">
-                        Outside highlights ({pending.length}) - accept genuine misses, reject padding:
+                        Unmarked extractions ({pending.length}) - informational, not errors.
+                        Accept the ones you'd have highlighted:
                       </span>
                       {#each pending as item}
                         <div class="rounded bg-surface-alt border border-border p-2 flex flex-col gap-1.5">
@@ -528,9 +532,9 @@
                               >Accept</button>
                               <button
                                 onclick={() => reject(item)}
-                                class="px-2 py-0.5 rounded text-xs font-ui font-medium bg-error/10 text-error hover:bg-error/20 cursor-pointer"
-                                title="Over-extraction - record as rejected"
-                              >Reject</button>
+                                class="px-2 py-0.5 rounded text-xs font-ui text-on-surface-muted hover:text-on-surface hover:bg-surface cursor-pointer"
+                                title="Not something you'd highlight - dismiss from this list (recorded so it stays dismissed)"
+                              >Dismiss</button>
                               {#if item.kind}
                                 <span class="ml-auto text-[10px] font-ui text-on-surface-muted self-center uppercase">{item.kind}</span>
                               {/if}
@@ -539,9 +543,9 @@
                         </div>
                       {/each}
                     </div>
-                  {:else if m.off_target.length > 0}
+                  {:else if m.unmarked.length > 0}
                     <span class="text-xs font-ui text-on-surface-muted">
-                      All {m.off_target.length} off-target items adjudicated.
+                      All {m.unmarked.length} unmarked extractions adjudicated.
                     </span>
                   {/if}
                 </div>

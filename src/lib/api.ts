@@ -434,13 +434,16 @@ export interface GradingItem {
   overlap_fraction?: number;
 }
 
+/** anomalica/grading/2 (ADR 0042): coverage-only. Partial highlights cannot
+ *  yield precision - an unhighlighted extraction is not wrong - so the one
+ *  corpus-wide number is coverage (highlighted spans that survived into the
+ *  output), and `unmarked` is informational, never a penalty. */
 export interface GradingModelResult {
   model: string;
-  recall: number;
-  precision: number;
-  f1: number;
+  prompts?: unknown;
+  coverage: number;
   missed: HighlightSpan[];
-  off_target: GradingItem[];
+  unmarked: GradingItem[];
 }
 
 export interface GradingResults {
