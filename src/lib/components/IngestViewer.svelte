@@ -1198,6 +1198,16 @@
     // WordTranscript, but this keeps markers out of every other prose path too).
     body = body.replace(/\{\{t:\d+(?:\.\d+)?\}\}/g, "");
     body = pairImageCaptions(body);
+    // PDFs emit file_page with an adjacent printed_page when the printed
+    // number differs - collapse the pair into ONE divider labelled with the
+    // printed page (the real page), keeping data-file-page for the
+    // source-pane scroll sync. Values can be roman numerals or index pages
+    // (xiv, I10), so match alphanumerics, not just digits.
+    body = body.replace(
+      /<!--\s*file_page:\s*(\d+)\s*-->\s*\n\s*<!--\s*printed_page:\s*([A-Za-z0-9]+)\s*-->/g,
+      (_, filePage, printedPage) =>
+        `<div class="page-marker" data-file-page="${filePage}"><span class="page-label">Page ${printedPage}</span></div>`,
+    );
     return body.replace(
       /<!--\s*([\s\S]*?)-->/g,
       (_, content) => {
@@ -1207,8 +1217,14 @@
         if (pageMatch) {
           return `<div class="page-marker" data-file-page="${pageMatch[1]}"><span class="page-label">Page ${pageMatch[1]}</span></div>`;
         }
+        // Page marker (ebooks): printed_page stands alone - EPUB pagebreaks
+        // have no file_page - and must render as a visible divider.
+        const printedMatch = trimmed.match(/^printed_page:\s*([A-Za-z0-9]+)$/);
+        if (printedMatch) {
+          return `<div class="page-marker" data-printed-page="${printedMatch[1]}"><span class="page-label">Page ${printedMatch[1]}</span></div>`;
+        }
         // Structural markers: suppress in body (used for nav, not display)
-        if (/^(chapter|chapter_title|printed_page|speaker)\s*:/.test(trimmed)) {
+        if (/^(chapter|chapter_title|speaker)\s*:/.test(trimmed)) {
           return "";
         }
         // Image with extracted file: render as actual <img> from the media endpoint
