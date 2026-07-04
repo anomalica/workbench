@@ -666,6 +666,8 @@
 
   // Metadata parsed from frontmatter (read-only display)
   let showMetadata = $state(false);
+  // Dedicated review-history panel (title-bar toggle) - provenance surface.
+  let showHistory = $state(false);
 
   // Source
   let isPdf = $derived(ingest.frontmatter.source_type === "pdf");
@@ -2410,6 +2412,13 @@
       </button>
     </div>
 
+    <button
+      onclick={() => (showHistory = !showHistory)}
+      class="px-2 py-1 rounded text-xs font-ui font-medium flex-none border border-border transition-colors cursor-pointer
+        {showHistory ? 'bg-primary text-on-primary' : 'text-on-surface-secondary hover:bg-surface'}"
+      title="Who edited this record, and when (from its git history)"
+    >History</button>
+
     {#if ontuning && !STATIC_READS}
       <button
         onclick={ontuning}
@@ -3092,8 +3101,15 @@
             </summary>
             <pre class="mt-2 font-mono text-on-surface whitespace-pre-wrap">{currentRawFrontmatter}</pre>
           </details>
-          <!-- Every reviewer's edits to this record (from git). -->
-          <ReviewHistory hash={ingest.content_hash} />
+        </div>
+      {/if}
+
+      <!-- Review history panel: who edited this record, newest first. Its own
+           panel with a title-bar toggle - provenance must be findable, not
+           buried inside the metadata drawer. -->
+      {#if showHistory}
+        <div class="border-b border-border bg-surface-alt/50 px-4 py-3 flex-none max-h-64 overflow-y-auto">
+          <ReviewHistory hash={ingest.content_hash} startOpen />
         </div>
       {/if}
 

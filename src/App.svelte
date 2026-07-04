@@ -604,8 +604,8 @@
                 onclick={() => { filterDigestible = !filterDigestible; }}
                 class="text-xs font-ui px-2 py-1 rounded cursor-pointer transition-colors
                   {filterDigestible ? 'bg-success/20 text-success' : 'text-on-surface-secondary hover:bg-surface'}"
-                title="Show only records that are digestible (100% observed)"
-              >Digestible</button>
+                title="Show only fully-reviewed records, ready for the digester"
+              >Ready to digest</button>
               <button
                 onclick={() => { filterUntraceable = !filterUntraceable; }}
                 class="text-xs font-ui px-2 py-1 rounded cursor-pointer transition-colors
