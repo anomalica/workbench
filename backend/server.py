@@ -717,7 +717,11 @@ class LocalIngestSource(IngestSource):
                 if push.returncode == 0:
                     return True, ""
                 last = (push.stderr or push.stdout).strip()[-300:]
-                rebase = run("pull", "--rebase", "origin")
+                # Explicit branch: a bare `pull --rebase origin` reads
+                # FETCH_HEAD, which a concurrent fetch (the operations
+                # auto-push watcher) can turn into "cannot rebase onto
+                # multiple branches".
+                rebase = run("pull", "--rebase", "origin", "main")
                 if rebase.returncode != 0:
                     run("rebase", "--abort")
                     detail = (rebase.stderr or rebase.stdout).strip()[-300:]

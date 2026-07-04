@@ -90,7 +90,11 @@ class SyncManager:
                 if not self.dirty():
                     _, behind = self.counts()
                     if behind:
-                        pull = self._run("pull", "--rebase", "origin")
+                        # Explicit branch - a bare `pull --rebase origin` reads
+                        # FETCH_HEAD, which a concurrent fetch from another
+                        # process can turn into "cannot rebase onto multiple
+                        # branches".
+                        pull = self._run("pull", "--rebase", "origin", "main")
                         if pull.returncode != 0:
                             self._run("rebase", "--abort")
                             self.last_error = (pull.stderr or pull.stdout).strip()[
