@@ -3,10 +3,13 @@ import yaml from "js-yaml";
 import {
   hasPrecedingImage,
   imageFilesInBody,
+  imageIsIrrelevant,
   markAsCaption,
   moveCaptionByFile,
   remapSpans,
+  setImageRelevanceByFile,
 } from "./image-captions";
+import { parseTextBlocks, totalUnits } from "./text-blocks";
 
 // A body with a structured image annotation followed by a loose caption
 // paragraph, then more prose. Line indices (0-based):
@@ -254,5 +257,41 @@ describe("caption re-targeting", () => {
     expect(moveCaptionByFile(attached.body, "ccc333ddd444.jpg", "nope999zzz000.jpg").ok).toBe(
       false,
     );
+  });
+});
+
+describe("setImageRelevanceByFile / imageIsIrrelevant", () => {
+  const FILE = "abc123def456.jpg";
+
+  it("marks an image irrelevant by adding `irrelevant: true` under the mapping", () => {
+    const { ok, body } = setImageRelevanceByFile(BODY, FILE, true);
+    expect(ok).toBe(true);
+    expect(parseAnnotation(body).irrelevant).toBe(true);
+    expect(imageIsIrrelevant(body, FILE)).toBe(true);
+    // Round-trips back to keep: clearing removes the line (absent = keep).
+    const cleared = setImageRelevanceByFile(body, FILE, false);
+    expect(cleared.ok).toBe(true);
+    expect(cleared.body).toBe(BODY);
+    expect(imageIsIrrelevant(cleared.body, FILE)).toBe(false);
+  });
+
+  it("is a no-op when already in the requested state or the image is missing", () => {
+    expect(setImageRelevanceByFile(BODY, FILE, false).ok).toBe(false); // already keep
+    const marked = setImageRelevanceByFile(BODY, FILE, true).body;
+    expect(setImageRelevanceByFile(marked, FILE, true).ok).toBe(false); // already irrelevant
+    expect(setImageRelevanceByFile(BODY, "nope999zzz000.jpg", true).ok).toBe(false);
+  });
+
+  it("does not change reviewable coverage - the image block stays zero-unit", () => {
+    const before = totalUnits(parseTextBlocks(BODY));
+    const { body } = setImageRelevanceByFile(BODY, FILE, true);
+    expect(totalUnits(parseTextBlocks(body))).toBe(before);
+  });
+
+  it("shifts line-anchored spans past the inserted flag line", () => {
+    const { oldToNew } = setImageRelevanceByFile(BODY, FILE, true);
+    // The prose after the annotation ("Body continues here." at line 11) moves
+    // down one, so a coverage span on it follows.
+    expect(remapSpans([{ from: 11, to: 11 }], oldToNew)).toEqual([{ from: 12, to: 12 }]);
   });
 });
