@@ -46,6 +46,7 @@
   import EpubViewer from "./EpubViewer.svelte";
   import WordTranscript from "./WordTranscript.svelte";
   import ReadableText from "./ReadableText.svelte";
+  import { bodyWithoutLeadingTitle } from "$lib/text-blocks";
   import EditableMetadata from "./EditableMetadata.svelte";
   import ReviewHistory from "./ReviewHistory.svelte";
   import { hasWordTimestamps, parseWords, nextRelevantWordStartAfter, speakerWordCounts } from "$lib/transcript-words";
@@ -144,6 +145,14 @@
     const c = currentFrontmatterObj.creators ?? currentFrontmatterObj.authors;
     return Array.isArray(c) ? c.map(String) : [];
   });
+  // The parsed frontmatter title, surfaced as the reading area's document
+  // heading (below) so every record shows its title the same way. Falls back
+  // to the fetch value while the working doc's frontmatter is (re)parsing.
+  let liveTitle = $derived(
+    typeof currentFrontmatterObj.title === "string" && currentFrontmatterObj.title.trim()
+      ? currentFrontmatterObj.title.trim()
+      : (ingest.frontmatter.title ?? "").trim(),
+  );
   let livePublisher = $derived(
     typeof currentFrontmatterObj.publisher === "string" ? currentFrontmatterObj.publisher : "",
   );
@@ -3296,6 +3305,18 @@
         </div>
       {/if}
 
+      <!-- Document heading: the parsed frontmatter title, surfaced at the top
+           of the reading area for every record type so the title never feels
+           missing from the document (it used to live only in the title bar).
+           The matching leading body title, if any, is suppressed below so it
+           never doubles. Ingest reading view only - edit/raw/diff show the
+           body verbatim. -->
+      {#if view === "ingest" && canShowBody && liveTitle}
+        <div class="flex-none px-8 pt-5 pb-3 border-b border-border/60">
+          <h1 class="font-serif text-xl font-semibold leading-snug text-on-surface">{liveTitle}</h1>
+        </div>
+      {/if}
+
       {#if !canShowBody}
         <!-- Restricted content: need hash verification -->
         <div
@@ -4005,6 +4026,7 @@
         {#if isTextRecord}
           <ReadableText
             body={currentBody()}
+            documentTitle={liveTitle}
             renderBlock={(src) => renderRedactions(marked.parse(preprocessAnnotations(src)) as string)}
             previousObserved={myObservedSpans}
             storageKey={`workbench:read:${ingest.content_hash}`}
@@ -4015,7 +4037,7 @@
             onblockclick={followBlockToSource}
           />
         {:else}
-          {@const processedBody = preprocessAnnotations(currentBody())}
+          {@const processedBody = preprocessAnnotations(bodyWithoutLeadingTitle(currentBody(), liveTitle))}
           {@const renderedHtml = renderRedactions(marked.parse(processedBody) as string)}
           <div
             bind:this={proseContainer}

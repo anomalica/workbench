@@ -10,6 +10,7 @@
     unmarkIrrelevantAt,
     shiftSpansForMark,
     shiftSpansForRemoval,
+    leadingTitleBlocks,
     type TextBlock,
   } from "$lib/text-blocks";
   import { hasPrecedingImage, markAsCaption, remapSpans } from "$lib/image-captions";
@@ -17,6 +18,7 @@
 
   let {
     body,
+    documentTitle = "",
     renderBlock,
     previousObserved = [],
     storageKey = "",
@@ -28,6 +30,11 @@
   }: {
     /** Record body with the frontmatter already stripped. */
     body: string;
+    /** The record's title. A leading body block that merely repeats it (a
+     *  PDF/ebook title page, or the legacy injected title prelude) is hidden
+     *  from display, since the title is shown separately as the document
+     *  heading - so it never appears twice. Coverage counting is unchanged. */
+    documentTitle?: string;
     /** Render one block's source markdown to trusted HTML (the parent reuses
      *  its annotation + redaction + marked pipeline). */
     renderBlock: (source: string) => string;
@@ -57,10 +64,12 @@
   } = $props();
 
   let blocks = $derived(parseTextBlocks(body));
+  // Leading blocks that duplicate the title, hidden from display only.
+  let suppressed = $derived(leadingTitleBlocks(blocks, documentTitle));
   let renderedBlocks = $derived(
     blocks
       .map((b) => ({ block: b, html: renderBlock(b.source) }))
-      .filter((r) => r.html.trim() !== "" || r.block.irrelevant),
+      .filter((r) => !suppressed.has(r.block.index) && (r.html.trim() !== "" || r.block.irrelevant)),
   );
 
   // Group runs of consecutive irrelevant blocks into one collapsible region
