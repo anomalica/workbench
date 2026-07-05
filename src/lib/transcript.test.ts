@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   parseTranscript,
+  insertEventNote,
   serializeTranscript,
   parseTimeToSeconds,
   secondsToTime,
@@ -655,5 +656,32 @@ describe("orderedNamedSpeakers", () => {
 
     expect(pickerOrder).toEqual(sidebarOrder);
     expect(sidebarOrder).toEqual(["Lex", "Guest"]); // first appearance order
+  });
+});
+
+describe("insertEventNote", () => {
+  it("inserts a bracketed token at the caret, padding a space only where needed", () => {
+    // Caret between two words -> a space is padded on each side.
+    const r = insertEventNote("They spoke then stopped.", "laughs", 10, 10);
+    expect(r.text).toBe("They spoke [laughs] then stopped.");
+    // Caret lands just after the inserted token.
+    expect(r.text.slice(0, r.cursor)).toBe("They spoke [laughs]");
+  });
+
+  it("adds no leading space at the very start and no trailing at the very end", () => {
+    expect(insertEventNote("", "applause", 0, 0).text).toBe("[applause]");
+    expect(insertEventNote("Silence.", "pause", 8, 8).text).toBe("Silence. [pause]");
+    expect(insertEventNote("Silence.", "pause", 0, 0).text).toBe("[pause] Silence.");
+  });
+
+  it("does not double a space that is already there", () => {
+    const r = insertEventNote("A B", "music", 2, 2); // caret before "B", after the space
+    expect(r.text).toBe("A [music]B".replace("]B", "] B")); // trailing pad only
+    expect(r.text).toBe("A [music] B");
+  });
+
+  it("replaces the selected range", () => {
+    const r = insertEventNote("uh the object", "crosstalk", 0, 2); // replace "uh"
+    expect(r.text).toBe("[crosstalk] the object");
   });
 });
