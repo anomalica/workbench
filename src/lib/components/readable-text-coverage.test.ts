@@ -1,17 +1,13 @@
 /**
- * Regression test for the suppressed-title coverage trap.
+ * Regression test for undisplayed-block coverage.
  *
- * A leading body heading that duplicates the frontmatter title is hidden from
- * the reading list (it is rendered separately as the document H1). But it still
- * carried a reviewable unit in `total`, with no gutter to click - so a reviewer
- * marking prose block-by-block could never cover it and the record capped at
- * (total - 1)/total, stuck below 100%. ("Mark all read" masked it because that
- * path covers hidden blocks invisibly.)
- *
- * The fix auto-observes content blocks that are counted but never displayed, so
- * a hidden title (and any annotation block that renders to nothing) can never
- * strand coverage. Those spans join the stored verdict too, so the digester
- * gate - which still counts those lines - sees them observed.
+ * The reading area renders the body faithfully (nothing suppressed), but a
+ * content block can still render to nothing - e.g. a markdown link-reference
+ * definition. Such a block counts a reviewable unit yet has no gutter to click,
+ * so block-by-block review could never cover it and the record would stall
+ * below 100%. autoObservedSpans auto-observes those unmarkable blocks (their
+ * spans also join the stored verdict so the digester gate, which still counts
+ * the line, sees it observed).
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
@@ -25,29 +21,30 @@ type Verdict = {
   total_units: number;
 };
 
-// Body: a leading heading that matches the title (block 0, suppressed) plus two
-// prose paragraphs (blocks 1, 2). 3 content units; only 2 are displayed.
-const BODY = "# The Report\n\nFirst paragraph.\n\nSecond paragraph.\n";
+// Block 1 is a link-reference definition: a content line that renders to empty
+// HTML, so it is never displayed. Blocks 0 and 2 are ordinary prose.
+const BODY = "First paragraph.\n\n[ref]: https://example.com\n\nSecond paragraph.\n";
+// Mirror the parent's render: a link-reference definition produces no output.
+const renderBlock = (src: string) => (src.trimStart().startsWith("[") ? "" : src);
 
 function props(onverdict: (v: Verdict) => void) {
   return {
     body: BODY,
-    documentTitle: "The Report",
-    renderBlock: (src: string) => src,
+    renderBlock,
     previousObserved: [],
-    storageKey: "workbench:read:suppressed-title-test",
+    storageKey: "workbench:read:undisplayed-block-test",
     onverdict,
   };
 }
 
-describe("ReadableText coverage: a suppressed title never strands 100%", () => {
+describe("ReadableText coverage: an undisplayed content block never strands 100%", () => {
   beforeEach(() => {
     localStorage.clear();
     Element.prototype.scrollTo = vi.fn();
     Element.prototype.scrollIntoView = vi.fn();
   });
 
-  it("auto-observes the hidden title span from the start", async () => {
+  it("auto-observes the empty-render block's span from the start", async () => {
     let verdict: Verdict | null = null;
     render(ReadableText, {
       props: props((v) => {
@@ -55,26 +52,23 @@ describe("ReadableText coverage: a suppressed title never strands 100%", () => {
       }),
     });
     await waitFor(() => {
-      // Title line (0) is auto-covered though nothing was marked by hand.
       expect((verdict as unknown as Verdict).total_units).toBe(3);
+      // The link-definition line (2) is auto-covered though nothing was marked.
       expect((verdict as unknown as Verdict).observed_coverage).toBeCloseTo(1 / 3, 5);
-      expect((verdict as unknown as Verdict).spans).toContainEqual({ from: 0, to: 0 });
+      expect((verdict as unknown as Verdict).spans).toContainEqual({ from: 2, to: 2 });
     });
   });
 
-  it("reaches digestible after marking only the displayed prose blocks", async () => {
+  it("reaches digestible after marking only the two displayed prose blocks", async () => {
     let verdict: Verdict | null = null;
     render(ReadableText, {
       props: props((v) => {
         verdict = v;
       }),
     });
-    await waitFor(() => expect(verdict).not.toBeNull());
-    // The reviewer can only click the two displayed prose gutters; the title
-    // has none. With the auto-cover this still reaches 100%.
     const toggles = await waitFor(() => {
       const t = document.querySelectorAll('button[aria-label="Toggle read"]');
-      expect(t.length).toBe(2);
+      expect(t.length).toBe(2); // only the two displayed prose blocks have a gutter
       return t;
     });
     for (const btn of toggles) await fireEvent.click(btn);

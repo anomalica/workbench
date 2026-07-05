@@ -11,8 +11,6 @@ import {
   unmarkIrrelevantAt,
   shiftSpansForMark,
   shiftSpansForRemoval,
-  leadingTitleBlocks,
-  bodyWithoutLeadingTitle,
 } from "./text-blocks";
 
 describe("commentLineFlags", () => {
@@ -184,57 +182,6 @@ describe("shiftSpansForRemoval", () => {
       { from: 2, to: 4 },
       { from: 8, to: 8 },
     ]);
-  });
-});
-
-describe("leadingTitleBlocks", () => {
-  it("suppresses a leading heading matching the title, plus its published stamp", () => {
-    const body = "# In Plain Sight\n\n*Published 2023-11-17*\n\nThe real content starts here.";
-    const blocks = parseTextBlocks(body);
-    const hide = leadingTitleBlocks(blocks, "In Plain Sight");
-    // Blocks 0 (# title) and 1 (*Published*) hidden; block 2 (content) kept.
-    expect([...hide].sort()).toEqual([0, 1]);
-  });
-
-  it("matches a plain (no-#) title line and is case-insensitive", () => {
-    const body = "IN PLAIN SIGHT\n\nBody.";
-    const hide = leadingTitleBlocks(parseTextBlocks(body), "In Plain Sight");
-    expect(hide.has(0)).toBe(true);
-  });
-
-  it("does not suppress a matching heading deeper in the body", () => {
-    const body = "Opening paragraph.\n\n# In Plain Sight\n\nMore.";
-    const hide = leadingTitleBlocks(parseTextBlocks(body), "In Plain Sight");
-    expect(hide.size).toBe(0);
-  });
-
-  it("suppresses nothing when the leading block is not the title", () => {
-    const body = "# Chapter One\n\nBody.";
-    expect(leadingTitleBlocks(parseTextBlocks(body), "In Plain Sight").size).toBe(0);
-  });
-
-  it("skips structural blocks above the title", () => {
-    const body = "<!-- file_page: 1 -->\n\n# The Report\n\nBody.";
-    const blocks = parseTextBlocks(body);
-    const hide = leadingTitleBlocks(blocks, "The Report");
-    const titleBlock = blocks.find((b) => b.source.includes("# The Report"))!;
-    expect(hide.has(titleBlock.index)).toBe(true);
-  });
-
-  it("is a no-op for an empty title", () => {
-    expect(leadingTitleBlocks(parseTextBlocks("# X\n\nY"), "").size).toBe(0);
-  });
-});
-
-describe("bodyWithoutLeadingTitle", () => {
-  it("removes the leading title block and published stamp from the body", () => {
-    const body = "# In Plain Sight\n\n*Published 2023-11-17*\n\nReal content.";
-    expect(bodyWithoutLeadingTitle(body, "In Plain Sight")).toBe("Real content.");
-  });
-
-  it("returns the body unchanged when there is no leading title", () => {
-    const body = "Just content.\n\nMore.";
-    expect(bodyWithoutLeadingTitle(body, "In Plain Sight")).toBe(body);
   });
 });
 
