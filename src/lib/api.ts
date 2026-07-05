@@ -506,6 +506,24 @@ export async function fetchPredigest(
   }
 }
 
+/** Whether the open record was superseded/re-ingested underneath the view.
+ *  Null on any error or a deployment without the endpoint. DYNAMIC. */
+export interface Supersession {
+  exists: boolean;
+  superseded_by: string | null;
+  public_supersedes: string | null;
+}
+
+export async function fetchSupersession(hash: string): Promise<Supersession | null> {
+  try {
+    const res = await fetch(`/api/ingests/${hash}/supersession`);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
 /** Sync state of the local ingests clone vs origin (local backend only -
  *  the static deploy has no clone and 404s, which callers treat as null). */
 export interface SyncStatus {

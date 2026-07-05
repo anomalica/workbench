@@ -4,6 +4,7 @@
     submitReview,
     pushOrigin,
     fetchPredigest,
+    fetchSupersession,
     type Predigest,
     fetchCoverage,
     provenanceOf,
@@ -68,6 +69,7 @@
     onreviewedchange,
     onback,
     ontuning,
+    onreload,
   }: {
     ingest: IngestDetail;
     digest?: DigestDocument | null;
@@ -87,6 +89,8 @@
     onback: () => void;
     /** Switch this record into relevance-tuning mode. */
     ontuning?: () => void;
+    /** Open the record that superseded this one (re-ingest while open). */
+    onreload?: (contentHash: string) => void;
   } = $props();
 
   const doc = new DocumentStore();
@@ -703,6 +707,33 @@
   let showMetadata = $state(false);
   // Dedicated review-history panel (title-bar toggle) - provenance surface.
   let showHistory = $state(false);
+
+  // Supersession watch: the local ingests clone can pull a re-ingest while a
+  // record is open, moving this record to store/v1/ and pointing it at a new
+  // content_hash. The open view would then show a stale record whose source no
+  // longer resolves. Poll for it and offer a reload rather than break silently.
+  let supersededBy = $state<string | null>(null);
+  $effect(() => {
+    if (STATIC_READS) return;
+    const hash = ingest.content_hash;
+    supersededBy = null;
+    let cancelled = false;
+    const check = async () => {
+      const s = await fetchSupersession(hash);
+      if (!cancelled && ingest.content_hash === hash && s?.superseded_by) {
+        supersededBy = s.superseded_by;
+      }
+    };
+    check();
+    const timer = setInterval(check, 60_000);
+    const onFocus = () => check();
+    window.addEventListener("focus", onFocus);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+      window.removeEventListener("focus", onFocus);
+    };
+  });
   // Set when a submitted review committed locally but failed to push to
   // origin - shown in the status bar until dismissed.
   let syncWarning = $state<string | null>(null);
@@ -2451,6 +2482,23 @@
   role="presentation"
   ondragover={(e) => e.preventDefault()}
   ondrop={(e) => e.preventDefault()}>
+  <!-- Superseded-while-open banner: this record was re-ingested underneath the
+       open view, so its source no longer resolves and edits would target a
+       retired record. Prompt a reload to the new version. -->
+  {#if supersededBy}
+    <div class="px-4 py-2 bg-warning text-on-warning flex items-center gap-2 flex-none text-xs font-ui">
+      <svg class="w-4 h-4 flex-none" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+      </svg>
+      <span class="font-semibold">This record was re-ingested while you had it open.</span>
+      <span>The version you're viewing is now retired{doc.dirty ? " - reloading discards unsubmitted changes" : ""}.</span>
+      <button
+        onclick={() => { if (supersededBy) onreload?.(supersededBy); }}
+        class="ml-auto font-semibold underline cursor-pointer hover:no-underline flex-none"
+        title="Open the re-ingested record"
+      >Reload the new version</button>
+    </div>
+  {/if}
   <!-- Title bar -->
   <div class="px-4 py-3 border-b border-border bg-surface-alt flex items-center gap-3">
     <button

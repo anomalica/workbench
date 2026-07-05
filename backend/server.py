@@ -262,6 +262,13 @@ class IngestSource(ABC):
         missing). Returns True on success."""
 
     @abstractmethod
+    def supersession(self, full_hash: str) -> dict:
+        """Whether a (possibly-open) record has been superseded by a re-ingest.
+        Returns {"exists": bool, "superseded_by": str|None} read from
+        frontmatter only (no body). Polled by the open review view so it can
+        prompt a reload rather than silently showing a stale record."""
+
+    @abstractmethod
     def load_highlights(self, full_hash: str) -> dict | None:
         """Load the relevance-tuning highlights sidecar, or None if absent."""
 
@@ -1006,6 +1013,19 @@ class LocalIngestSource(IngestSource):
     def _coverage_path(self, full_hash: str) -> Path:
         return self.store / f"{full_hash}.review.json"
 
+    def supersession(self, full_hash: str) -> dict:
+        # Uses the scan's already-parsed frontmatter, so no body is read. A
+        # re-ingested record moves to store/v1/ carrying superseded_by; the
+        # live store no longer has it, so check both.
+        entry = self._scan().get(full_hash) or self._scan_archived().get(full_hash)
+        if entry is None:
+            return {"exists": False, "superseded_by": None}
+        _, frontmatter = entry
+        return {
+            "exists": True,
+            "superseded_by": normalise_hash(frontmatter.get("superseded_by")),
+        }
+
     def _highlights_path(self, full_hash: str) -> Path | None:
         """The highlights sidecar sits next to the record file, so an
         archived (store/v1/) record's sidecar lives in store/v1/ too."""
@@ -1153,6 +1173,9 @@ class GitHubIngestSource(IngestSource):
         raise NotImplementedError("GitHubIngestSource is not yet implemented")
 
     def append_coverage(self, **kwargs: object) -> bool:
+        raise NotImplementedError("GitHubIngestSource is not yet implemented")
+
+    def supersession(self, full_hash: str) -> dict:
         raise NotImplementedError("GitHubIngestSource is not yet implemented")
 
     def load_highlights(self, full_hash: str) -> dict | None:
@@ -2432,6 +2455,25 @@ def get_grading(full_hash: str) -> JSONResponse:
     with open(path) as f:
         grading = json.load(f)
     return JSONResponse({"available": True, "body_sha256": sha, "grading": grading})
+
+
+@app.get("/api/ingests/{full_hash}/supersession")
+def get_supersession(full_hash: str) -> JSONResponse:
+    """Whether the open record has been re-ingested/superseded underneath the
+    view. The open review view polls this so it can prompt a reload with the
+    new record rather than silently showing a stale, source-unresolvable one.
+    `public_supersedes` is the 56-char prefix for deep-linking the new record."""
+    if not FULL_HASH_PATTERN.match(full_hash):
+        raise HTTPException(status_code=404, detail="Not found")
+    status = source.supersession(full_hash)
+    by = status.get("superseded_by")
+    return JSONResponse(
+        {
+            "exists": status["exists"],
+            "superseded_by": by,
+            "public_supersedes": by[:PUBLIC_HASH_LENGTH] if by else None,
+        }
+    )
 
 
 @app.get("/api/ingests/{full_hash}/history")

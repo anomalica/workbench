@@ -633,6 +633,7 @@
         }}
         onback={goBack}
         ontuning={() => (tuningOpen = true)}
+        onreload={(contentHash) => selectIngest(contentHash)}
       />
     {:else}
       <div class="flex-1 flex flex-col min-h-0">
