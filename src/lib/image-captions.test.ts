@@ -4,10 +4,12 @@ import {
   hasPrecedingImage,
   imageFilesInBody,
   imageIsIrrelevant,
+  imageDescription,
   markAsCaption,
   moveCaptionByFile,
   remapSpans,
   setImageRelevanceByFile,
+  setImageDescriptionByFile,
 } from "./image-captions";
 import { parseTextBlocks, totalUnits } from "./text-blocks";
 
@@ -293,5 +295,53 @@ describe("setImageRelevanceByFile / imageIsIrrelevant", () => {
     // The prose after the annotation ("Body continues here." at line 11) moves
     // down one, so a coverage span on it follows.
     expect(remapSpans([{ from: 11, to: 11 }], oldToNew)).toEqual([{ from: 12, to: 12 }]);
+  });
+});
+
+describe("setImageDescriptionByFile / imageDescription", () => {
+  const FILE = "abc123def456.jpg";
+
+  it("writes the description into the annotation and reads it back", () => {
+    const text = "Tweet by @user: the object remains unidentified.";
+    const { ok, body } = setImageDescriptionByFile(BODY, FILE, text);
+    expect(ok).toBe(true);
+    expect(parseAnnotation(body).description).toBe(text);
+    expect(imageDescription(body, FILE)).toBe(text);
+  });
+
+  it("replaces an existing description rather than duplicating it", () => {
+    const first = setImageDescriptionByFile(BODY, FILE, "Old text.").body;
+    const second = setImageDescriptionByFile(first, FILE, "New text.");
+    expect(parseAnnotation(second.body).description).toBe("New text.");
+    expect(second.body.match(/description:/g)?.length).toBe(1);
+  });
+
+  it("clears the description when set to empty, back to no field", () => {
+    const set = setImageDescriptionByFile(BODY, FILE, "Something.").body;
+    const cleared = setImageDescriptionByFile(set, FILE, "  ");
+    expect(cleared.ok).toBe(true);
+    expect(cleared.body).toBe(BODY);
+    expect(imageDescription(cleared.body, FILE)).toBe("");
+  });
+
+  it("is a no-op when unchanged or the image is missing", () => {
+    expect(setImageDescriptionByFile(BODY, FILE, "").ok).toBe(false); // no description, still none
+    const set = setImageDescriptionByFile(BODY, FILE, "Same.").body;
+    expect(setImageDescriptionByFile(set, FILE, "Same.").ok).toBe(false);
+    expect(setImageDescriptionByFile(BODY, "nope999zzz000.jpg", "x").ok).toBe(false);
+  });
+
+  it("quotes YAML-special and multi-line text so it round-trips", () => {
+    const text = 'Line one: "quoted 40:1".\nLine two.';
+    const { body } = setImageDescriptionByFile(BODY, FILE, text);
+    expect(parseAnnotation(body).description).toBe(text);
+    // Stays a single YAML line (newline escaped inside the quoted scalar).
+    expect(body.match(/description:/g)?.length).toBe(1);
+  });
+
+  it("does not change reviewable coverage - the image block stays zero-unit", () => {
+    const before = totalUnits(parseTextBlocks(BODY));
+    const { body } = setImageDescriptionByFile(BODY, FILE, "A description.");
+    expect(totalUnits(parseTextBlocks(body))).toBe(before);
   });
 });
