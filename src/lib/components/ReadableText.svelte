@@ -77,6 +77,21 @@
       .map((b) => ({ block: b, html: renderBlock(b.source) }))
       .filter((r) => !suppressed.has(r.block.index) && (r.html.trim() !== "" || r.block.irrelevant)),
   );
+  let displayedIndices = $derived(new Set(renderedBlocks.map((r) => r.block.index)));
+  // Content blocks that count toward coverage but are never shown to the
+  // reviewer - a title heading suppressed because it duplicates the document
+  // H1, or an annotation block that renders to nothing - have no gutter to
+  // click, so block-by-block review could never cover them and the record would
+  // cap at (total - hidden)/total, stuck below 100%. Auto-observe them: the
+  // reviewer reads the title as the heading, and empty-render annotations carry
+  // no prose. Derived (not $state), so it re-aligns automatically when a body
+  // edit renumbers lines. These spans join the stored verdict so the digester
+  // gate, which still counts those lines, sees them as observed too.
+  let autoObservedSpans = $derived(
+    blocks
+      .filter((b) => !b.irrelevant && b.contentLines.length > 0 && !displayedIndices.has(b.index))
+      .map((b) => ({ from: b.lineFrom, to: b.lineTo })),
+  );
 
   // Group runs of consecutive irrelevant blocks into one collapsible region
   // strip; everything else renders as ordinary blocks.
@@ -266,14 +281,14 @@
 
   let total = $derived(totalUnits(blocks));
   let coveredUnits = $derived(
-    unitsInSpans(blocks, mergeSpans([...livePrevObserved, ...observedSpans])),
+    unitsInSpans(blocks, mergeSpans([...livePrevObserved, ...observedSpans, ...autoObservedSpans])),
   );
   let pct = $derived(total > 0 ? Math.round((coveredUnits / total) * 100) : 0);
 
   // The verdict mirrors the word editor's: this session's spans plus the
   // cumulative fraction + digestible flag the digester gate reads.
   let coverageVerdict = $derived({
-    spans: observedSpans.map((s) => ({ from: s.from, to: s.to })),
+    spans: mergeSpans([...observedSpans, ...autoObservedSpans]).map((s) => ({ from: s.from, to: s.to })),
     observed_coverage: total > 0 ? coveredUnits / total : 0,
     digestible: total > 0 && coveredUnits === total,
     total_units: total,
