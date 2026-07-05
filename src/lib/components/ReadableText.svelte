@@ -321,6 +321,13 @@
       toggleImageRelevance(toggle.dataset.imageFile, toggle.dataset.irrelevant === "true");
       return;
     }
+    const rmBtn = target.closest(".image-description-remove") as HTMLElement | null;
+    if (rmBtn?.dataset.imageFile) {
+      e.preventDefault();
+      e.stopPropagation();
+      removeImageDescription(rmBtn.dataset.imageFile);
+      return;
+    }
     const descBtn = target.closest(".image-description-edit") as HTMLElement | null;
     if (descBtn?.dataset.imageFile) {
       e.preventDefault();
@@ -361,6 +368,16 @@
     const { file, text } = editingDescription;
     const edit = setImageDescriptionByFile(body, file, text);
     editingDescription = null;
+    if (!edit.ok) return;
+    observedSpans = remapSpans(observedSpans, edit.oldToNew);
+    livePrevObserved = remapSpans(livePrevObserved, edit.oldToNew);
+    onbodyedit(edit.body);
+  }
+
+  // Clear the description field in one click (same commit path as an edit).
+  function removeImageDescription(file: string) {
+    if (!onbodyedit) return;
+    const edit = setImageDescriptionByFile(body, file, "");
     if (!edit.ok) return;
     observedSpans = remapSpans(observedSpans, edit.oldToNew);
     livePrevObserved = remapSpans(livePrevObserved, edit.oldToNew);
@@ -829,15 +846,29 @@
     letter-spacing: 0.06em;
     color: var(--color-primary);
   }
+  :global(figure.ingest-figure .image-description-actions) {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin-top: 0.2rem;
+  }
   :global(figure.ingest-figure .image-description-edit) {
     align-self: flex-start;
-    margin-top: 0.2rem;
     font-size: 0.7rem;
     color: var(--color-primary);
     cursor: pointer;
   }
   :global(figure.ingest-figure .image-description-edit:hover) {
     text-decoration: underline;
+  }
+  :global(figure.ingest-figure .image-description-remove) {
+    display: inline-flex;
+    align-items: center;
+    color: var(--color-on-surface-muted);
+    cursor: pointer;
+  }
+  :global(figure.ingest-figure .image-description-remove:hover) {
+    color: var(--color-warning);
   }
   /* The "add description" affordance hover-reveals so undescribed images stay
      uncluttered, matching the relevance toggle. */

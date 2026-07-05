@@ -1285,14 +1285,19 @@
             // reads as a distinct, labelled block, not a caption. Editable in the
             // reviewer context; shown read-only elsewhere.
             const description = typeof img.description === "string" ? img.description.trim() : "";
+            const descActions = imageControls
+              ? `<span class="image-description-actions">` +
+                `<button type="button" class="image-description-edit" data-image-file="${img.file}">Edit</button>` +
+                `<button type="button" class="image-description-remove" data-image-file="${img.file}" title="Remove this description" aria-label="Remove description">` +
+                `<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" d="M6 18L18 6M6 6l12 12"/></svg></button>` +
+                `</span>`
+              : "";
             let descBlock = "";
             if (description) {
               descBlock =
                 `<div class="image-description"><span class="image-description-label">Description</span>` +
                 `<span class="image-description-text">${escapeHtml(description)}</span>` +
-                (imageControls
-                  ? `<button type="button" class="image-description-edit" data-image-file="${img.file}">Edit</button>`
-                  : "") +
+                descActions +
                 `</div>`;
             } else if (imageControls) {
               descBlock = `<button type="button" class="image-description-edit image-description-add" data-image-file="${img.file}">+ Describe what's in this image</button>`;
@@ -1316,7 +1321,9 @@
                     : "Mark this image irrelevant - dropped from the rendered page. Does not affect review coverage or extraction."
                 }">${irrelevant ? "Keep image" : "Mark irrelevant"}</button>`
               : "";
-            return `<figure class="ingest-figure" data-image-file="${img.file}"${irrAttr}><img src="${src}" alt="${escapeHtml(alt)}" loading="lazy" />${cap}${descBlock}${tag}${toggle}</figure>`;
+            // Order: image, then the DESCRIPTION (primary 'what is in it'
+            // content), then the CAPTION (secondary source attribution).
+            return `<figure class="ingest-figure" data-image-file="${img.file}"${irrAttr}><img src="${src}" alt="${escapeHtml(alt)}" loading="lazy" />${descBlock}${cap}${tag}${toggle}</figure>`;
           }
         }
         // Image description (no extracted file)
