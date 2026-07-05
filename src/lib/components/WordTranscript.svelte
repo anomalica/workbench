@@ -1,6 +1,11 @@
 <script lang="ts">
   import { untrack } from "svelte";
-  import { parseWords, wordsInTimeRange, wordActiveAt } from "$lib/transcript-words";
+  import {
+    parseWords,
+    wordsInTimeRange,
+    wordActiveAt,
+    eventNoteAnchorIndex,
+  } from "$lib/transcript-words";
   import type { SpeakerRun } from "$lib/transcript-words";
   import { EVENT_NOTE_PRESETS } from "$lib/transcript";
   import {
@@ -58,11 +63,11 @@
     filteredSpeakers = new Set<string>(),
     hideIrrelevant = true,
     storageKey = "",
-    notesStorageKey = "",
     serverObserved = [],
     claimHighlight = null,
     onreassign,
     onreplaceselection,
+    oneventnote,
     onseek,
     onmarkresume,
     onverdict,
@@ -81,8 +86,6 @@
     hideIrrelevant?: boolean;
     /** localStorage key for persisting which words have been observed. */
     storageKey?: string;
-    /** localStorage key for persisting time-anchored visual notes. */
-    notesStorageKey?: string;
     /** Word indices this reviewer already submitted as observed (from the
      *  server coverage sidecar). Merged into the local observation set so a
      *  reopened record restores previously-submitted coverage, not just the
@@ -103,6 +106,9 @@
       to: number,
       newWords: { text: string; start: number }[],
     ) => void;
+    /** Insert a bracketed event note (`[laughs]`) into the body at time
+     *  `at` - the word-record twin of the segment editor's quick-insert. */
+    oneventnote?: (at: number, text: string) => void;
     /** Seek the media to `seconds` (optional). */
     onseek?: (seconds: number) => void;
     /** Position the media at `seconds` WITHOUT starting playback - used by the
@@ -469,30 +475,14 @@
   // standard transcript event. Shared with the segment editor's quick-insert.
   const NOTE_PRESETS = EVENT_NOTE_PRESETS;
 
+  // Notes are transient compose state only: adding one opens an inline editor,
+  // and committing writes the bracketed token into the BODY (a `{{t:}}[laughs]`
+  // word the digester reads as meta), not a localStorage overlay - so a note is
+  // real, persists, and reaches extraction, matching the segment editor. An
+  // uncommitted note lives only for the compose session.
   let notes = $state<VisualNote[]>([]);
   let editingNoteId = $state<string | null>(null);
   let noteInputEl = $state<HTMLTextAreaElement>();
-
-  $effect(() => {
-    const key = notesStorageKey;
-    let restored: VisualNote[] = [];
-    if (key) {
-      try {
-        const raw = JSON.parse(localStorage.getItem(key) ?? "[]");
-        if (Array.isArray(raw)) restored = raw;
-      } catch {
-        restored = [];
-      }
-    }
-    untrack(() => {
-      notes = restored;
-    });
-  });
-
-  $effect(() => {
-    const serialised = JSON.stringify(notes);
-    if (notesStorageKey) safeLocalSet(notesStorageKey, serialised);
-  });
 
   let sortedNotes = $derived([...notes].sort((a, b) => a.at - b.at));
 
@@ -597,16 +587,36 @@
     addNoteAtCurrentTime();
   }
 
-  function commitNote(id: string) {
-    // Drop a note left empty (e.g. opened then dismissed without typing).
-    notes = notes.filter((n) => n.id !== id || n.text.trim() !== "");
-    editingNoteId = null;
+  /** Write a committed note into the body as a `[...]` event word at its time.
+   *  Keeps the session observed set aligned across the +1 word (indices at or
+   *  after the insert shift up) and auto-observes the note itself, so adding one
+   *  never shifts the coverage fade or drops the percentage - the note is meta
+   *  the reviewer authored, not an unread word. */
+  function writeEventNoteToBody(at: number, text: string) {
+    const token = /^\[.*\]$/.test(text) ? text : `[${text}]`;
+    const noteIndex = eventNoteAnchorIndex(words, at) + 1;
+    const shifted = new Set<number>();
+    for (const g of observed) shifted.add(g >= noteIndex ? g + 1 : g);
+    shifted.add(noteIndex);
+    observed = shifted;
+    if (resumeWord !== null && resumeWord >= noteIndex) resumeWord += 1;
+    styleEpoch++;
+    oneventnote?.(at, token);
   }
 
-  /** Fill a note with a preset event marker and close the editor. */
+  function commitNote(id: string) {
+    const note = notes.find((n) => n.id === id);
+    const text = note?.text.trim() ?? "";
+    notes = notes.filter((n) => n.id !== id); // remove the transient compose note
+    editingNoteId = null;
+    if (note && text) writeEventNoteToBody(note.at, text);
+  }
+
+  /** Insert a preset event marker at the note's moment and close the editor. */
   function applyPreset(note: VisualNote, label: string) {
-    note.text = `[${label}]`;
-    commitNote(note.id);
+    notes = notes.filter((n) => n.id !== note.id);
+    editingNoteId = null;
+    writeEventNoteToBody(note.at, `[${label}]`);
   }
 
   function deleteNote(id: string) {

@@ -110,6 +110,20 @@ export function parseWords(body: string): ParsedWords {
   return { words, runs, lineEndWords, preamble };
 }
 
+/** The gIndex a bracketed event note anchors AFTER for time `at`: the last word
+ *  starting at or before `at`, or -1 to prepend before the first word. The note
+ *  word is then inserted at `anchor + 1`. Shared by the DocumentStore insert and
+ *  WordTranscript's observed-set shift so the two always agree on the position.
+ *  Words are time-ordered, so the scan stops at the first later word. */
+export function eventNoteAnchorIndex(words: Word[], at: number): number {
+  let k = -1;
+  for (let i = 0; i < words.length; i++) {
+    if (words[i].start <= at) k = i;
+    else break;
+  }
+  return k;
+}
+
 /** Serialise words + runs + line breaks back into a transcript body.
  *  Re-emits the body preamble verbatim, then a `<!-- speaker -->` comment only
  *  when the speaker changes (adjacent same-speaker runs merge), a single blank

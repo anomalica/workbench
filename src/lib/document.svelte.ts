@@ -303,6 +303,38 @@ export class DocumentStore {
     if (result !== this.current) this.pushEdit(result);
   }
 
+  /** Insert a bracketed event note (`[laughs]`) as a word at time `at` in a
+   *  per-word-timestamp body, anchored after the last word starting at or before
+   *  `at` (prepended when `at` precedes the first word). The pre-digest strips
+   *  the `{{t:}}` marker, leaving the bare `[...]` the digester reads as a meta
+   *  event - the word-record twin of the segment editor's quick-insert. */
+  insertEventNote(at: number, text: string) {
+    const token = text.trim();
+    if (!token) return;
+    const [, body] = splitFrontmatter(this.current);
+    const parsed = parseWords(body);
+    if (parsed.words.length === 0) return;
+    const anchor = eventNoteAnchorIndex(parsed.words, at);
+    let next: ReturnType<typeof parseWords>;
+    if (anchor < 0) {
+      const first = parsed.words[0];
+      const start = Math.max(0, Math.min(at, first.start - 0.001));
+      next = replaceWordRange(parsed, 0, 0, [
+        { text: token, start },
+        { text: first.text, start: first.start },
+      ]);
+    } else {
+      const a = parsed.words[anchor];
+      const after = anchor + 1 < parsed.words.length ? parsed.words[anchor + 1].start : a.start + 1;
+      const start = Math.min(Math.max(at, a.start), after - 0.001);
+      next = replaceWordRange(parsed, anchor, anchor, [
+        { text: a.text, start: a.start },
+        { text: token, start },
+      ]);
+    }
+    this.editBody(serializeWords(next.words, next.runs, next.lineEndWords, next.preamble));
+  }
+
   // --- All structural operations use parse-modify-serialize ---
 
   private editSegments(fn: (segs: Segment[]) => boolean) {
@@ -498,6 +530,7 @@ import {
   namedSpeakersInOrder,
   splitWord,
   replaceWordRange,
+  eventNoteAnchorIndex,
 } from "$lib/transcript-words";
 
 function splitFrontmatter(doc: string): [string, string] {

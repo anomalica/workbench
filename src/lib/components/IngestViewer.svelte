@@ -3583,11 +3583,11 @@
             {filteredSpeakers}
             {hideIrrelevant}
             storageKey={`workbench:observed:${ingest.content_hash}`}
-            notesStorageKey={`workbench:notes:${ingest.content_hash}`}
             serverObserved={serverObservedWords}
             {claimHighlight}
             onreassign={(from, to, speaker) => doc.reassignWords(from, to, speaker)}
             onreplaceselection={(from, to, w) => doc.replaceSelection(from, to, w)}
+            oneventnote={(at, text) => doc.insertEventNote(at, text)}
             onseek={(seconds) => {
               if (ytPlayer && playerReady) {
                 ytPlayer.seekTo(Math.max(0, seconds), true);
