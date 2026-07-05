@@ -2,6 +2,7 @@
   import { untrack } from "svelte";
   import { parseWords, wordsInTimeRange, wordActiveAt } from "$lib/transcript-words";
   import type { SpeakerRun } from "$lib/transcript-words";
+  import { EVENT_NOTE_PRESETS } from "$lib/transcript";
   import {
     orderedNamedSpeakers,
     isSpecialSpeaker,
@@ -465,16 +466,8 @@
 
   // Quick tags for non-verbal events - the things speech transcription drops.
   // Picking one writes a bracketed marker (e.g. `[laughs]`) so it reads like a
-  // standard transcript event, as opposed to a free-text note about the visuals.
-  const NOTE_PRESETS = [
-    "laughs",
-    "laughter",
-    "applause",
-    "pause",
-    "music",
-    "crosstalk",
-    "inaudible",
-  ] as const;
+  // standard transcript event. Shared with the segment editor's quick-insert.
+  const NOTE_PRESETS = EVENT_NOTE_PRESETS;
 
   let notes = $state<VisualNote[]>([]);
   let editingNoteId = $state<string | null>(null);

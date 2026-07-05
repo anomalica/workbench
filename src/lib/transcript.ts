@@ -300,6 +300,40 @@ export const SPECIAL_SPEAKERS = [
   SPEAKER_GROUP,
 ] as const;
 
+/** Common non-verbal transcript event notes. A reviewer inserts one as an
+ *  unkeyed bracketed token (`[laughs]`) at the point the event occurs; the
+ *  digester reads a `[...]` note in a transcript as a meta event, never spoken
+ *  words (record-format.md - the bracket meta-notation). Distinct from the
+ *  keyed `{{actor: action}}` inline annotation, which is unchanged. */
+export const EVENT_NOTE_PRESETS = [
+  "laughs",
+  "laughter",
+  "applause",
+  "pause",
+  "music",
+  "crosstalk",
+  "inaudible",
+] as const;
+
+/** Splice a bracketed event note `[label]` into `text`, replacing the range
+ *  [start, end). A single space is padded on either side only where the
+ *  neighbour isn't already whitespace, so the token never fuses onto a word.
+ *  Returns the new text and the caret position just after the inserted token. */
+export function insertEventNote(
+  text: string,
+  label: string,
+  start: number,
+  end: number,
+): { text: string; cursor: number } {
+  const token = `[${label}]`;
+  const before = text.slice(0, start);
+  const after = text.slice(end);
+  const lead = before.length > 0 && !/\s$/.test(before) ? " " : "";
+  const trail = after.length > 0 && !/^\s/.test(after) ? " " : "";
+  const insert = `${lead}${token}${trail}`;
+  return { text: before + insert + after, cursor: start + insert.length };
+}
+
 /** Check if a speaker name looks like a default (Speaker N). */
 export function isDefaultSpeakerName(name: string): boolean {
   return /^Speaker \d+$/i.test(name);

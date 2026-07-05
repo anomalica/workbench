@@ -5,6 +5,8 @@
     secondsToTimecode,
     parseTimeToSeconds,
     isSpecialSpeaker,
+    EVENT_NOTE_PRESETS,
+    insertEventNote as spliceEventNote,
     SPEAKER_IRRELEVANT,
     SPEAKER_NARRATOR,
     SPEAKER_EXTERNAL_FOOTAGE,
@@ -85,6 +87,22 @@
   let otherGroup = $derived(
     allSpeakers.filter((s) => s !== editSpeaker && !namedSpeakers.includes(s) && !isSpecialSpeaker(s)),
   );
+
+  // Insert a bracketed non-verbal event note at the cursor (or replacing the
+  // selection). Bare `[...]` is the unkeyed meta form the digester reads as an
+  // event, not spoken words - distinct from the keyed `{{actor: action}}` form.
+  // Spaces are padded in only where the neighbours aren't already whitespace.
+  function insertEventNote(label: string) {
+    const el = textareaEl;
+    const start = el?.selectionStart ?? text.length;
+    const end = el?.selectionEnd ?? start;
+    const result = spliceEventNote(text, label, start, end);
+    text = result.text;
+    setTimeout(() => {
+      el?.focus();
+      el?.setSelectionRange(result.cursor, result.cursor);
+    }, 0);
+  }
 
   function save() {
     const newText = text.trim();
@@ -243,6 +261,19 @@
         rows="4"
         class="w-full text-sm font-body text-on-surface bg-surface border border-border rounded px-2 py-1.5 outline-none focus:border-primary resize-y leading-relaxed"
       ></textarea>
+      <!-- Quick-insert non-verbal event notes at the cursor. The reviewer can
+           also just type any `[...]`; these are the common ones. -->
+      <div class="mt-1.5 flex flex-wrap items-center gap-1.5">
+        <span class="text-[0.65rem] font-ui uppercase tracking-wide text-on-surface-muted">Event note</span>
+        {#each EVENT_NOTE_PRESETS as preset}
+          <button
+            type="button"
+            onclick={() => insertEventNote(preset)}
+            class="text-xs font-mono px-1.5 py-0.5 bg-surface border border-border rounded cursor-pointer hover:border-primary/50 hover:text-primary text-on-surface-secondary"
+            title={`Insert [${preset}] at the cursor - a non-verbal event, read downstream as meta, not spoken words`}
+          >[{preset}]</button>
+        {/each}
+      </div>
     </div>
 
     <div class="flex items-center justify-end gap-2">
