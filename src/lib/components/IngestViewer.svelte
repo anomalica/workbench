@@ -1221,7 +1221,7 @@
     );
   }
 
-  function preprocessAnnotations(body: string): string {
+  function preprocessAnnotations(body: string, imageControls = false): string {
     const recordHash = ingest.content_hash;
     // Strip per-word timestamp markers ({{t:SECONDS}}) for prose display: they're
     // an inline annotation (record/2), not content. The word-level editor
@@ -1279,9 +1279,26 @@
             const alt = typeof img.alt === "string" ? img.alt : "";
             const caption = typeof img.caption === "string" ? img.caption.trim() : "";
             const cap = caption ? `<figcaption>${escapeHtml(caption)}</figcaption>` : "";
-            // data-image-file lets the caption re-target picker identify which
-            // image a click lands on.
-            return `<figure class="ingest-figure" data-image-file="${img.file}"><img src="${src}" alt="${escapeHtml(alt)}" loading="lazy" />${cap}</figure>`;
+            // Display-only relevance flag (record-format.md#image): `irrelevant:
+            // true` drops the image from the rendered page. Never touches
+            // coverage or extraction. data-image-file lets the caption re-target
+            // picker and the relevance toggle identify which image a click hits.
+            const irrelevant = img.irrelevant === true;
+            const irrAttr = irrelevant ? ' data-image-irrelevant="true"' : "";
+            const tag = irrelevant
+              ? `<span class="image-irrelevant-tag">Irrelevant - dropped from display</span>`
+              : "";
+            // The toggle renders only where the reviewer can edit; other render
+            // paths (predigest preview, read-only prose) show the dimmed state
+            // without the control.
+            const toggle = imageControls
+              ? `<button type="button" class="image-relevance-toggle" data-image-file="${img.file}" data-irrelevant="${irrelevant}" title="${
+                  irrelevant
+                    ? "Marked irrelevant - dropped from the rendered page. Click to keep."
+                    : "Mark this image irrelevant - dropped from the rendered page. Does not affect review coverage or extraction."
+                }">${irrelevant ? "Keep image" : "Mark irrelevant"}</button>`
+              : "";
+            return `<figure class="ingest-figure" data-image-file="${img.file}"${irrAttr}><img src="${src}" alt="${escapeHtml(alt)}" loading="lazy" />${cap}${tag}${toggle}</figure>`;
           }
         }
         // Image description (no extracted file)
@@ -4055,7 +4072,8 @@
         {#if isTextRecord}
           <ReadableText
             body={currentBody()}
-            renderBlock={(src) => renderRedactions(marked.parse(preprocessAnnotations(src)) as string)}
+            renderBlock={(src) =>
+              renderRedactions(marked.parse(preprocessAnnotations(src, !!user)) as string)}
             previousObserved={myObservedSpans}
             storageKey={`workbench:read:${ingest.content_hash}`}
             bind:containerEl={proseContainer}

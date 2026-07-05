@@ -17,6 +17,7 @@
     hasPrecedingImage,
     markAsCaption,
     moveCaptionByFile,
+    setImageRelevanceByFile,
     remapSpans,
   } from "$lib/image-captions";
   import { safeLocalSet } from "$lib/storage";
@@ -306,21 +307,44 @@
     }
   }
 
+  // Per-image relevance and caption re-target act on image figures, which sit
+  // in structural blocks (zero units) that don't take a pointerdown selection
+  // handler - so both are handled by delegation on the block-list container.
+  function onImageControlClick(e: MouseEvent) {
+    const target = e.target as HTMLElement;
+    const toggle = target.closest(".image-relevance-toggle") as HTMLElement | null;
+    if (toggle?.dataset.imageFile) {
+      e.preventDefault();
+      e.stopPropagation();
+      toggleImageRelevance(toggle.dataset.imageFile, toggle.dataset.irrelevant === "true");
+      return;
+    }
+    if (pendingCaption) {
+      const fig = target.closest("figure[data-image-file]") as HTMLElement | null;
+      if (fig?.dataset.imageFile) {
+        e.preventDefault();
+        retargetCaption(fig.dataset.imageFile);
+      }
+    }
+  }
+
+  // Flip the display-only `irrelevant` flag on the image annotation. Shifts the
+  // session/prior spans past the one-line annotation edit, like the caption
+  // edits. Never changes coverage totals (the image block stays zero-unit).
+  function toggleImageRelevance(file: string, currentlyIrrelevant: boolean) {
+    if (!onbodyedit) return;
+    const edit = setImageRelevanceByFile(body, file, !currentlyIrrelevant);
+    if (!edit.ok) return;
+    observedSpans = remapSpans(observedSpans, edit.oldToNew);
+    livePrevObserved = remapSpans(livePrevObserved, edit.oldToNew);
+    onbodyedit(edit.body);
+  }
+
   function onBlockPointerDown(e: PointerEvent, i: number) {
     if (e.button !== 0) return;
     // Let clicks on links behave normally. Native text selection is suppressed
     // via `select-none` on the blocks, so only the block highlight shows.
     if ((e.target as HTMLElement).closest("a")) return;
-    // Re-targeting a caption: a click on any image moves the pending caption
-    // there instead of selecting the block.
-    if (pendingCaption) {
-      const fig = (e.target as HTMLElement).closest("figure[data-image-file]") as HTMLElement | null;
-      if (fig?.dataset.imageFile) {
-        e.preventDefault();
-        retargetCaption(fig.dataset.imageFile);
-        return;
-      }
-    }
     const block = blocks.find((b) => b.index === i);
     if (block) onblockclick?.(block.lineFrom);
     if (e.shiftKey) {
@@ -532,10 +556,12 @@
   {/if}
 
   <!-- Block list -->
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
   <div
     bind:this={containerEl}
     data-scroll-sync
     {onscroll}
+    onclick={onImageControlClick}
     class="flex-1 overflow-auto px-4 py-4 {pendingCaption ? 'caption-retarget' : ''}"
   >
     <div class="mx-auto max-w-3xl flex flex-col">
@@ -644,5 +670,55 @@
   :global(.caption-retarget figure.ingest-figure:hover) {
     outline-style: solid;
     outline-color: var(--color-primary);
+  }
+
+  /* Per-image relevance. The toggle hides until the figure is hovered (keeps the
+     reading view clean), but stays visible once an image is marked irrelevant so
+     the reviewer can always undo. Figures render via {@html}, so :global. */
+  :global(figure.ingest-figure) {
+    position: relative;
+  }
+  :global(figure.ingest-figure .image-relevance-toggle) {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    font-size: 0.7rem;
+    font-weight: 500;
+    line-height: 1;
+    padding: 0.25rem 0.6rem;
+    border-radius: 9999px;
+    background: color-mix(in srgb, var(--color-surface) 88%, transparent);
+    color: var(--color-on-surface-secondary);
+    border: 1px solid var(--color-border);
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.12s;
+  }
+  :global(figure.ingest-figure:hover .image-relevance-toggle),
+  :global(figure.ingest-figure[data-image-irrelevant="true"] .image-relevance-toggle) {
+    opacity: 1;
+  }
+  :global(figure.ingest-figure .image-relevance-toggle:hover) {
+    color: var(--color-warning);
+    border-color: var(--color-warning);
+  }
+  /* Marked irrelevant: dim the image and badge it, so it visibly reads as
+     dropped-from-display without any change to the read percentage. */
+  :global(figure.ingest-figure[data-image-irrelevant="true"] img) {
+    opacity: 0.4;
+    filter: grayscale(1);
+  }
+  :global(figure.ingest-figure .image-irrelevant-tag) {
+    position: absolute;
+    top: 0.5rem;
+    left: 0.5rem;
+    font-size: 0.65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    padding: 0.2rem 0.5rem;
+    border-radius: 0.25rem;
+    background: var(--color-warning);
+    color: var(--color-surface);
   }
 </style>

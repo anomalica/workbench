@@ -146,12 +146,18 @@ export interface CaptionEdit {
   imageFile?: string;
 }
 
-/** The `caption:` field line index within an annotation, or -1. */
-function findCaptionLine(lines: string[], img: ImageAnnotation): number {
+/** The line index of `field:` within an annotation, or -1. */
+function findFieldLine(lines: string[], img: ImageAnnotation, field: string): number {
+  const re = new RegExp(`^\\s*${field}\\s*:`);
   for (let i = img.from + 1; i < img.to; i++) {
-    if (/^\s*caption\s*:/.test(lines[i])) return i;
+    if (re.test(lines[i])) return i;
   }
   return -1;
+}
+
+/** The `caption:` field line index within an annotation, or -1. */
+function findCaptionLine(lines: string[], img: ImageAnnotation): number {
+  return findFieldLine(lines, img, "caption");
 }
 
 function captionLineFor(lines: string[], img: ImageAnnotation, caption: string): string {
@@ -256,6 +262,51 @@ export function moveCaptionByFile(body: string, fromFile: string, toFile: string
     }
   }
   return { ok: true, body: newLines.join("\n"), oldToNew, imageFile: toFile };
+}
+
+/** True if the image annotation with `file` carries `irrelevant: true` (the
+ *  display-only drop flag). Absent = keep/relevant. */
+export function imageIsIrrelevant(body: string, file: string): boolean {
+  const img = imageAnnotations(body.split("\n")).find((a) => a.data.image.file === file);
+  return img?.data.image.irrelevant === true;
+}
+
+/** Set or clear `irrelevant: true` on the image annotation with `file`. This is
+ *  DISPLAY-only metadata the assembler/site reads to drop the image from the
+ *  rendered page (record-format.md#image); it never touches read-coverage
+ *  (image annotations are structural, zero units) or extraction (the pre-digest
+ *  strips every image annotation). Clearing removes the line, so absent = keep.
+ *  No-op (ok:false) when the image is missing or already in the target state. */
+export function setImageRelevanceByFile(
+  body: string,
+  file: string,
+  irrelevant: boolean,
+): CaptionEdit {
+  const lines = body.split("\n");
+  const img = imageAnnotations(lines).find((a) => a.data.image.file === file);
+  if (!img) return { ok: false, body, oldToNew: [] };
+  const existing = findFieldLine(lines, img, "irrelevant");
+  const already = img.data.image.irrelevant === true;
+  if (irrelevant === already) return { ok: false, body, oldToNew: [] };
+
+  const flagLine = fieldIndent(lines, img) + "irrelevant: true";
+  const newLines: string[] = [];
+  const oldToNew: number[] = new Array(lines.length).fill(-1);
+  for (let i = 0; i < lines.length; i++) {
+    if (!irrelevant && i === existing) continue; // clearing: drop the flag line
+    if (irrelevant && existing < 0 && i === img.to) {
+      newLines.push(flagLine); // set: insert before the closing fence
+      oldToNew[i] = newLines.length;
+      newLines.push(lines[i]);
+    } else if (irrelevant && i === existing) {
+      oldToNew[i] = newLines.length;
+      newLines.push(flagLine); // set: normalise an existing (e.g. false) line
+    } else {
+      oldToNew[i] = newLines.length;
+      newLines.push(lines[i]);
+    }
+  }
+  return { ok: true, body: newLines.join("\n"), oldToNew, imageFile: file };
 }
 
 /** Shift line-anchored coverage spans through an oldToNew line map: a span's
