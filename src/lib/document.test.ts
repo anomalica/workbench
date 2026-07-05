@@ -11,6 +11,8 @@ import {
   reassignSpeaker,
   renameSpeakerInRuns,
   namedSpeakersInOrder,
+  replaceWordRange,
+  eventNoteAnchorIndex,
 } from "./transcript-words";
 import yaml from "js-yaml";
 
@@ -784,5 +786,58 @@ describe("updateFrontmatter writes creators/publisher, preserving other keys", (
   it("dropping all creators removes the key", () => {
     const result = updateFrontmatter(doc, { creators: [] });
     expect("creators" in reparse(result)).toBe(false);
+  });
+});
+
+describe("insertEventNote writes a bracketed meta word into the body", () => {
+  // Mirrors DocumentStore.insertEventNote: anchor by time, splice the note word
+  // in via replaceWordRange, serialise.
+  const FM = "---\nschema: anomalica/record/2\n---\n";
+  const BODY =
+    "<!-- speaker: Speaker 1 -->\n" + "{{t:1.00}}He {{t:2.00}}was {{t:3.00}}reputable.\n";
+
+  function insertEventNote(current: string, at: number, text: string): string {
+    const body = current.slice(current.indexOf("---\n", 4) + 4);
+    const parsed = parseWords(body);
+    const anchor = eventNoteAnchorIndex(parsed.words, at);
+    let next: ReturnType<typeof parseWords>;
+    if (anchor < 0) {
+      const first = parsed.words[0];
+      next = replaceWordRange(parsed, 0, 0, [
+        { text, start: Math.max(0, Math.min(at, first.start - 0.001)) },
+        { text: first.text, start: first.start },
+      ]);
+    } else {
+      const a = parsed.words[anchor];
+      const after = anchor + 1 < parsed.words.length ? parsed.words[anchor + 1].start : a.start + 1;
+      next = replaceWordRange(parsed, anchor, anchor, [
+        { text: a.text, start: a.start },
+        { text, start: Math.min(Math.max(at, a.start), after - 0.001) },
+      ]);
+    }
+    return FM + serializeWords(next.words, next.runs, next.lineEndWords, next.preamble);
+  }
+
+  it("inserts the note after the word at that moment and re-parses cleanly", () => {
+    const out = insertEventNote(FM + BODY, 2.5, "[laughs]");
+    const words = parseWords(out.slice(out.indexOf("---\n", 4) + 4)).words;
+    expect(words.map((w) => w.text)).toEqual(["He", "was", "[laughs]", "reputable."]);
+    // The note carries its own timestamp between "was" (2.0) and "reputable." (3.0).
+    expect(words[2].start).toBeGreaterThanOrEqual(2.0);
+    expect(words[2].start).toBeLessThan(3.0);
+  });
+
+  it("prepends before the first word when the time precedes it", () => {
+    const out = insertEventNote(FM + BODY, 0.2, "[applause]");
+    const words = parseWords(out.slice(out.indexOf("---\n", 4) + 4)).words;
+    expect(words[0].text).toBe("[applause]");
+    expect(words[1].text).toBe("He");
+  });
+
+  it("keeps the speaker run and frontmatter intact", () => {
+    const out = insertEventNote(FM + BODY, 2.5, "[laughs]");
+    expect(out).toContain("<!-- speaker: Speaker 1 -->");
+    expect(out.startsWith(FM)).toBe(true);
+    expect(out.match(/<!-- speaker:/g)?.length).toBe(1); // one run, not split
   });
 });

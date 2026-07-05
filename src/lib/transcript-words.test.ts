@@ -12,6 +12,7 @@ import {
   speakerWordCounts,
   splitWord,
   replaceWordRange,
+  eventNoteAnchorIndex,
   type SpeakerRun,
   type Word,
 } from "./transcript-words";
@@ -507,5 +508,21 @@ describe("namedSpeakersInOrder", () => {
       { speaker: "[group]", startWord: 4, endWord: 5 },
     ];
     expect(namedSpeakersInOrder(runs)).toEqual([]);
+  });
+});
+
+describe("eventNoteAnchorIndex", () => {
+  const words = [
+    { text: "one", start: 1.0, gIndex: 0 },
+    { text: "two", start: 2.0, gIndex: 1 },
+    { text: "three", start: 3.0, gIndex: 2 },
+  ];
+  it("anchors after the last word starting at or before the time", () => {
+    expect(eventNoteAnchorIndex(words, 2.5)).toBe(1); // after "two"
+    expect(eventNoteAnchorIndex(words, 2.0)).toBe(1); // ties anchor to that word
+    expect(eventNoteAnchorIndex(words, 9.0)).toBe(2); // after the last word
+  });
+  it("returns -1 to prepend before the first word", () => {
+    expect(eventNoteAnchorIndex(words, 0.5)).toBe(-1);
   });
 });
