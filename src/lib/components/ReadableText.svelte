@@ -12,6 +12,7 @@
     shiftSpansForRemoval,
     type TextBlock,
   } from "$lib/text-blocks";
+  import { hasPrecedingImage, markAsCaption, remapSpans } from "$lib/image-captions";
   import { safeLocalSet } from "$lib/storage";
 
   let {
@@ -125,6 +126,41 @@
     if (removed.length === 0) return;
     observedSpans = shiftSpansForRemoval(observedSpans, removed);
     onbodyedit(newBody);
+  }
+
+  // A block that is real prose, not an annotation. An image-annotation block's
+  // YAML lines count as "content" (isContentLine only excludes `<!--` lines),
+  // so guard by source: a block whose text starts an HTML comment is an
+  // annotation and must never be marked as a caption (it would move the
+  // annotation's own text into another image).
+  function isProseBlock(b: TextBlock): boolean {
+    return !b.irrelevant && b.contentLines.length > 0 && !b.source.trimStart().startsWith("<!--");
+  }
+
+  // "Mark as caption": offered when the selection is real prose with an image
+  // annotation above it to attach to.
+  let selectionCaptionable = $derived.by(() => {
+    if (!onbodyedit || !range) return false;
+    const chosen = selectedIndices()
+      .map((i) => blocks.find((b) => b.index === i))
+      .filter((b): b is TextBlock => !!b);
+    if (chosen.length === 0 || !chosen.every(isProseBlock)) return false;
+    return hasPrecedingImage(body, Math.min(...chosen.map((b) => b.lineFrom)));
+  });
+
+  function markSelectionAsCaption() {
+    if (!onbodyedit || !range) return;
+    const chosen = selectedIndices()
+      .map((i) => blocks.find((b) => b.index === i))
+      .filter((b): b is TextBlock => !!b && isProseBlock(b));
+    if (chosen.length === 0) return;
+    const lineFrom = Math.min(...chosen.map((b) => b.lineFrom));
+    const lineTo = Math.max(...chosen.map((b) => b.lineTo));
+    const edit = markAsCaption(body, lineFrom, lineTo);
+    if (!edit.ok) return;
+    observedSpans = remapSpans(observedSpans, edit.oldToNew);
+    onbodyedit(edit.body);
+    clearSelection();
   }
 
   // This session's pending marks, persisted as line spans (stable across the
@@ -361,6 +397,15 @@
           title="Kept in the record, excluded from extraction. Mark anything that is not domain content: marketing and self-promotion, copyright/legal pages, contents and indices, bibliographies and endnote lists, dedication-style filler, ads and AV filler. Full guidance: review-workbench.md - What to mark irrelevant."
         >
           Mark irrelevant
+        </button>
+      {/if}
+      {#if selectionCaptionable}
+        <button
+          onclick={markSelectionAsCaption}
+          class="font-medium text-primary cursor-pointer hover:underline whitespace-nowrap"
+          title="Move this text into the caption field of the image above. Captions (often carrying a copyright or attribution line) are kept on the image and excluded from extraction, so they aren't read as claims."
+        >
+          Mark as caption
         </button>
       {/if}
       <button

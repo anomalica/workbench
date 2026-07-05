@@ -1229,15 +1229,27 @@
         if (/^(chapter|chapter_title|speaker)\s*:/.test(trimmed)) {
           return "";
         }
-        // Image with extracted file: render as actual <img> from the media endpoint
-        const imageFileMatch = trimmed.match(
-          /^image\s*:\s*\n\s*file\s*:\s*([0-9a-f]{12}\.[a-z]{3,4})(?:\s*\n\s*alt\s*:\s*"?([^"\n]*)"?)?/,
-        );
-        if (imageFileMatch) {
-          const file = imageFileMatch[1];
-          const alt = (imageFileMatch[2] || "").trim();
-          const src = `/api/ingests/${recordHash}/media/${file}`;
-          return `<figure class="ingest-figure"><img src="${src}" alt="${escapeHtml(alt)}" loading="lazy" /></figure>`;
+        // Image with extracted file: render as an <img> from the media
+        // endpoint, plus the source's printed caption as a <figcaption> when
+        // present. Parse the mapping YAML so any field order (file/alt/
+        // caption/description) works, not just file-then-alt.
+        if (/^image\s*:\s*\n/.test(trimmed)) {
+          let img: Record<string, unknown> | null = null;
+          try {
+            const parsed = yaml.load(trimmed) as { image?: unknown };
+            if (parsed?.image && typeof parsed.image === "object") {
+              img = parsed.image as Record<string, unknown>;
+            }
+          } catch {
+            img = null;
+          }
+          if (img && typeof img.file === "string" && /^[0-9a-f]{12}\.[a-z]{3,4}$/.test(img.file)) {
+            const src = `/api/ingests/${recordHash}/media/${img.file}`;
+            const alt = typeof img.alt === "string" ? img.alt : "";
+            const caption = typeof img.caption === "string" ? img.caption.trim() : "";
+            const cap = caption ? `<figcaption>${escapeHtml(caption)}</figcaption>` : "";
+            return `<figure class="ingest-figure"><img src="${src}" alt="${escapeHtml(alt)}" loading="lazy" />${cap}</figure>`;
+          }
         }
         // Image description (no extracted file)
         const imageDescMatch = trimmed.match(/^image\s*:\s*([\s\S]+)/);
