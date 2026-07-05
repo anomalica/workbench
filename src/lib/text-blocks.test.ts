@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   isContentLine,
+  commentLineFlags,
   parseTextBlocks,
   totalUnits,
   observedLineSpans,
@@ -14,16 +15,38 @@ import {
   bodyWithoutLeadingTitle,
 } from "./text-blocks";
 
+describe("commentLineFlags", () => {
+  it("flags every line of a multi-line comment, matching the gate fixture", () => {
+    // The exact fixture the digester's review_gate.comment_line_flags returns,
+    // so the two mirrors agree byte-for-byte.
+    const lines = ["content", "<!-- x -->", "<!--", "image:", "  file:", "-->", "content"];
+    expect(commentLineFlags(lines)).toEqual([false, true, true, true, true, true, false]);
+  });
+
+  it("a single-line comment does not open a multi-line region", () => {
+    expect(commentLineFlags(["<!-- a -->", "next line"])).toEqual([true, false]);
+  });
+});
+
 describe("isContentLine", () => {
-  it("counts non-blank, non-comment lines only", () => {
-    expect(isContentLine("Hello.")).toBe(true);
-    expect(isContentLine("   ")).toBe(false);
-    expect(isContentLine("")).toBe(false);
-    expect(isContentLine("<!-- file_page: 5 -->")).toBe(false);
-    expect(isContentLine("  <!-- image:")).toBe(false);
-    // A comment-continuation line does NOT start with <!-- so the gate counts
-    // it; we must match that to keep the verdict and recompute in agreement.
-    expect(isContentLine("  file: abc123def456.jpg")).toBe(true);
+  it("counts a line iff it is non-blank and not flagged as comment", () => {
+    expect(isContentLine("Hello.", false)).toBe(true);
+    expect(isContentLine("   ", false)).toBe(false);
+    expect(isContentLine("", false)).toBe(false);
+    expect(isContentLine("<!-- file_page: 5 -->", true)).toBe(false);
+    // A comment-continuation line is now flagged, so it no longer counts - the
+    // gate (review_gate) makes the identical exclusion, keeping verdict and
+    // recompute in agreement.
+    expect(isContentLine("  file: abc123def456.jpg", true)).toBe(false);
+  });
+});
+
+describe("multi-line image annotation is not reviewable content", () => {
+  it("a `<!-- image: ... -->` block carries zero units and is structural", () => {
+    const body = "Intro.\n\n<!--\nimage:\n  file: 12514f7d1440.png\n-->\n\nAfter.\n";
+    const blocks = parseTextBlocks(body);
+    expect(blocks.map((b) => b.contentLines.length)).toEqual([1, 0, 1]);
+    expect(totalUnits(blocks)).toBe(2);
   });
 });
 
