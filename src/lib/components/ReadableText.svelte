@@ -160,11 +160,10 @@
     onbodyedit(newBody);
   }
 
-  // A block that is real prose, not an annotation. An image-annotation block's
-  // YAML lines count as "content" (isContentLine only excludes `<!--` lines),
-  // so guard by source: a block whose text starts an HTML comment is an
-  // annotation and must never be marked as a caption (it would move the
-  // annotation's own text into another image).
+  // A block that is real prose, not an annotation. A multi-line annotation now
+  // carries no content lines (its whole comment is flagged), so such a block has
+  // contentLines.length === 0 and fails the check anyway; the source guard stays
+  // as belt-and-braces so annotation text is never moved into an image caption.
   function isProseBlock(b: TextBlock): boolean {
     return !b.irrelevant && b.contentLines.length > 0 && !b.source.trimStart().startsWith("<!--");
   }

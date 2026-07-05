@@ -34,11 +34,37 @@ export interface TextBlock {
   irrelevant: boolean;
 }
 
-/** A body line is a reviewable unit iff it is non-blank and is not an HTML
- *  comment line. Mirrors review_gate._content_line_numbers (review_gate.py:58). */
-export function isContentLine(line: string): boolean {
-  const s = line.trim();
-  return s !== "" && !s.startsWith("<!--");
+/** Flag every line that is part of an HTML comment - the opener, any
+ *  continuation lines of a multi-line comment, and the closing `-->` line.
+ *  A per-line `startsWith("<!--")` check is not enough: the canonical image
+ *  annotation is a multi-line comment (`<!--` / `image:` / `  file: ...` /
+ *  `-->`) whose middle and closing lines do not start with `<!--` and were
+ *  wrongly counted as reviewable prose. Stateful, mirrors anomalica-common
+ *  review_gate.comment_line_flags byte-for-byte. */
+export function commentLineFlags(lines: string[]): boolean[] {
+  const flags: boolean[] = [];
+  let inComment = false;
+  for (const line of lines) {
+    if (inComment) {
+      flags.push(true); // the closing line is still comment
+      if (line.includes("-->")) inComment = false;
+    } else if (line.trimStart().startsWith("<!--")) {
+      flags.push(true);
+      // Multi-line opener iff there is no `-->` after the `<!--` on this line.
+      if (!line.trimStart().slice(4).includes("-->")) inComment = true;
+    } else {
+      flags.push(false);
+    }
+  }
+  return flags;
+}
+
+/** A body line is a reviewable unit iff it is non-blank and is not part of an
+ *  HTML comment. Mirrors review_gate._content_line_numbers. The comment test is
+ *  stateful (multi-line comments), so callers pass the whole-body flags from
+ *  {@link commentLineFlags}. */
+export function isContentLine(line: string, isComment: boolean): boolean {
+  return line.trim() !== "" && !isComment;
 }
 
 // Block-level irrelevant regions for prose records: whole blocks wrapped in
@@ -63,6 +89,7 @@ export function isIrrelevantEnd(line: string): boolean {
  *  `irrelevant: true` and no reviewable units. */
 export function parseTextBlocks(body: string): TextBlock[] {
   const lines = body.split("\n");
+  const comment = commentLineFlags(lines);
   const blocks: TextBlock[] = [];
   let i = 0;
   let index = 0;
@@ -94,7 +121,8 @@ export function parseTextBlocks(body: string): TextBlock[] {
     const to = i - 1;
     const contentLines: number[] = [];
     if (!inIrrelevant) {
-      for (let j = from; j <= to; j++) if (isContentLine(lines[j])) contentLines.push(j);
+      for (let j = from; j <= to; j++)
+        if (isContentLine(lines[j], comment[j])) contentLines.push(j);
     }
     blocks.push({
       index: index++,
