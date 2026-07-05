@@ -215,63 +215,6 @@ export function shiftSpansForMark(
   });
 }
 
-/** Normalise a block's source to compare against the frontmatter title:
- *  drop a leading markdown heading marker and surrounding emphasis. */
-function headingText(source: string): string {
-  return source
-    .trim()
-    .replace(/^#+\s*/, "")
-    .replace(/^\*+\s*|\s*\*+$/g, "")
-    .trim();
-}
-
-/** The leading blocks that just duplicate the frontmatter title - a heading
- *  matching `title` at the very top of the body, plus an immediately-following
- *  `*Published ...*` stamp. Used to suppress them from the reader display so
- *  the title (rendered separately as the document heading) never doubles.
- *  Guards to the LEADING block only: a matching heading deeper in the body is
- *  real content and is never suppressed. Structural blocks (page markers,
- *  annotations) above the title are skipped. */
-export function leadingTitleBlocks(blocks: TextBlock[], title: string): Set<number> {
-  const hide = new Set<number>();
-  const target = title.trim().toLowerCase();
-  if (!target) return hide;
-  let matchedTitle = false;
-  for (const b of blocks) {
-    if (b.contentLines.length === 0) continue; // skip structural / annotation-only
-    if (!matchedTitle) {
-      if (headingText(b.source).toLowerCase() === target) {
-        hide.add(b.index);
-        matchedTitle = true;
-        continue;
-      }
-      return hide; // first real content isn't the title - nothing to suppress
-    }
-    if (/^\*?\s*published\b/i.test(b.source.trim())) hide.add(b.index);
-    break; // only the stamp immediately after the title
-  }
-  return hide;
-}
-
-/** The body with any leading title-duplicating block(s) removed. For
- *  render-only paths with no line-anchored coverage (the plain-prose
- *  fallback), where dropping lines is safe. */
-export function bodyWithoutLeadingTitle(body: string, title: string): string {
-  const blocks = parseTextBlocks(body);
-  const hide = leadingTitleBlocks(blocks, title);
-  if (hide.size === 0) return body;
-  const drop = new Set<number>();
-  for (const b of blocks) {
-    if (!hide.has(b.index)) continue;
-    for (let l = b.lineFrom; l <= b.lineTo; l++) drop.add(l);
-  }
-  return body
-    .split("\n")
-    .filter((_, i) => !drop.has(i))
-    .join("\n")
-    .replace(/^\n+/, "");
-}
-
 /** Total reviewable units across the whole body. */
 export function totalUnits(blocks: TextBlock[]): number {
   return blocks.reduce((n, b) => n + b.contentLines.length, 0);

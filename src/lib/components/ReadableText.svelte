@@ -11,7 +11,6 @@
     unmarkIrrelevantAt,
     shiftSpansForMark,
     shiftSpansForRemoval,
-    leadingTitleBlocks,
     type TextBlock,
   } from "$lib/text-blocks";
   import {
@@ -24,7 +23,6 @@
 
   let {
     body,
-    documentTitle = "",
     renderBlock,
     previousObserved = [],
     storageKey = "",
@@ -36,11 +34,6 @@
   }: {
     /** Record body with the frontmatter already stripped. */
     body: string;
-    /** The record's title. A leading body block that merely repeats it (a
-     *  PDF/ebook title page, or the legacy injected title prelude) is hidden
-     *  from display, since the title is shown separately as the document
-     *  heading - so it never appears twice. Coverage counting is unchanged. */
-    documentTitle?: string;
     /** Render one block's source markdown to trusted HTML (the parent reuses
      *  its annotation + redaction + marked pipeline). */
     renderBlock: (source: string) => string;
@@ -70,23 +63,20 @@
   } = $props();
 
   let blocks = $derived(parseTextBlocks(body));
-  // Leading blocks that duplicate the title, hidden from display only.
-  let suppressed = $derived(leadingTitleBlocks(blocks, documentTitle));
+  // The body renders faithfully - every block is shown, nothing suppressed.
   let renderedBlocks = $derived(
     blocks
       .map((b) => ({ block: b, html: renderBlock(b.source) }))
-      .filter((r) => !suppressed.has(r.block.index) && (r.html.trim() !== "" || r.block.irrelevant)),
+      .filter((r) => r.html.trim() !== "" || r.block.irrelevant),
   );
   let displayedIndices = $derived(new Set(renderedBlocks.map((r) => r.block.index)));
-  // Content blocks that count toward coverage but are never shown to the
-  // reviewer - a title heading suppressed because it duplicates the document
-  // H1, or an annotation block that renders to nothing - have no gutter to
-  // click, so block-by-block review could never cover them and the record would
-  // cap at (total - hidden)/total, stuck below 100%. Auto-observe them: the
-  // reviewer reads the title as the heading, and empty-render annotations carry
-  // no prose. Derived (not $state), so it re-aligns automatically when a body
-  // edit renumbers lines. These spans join the stored verdict so the digester
-  // gate, which still counts those lines, sees them as observed too.
+  // A content block that counts toward coverage but renders to nothing (e.g. a
+  // markdown link-reference definition) has no gutter to click, so block-by-block
+  // review could never cover it and the record would stall below 100%. Auto-
+  // observe those unmarkable blocks: the reviewer sees no prose to read there.
+  // Derived (not $state), so it re-aligns when a body edit renumbers lines;
+  // these spans join the stored verdict so the digester gate, which still counts
+  // those lines, sees them observed too.
   let autoObservedSpans = $derived(
     blocks
       .filter((b) => !b.irrelevant && b.contentLines.length > 0 && !displayedIndices.has(b.index))
