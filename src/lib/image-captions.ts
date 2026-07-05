@@ -1,4 +1,9 @@
 /**
+ * Reviewer edits to a structured image annotation's fields: caption (move loose
+ * prose in / re-target), the display-only `irrelevant` flag, and the extractable
+ * `description`. All operate on the mapping-form annotation (an image with a
+ * `file`) and return a line-remap so coverage spans follow the edit.
+ *
  * "Mark as caption": move a block of loose prose beneath a figure INTO the
  * `caption` field of the nearest preceding structured image annotation.
  *
@@ -301,6 +306,57 @@ export function setImageRelevanceByFile(
     } else if (irrelevant && i === existing) {
       oldToNew[i] = newLines.length;
       newLines.push(flagLine); // set: normalise an existing (e.g. false) line
+    } else {
+      oldToNew[i] = newLines.length;
+      newLines.push(lines[i]);
+    }
+  }
+  return { ok: true, body: newLines.join("\n"), oldToNew, imageFile: file };
+}
+
+/** The `description` of the image annotation with `file`, or "" if none. */
+export function imageDescription(body: string, file: string): string {
+  const img = imageAnnotations(body.split("\n")).find((a) => a.data.image.file === file);
+  const d = img?.data.image.description;
+  return typeof d === "string" ? d : "";
+}
+
+/** Set (or clear, when the value is empty) the `description:` field on the image
+ *  annotation with `file`. Unlike caption/alt/irrelevant, the description is
+ *  CONTENT (record-format.md#image): the pre-digest KEEPS it and renders it as
+ *  prose to the model, so a claim can be drawn from what the image shows (a
+ *  screenshotted tweet's text, a chart's figures). It still never affects read-
+ *  coverage - the image annotation stays a zero-unit structural block. No-op
+ *  (ok:false) when the image is missing or the value is unchanged. */
+export function setImageDescriptionByFile(
+  body: string,
+  file: string,
+  description: string,
+): CaptionEdit {
+  const lines = body.split("\n");
+  const img = imageAnnotations(lines).find((a) => a.data.image.file === file);
+  if (!img) return { ok: false, body, oldToNew: [] };
+  const value = description.trim();
+  const current = typeof img.data.image.description === "string" ? img.data.image.description : "";
+  if (value === current) return { ok: false, body, oldToNew: [] };
+
+  const existing = findFieldLine(lines, img, "description");
+  const descLine =
+    fieldIndent(lines, img) +
+    yaml
+      .dump({ description: value }, { forceQuotes: true, quotingType: '"', lineWidth: -1 })
+      .trimEnd();
+  const newLines: string[] = [];
+  const oldToNew: number[] = new Array(lines.length).fill(-1);
+  for (let i = 0; i < lines.length; i++) {
+    if (!value && i === existing) continue; // clearing: drop the line
+    if (value && existing < 0 && i === img.to) {
+      newLines.push(descLine); // set: insert before the closing fence
+      oldToNew[i] = newLines.length;
+      newLines.push(lines[i]);
+    } else if (value && i === existing) {
+      oldToNew[i] = newLines.length;
+      newLines.push(descLine); // replace the existing description
     } else {
       oldToNew[i] = newLines.length;
       newLines.push(lines[i]);

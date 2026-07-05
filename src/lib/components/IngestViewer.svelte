@@ -1279,6 +1279,24 @@
             const alt = typeof img.alt === "string" ? img.alt : "";
             const caption = typeof img.caption === "string" ? img.caption.trim() : "";
             const cap = caption ? `<figcaption>${escapeHtml(caption)}</figcaption>` : "";
+            // Description (record-format.md#image): the reviewer's faithful
+            // transcription of what is IN the image. Unlike the caption, this is
+            // CONTENT - the pre-digest keeps it and it can become a claim - so it
+            // reads as a distinct, labelled block, not a caption. Editable in the
+            // reviewer context; shown read-only elsewhere.
+            const description = typeof img.description === "string" ? img.description.trim() : "";
+            let descBlock = "";
+            if (description) {
+              descBlock =
+                `<div class="image-description"><span class="image-description-label">Description</span>` +
+                `<span class="image-description-text">${escapeHtml(description)}</span>` +
+                (imageControls
+                  ? `<button type="button" class="image-description-edit" data-image-file="${img.file}">Edit</button>`
+                  : "") +
+                `</div>`;
+            } else if (imageControls) {
+              descBlock = `<button type="button" class="image-description-edit image-description-add" data-image-file="${img.file}">+ Describe what's in this image</button>`;
+            }
             // Display-only relevance flag (record-format.md#image): `irrelevant:
             // true` drops the image from the rendered page. Never touches
             // coverage or extraction. data-image-file lets the caption re-target
@@ -1298,7 +1316,7 @@
                     : "Mark this image irrelevant - dropped from the rendered page. Does not affect review coverage or extraction."
                 }">${irrelevant ? "Keep image" : "Mark irrelevant"}</button>`
               : "";
-            return `<figure class="ingest-figure" data-image-file="${img.file}"${irrAttr}><img src="${src}" alt="${escapeHtml(alt)}" loading="lazy" />${cap}${tag}${toggle}</figure>`;
+            return `<figure class="ingest-figure" data-image-file="${img.file}"${irrAttr}><img src="${src}" alt="${escapeHtml(alt)}" loading="lazy" />${cap}${descBlock}${tag}${toggle}</figure>`;
           }
         }
         // Image description (no extracted file)

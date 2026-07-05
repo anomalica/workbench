@@ -18,6 +18,8 @@
     markAsCaption,
     moveCaptionByFile,
     setImageRelevanceByFile,
+    imageDescription,
+    setImageDescriptionByFile,
     remapSpans,
   } from "$lib/image-captions";
   import { safeLocalSet } from "$lib/storage";
@@ -319,6 +321,13 @@
       toggleImageRelevance(toggle.dataset.imageFile, toggle.dataset.irrelevant === "true");
       return;
     }
+    const descBtn = target.closest(".image-description-edit") as HTMLElement | null;
+    if (descBtn?.dataset.imageFile) {
+      e.preventDefault();
+      e.stopPropagation();
+      openDescriptionEditor(descBtn.dataset.imageFile);
+      return;
+    }
     if (pendingCaption) {
       const fig = target.closest("figure[data-image-file]") as HTMLElement | null;
       if (fig?.dataset.imageFile) {
@@ -334,6 +343,24 @@
   function toggleImageRelevance(file: string, currentlyIrrelevant: boolean) {
     if (!onbodyedit) return;
     const edit = setImageRelevanceByFile(body, file, !currentlyIrrelevant);
+    if (!edit.ok) return;
+    observedSpans = remapSpans(observedSpans, edit.oldToNew);
+    livePrevObserved = remapSpans(livePrevObserved, edit.oldToNew);
+    onbodyedit(edit.body);
+  }
+
+  // The image description editor: free-text the reviewer writes to transcribe or
+  // describe what is IN the image. Distinct from the caption (which the source
+  // printed) - the description is extractable content.
+  let editingDescription = $state<{ file: string; text: string } | null>(null);
+  function openDescriptionEditor(file: string) {
+    editingDescription = { file, text: imageDescription(body, file) };
+  }
+  function saveDescription() {
+    if (!onbodyedit || !editingDescription) return;
+    const { file, text } = editingDescription;
+    const edit = setImageDescriptionByFile(body, file, text);
+    editingDescription = null;
     if (!edit.ok) return;
     observedSpans = remapSpans(observedSpans, edit.oldToNew);
     livePrevObserved = remapSpans(livePrevObserved, edit.oldToNew);
@@ -364,6 +391,11 @@
   }
 
   function onWindowKeydown(e: KeyboardEvent) {
+    if (e.key === "Escape" && editingDescription) {
+      e.preventDefault();
+      editingDescription = null;
+      return;
+    }
     if (e.key === "Escape" && (range || pendingCaption)) {
       e.preventDefault();
       clearSelection();
@@ -555,6 +587,57 @@
     </div>
   {/if}
 
+  <!-- Image description editor: free-text transcription of what is IN the image.
+       Distinct from the caption - the description is extractable content. -->
+  {#if editingDescription}
+    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+    <div
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      onclick={(e) => {
+        if (e.target === e.currentTarget) editingDescription = null;
+      }}
+    >
+      <div class="w-full max-w-lg rounded-lg bg-surface border border-border shadow-xl flex flex-col">
+        <div class="px-5 pt-4 pb-3 border-b border-border">
+          <h2 class="text-sm font-ui font-semibold text-on-surface">Image description</h2>
+          <p class="mt-1 text-xs text-on-surface-secondary leading-relaxed">
+            Transcribe or factually describe what is <em>in</em> the image - the text of a screenshot,
+            the figures in a chart, the words on a page. This is content: it feeds extraction and can
+            become a claim, so keep it faithful (no interpretation). It is not the
+            <span class="font-medium">caption</span> - that is the source's own attribution line and
+            stays out of extraction.
+          </p>
+        </div>
+        <div class="px-5 py-4">
+          <!-- svelte-ignore a11y_autofocus -->
+          <textarea
+            bind:value={editingDescription.text}
+            rows="5"
+            autofocus
+            placeholder="e.g. Tweet by @user, 3 May 2023: The Pentagon confirmed the 2004 Nimitz object remains unidentified."
+            class="w-full rounded border border-border bg-surface-alt px-3 py-2 text-sm text-on-surface
+              placeholder:text-on-surface-muted focus:outline-none focus:ring-1 focus:ring-primary resize-y"
+          ></textarea>
+        </div>
+        <div class="px-5 pb-4 flex items-center justify-end gap-3">
+          <button
+            onclick={() => (editingDescription = null)}
+            class="text-xs font-ui text-on-surface-secondary hover:text-on-surface cursor-pointer"
+          >
+            Cancel
+          </button>
+          <button
+            onclick={saveDescription}
+            class="text-xs font-ui font-medium px-3 py-1.5 rounded bg-primary text-on-primary
+              hover:bg-primary/90 cursor-pointer"
+          >
+            Save description
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
   <!-- Block list -->
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
   <div
@@ -720,5 +803,61 @@
     border-radius: 0.25rem;
     background: var(--color-warning);
     color: var(--color-surface);
+  }
+
+  /* Image description: the reviewer's transcription of the image content. Reads
+     as a distinct, labelled block (not a caption) because it is extractable
+     content. The primary accent marks it apart from the muted figcaption. */
+  :global(figure.ingest-figure .image-description) {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    margin-top: 0.5rem;
+    padding: 0.4rem 0.7rem;
+    text-align: left;
+    border-left: 3px solid var(--color-primary);
+    background: color-mix(in srgb, var(--color-primary) 7%, transparent);
+    border-radius: 0 0.25rem 0.25rem 0;
+    font-size: 0.85rem;
+    line-height: 1.45;
+    color: var(--color-on-surface);
+  }
+  :global(figure.ingest-figure .image-description-label) {
+    font-size: 0.6rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--color-primary);
+  }
+  :global(figure.ingest-figure .image-description-edit) {
+    align-self: flex-start;
+    margin-top: 0.2rem;
+    font-size: 0.7rem;
+    color: var(--color-primary);
+    cursor: pointer;
+  }
+  :global(figure.ingest-figure .image-description-edit:hover) {
+    text-decoration: underline;
+  }
+  /* The "add description" affordance hover-reveals so undescribed images stay
+     uncluttered, matching the relevance toggle. */
+  :global(figure.ingest-figure .image-description-add) {
+    display: inline-block;
+    margin-top: 0.5rem;
+    font-size: 0.72rem;
+    color: var(--color-on-surface-secondary);
+    border: 1px dashed var(--color-border);
+    border-radius: 9999px;
+    padding: 0.2rem 0.7rem;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.12s;
+  }
+  :global(figure.ingest-figure:hover .image-description-add) {
+    opacity: 1;
+  }
+  :global(figure.ingest-figure .image-description-add:hover) {
+    color: var(--color-primary);
+    border-color: var(--color-primary);
   }
 </style>
