@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import yaml from "js-yaml";
-import { hasPrecedingImage, markAsCaption, remapSpans } from "./image-captions";
+import {
+  hasPrecedingImage,
+  imageFilesInBody,
+  markAsCaption,
+  moveCaptionByFile,
+  remapSpans,
+} from "./image-captions";
 
 // A body with a structured image annotation followed by a loose caption
 // paragraph, then more prose. Line indices (0-based):
@@ -197,5 +203,56 @@ describe("remapSpans", () => {
     const newLines = markAsCaption(BODY, CAPTION_FROM, CAPTION_TO).body.split("\n");
     const mark = shifted.find((s) => s.from === oldToNew[11])!;
     expect(newLines[mark.from]).toBe("Body continues here.");
+  });
+});
+
+describe("caption re-targeting", () => {
+  const TWO_IMAGES = [
+    "<!--",
+    "image:",
+    "  file: aaa111bbb222.jpg",
+    "-->",
+    "",
+    "<!--",
+    "image:",
+    "  file: ccc333ddd444.jpg",
+    "-->",
+    "",
+    "The caption paragraph.",
+  ].join("\n");
+
+  it("markAsCaption reports the image file it attached to", () => {
+    const out = markAsCaption(TWO_IMAGES, 10, 10);
+    expect(out.ok).toBe(true);
+    expect(out.imageFile).toBe("ccc333ddd444.jpg"); // nearest preceding
+  });
+
+  it("imageFilesInBody lists every image in order", () => {
+    expect(imageFilesInBody(TWO_IMAGES)).toEqual(["aaa111bbb222.jpg", "ccc333ddd444.jpg"]);
+  });
+
+  it("moves a caption from one image to another", () => {
+    // First attach to nearest (ccc333), then re-target to the earlier aaa111.
+    const attached = markAsCaption(TWO_IMAGES, 10, 10);
+    const moved = moveCaptionByFile(attached.body, "ccc333ddd444.jpg", "aaa111bbb222.jpg");
+    expect(moved.ok).toBe(true);
+    expect(moved.imageFile).toBe("aaa111bbb222.jpg");
+    const lines = moved.body.split("\n");
+    // The target (aaa111) now carries the caption; the source (ccc333) doesn't.
+    const firstEnd = lines.indexOf("-->");
+    const first = lines.slice(0, firstEnd + 1).join("\n");
+    const second = lines.slice(firstEnd + 1).join("\n");
+    expect(first).toContain('caption: "The caption paragraph."');
+    expect(second).not.toContain("caption");
+    // Exactly one caption line survives the move.
+    expect(moved.body.match(/caption:/g)?.length).toBe(1);
+  });
+
+  it("re-target is a no-op to the same image or a missing one", () => {
+    const attached = markAsCaption(TWO_IMAGES, 10, 10);
+    expect(moveCaptionByFile(attached.body, "ccc333ddd444.jpg", "ccc333ddd444.jpg").ok).toBe(false);
+    expect(moveCaptionByFile(attached.body, "ccc333ddd444.jpg", "nope999zzz000.jpg").ok).toBe(
+      false,
+    );
   });
 });

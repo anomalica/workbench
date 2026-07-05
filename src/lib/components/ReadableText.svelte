@@ -13,7 +13,12 @@
     leadingTitleBlocks,
     type TextBlock,
   } from "$lib/text-blocks";
-  import { hasPrecedingImage, markAsCaption, remapSpans } from "$lib/image-captions";
+  import {
+    hasPrecedingImage,
+    markAsCaption,
+    moveCaptionByFile,
+    remapSpans,
+  } from "$lib/image-captions";
   import { safeLocalSet } from "$lib/storage";
 
   let {
@@ -157,6 +162,11 @@
     return hasPrecedingImage(body, Math.min(...chosen.map((b) => b.lineFrom)));
   });
 
+  // After a caption is set, the reviewer can re-target it to a different image
+  // (nearest-preceding is only the default guess). `pendingCaption.file` is the
+  // image the caption currently sits on.
+  let pendingCaption = $state<{ file: string } | null>(null);
+
   function markSelectionAsCaption() {
     if (!onbodyedit || !range) return;
     const chosen = selectedIndices()
@@ -169,7 +179,18 @@
     if (!edit.ok) return;
     observedSpans = remapSpans(observedSpans, edit.oldToNew);
     onbodyedit(edit.body);
+    pendingCaption = edit.imageFile ? { file: edit.imageFile } : null;
     clearSelection();
+  }
+
+  /** Re-point the pending caption to the clicked image. */
+  function retargetCaption(toFile: string) {
+    if (!onbodyedit || !pendingCaption || toFile === pendingCaption.file) return;
+    const edit = moveCaptionByFile(body, pendingCaption.file, toFile);
+    if (!edit.ok) return;
+    observedSpans = remapSpans(observedSpans, edit.oldToNew);
+    onbodyedit(edit.body);
+    pendingCaption = { file: edit.imageFile ?? toFile };
   }
 
   // This session's pending marks, persisted as line spans (stable across the
@@ -193,6 +214,7 @@
     }
     observedSpans = restored;
     clearSelection();
+    pendingCaption = null;
   });
 
   $effect(() => {
@@ -256,6 +278,16 @@
     // Let clicks on links behave normally. Native text selection is suppressed
     // via `select-none` on the blocks, so only the block highlight shows.
     if ((e.target as HTMLElement).closest("a")) return;
+    // Re-targeting a caption: a click on any image moves the pending caption
+    // there instead of selecting the block.
+    if (pendingCaption) {
+      const fig = (e.target as HTMLElement).closest("figure[data-image-file]") as HTMLElement | null;
+      if (fig?.dataset.imageFile) {
+        e.preventDefault();
+        retargetCaption(fig.dataset.imageFile);
+        return;
+      }
+    }
     const block = blocks.find((b) => b.index === i);
     if (block) onblockclick?.(block.lineFrom);
     if (e.shiftKey) {
@@ -275,9 +307,10 @@
   }
 
   function onWindowKeydown(e: KeyboardEvent) {
-    if (e.key === "Escape" && range) {
+    if (e.key === "Escape" && (range || pendingCaption)) {
       e.preventDefault();
       clearSelection();
+      pendingCaption = null;
     }
   }
 
@@ -447,12 +480,30 @@
     {/if}
   </div>
 
+  <!-- Caption re-target bar: after a caption is set (nearest-preceding image),
+       let the reviewer point it at the correct image. -->
+  {#if pendingCaption}
+    <div class="flex-none flex items-center gap-3 px-4 py-2 border-b border-border bg-primary/10 text-xs font-ui">
+      <svg class="w-3.5 h-3.5 flex-none text-primary" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14M14 8h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+      </svg>
+      <span class="text-on-surface">Caption attached to the highlighted image. Wrong one? Click the correct image to move it.</span>
+      <button
+        onclick={() => (pendingCaption = null)}
+        class="ml-auto font-medium text-primary cursor-pointer hover:underline whitespace-nowrap"
+        title="Keep the caption where it is (Esc)"
+      >
+        Done
+      </button>
+    </div>
+  {/if}
+
   <!-- Block list -->
   <div
     bind:this={containerEl}
     data-scroll-sync
     {onscroll}
-    class="flex-1 overflow-auto px-4 py-4"
+    class="flex-1 overflow-auto px-4 py-4 {pendingCaption ? 'caption-retarget' : ''}"
   >
     <div class="mx-auto max-w-3xl flex flex-col">
       {#each displayItems as item (item.kind === "block" ? item.block.index : `r${regionKey(item)}`)}
@@ -547,3 +598,18 @@
     </div>
   </div>
 </div>
+
+<style>
+  /* While re-targeting a caption, every image reads as a clickable target. The
+     figures render via {@html}, so these must be :global. */
+  :global(.caption-retarget figure.ingest-figure) {
+    cursor: pointer;
+    outline: 2px dashed color-mix(in srgb, var(--color-primary) 55%, transparent);
+    outline-offset: 3px;
+    border-radius: 0.25rem;
+  }
+  :global(.caption-retarget figure.ingest-figure:hover) {
+    outline-style: solid;
+    outline-color: var(--color-primary);
+  }
+</style>

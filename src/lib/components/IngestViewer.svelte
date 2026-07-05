@@ -1257,7 +1257,9 @@
             const alt = typeof img.alt === "string" ? img.alt : "";
             const caption = typeof img.caption === "string" ? img.caption.trim() : "";
             const cap = caption ? `<figcaption>${escapeHtml(caption)}</figcaption>` : "";
-            return `<figure class="ingest-figure"><img src="${src}" alt="${escapeHtml(alt)}" loading="lazy" />${cap}</figure>`;
+            // data-image-file lets the caption re-target picker identify which
+            // image a click lands on.
+            return `<figure class="ingest-figure" data-image-file="${img.file}"><img src="${src}" alt="${escapeHtml(alt)}" loading="lazy" />${cap}</figure>`;
           }
         }
         // Image description (no extracted file)
