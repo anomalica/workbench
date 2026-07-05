@@ -11,7 +11,6 @@ import {
   reassignSpeaker,
   renameSpeakerInRuns,
   namedSpeakersInOrder,
-  replaceWordRange,
   eventNoteAnchorIndex,
 } from "./transcript-words";
 import yaml from "js-yaml";
@@ -789,55 +788,48 @@ describe("updateFrontmatter writes creators/publisher, preserving other keys", (
   });
 });
 
-describe("insertEventNote writes a bracketed meta word into the body", () => {
-  // Mirrors DocumentStore.insertEventNote: anchor by time, splice the note word
-  // in via replaceWordRange, serialise.
+describe("insertEventNote attaches a first-class note to a word (not a new word)", () => {
+  // Mirrors DocumentStore.insertEventNote: anchor by time (min word 0), append
+  // the token to that word's notes, serialise. The note is NOT a word.
   const FM = "---\nschema: anomalica/record/2\n---\n";
   const BODY =
     "<!-- speaker: Speaker 1 -->\n" + "{{t:1.00}}He {{t:2.00}}was {{t:3.00}}reputable.\n";
+  const bodyOf = (out: string) => out.slice(out.indexOf("---\n", 4) + 4);
 
   function insertEventNote(current: string, at: number, text: string): string {
-    const body = current.slice(current.indexOf("---\n", 4) + 4);
+    const body = bodyOf(current);
     const parsed = parseWords(body);
-    const anchor = eventNoteAnchorIndex(parsed.words, at);
-    let next: ReturnType<typeof parseWords>;
-    if (anchor < 0) {
-      const first = parsed.words[0];
-      next = replaceWordRange(parsed, 0, 0, [
-        { text, start: Math.max(0, Math.min(at, first.start - 0.001)) },
-        { text: first.text, start: first.start },
-      ]);
-    } else {
-      const a = parsed.words[anchor];
-      const after = anchor + 1 < parsed.words.length ? parsed.words[anchor + 1].start : a.start + 1;
-      next = replaceWordRange(parsed, anchor, anchor, [
-        { text: a.text, start: a.start },
-        { text, start: Math.min(Math.max(at, a.start), after - 0.001) },
-      ]);
-    }
-    return FM + serializeWords(next.words, next.runs, next.lineEndWords, next.preamble);
+    const anchor = Math.max(0, eventNoteAnchorIndex(parsed.words, at));
+    const words = parsed.words.map((w, i) =>
+      i === anchor ? { ...w, notes: [...(w.notes ?? []), text] } : w,
+    );
+    return FM + serializeWords(words, parsed.runs, parsed.lineEndWords, parsed.preamble);
   }
 
-  it("inserts the note after the word at that moment and re-parses cleanly", () => {
+  it("attaches the note to the word at that moment and adds no new word", () => {
     const out = insertEventNote(FM + BODY, 2.5, "[laughs]");
-    const words = parseWords(out.slice(out.indexOf("---\n", 4) + 4)).words;
-    expect(words.map((w) => w.text)).toEqual(["He", "was", "[laughs]", "reputable."]);
-    // The note carries its own timestamp between "was" (2.0) and "reputable." (3.0).
-    expect(words[2].start).toBeGreaterThanOrEqual(2.0);
-    expect(words[2].start).toBeLessThan(3.0);
+    const words = parseWords(bodyOf(out)).words;
+    // Still three spoken words - the note is not one of them.
+    expect(words.map((w) => w.text)).toEqual(["He", "was", "reputable."]);
+    expect(words[1].notes).toEqual(["[laughs]"]); // on "was"
   });
 
-  it("prepends before the first word when the time precedes it", () => {
+  it("round-trips the note in the body with no timestamp of its own", () => {
+    const out = insertEventNote(FM + BODY, 2.5, "[laughs]");
+    expect(bodyOf(out)).toContain("{{t:2.00}}was [laughs]");
+    // Exactly the three word timestamps - the note added none.
+    expect(bodyOf(out).match(/\{\{t:/g)?.length).toBe(3);
+  });
+
+  it("anchors to the first word when the time precedes it", () => {
     const out = insertEventNote(FM + BODY, 0.2, "[applause]");
-    const words = parseWords(out.slice(out.indexOf("---\n", 4) + 4)).words;
-    expect(words[0].text).toBe("[applause]");
-    expect(words[1].text).toBe("He");
+    const words = parseWords(bodyOf(out)).words;
+    expect(words[0].notes).toEqual(["[applause]"]);
   });
 
   it("keeps the speaker run and frontmatter intact", () => {
     const out = insertEventNote(FM + BODY, 2.5, "[laughs]");
-    expect(out).toContain("<!-- speaker: Speaker 1 -->");
     expect(out.startsWith(FM)).toBe(true);
-    expect(out.match(/<!-- speaker:/g)?.length).toBe(1); // one run, not split
+    expect(out.match(/<!-- speaker:/g)?.length).toBe(1);
   });
 });
