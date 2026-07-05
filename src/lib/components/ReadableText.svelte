@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import { mergeSpans, subtractSpans, type CoverageSpan } from "$lib/coverage";
   import {
     parseTextBlocks,
@@ -130,6 +131,7 @@
     const lineFrom = Math.min(...chosen.map((b) => b.lineFrom));
     const lineTo = Math.max(...chosen.map((b) => b.lineTo));
     observedSpans = shiftSpansForMark(observedSpans, lineFrom, lineTo);
+    livePrevObserved = shiftSpansForMark(livePrevObserved, lineFrom, lineTo);
     onbodyedit(markIrrelevantLines(body, lineFrom, lineTo));
     clearSelection();
   }
@@ -139,6 +141,7 @@
     const { body: newBody, removed } = unmarkIrrelevantAt(body, regionKey(region));
     if (removed.length === 0) return;
     observedSpans = shiftSpansForRemoval(observedSpans, removed);
+    livePrevObserved = shiftSpansForRemoval(livePrevObserved, removed);
     onbodyedit(newBody);
   }
 
@@ -178,6 +181,7 @@
     const edit = markAsCaption(body, lineFrom, lineTo);
     if (!edit.ok) return;
     observedSpans = remapSpans(observedSpans, edit.oldToNew);
+    livePrevObserved = remapSpans(livePrevObserved, edit.oldToNew);
     onbodyedit(edit.body);
     pendingCaption = edit.imageFile ? { file: edit.imageFile } : null;
     clearSelection();
@@ -189,6 +193,7 @@
     const edit = moveCaptionByFile(body, pendingCaption.file, toFile);
     if (!edit.ok) return;
     observedSpans = remapSpans(observedSpans, edit.oldToNew);
+    livePrevObserved = remapSpans(livePrevObserved, edit.oldToNew);
     onbodyedit(edit.body);
     pendingCaption = { file: edit.imageFile ?? toFile };
   }
@@ -232,12 +237,36 @@
     }
   });
 
-  let priorBlocks = $derived(blocksCoveredBySpans(blocks, previousObserved));
+  // Prior committed coverage, held locally so it can be shifted in step with
+  // an in-session body edit (mark irrelevant / caption). previousObserved is
+  // line-indexed against the body as committed; inserting/removing lines
+  // renumbers the body, so without this the prior reads stop mapping to their
+  // renumbered blocks and drop out of the coverage total. Re-synced from the
+  // prop only when it actually changes (record switch, coverage fetch, submit)
+  // - never mid-edit - so the shifts survive.
+  let livePrevObserved = $state<CoverageSpan[]>([]);
+  $effect(() => {
+    // Re-sync ONLY when previousObserved changes (record switch, coverage
+    // fetch, submit) - never on a body edit, so in-session shifts survive.
+    // `body` is read untracked for the same reason. Drop/clamp spans that
+    // reference lines past the current body: a content-hash-stable re-ingest
+    // (audio/pdf) keeps the coverage sidecar but reshapes the body, so
+    // carried-over spans can dangle beyond it. A dangling span never blocks
+    // reaching 100% (the reviewer re-confirms via Mark all read); the clamp
+    // just stops it over- or under-counting.
+    const prev = previousObserved;
+    const maxLine = untrack(() => body.split("\n").length - 1);
+    livePrevObserved = prev
+      .filter((s) => s.from <= maxLine)
+      .map((s) => (s.to > maxLine ? { ...s, to: maxLine } : s));
+  });
+
+  let priorBlocks = $derived(blocksCoveredBySpans(blocks, livePrevObserved));
   let sessionBlocks = $derived(blocksCoveredBySpans(blocks, observedSpans));
 
   let total = $derived(totalUnits(blocks));
   let coveredUnits = $derived(
-    unitsInSpans(blocks, mergeSpans([...previousObserved, ...observedSpans])),
+    unitsInSpans(blocks, mergeSpans([...livePrevObserved, ...observedSpans])),
   );
   let pct = $derived(total > 0 ? Math.round((coveredUnits / total) * 100) : 0);
 

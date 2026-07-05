@@ -214,3 +214,33 @@ describe("bodyWithoutLeadingTitle", () => {
     expect(bodyWithoutLeadingTitle(body, "In Plain Sight")).toBe(body);
   });
 });
+
+describe("prior coverage realigns across a mark-irrelevant insert", () => {
+  // Reviewer previously read all four paragraphs; then marks the 2nd
+  // irrelevant. The prior spans must shift with the inserted marker lines or
+  // the reads below the insert stop mapping to their renumbered blocks.
+  const body = "A one.\n\nB two.\n\nC three.\n\nD four.";
+
+  it("stays fully covered when the prior spans are shifted (the fix)", () => {
+    const blocks = parseTextBlocks(body);
+    const prev = observedLineSpans(blocks, new Set(blocks.map((b) => b.index)));
+    expect(unitsInSpans(blocks, prev)).toBe(totalUnits(blocks)); // 100% before
+
+    const b = blocks[1]; // "B two."
+    const newBody = markIrrelevantLines(body, b.lineFrom, b.lineTo);
+    const shifted = shiftSpansForMark(prev, b.lineFrom, b.lineTo);
+    const newBlocks = parseTextBlocks(newBody);
+
+    expect(totalUnits(newBlocks)).toBe(totalUnits(blocks) - 1); // irrelevant dropped
+    expect(unitsInSpans(newBlocks, shifted)).toBe(totalUnits(newBlocks)); // still 100%
+  });
+
+  it("under-counts if the prior spans are NOT shifted (the bug)", () => {
+    const blocks = parseTextBlocks(body);
+    const prev = observedLineSpans(blocks, new Set(blocks.map((b) => b.index)));
+    const b = blocks[1];
+    const newBlocks = parseTextBlocks(markIrrelevantLines(body, b.lineFrom, b.lineTo));
+    // Unshifted prior spans map onto marker lines / moved blocks and lose units.
+    expect(unitsInSpans(newBlocks, prev)).toBeLessThan(totalUnits(newBlocks));
+  });
+});
