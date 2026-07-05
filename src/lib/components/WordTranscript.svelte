@@ -1,11 +1,6 @@
 <script lang="ts">
   import { untrack } from "svelte";
-  import {
-    parseWords,
-    wordsInTimeRange,
-    wordActiveAt,
-    eventNoteAnchorIndex,
-  } from "$lib/transcript-words";
+  import { parseWords, wordsInTimeRange, wordActiveAt } from "$lib/transcript-words";
   import type { SpeakerRun } from "$lib/transcript-words";
   import { EVENT_NOTE_PRESETS } from "$lib/transcript";
   import {
@@ -68,6 +63,8 @@
     onreassign,
     onreplaceselection,
     oneventnote,
+    oneventnoteedit,
+    oneventnoteremove,
     onseek,
     onmarkresume,
     onverdict,
@@ -109,6 +106,10 @@
     /** Insert a bracketed event note (`[laughs]`) into the body at time
      *  `at` - the word-record twin of the segment editor's quick-insert. */
     oneventnote?: (at: number, text: string) => void;
+    /** Edit (empty text = remove) the ordinal-th event note on a word. */
+    oneventnoteedit?: (gIndex: number, ordinal: number, text: string) => void;
+    /** Remove the ordinal-th event note on a word. */
+    oneventnoteremove?: (gIndex: number, ordinal: number) => void;
     /** Seek the media to `seconds` (optional). */
     onseek?: (seconds: number) => void;
     /** Position the media at `seconds` WITHOUT starting playback - used by the
@@ -587,21 +588,11 @@
     addNoteAtCurrentTime();
   }
 
-  /** Write a committed note into the body as a `[...]` event word at its time.
-   *  Keeps the session observed set aligned across the +1 word (indices at or
-   *  after the insert shift up) and auto-observes the note itself, so adding one
-   *  never shifts the coverage fade or drops the percentage - the note is meta
-   *  the reviewer authored, not an unread word. */
+  /** Commit a composed note into the body as a first-class `[...]` event note
+   *  attached to the word at its moment. The note is not a word - it adds no
+   *  gIndex - so the observed set and coverage are untouched. */
   function writeEventNoteToBody(at: number, text: string) {
-    const token = /^\[.*\]$/.test(text) ? text : `[${text}]`;
-    const noteIndex = eventNoteAnchorIndex(words, at) + 1;
-    const shifted = new Set<number>();
-    for (const g of observed) shifted.add(g >= noteIndex ? g + 1 : g);
-    shifted.add(noteIndex);
-    observed = shifted;
-    if (resumeWord !== null && resumeWord >= noteIndex) resumeWord += 1;
-    styleEpoch++;
-    oneventnote?.(at, token);
+    oneventnote?.(at, text);
   }
 
   function commitNote(id: string) {
@@ -622,6 +613,26 @@
   function deleteNote(id: string) {
     notes = notes.filter((n) => n.id !== id);
     if (editingNoteId === id) editingNoteId = null;
+  }
+
+  // Editing a committed note (one that already lives in the body as a
+  // word.notes entry), by anchor word gIndex + its ordinal among that word's
+  // notes. Kept distinct from the transient compose editor above.
+  let editingBodyNote = $state<{ gIndex: number; ordinal: number; text: string } | null>(null);
+  function openBodyNoteEditor(gIndex: number, ordinal: number) {
+    editingBodyNote = { gIndex, ordinal, text: words[gIndex]?.notes?.[ordinal] ?? "" };
+  }
+  function saveBodyNote() {
+    if (!editingBodyNote) return;
+    const { gIndex, ordinal, text } = editingBodyNote;
+    editingBodyNote = null;
+    oneventnoteedit?.(gIndex, ordinal, text);
+  }
+  function removeBodyNote(gIndex: number, ordinal: number) {
+    if (editingBodyNote?.gIndex === gIndex && editingBodyNote.ordinal === ordinal) {
+      editingBodyNote = null;
+    }
+    oneventnoteremove?.(gIndex, ordinal);
   }
 
   function secondsToClock(s: number): string {
@@ -1266,6 +1277,67 @@
           {#each Array.from({ length: run.endWord - run.startWord + 1 }, (_, k) => run.startWord + k) as g (g)}<span
               data-word-index={g}
               class="wt-word">{words[g].text}</span>{" "}
+            <!-- Committed event notes on this word: first-class annotation
+                 chips, NOT spoken words - no timestamp, never in the word
+                 editor. display:flex breaks each onto its own line. -->
+            {#each words[g].notes ?? [] as noteText, ordinal (ordinal)}
+              <span
+                data-event-note={g}
+                data-note-ordinal={ordinal}
+                style="display:flex"
+                class="my-1.5 items-start gap-1.5 rounded border border-warning/50 bg-warning-container/20 px-2 py-1 text-xs not-italic text-on-surface select-text"
+              >
+                <svg class="w-3.5 h-3.5 flex-none mt-0.5 text-warning" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                </svg>
+                {#if editingBodyNote?.gIndex === g && editingBodyNote.ordinal === ordinal}
+                  <span style="display:flex" class="flex-1 min-w-0 flex-col gap-1.5">
+                    <textarea
+                      bind:value={editingBodyNote.text}
+                      onblur={saveBodyNote}
+                      onkeydown={(e) => { if (e.key === "Escape") { e.preventDefault(); saveBodyNote(); } }}
+                      rows="2"
+                      class="w-full bg-surface border border-primary rounded px-1.5 py-1 text-xs text-on-surface outline-none resize-y"
+                    ></textarea>
+                    <span style="display:flex" class="flex-wrap items-center gap-1">
+                      <span class="text-[10px] font-ui uppercase tracking-wide text-on-surface-muted/70 mr-0.5">Quick</span>
+                      {#each NOTE_PRESETS as preset}
+                        <button
+                          type="button"
+                          onpointerdown={(e) => e.preventDefault()}
+                          onclick={() => { if (editingBodyNote) editingBodyNote.text = `[${preset}]`; }}
+                          class="px-1.5 py-0.5 rounded-full border border-border text-[11px] font-ui text-on-surface-secondary hover:bg-primary-container/30 hover:border-primary/50 cursor-pointer"
+                        >{preset}</button>
+                      {/each}
+                    </span>
+                    <button onclick={saveBodyNote} class="self-start text-xs font-ui font-medium text-primary cursor-pointer hover:underline">Save</button>
+                  </span>
+                {:else}
+                  <span class="flex-1 min-w-0 whitespace-pre-wrap font-medium">{noteText}</span>
+                  {#if oneventnoteedit}
+                    <button
+                      onclick={() => openBodyNoteEditor(g, ordinal)}
+                      class="flex-none text-on-surface-muted/70 hover:text-primary cursor-pointer"
+                      title="Edit note" aria-label="Edit note"
+                    >
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                      </svg>
+                    </button>
+                    <button
+                      onclick={() => removeBodyNote(g, ordinal)}
+                      class="flex-none text-on-surface-muted/70 hover:text-error cursor-pointer"
+                      title="Remove note" aria-label="Remove note"
+                    >
+                      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  {/if}
+                {/if}
+              </span>
+            {/each}
             {#each notesByAnchorWord.get(g) ?? [] as note (note.id)}
               <!-- Reviewer note: rendered inline at its moment but clearly
                    markup, not speech (playback ignores it - it isn't a word).

@@ -303,36 +303,45 @@ export class DocumentStore {
     if (result !== this.current) this.pushEdit(result);
   }
 
-  /** Insert a bracketed event note (`[laughs]`) as a word at time `at` in a
-   *  per-word-timestamp body, anchored after the last word starting at or before
-   *  `at` (prepended when `at` precedes the first word). The pre-digest strips
-   *  the `{{t:}}` marker, leaving the bare `[...]` the digester reads as a meta
-   *  event - the word-record twin of the segment editor's quick-insert. */
+  /** Attach a bracketed event note (`[laughs]`) as a first-class annotation
+   *  FOLLOWING the word at time `at` (the last word starting at or before it) in
+   *  a per-word-timestamp body. The note is not a word: it carries no timestamp,
+   *  is never tokenised, and adds no gIndex - so coverage and the observed set
+   *  are untouched. The pre-digest keeps the bare `[...]` the digester reads as a
+   *  meta event - the word-record twin of the segment editor's quick-insert. */
   insertEventNote(at: number, text: string) {
-    const token = text.trim();
+    const token = bracketNote(text);
     if (!token) return;
     const [, body] = splitFrontmatter(this.current);
     const parsed = parseWords(body);
     if (parsed.words.length === 0) return;
-    const anchor = eventNoteAnchorIndex(parsed.words, at);
-    let next: ReturnType<typeof parseWords>;
-    if (anchor < 0) {
-      const first = parsed.words[0];
-      const start = Math.max(0, Math.min(at, first.start - 0.001));
-      next = replaceWordRange(parsed, 0, 0, [
-        { text: token, start },
-        { text: first.text, start: first.start },
-      ]);
-    } else {
-      const a = parsed.words[anchor];
-      const after = anchor + 1 < parsed.words.length ? parsed.words[anchor + 1].start : a.start + 1;
-      const start = Math.min(Math.max(at, a.start), after - 0.001);
-      next = replaceWordRange(parsed, anchor, anchor, [
-        { text: a.text, start: a.start },
-        { text: token, start },
-      ]);
-    }
-    this.editBody(serializeWords(next.words, next.runs, next.lineEndWords, next.preamble));
+    const anchor = Math.max(0, eventNoteAnchorIndex(parsed.words, at));
+    const words = parsed.words.map((w, i) =>
+      i === anchor ? { ...w, notes: [...(w.notes ?? []), token] } : w,
+    );
+    this.editBody(serializeWords(words, parsed.runs, parsed.lineEndWords, parsed.preamble));
+  }
+
+  /** Edit (or, with empty text, remove) the `ordinal`-th event note on the word
+   *  at `gIndex`. The note stays a single atomic annotation - free text, spaces
+   *  and all - never re-tokenised into words. */
+  editWordNote(gIndex: number, ordinal: number, text: string) {
+    const [, body] = splitFrontmatter(this.current);
+    const parsed = parseWords(body);
+    const word = parsed.words[gIndex];
+    if (!word?.notes || ordinal < 0 || ordinal >= word.notes.length) return;
+    const token = bracketNote(text);
+    const notes = [...word.notes];
+    if (token) notes[ordinal] = token;
+    else notes.splice(ordinal, 1);
+    const words = parsed.words.map((w, i) =>
+      i === gIndex ? { ...w, notes: notes.length ? notes : undefined } : w,
+    );
+    this.editBody(serializeWords(words, parsed.runs, parsed.lineEndWords, parsed.preamble));
+  }
+
+  removeWordNote(gIndex: number, ordinal: number) {
+    this.editWordNote(gIndex, ordinal, "");
   }
 
   // --- All structural operations use parse-modify-serialize ---
@@ -532,6 +541,13 @@ import {
   replaceWordRange,
   eventNoteAnchorIndex,
 } from "$lib/transcript-words";
+
+/** Normalise event-note text to a bracketed `[...]` token, or "" when empty. */
+function bracketNote(text: string): string {
+  const t = text.trim();
+  if (!t) return "";
+  return /^\[.*\]$/.test(t) ? t : `[${t}]`;
+}
 
 function splitFrontmatter(doc: string): [string, string] {
   const match = doc.match(/^(---\n[\s\S]*?\n---\n)([\s\S]*)$/);

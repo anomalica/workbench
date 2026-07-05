@@ -3595,6 +3595,8 @@
             onreassign={(from, to, speaker) => doc.reassignWords(from, to, speaker)}
             onreplaceselection={(from, to, w) => doc.replaceSelection(from, to, w)}
             oneventnote={(at, text) => doc.insertEventNote(at, text)}
+            oneventnoteedit={(g, ordinal, text) => doc.editWordNote(g, ordinal, text)}
+            oneventnoteremove={(g, ordinal) => doc.removeWordNote(g, ordinal)}
             onseek={(seconds) => {
               if (ytPlayer && playerReady) {
                 ytPlayer.seekTo(Math.max(0, seconds), true);

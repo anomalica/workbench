@@ -4,6 +4,11 @@ export interface Word {
   text: string;
   start: number;
   gIndex: number;
+  /** Bracketed non-verbal event notes (`[laughs]`) that FOLLOW this word - a
+   *  first-class annotation object, not a spoken word: no timestamp of its own,
+   *  never tokenised or word-edited. Rendered as a distinct chip after the word.
+   *  Omitted when the word carries none. */
+  notes?: string[];
 }
 
 /** A consecutive run of words owned by one speaker. `startWord`/`endWord` are
@@ -35,6 +40,27 @@ const INLINE_SPEAKER = /^<!--\s*speaker:\s*(.+?)\s*-->$/;
 // mis-recognised word into several words that share one timestamp, so a unit
 // is not restricted to a single token.
 const WORD_TOKEN = /\{\{t:(\d+(?:\.\d+)?)\}\}([\s\S]*?)(?=\{\{t:|$)/g;
+// A bracketed non-verbal event note. Transcripts carry no markdown links, so a
+// `[...]` in a word segment is always a note, never prose (record-format.md -
+// the bracket meta-notation).
+const NOTE_TOKEN = /\[[^\]]*\]/g;
+
+/** Split a `{{t:}}` segment's text into the spoken word (brackets removed) and
+ *  the bracketed event notes that follow it. `{{t:1.5}}had [laughs]` yields
+ *  word "had" + note "[laughs]"; a segment that is only `[laughs]` (the legacy
+ *  note-as-word form) yields an empty word and the note, so it re-anchors onto
+ *  the previous real word and sheds its stray timestamp. */
+function splitSegment(raw: string): { word: string; notes: string[] } {
+  const notes: string[] = [];
+  const word = raw
+    .replace(NOTE_TOKEN, (m) => {
+      notes.push(m);
+      return " ";
+    })
+    .replace(/\s+/g, " ")
+    .trim();
+  return { word, notes };
+}
 
 /** True if the body uses per-word timestamps (contains `{{t:` markers). */
 export function hasWordTimestamps(body: string): boolean {
@@ -82,13 +108,12 @@ export function parseWords(body: string): ParsedWords {
     WORD_TOKEN.lastIndex = 0;
     let m = WORD_TOKEN.exec(line);
     while (m !== null) {
-      // The capture includes the single space that joins it to the next unit;
-      // trim that off (internal spaces, if any, are kept). Skip empty captures
-      // defensively (adjacent markers with no text between them).
-      const text = m[2].trim();
+      // The capture runs to the next marker. Split off any bracketed event
+      // notes: the remainder is the spoken word (internal spaces kept).
+      const { word: text, notes: segNotes } = splitSegment(m[2]);
       if (text) {
         const start = parseFloat(m[1]);
-        words.push({ text, start, gIndex });
+        words.push({ text, start, gIndex, ...(segNotes.length ? { notes: segNotes } : {}) });
 
         const lastRun = runs[runs.length - 1];
         if (lastRun && lastRun.speaker === currentSpeaker) {
@@ -99,6 +124,11 @@ export function parseWords(body: string): ParsedWords {
 
         lastOnLine = gIndex;
         gIndex++;
+      } else if (segNotes.length && words.length > 0) {
+        // Notes with no word of their own (the legacy note-as-word form) attach
+        // to the previous real word, dropping the stray timestamp.
+        const prev = words[words.length - 1];
+        prev.notes = [...(prev.notes ?? []), ...segNotes];
       }
       m = WORD_TOKEN.exec(line);
     }
@@ -110,11 +140,11 @@ export function parseWords(body: string): ParsedWords {
   return { words, runs, lineEndWords, preamble };
 }
 
-/** The gIndex a bracketed event note anchors AFTER for time `at`: the last word
- *  starting at or before `at`, or -1 to prepend before the first word. The note
- *  word is then inserted at `anchor + 1`. Shared by the DocumentStore insert and
- *  WordTranscript's observed-set shift so the two always agree on the position.
- *  Words are time-ordered, so the scan stops at the first later word. */
+/** The gIndex of the word a bracketed event note anchors ONTO for time `at`:
+ *  the last word starting at or before `at`, or -1 when `at` precedes the first
+ *  word (callers clamp to word 0). The note becomes an entry in that word's
+ *  `notes`, not a word of its own. Words are time-ordered, so the scan stops at
+ *  the first later word. */
 export function eventNoteAnchorIndex(words: Word[], at: number): number {
   let k = -1;
   for (let i = 0; i < words.length; i++) {
@@ -164,7 +194,8 @@ export function serializeWords(
     }
 
     if (lineStartWord < 0) lineStartWord = i;
-    lineTokens.push(`{{t:${words[i].start.toFixed(2)}}}${words[i].text}`);
+    const noteSuffix = words[i].notes?.length ? ` ${words[i].notes!.join(" ")}` : "";
+    lineTokens.push(`{{t:${words[i].start.toFixed(2)}}}${words[i].text}${noteSuffix}`);
 
     if (lineEndWords.has(i)) flushLine();
   }
@@ -203,11 +234,19 @@ export function splitWord(
     gIndex + 1 < words.length ? words[gIndex + 1].start : (mediaDuration ?? start + 1);
   const span = Math.max(0, nextStart - start);
 
+  const splitNotes = words[gIndex].notes;
   const newWords: Word[] = [];
   for (let i = 0; i < words.length; i++) {
     if (i === gIndex) {
       for (let p = 0; p < k; p++) {
-        newWords.push({ text: pieces[p], start: start + (span * p) / k, gIndex: newWords.length });
+        // The split word's event notes follow the LAST piece (they trailed the
+        // whole word).
+        newWords.push({
+          text: pieces[p],
+          start: start + (span * p) / k,
+          gIndex: newWords.length,
+          ...(p === k - 1 && splitNotes?.length ? { notes: splitNotes } : {}),
+        });
       }
     } else {
       newWords.push({ ...words[i], gIndex: newWords.length });
