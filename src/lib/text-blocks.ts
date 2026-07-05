@@ -9,9 +9,11 @@
  *
  * The reviewable-unit count must match the digester gate's
  * `review_gate._content_line_numbers` exactly: a body line counts iff it is
- * non-blank AND its stripped form does not start with an HTML comment (`<!--`).
- * Counting plain non-blank lines would over-count annotation/comment lines and
- * disagree with the gate's recompute.
+ * non-blank AND is not part of an HTML comment. The comment test is stateful -
+ * a multi-line comment (the canonical image annotation) flags its opener, every
+ * continuation line, and the closing `-->` - so a per-line `<!--` prefix check
+ * is not enough. See {@link commentLineFlags}, which mirrors the gate's
+ * `comment_line_flags`.
  */
 
 import type { CoverageSpan } from "./coverage";
