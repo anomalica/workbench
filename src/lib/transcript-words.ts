@@ -301,9 +301,22 @@ export function replaceWordRange(
     .filter((w) => w.text);
   const delta = clean.length - (to - from + 1);
 
+  // Event notes on the replaced words are not word content and the editor never
+  // surfaces them, so carry them onto the last replacement word rather than
+  // dropping them - editing (or splitting on space in) the word a note is
+  // anchored to must never lose or tokenise the note.
+  const rangeNotes = words.slice(from, to + 1).flatMap((w) => w.notes ?? []);
   const out: Word[] = [];
   for (let i = 0; i < from; i++) out.push({ ...words[i], gIndex: out.length });
-  for (const w of clean) out.push({ text: w.text, start: w.start, gIndex: out.length });
+  clean.forEach((w, ci) => {
+    const carryNotes = ci === clean.length - 1 && rangeNotes.length > 0;
+    out.push({
+      text: w.text,
+      start: w.start,
+      gIndex: out.length,
+      ...(carryNotes ? { notes: rangeNotes } : {}),
+    });
+  });
   for (let i = to + 1; i < words.length; i++) out.push({ ...words[i], gIndex: out.length });
 
   const newRuns: SpeakerRun[] = [];
