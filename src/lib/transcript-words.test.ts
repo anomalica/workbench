@@ -562,3 +562,24 @@ describe("event notes as first-class word annotations", () => {
     expect(words[0].notes).toEqual(["background music"]);
   });
 });
+
+describe("event notes survive editing the word they anchor to", () => {
+  it("carries a word's notes onto the last replacement word (edit/split), never dropping them", () => {
+    const body = "<!-- speaker: S1 -->\n{{t:1.00}}He {{t:2.00}}was [laughs] {{t:3.00}}great.\n";
+    const p = parseWords(body);
+    expect(p.words[1].notes).toEqual(["laughs"]); // note is on "was"
+    // Edit "was" and split it into two words (the space-split the word editor does).
+    const next = replaceWordRange(p, 1, 1, [
+      { text: "was", start: 2.0 },
+      { text: "really", start: 2.5 },
+    ]);
+    const noted = next.words.filter((w) => w.notes?.length);
+    expect(noted.length).toBe(1); // exactly one carrier, not lost, not duplicated
+    expect(noted[0].notes).toEqual(["laughs"]);
+    expect(noted[0].text).toBe("really"); // the LAST replacement word
+    // Round-trips back to the bracket notation on disk.
+    const out = serializeWords(next.words, next.runs, next.lineEndWords, next.preamble);
+    expect(out).toContain("[laughs]");
+    expect(parseWords(out).words.filter((w) => w.notes?.length).length).toBe(1);
+  });
+});
