@@ -532,7 +532,7 @@ describe("event notes as first-class word annotations", () => {
     const body = "<!-- speaker: S1 -->\n{{t:1.00}}He {{t:2.00}}was [laughs] {{t:3.00}}great.\n";
     const { words } = parseWords(body);
     expect(words.map((w) => w.text)).toEqual(["He", "was", "great."]);
-    expect(words[1].notes).toEqual(["[laughs]"]);
+    expect(words[1].notes).toEqual(["laughs"]);
     expect(words[0].notes).toBeUndefined();
   });
 
@@ -541,7 +541,7 @@ describe("event notes as first-class word annotations", () => {
       "<!-- speaker: S1 -->\n{{t:1.00}}He {{t:2.00}}was {{t:2.10}}[laughs] {{t:3.00}}great.\n";
     const { words } = parseWords(body);
     expect(words.map((w) => w.text)).toEqual(["He", "was", "great."]);
-    expect(words[1].notes).toEqual(["[laughs]"]); // moved onto "was"
+    expect(words[1].notes).toEqual(["laughs"]); // moved onto "was"
   });
 
   it("round-trips a note through serialise with no timestamp of its own", () => {
@@ -552,13 +552,13 @@ describe("event notes as first-class word annotations", () => {
     expect(out.match(/\{\{t:/g)?.length).toBe(3); // no marker for the note
     // Stable across a second round-trip.
     const p2 = parseWords(out);
-    expect(p2.words[1].notes).toEqual(["[laughs]"]);
+    expect(p2.words[1].notes).toEqual(["laughs"]);
   });
 
   it("keeps a multi-word note (spaces and all) as one atomic annotation", () => {
     const body = "<!-- speaker: S1 -->\n{{t:1.00}}Then [background music] {{t:2.00}}silence.\n";
     const { words } = parseWords(body);
     expect(words.map((w) => w.text)).toEqual(["Then", "silence."]);
-    expect(words[0].notes).toEqual(["[background music]"]);
+    expect(words[0].notes).toEqual(["background music"]);
   });
 });

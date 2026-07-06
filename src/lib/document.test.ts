@@ -801,7 +801,7 @@ describe("insertEventNote attaches a first-class note to a word (not a new word)
     const parsed = parseWords(body);
     const anchor = Math.max(0, eventNoteAnchorIndex(parsed.words, at));
     const words = parsed.words.map((w, i) =>
-      i === anchor ? { ...w, notes: [...(w.notes ?? []), text] } : w,
+      i === anchor ? { ...w, notes: [...(w.notes ?? []), text.replace(/[[\]]/g, "").trim()] } : w,
     );
     return FM + serializeWords(words, parsed.runs, parsed.lineEndWords, parsed.preamble);
   }
@@ -811,7 +811,7 @@ describe("insertEventNote attaches a first-class note to a word (not a new word)
     const words = parseWords(bodyOf(out)).words;
     // Still three spoken words - the note is not one of them.
     expect(words.map((w) => w.text)).toEqual(["He", "was", "reputable."]);
-    expect(words[1].notes).toEqual(["[laughs]"]); // on "was"
+    expect(words[1].notes).toEqual(["laughs"]); // on "was"
   });
 
   it("round-trips the note in the body with no timestamp of its own", () => {
@@ -824,7 +824,7 @@ describe("insertEventNote attaches a first-class note to a word (not a new word)
   it("anchors to the first word when the time precedes it", () => {
     const out = insertEventNote(FM + BODY, 0.2, "[applause]");
     const words = parseWords(bodyOf(out)).words;
-    expect(words[0].notes).toEqual(["[applause]"]);
+    expect(words[0].notes).toEqual(["applause"]);
   });
 
   it("keeps the speaker run and frontmatter intact", () => {
