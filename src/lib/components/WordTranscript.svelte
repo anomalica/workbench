@@ -603,11 +603,17 @@
     if (note && text) writeEventNoteToBody(note.at, text);
   }
 
-  /** Insert a preset event marker at the note's moment and close the editor. */
+  /** Insert a preset event marker at the note's moment and close the editor.
+   *  The label is bare - brackets are the on-disk notation, added on serialise. */
   function applyPreset(note: VisualNote, label: string) {
     notes = notes.filter((n) => n.id !== note.id);
     editingNoteId = null;
-    writeEventNoteToBody(note.at, `[${label}]`);
+    writeEventNoteToBody(note.at, label);
+  }
+
+  // Brackets are notation, not content: the reviewer never types them.
+  function blockBrackets(e: KeyboardEvent) {
+    if (e.key === "[" || e.key === "]") e.preventDefault();
   }
 
   function deleteNote(id: string) {
@@ -1295,8 +1301,9 @@
                     <textarea
                       bind:value={editingBodyNote.text}
                       onblur={saveBodyNote}
-                      onkeydown={(e) => { if (e.key === "Escape") { e.preventDefault(); saveBodyNote(); } }}
+                      onkeydown={(e) => { blockBrackets(e); if (e.key === "Escape") { e.preventDefault(); saveBodyNote(); } }}
                       rows="2"
+                      placeholder="e.g. laughs, applause, inaudible..."
                       class="w-full bg-surface border border-primary rounded px-1.5 py-1 text-xs text-on-surface outline-none resize-y"
                     ></textarea>
                     <span style="display:flex" class="flex-wrap items-center gap-1">
@@ -1305,7 +1312,7 @@
                         <button
                           type="button"
                           onpointerdown={(e) => e.preventDefault()}
-                          onclick={() => { if (editingBodyNote) editingBodyNote.text = `[${preset}]`; }}
+                          onclick={() => { if (editingBodyNote) editingBodyNote.text = preset; }}
                           class="px-1.5 py-0.5 rounded-full border border-border text-[11px] font-ui text-on-surface-secondary hover:bg-primary-container/30 hover:border-primary/50 cursor-pointer"
                         >{preset}</button>
                       {/each}
@@ -1366,13 +1373,14 @@
                       bind:value={note.text}
                       onblur={() => commitNote(note.id)}
                       onkeydown={(e) => {
+                        blockBrackets(e);
                         if (e.key === "Escape") {
                           e.preventDefault();
                           commitNote(note.id);
                         }
                       }}
                       rows="2"
-                      placeholder="Note this moment - what's on screen, an action, a sound..."
+                      placeholder="Note this moment - a sound, an action (no brackets - added automatically)..."
                       class="w-full bg-surface border border-primary rounded px-1.5 py-1 text-xs text-on-surface outline-none resize-y"
                     ></textarea>
                     <!-- Quick event tags. preventDefault on pointerdown keeps the

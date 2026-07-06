@@ -310,7 +310,7 @@ export class DocumentStore {
    *  are untouched. The pre-digest keeps the bare `[...]` the digester reads as a
    *  meta event - the word-record twin of the segment editor's quick-insert. */
   insertEventNote(at: number, text: string) {
-    const token = bracketNote(text);
+    const token = noteInner(text);
     if (!token) return;
     const [, body] = splitFrontmatter(this.current);
     const parsed = parseWords(body);
@@ -330,7 +330,7 @@ export class DocumentStore {
     const parsed = parseWords(body);
     const word = parsed.words[gIndex];
     if (!word?.notes || ordinal < 0 || ordinal >= word.notes.length) return;
-    const token = bracketNote(text);
+    const token = noteInner(text);
     const notes = [...word.notes];
     if (token) notes[ordinal] = token;
     else notes.splice(ordinal, 1);
@@ -542,11 +542,11 @@ import {
   eventNoteAnchorIndex,
 } from "$lib/transcript-words";
 
-/** Normalise event-note text to a bracketed `[...]` token, or "" when empty. */
-function bracketNote(text: string): string {
-  const t = text.trim();
-  if (!t) return "";
-  return /^\[.*\]$/.test(t) ? t : `[${t}]`;
+/** The bare inner text of an event note: brackets are the on-disk notation, not
+ *  content, so any the caller passed are stripped (and stray brackets can never
+ *  break the `[...]` round-trip). "" when empty. */
+function noteInner(text: string): string {
+  return text.replace(/[[\]]/g, "").replace(/\s+/g, " ").trim();
 }
 
 function splitFrontmatter(doc: string): [string, string] {

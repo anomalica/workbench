@@ -4,10 +4,11 @@ export interface Word {
   text: string;
   start: number;
   gIndex: number;
-  /** Bracketed non-verbal event notes (`[laughs]`) that FOLLOW this word - a
-   *  first-class annotation object, not a spoken word: no timestamp of its own,
-   *  never tokenised or word-edited. Rendered as a distinct chip after the word.
-   *  Omitted when the word carries none. */
+  /** Non-verbal event notes that FOLLOW this word - first-class annotation
+   *  objects, not spoken words: no timestamp of their own, never tokenised or
+   *  word-edited, rendered as distinct chips. Stored as the BARE inner text
+   *  ("laughs", not "[laughs]"); the `[...]` brackets are the on-disk notation
+   *  that serializeWords adds back. Omitted when the word carries none. */
   notes?: string[];
 }
 
@@ -45,16 +46,19 @@ const WORD_TOKEN = /\{\{t:(\d+(?:\.\d+)?)\}\}([\s\S]*?)(?=\{\{t:|$)/g;
 // the bracket meta-notation).
 const NOTE_TOKEN = /\[[^\]]*\]/g;
 
-/** Split a `{{t:}}` segment's text into the spoken word (brackets removed) and
- *  the bracketed event notes that follow it. `{{t:1.5}}had [laughs]` yields
- *  word "had" + note "[laughs]"; a segment that is only `[laughs]` (the legacy
- *  note-as-word form) yields an empty word and the note, so it re-anchors onto
- *  the previous real word and sheds its stray timestamp. */
+/** Split a `{{t:}}` segment's text into the spoken word and the event notes
+ *  that follow it. `{{t:1.5}}had [laughs]` yields word "had" + note "laughs".
+ *  The `[...]` brackets are the on-disk NOTATION, not content: the INNER text is
+ *  stored (record-format.md - the bracket meta-notation), and serializeWords
+ *  wraps it back. A segment that is only `[laughs]` (the legacy note-as-word
+ *  form) yields an empty word and the note, so it re-anchors onto the previous
+ *  real word and sheds its stray timestamp. */
 function splitSegment(raw: string): { word: string; notes: string[] } {
   const notes: string[] = [];
   const word = raw
     .replace(NOTE_TOKEN, (m) => {
-      notes.push(m);
+      const inner = m.slice(1, -1).trim();
+      if (inner) notes.push(inner);
       return " ";
     })
     .replace(/\s+/g, " ")
@@ -194,7 +198,10 @@ export function serializeWords(
     }
 
     if (lineStartWord < 0) lineStartWord = i;
-    const noteSuffix = words[i].notes?.length ? ` ${words[i].notes!.join(" ")}` : "";
+    // Notes are stored bare; wrap each back in the `[...]` on-disk notation.
+    const noteSuffix = words[i].notes?.length
+      ? ` ${words[i].notes!.map((n) => `[${n}]`).join(" ")}`
+      : "";
     lineTokens.push(`{{t:${words[i].start.toFixed(2)}}}${words[i].text}${noteSuffix}`);
 
     if (lineEndWords.has(i)) flushLine();
