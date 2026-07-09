@@ -94,6 +94,7 @@
     if (i < items.length - 1) return items[i + 1].start;
     return nextStart ?? mediaDuration ?? items[i].start + 1;
   }
+
   // Move a row's timestamp, shunting the neighbours it runs into rather than
   // stopping dead against them - so a stretch of bad timings can be dragged into
   // shape from one end. The cascade halts at the words either side of the
@@ -289,38 +290,6 @@
             {item.start.toFixed(2)}s
           </button>
 
-          <!-- Per-row time nudge with a centred play, shown for the selected
-               row. Each nudge plays from the new position; the centre play
-               replays from the current one. -->
-          {#if selected === i}
-            <div class="flex-none flex items-center gap-0.5">
-              {#each [-0.1, -0.01] as d (d)}
-                <button
-                  onclick={() => { nudge(i, d); onseek(items[i].start); }}
-                  class="text-[10px] tabular-nums rounded px-1 py-0.5 bg-surface-alt text-on-surface-secondary
-                    hover:bg-surface-alt/70 cursor-pointer"
-                  title="{d * 1000}ms, then play"
-                >{(d * 1000).toFixed(0)}</button>
-              {/each}
-              <button
-                onclick={() => onseek(items[i].start)}
-                class="flex-none text-primary hover:text-primary-hover cursor-pointer px-0.5"
-                title="Play from here"
-                aria-label="Play from here"
-              >
-                <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20"><path d="M6 4l10 6-10 6V4z" /></svg>
-              </button>
-              {#each [0.01, 0.1] as d (d)}
-                <button
-                  onclick={() => { nudge(i, d); onseek(items[i].start); }}
-                  class="text-[10px] tabular-nums rounded px-1 py-0.5 bg-surface-alt text-on-surface-secondary
-                    hover:bg-surface-alt/70 cursor-pointer"
-                  title="+{d * 1000}ms, then play"
-                >+{(d * 1000).toFixed(0)}</button>
-              {/each}
-            </div>
-          {/if}
-
           <!-- Word text. Space starts a new word at the caret; pasted spaces split. -->
           <input
             bind:this={inputs[i]}
@@ -332,6 +301,40 @@
               text-on-surface focus:outline-none focus:border-primary"
             placeholder="(new word)"
           />
+
+          <!-- Time nudge with a centred play, live only on the selected row but
+               always occupying its space - appearing between the timestamp and
+               the word would shove every word sideways as the selection moves.
+               Each nudge replays from the new position; the centre play replays
+               from the current one. -->
+          <div
+            class="flex-none flex items-center gap-0.5 {selected === i ? '' : 'invisible'}"
+          >
+            {#each [-0.1, -0.01] as d (d)}
+              <button
+                onclick={() => { nudge(i, d); onseek(items[i].start); }}
+                class="text-[10px] tabular-nums rounded px-1 py-0.5 bg-surface-alt text-on-surface-secondary
+                  hover:bg-surface-alt/70 cursor-pointer"
+                title="{d * 1000}ms, then play"
+              >{(d * 1000).toFixed(0)}</button>
+            {/each}
+            <button
+              onclick={() => onseek(items[i].start)}
+              class="flex-none text-primary hover:text-primary-hover cursor-pointer px-0.5"
+              title="Play from here"
+              aria-label="Play from here"
+            >
+              <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20"><path d="M6 4l10 6-10 6V4z" /></svg>
+            </button>
+            {#each [0.01, 0.1] as d (d)}
+              <button
+                onclick={() => { nudge(i, d); onseek(items[i].start); }}
+                class="text-[10px] tabular-nums rounded px-1 py-0.5 bg-surface-alt text-on-surface-secondary
+                  hover:bg-surface-alt/70 cursor-pointer"
+                title="+{d * 1000}ms, then play"
+              >+{(d * 1000).toFixed(0)}</button>
+            {/each}
+          </div>
 
           <!-- Delete this word -->
           <button
