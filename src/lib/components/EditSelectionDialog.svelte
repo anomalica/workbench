@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { Word } from "$lib/transcript-words";
   import { retimeWithPush } from "$lib/word-timing";
-  import { tick, onMount } from "svelte";
+  import { tick, onMount, onDestroy } from "svelte";
 
   // Unified multi-word editor: edit text, delete/insert words, and retime - all
   // in one modal over a selected word range. Replaces the separate edit-word +
@@ -50,6 +50,10 @@
   // one (Shift) for landing on it. Matches the on-disk 10ms resolution.
   const WHEEL_STEP = 0.1;
   const WHEEL_STEP_FINE = 0.01;
+  // How long a retime waits before replaying. Long enough that a wheel roll or a
+  // held arrow key coalesces into one preview of where you settled, short enough
+  // that a single nudge sounds immediate.
+  const PREVIEW_DELAY_MS = 150;
 
   // svelte-ignore state_referenced_locally
   let items = $state<Item[]>(
@@ -95,6 +99,29 @@
     return nextStart ?? mediaDuration ?? items[i].start + 1;
   }
 
+  // Every retime replays from where the word now starts, so the reviewer hears
+  // straight away whether it landed on the word. Rolling the wheel or holding an
+  // arrow key would otherwise fire a seek per step, so previews coalesce: only
+  // the position settled on plays.
+  let previewTimer: ReturnType<typeof setTimeout> | null = null;
+  function cancelPreview() {
+    if (previewTimer) clearTimeout(previewTimer);
+    previewTimer = null;
+  }
+  function previewRow(i: number) {
+    cancelPreview();
+    previewTimer = setTimeout(() => {
+      previewTimer = null;
+      if (items[i]) onseek(items[i].start);
+    }, PREVIEW_DELAY_MS);
+  }
+  /** Play from `t` at once, dropping any preview a retime had queued. */
+  function seekNow(t: number) {
+    cancelPreview();
+    onseek(t);
+  }
+  onDestroy(cancelPreview);
+
   // Move a row's timestamp, shunting the neighbours it runs into rather than
   // stopping dead against them - so a stretch of bad timings can be dragged into
   // shape from one end. The cascade halts at the words either side of the
@@ -114,6 +141,7 @@
     if (human) {
       items[i].auto = false;
       items[i].pushed = false;
+      previewRow(i);
     }
   }
   function nudge(i: number, delta: number) {
@@ -259,8 +287,9 @@
       Up/down or Enter move between words; space starts a new word at the caret;
       Ctrl+Enter saves. Retime with the buttons, left/right (50ms), or the wheel over
       a timestamp (100ms, Shift for 10ms): a word shunts its neighbours along, but
-      never the words either side of the selection. Playing a word runs to the end of
-      the selection, then stops. Amber = auto-positioned; ringed = shunted.
+      never the words either side of the selection. Clicking a word - or retiming one -
+      plays from it to the end of the selection, then stops. Amber = auto-positioned;
+      ringed = shunted.
     </p>
 
     <div class="flex-1 overflow-auto px-3 py-2 space-y-1">
@@ -274,7 +303,7 @@
                wheel scrubs it. Colour distinguishes auto vs set, a ring marks a
                word a neighbour's retime shunted along. -->
           <button
-            onclick={() => { selected = i; onseek(item.start); }}
+            onclick={() => { selected = i; seekNow(item.start); }}
             onwheel={(e) => onTimestampWheel(e, i)}
             class="flex-none tabular-nums text-xs rounded px-1.5 py-0.5 cursor-pointer transition-colors
               {item.pushed ? 'ring-1 ring-primary/60' : ''}
@@ -290,11 +319,13 @@
             {item.start.toFixed(2)}s
           </button>
 
-          <!-- Word text. Space starts a new word at the caret; pasted spaces split. -->
+          <!-- Word text. Clicking it plays from this word. Space starts a new
+               word at the caret; pasted spaces split. -->
           <input
             bind:this={inputs[i]}
             bind:value={item.text}
             onfocus={() => (selected = i)}
+            onclick={() => seekNow(items[i].start)}
             onkeydown={(e) => onWordKeydown(e, i)}
             oninput={() => { if (/\s/.test(item.text)) splitOnSpace(i); }}
             class="flex-1 min-w-0 bg-surface border border-border rounded px-2 py-1 text-sm
@@ -312,14 +343,14 @@
           >
             {#each [-0.1, -0.01] as d (d)}
               <button
-                onclick={() => { nudge(i, d); onseek(items[i].start); }}
+                onclick={() => nudge(i, d)}
                 class="text-[10px] tabular-nums rounded px-1 py-0.5 bg-surface-alt text-on-surface-secondary
                   hover:bg-surface-alt/70 cursor-pointer"
                 title="{d * 1000}ms, then play"
               >{(d * 1000).toFixed(0)}</button>
             {/each}
             <button
-              onclick={() => onseek(items[i].start)}
+              onclick={() => seekNow(items[i].start)}
               class="flex-none text-primary hover:text-primary-hover cursor-pointer px-0.5"
               title="Play from here"
               aria-label="Play from here"
@@ -328,7 +359,7 @@
             </button>
             {#each [0.01, 0.1] as d (d)}
               <button
-                onclick={() => { nudge(i, d); onseek(items[i].start); }}
+                onclick={() => nudge(i, d)}
                 class="text-[10px] tabular-nums rounded px-1 py-0.5 bg-surface-alt text-on-surface-secondary
                   hover:bg-surface-alt/70 cursor-pointer"
                 title="+{d * 1000}ms, then play"
