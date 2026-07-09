@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Word } from "$lib/transcript-words";
+  import { retimeWithPush } from "$lib/word-timing";
   import { tick, onMount } from "svelte";
 
   // Unified multi-word editor: edit text, delete/insert words, and retime - all
@@ -36,10 +37,20 @@
     // True when the timestamp was auto-positioned (a new/split word), not set by
     // the reviewer - shown in a distinct colour so it's clear it's a guess.
     auto: boolean;
+    // True when a neighbour's retime shunted this word along, rather than the
+    // reviewer placing it. Cleared as soon as it's retimed directly.
+    pushed: boolean;
   }
 
+  // Wheel over a timestamp scrubs it: a coarse step for finding the word, a fine
+  // one (Shift) for landing on it. Matches the on-disk 10ms resolution.
+  const WHEEL_STEP = 0.1;
+  const WHEEL_STEP_FINE = 0.01;
+
   // svelte-ignore state_referenced_locally
-  let items = $state<Item[]>(words.map((w) => ({ text: w.text, start: w.start, auto: false })));
+  let items = $state<Item[]>(
+    words.map((w) => ({ text: w.text, start: w.start, auto: false, pushed: false })),
+  );
   // The row whose timestamp the arrow keys nudge.
   let selected = $state(0);
   // Per-row text inputs, for moving focus when navigating or splitting words.
@@ -63,22 +74,42 @@
     el.scrollIntoView({ block: "nearest" });
   }
 
-  function lowerBound(i: number): number {
-    return i > 0 ? items[i - 1].start : (prevStart ?? 0);
-  }
+  // Where a newly inserted word lands: midway to the following word.
   function upperBound(i: number): number {
     if (i < items.length - 1) return items[i + 1].start;
     return nextStart ?? mediaDuration ?? items[i].start + 1;
   }
-  // Clamp a row's start between its neighbours so word order stays monotonic.
+  // Move a row's timestamp, shunting the neighbours it runs into rather than
+  // stopping dead against them - so a stretch of bad timings can be dragged into
+  // shape from one end. The cascade halts at the words either side of the
+  // selection, which never move: a retime can't ripple into the wider transcript.
   function setStart(i: number, t: number, human = true) {
-    const lo = lowerBound(i);
-    const hi = upperBound(i);
-    items[i].start = Math.max(lo, Math.min(hi, t));
-    if (human) items[i].auto = false;
+    const next = retimeWithPush(
+      items.map((it) => it.start),
+      i,
+      t,
+      { prevStart, nextStart, mediaDuration },
+    );
+    for (let j = 0; j < items.length; j++) {
+      if (next[j] === items[j].start) continue;
+      items[j].start = next[j];
+      if (j !== i) items[j].pushed = true;
+    }
+    if (human) {
+      items[i].auto = false;
+      items[i].pushed = false;
+    }
   }
   function nudge(i: number, delta: number) {
     setStart(i, items[i].start + delta);
+  }
+
+  function onTimestampWheel(e: WheelEvent, i: number) {
+    if (e.deltaY === 0) return;
+    e.preventDefault();
+    selected = i;
+    const step = e.shiftKey ? WHEEL_STEP_FINE : WHEEL_STEP;
+    setStart(i, items[i].start + (e.deltaY < 0 ? step : -step));
   }
 
   function deleteItem(i: number) {
@@ -90,7 +121,7 @@
     const last = items[items.length - 1];
     const lo = last ? last.start : (prevStart ?? 0);
     const hi = nextStart ?? mediaDuration ?? lo + 1;
-    items = [...items, { text: "", start: (lo + hi) / 2, auto: true }];
+    items = [...items, { text: "", start: (lo + hi) / 2, auto: true, pushed: false }];
     selected = items.length - 1;
   }
 
@@ -106,7 +137,7 @@
     const newStart = (items[i].start + upperBound(i)) / 2;
     const next = items.slice();
     next[i] = { ...next[i], text: before };
-    next.splice(i + 1, 0, { text: after, start: newStart, auto: true });
+    next.splice(i + 1, 0, { text: after, start: newStart, auto: true, pushed: false });
     items = next;
     focusRow(i + 1, 0);
   }
@@ -130,6 +161,7 @@
       text,
       start: p === 0 ? start : start + (span * p) / parts.length,
       auto: p !== 0,
+      pushed: false,
     }));
     items = [...items.slice(0, i), ...pieces, ...items.slice(i + 1)];
     focusRow(i + parts.length - 1, "end");
@@ -145,6 +177,14 @@
     if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
       e.preventDefault();
       save();
+      return;
+    }
+    // Enter alone walks to the next word, its text selected so it can be retyped
+    // outright - the form-field rhythm. It stops at the last word rather than
+    // wrapping or saving; saving is Ctrl+Enter.
+    if (e.key === "Enter" && !e.shiftKey && !e.altKey) {
+      e.preventDefault();
+      if (selected < items.length - 1) focusRow(selected + 1, "all");
       return;
     }
     // Up/down move the selection box to the previous/next word (and focus it),
@@ -200,10 +240,11 @@
     </div>
 
     <p class="px-4 pt-2 text-xs text-on-surface-muted">
-      Edit the text, delete or add words, and retime. Up/down move between words;
-      a timestamp nudge (buttons, or left/right arrows at 50ms) plays from the new
-      position, and &#9658; replays. Space starts a new word at the caret;
-      Ctrl+Enter saves. Amber timestamps were auto-positioned - click to confirm.
+      Up/down or Enter move between words; space starts a new word at the caret;
+      Ctrl+Enter saves. Retime with the buttons, left/right (50ms), or the wheel over
+      a timestamp (100ms, Shift for 10ms): a word shunts its neighbours along, but
+      never the words either side of the selection. Amber = auto-positioned;
+      ringed = shunted.
     </p>
 
     <div class="flex-1 overflow-auto px-3 py-2 space-y-1">
@@ -212,16 +253,22 @@
           class="flex items-center gap-2 rounded px-2 py-1 transition-colors
             {selected === i ? 'bg-primary/10' : 'hover:bg-surface-alt/50'}"
         >
-          <!-- Timestamp chip: click to select; colour distinguishes auto vs set -->
+          <!-- Timestamp chip: click plays from here to the end of the selection;
+               wheel scrubs it. Colour distinguishes auto vs set, a ring marks a
+               word a neighbour's retime shunted along. -->
           <button
             onclick={() => { selected = i; onseek(item.start); }}
+            onwheel={(e) => onTimestampWheel(e, i)}
             class="flex-none tabular-nums text-xs rounded px-1.5 py-0.5 cursor-pointer transition-colors
+              {item.pushed ? 'ring-1 ring-primary/60' : ''}
               {item.auto
                 ? 'bg-warning-container text-on-warning-container'
                 : selected === i
                   ? 'bg-primary text-on-primary'
                   : 'bg-surface-alt text-on-surface-secondary hover:bg-surface-alt/70'}"
-            title={item.auto ? "Auto-positioned - click to select + confirm" : "Click to select, then nudge"}
+            title={item.auto
+              ? "Auto-positioned - click to play from here and confirm. Wheel to retime (Shift: 10ms)"
+              : "Click to play from here. Wheel to retime (Shift: 10ms)"}
           >
             {item.start.toFixed(2)}s
           </button>
