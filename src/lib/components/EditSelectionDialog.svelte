@@ -12,6 +12,7 @@
     nextStart = null,
     mediaDuration = null,
     speaker = "",
+    currentTime = 0,
     onsave,
     oncancel,
     onseek,
@@ -24,6 +25,9 @@
     nextStart?: number | null;
     mediaDuration?: number | null;
     speaker?: string;
+    /** Playback clock, for the karaoke row cursor. The caller stops playback at
+     *  the selection's end, so the cursor never leaves this list. */
+    currentTime?: number;
     /** Commit the edited words (text + start), in order. */
     onsave: (newWords: { text: string; start: number }[]) => void;
     oncancel: () => void;
@@ -55,6 +59,17 @@
   let selected = $state(0);
   // Per-row text inputs, for moving focus when navigating or splitting words.
   let inputs: (HTMLInputElement | null)[] = [];
+
+  // The word under the playhead, so "play from here" visibly runs through the
+  // selection word by word. -1 before the first word. Items stay ascending.
+  let activeRow = $derived.by(() => {
+    let k = -1;
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].start <= currentTime) k = i;
+      else break;
+    }
+    return k;
+  });
 
   // Select row `i`, focus its text input and place the caret (default: end).
   // `caret: "all"` selects the whole word so typing replaces it outright.
@@ -243,14 +258,15 @@
       Up/down or Enter move between words; space starts a new word at the caret;
       Ctrl+Enter saves. Retime with the buttons, left/right (50ms), or the wheel over
       a timestamp (100ms, Shift for 10ms): a word shunts its neighbours along, but
-      never the words either side of the selection. Amber = auto-positioned;
-      ringed = shunted.
+      never the words either side of the selection. Playing a word runs to the end of
+      the selection, then stops. Amber = auto-positioned; ringed = shunted.
     </p>
 
     <div class="flex-1 overflow-auto px-3 py-2 space-y-1">
       {#each items as item, i (i)}
         <div
-          class="flex items-center gap-2 rounded px-2 py-1 transition-colors
+          class="flex items-center gap-2 rounded px-2 py-1 transition-colors border-l-2
+            {activeRow === i ? 'border-primary' : 'border-transparent'}
             {selected === i ? 'bg-primary/10' : 'hover:bg-surface-alt/50'}"
         >
           <!-- Timestamp chip: click plays from here to the end of the selection;

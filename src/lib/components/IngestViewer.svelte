@@ -1585,6 +1585,46 @@
     }, durationMs);
   }
 
+  // Playback ceiling for the word-selection editor: while it is open, playback
+  // stops at the word after the selection so a retime can be heard in isolation.
+  // A timer set on each seek gives the precise stop; the 250ms clock tick is the
+  // backup for a play started from the player's own controls. Armed only while
+  // the playhead is below the ceiling - nothing to stop otherwise, and arming
+  // there would make Play a dead button.
+  let playCeiling: number | null = null;
+  let ceilingArmed = false;
+  let ceilingTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function cancelCeilingTimer() {
+    if (ceilingTimer) {
+      clearTimeout(ceilingTimer);
+      ceilingTimer = null;
+    }
+  }
+
+  function armCeilingFrom(seconds: number) {
+    cancelCeilingTimer();
+    ceilingArmed = playCeiling !== null && seconds < playCeiling;
+    if (!ceilingArmed || playCeiling === null) return;
+    const durationMs = ((playCeiling - seconds) / (playbackRate || 1)) * 1000;
+    ceilingTimer = setTimeout(() => {
+      if (ytPlayer && playerReady) ytPlayer.pauseVideo();
+      ceilingArmed = false;
+      ceilingTimer = null;
+    }, Math.max(0, durationMs));
+  }
+
+  function setPlayCeiling(until: number | null) {
+    if (until === playCeiling) return;
+    playCeiling = until;
+    cancelCeilingTimer();
+    ceilingArmed = false;
+    if (until === null || !ytPlayer || !playerReady) return;
+    // Opening the editor mid-playback must clamp the run already under way.
+    if (ytPlayer.getPlayerState() === 1) armCeilingFrom(ytPlayer.getCurrentTime());
+    else ceilingArmed = currentTime < until;
+  }
+
   // Speaker selection - for merging and UI highlight.
   let selectedSpeakers = $state(new Set<string>());
   // Speaker filter - intentional filter via colour dot click.
@@ -2122,6 +2162,12 @@
               singleSegmentEnd = -1;
               singleCheckEnabled = false;
             }
+            // Selection-editor ceiling: backup for a play the seek path never saw.
+            if (ceilingArmed && playCeiling !== null && t >= playCeiling) {
+              ytPlayer.pauseVideo();
+              ceilingArmed = false;
+              cancelCeilingTimer();
+            }
           }, 250);
         },
       },
@@ -2471,6 +2517,7 @@
     if (ytId) initYouTubePlayer(ytId);
     return () => {
       if (timeInterval) clearInterval(timeInterval);
+      cancelCeilingTimer();
       ytPlayer = null;
       playerReady = false;
     };
@@ -3599,15 +3646,21 @@
             oneventnoteremove={(g, ordinal) => doc.removeWordNote(g, ordinal)}
             onseek={(seconds) => {
               if (ytPlayer && playerReady) {
-                ytPlayer.seekTo(Math.max(0, seconds), true);
+                const t = Math.max(0, seconds);
+                ytPlayer.seekTo(t, true);
                 ytPlayer.playVideo();
+                // Playing a word inside the open editor runs on through the
+                // following words and stops at the selection's end.
+                armCeilingFrom(t);
               }
             }}
+            onplayceiling={setPlayCeiling}
             onmarkresume={(seconds) => {
               // Park the playhead at the marked word (paused) so the reviewer's
               // next Play resumes from there - and so continued playback doesn't
               // auto-observe the still-unobserved word just past the marker.
               if (ytPlayer && playerReady) {
+                cancelCeilingTimer();
                 ytPlayer.seekTo(Math.max(0, seconds), true);
                 ytPlayer.pauseVideo();
               }

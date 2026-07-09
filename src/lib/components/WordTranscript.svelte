@@ -66,6 +66,7 @@
     oneventnoteedit,
     oneventnoteremove,
     onseek,
+    onplayceiling,
     onmarkresume,
     onverdict,
   }: {
@@ -112,6 +113,11 @@
     oneventnoteremove?: (gIndex: number, ordinal: number) => void;
     /** Seek the media to `seconds` (optional). */
     onseek?: (seconds: number) => void;
+    /** While the selection editor is open, playback must not run past the
+     *  selection. Reports the ceiling in seconds - the start of the word AFTER
+     *  the selection, the one timestamp the editor refuses to move - or null
+     *  when the editor is closed or the selection ends the record. */
+    onplayceiling?: (until: number | null) => void;
     /** Position the media at `seconds` WITHOUT starting playback - used by the
      *  resume marker so pressing play continues from there. */
     onmarkresume?: (seconds: number) => void;
@@ -232,6 +238,25 @@
       speaker,
     };
   });
+
+  // While the editor is open, playback is confined to the selection: it stops at
+  // the word after it. Retiming inside the editor is only legible if you can hear
+  // the words in isolation, and running on into the rest of the record is exactly
+  // what makes that impossible.
+  let playCeiling = $derived(editingSelection ? (selectionInfo?.nextStart ?? null) : null);
+  // `selectionInfo` recomputes on every word edit, so only a CHANGED ceiling is
+  // announced - re-announcing rearms the host's pause timer mid-playback.
+  let announcedCeiling: number | null = null;
+  $effect(() => {
+    const c = playCeiling;
+    untrack(() => {
+      if (c === announcedCeiling) return;
+      announcedCeiling = c;
+      onplayceiling?.(c);
+    });
+  });
+  // Lift the ceiling if this view unmounts with the editor still open.
+  $effect(() => () => onplayceiling?.(null));
 
   // Floating selection bar: positioned just above (or below) the first
   // selected word, in the offsetParent's coordinate space.
@@ -1450,6 +1475,7 @@
       prevStart={selectionInfo.prevStart}
       nextStart={selectionInfo.nextStart}
       speaker={selectionInfo.speaker}
+      {currentTime}
       onseek={(t) => onseek?.(t)}
       oncancel={() => { editingSelection = false; }}
       onsave={(newWords) => {
