@@ -65,6 +65,7 @@
     oneventnote,
     oneventnoteedit,
     oneventnoteremove,
+    onselectiontext,
     onseek,
     onplayceiling,
     onmarkresume,
@@ -111,6 +112,11 @@
     oneventnoteedit?: (gIndex: number, ordinal: number, text: string) => void;
     /** Remove the ordinal-th event note on a word. */
     oneventnoteremove?: (gIndex: number, ordinal: number) => void;
+    /** Report the selected words as plain text whenever the selection changes.
+     *  The transcript is `select-none` with a custom word range, so the host
+     *  cannot read this selection from `window.getSelection()` - Ctrl+F seeds
+     *  its search from here. */
+    onselectiontext?: (text: string) => void;
     /** Seek the media to `seconds` (optional). */
     onseek?: (seconds: number) => void;
     /** While the selection editor is open, playback must not run past the
@@ -559,6 +565,13 @@
       .map((w) => w.text)
       .join(" ");
   }
+
+  // Publish the selection so Ctrl+F can search for it without the host having
+  // to reach into this component's word range.
+  $effect(() => {
+    void range;
+    untrack(() => onselectiontext?.(selectionText()));
+  });
 
   /** Put the selected words on the clipboard. The selection is a custom word
    *  range and the transcript is `select-none`, so the browser has nothing to

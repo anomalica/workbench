@@ -43,7 +43,7 @@
   import SpeakerDot from "./SpeakerDot.svelte";
   import DiffViewer from "./DiffViewer.svelte";
   import MilkdownEditor from "./MilkdownEditor.svelte";
-  import FindReplaceBar from "./FindReplaceBar.svelte";
+  import FindReplaceView from "./FindReplaceView.svelte";
   import EpubViewer from "./EpubViewer.svelte";
   import WordTranscript from "./WordTranscript.svelte";
   import ReadableText from "./ReadableText.svelte";
@@ -215,9 +215,9 @@
     total_units: number;
   } | null>(null);
 
-  // View mode for the ingest column's sub-tabs (rendered/edit/raw/diff).
+  // View mode for the ingest column's sub-tabs (rendered/edit/raw/diff/find).
   // Digest is no longer a sub-tab; it lives in its own column.
-  let view = $state<"ingest" | "edit" | "diff" | "raw" | "predigest">("ingest");
+  let view = $state<"ingest" | "edit" | "diff" | "raw" | "predigest" | "find">("ingest");
   // The pre-digest (ADR 0042), computed LIVE from the working body so the
   // reviewer can mark a section irrelevant and re-preview before submitting.
   // Recomputes (debounced) while the tab is open and the body changes. The
@@ -241,10 +241,22 @@
     void ingest.content_hash;
     predigest = null;
   });
-  // In-editor find/replace bar over the raw body textarea (Ctrl-F / Ctrl-H).
-  let findOpen = $state(false);
   let rawTextarea = $state<HTMLTextAreaElement>();
-  let findBar = $state<{ focus: () => void }>();
+  // Find/replace lives in its own view, seeded with whatever is selected when
+  // Ctrl+F is pressed. `findSeq` is bumped per press so hitting Ctrl+F on the
+  // same word twice re-runs the search rather than looking inert.
+  let findView = $state<{ focus: () => void }>();
+  let findSeed = $state("");
+  let findSeq = $state(0);
+  // Text of the word-transcript's current selection, which is a custom word
+  // range rather than a native one - `window.getSelection()` cannot see it.
+  let wordSelectionText = $state("");
+
+  /** Whatever the reviewer has selected right now, for Ctrl+F to search for. */
+  function selectedTextForFind(): string {
+    const native = (window.getSelection()?.toString() ?? "").trim();
+    return native || wordSelectionText.trim();
+  }
 
   // Claim sections in display order. Derived rather than inline so the typed
   // tuple isn't inferred as a union by Svelte's compiler.
@@ -2373,12 +2385,19 @@
       return;
     }
     if ((e.ctrlKey || e.metaKey) && (e.key === "f" || e.key === "h")) {
-      // In-editor find/replace over the raw body text. Switch to the raw
-      // editor (the universal text surface) and open the bar.
+      // Find/replace in its own view, pre-loaded with the current selection.
+      // Never the raw editor: nobody wants to be dropped into timestamps.
       e.preventDefault();
-      view = "raw";
-      findOpen = true;
-      requestAnimationFrame(() => findBar?.focus());
+      if (view === "find") {
+        // Already here - reselect the query rather than re-seeding it from a
+        // transcript selection the reviewer can no longer even see.
+        findView?.focus();
+        return;
+      }
+      findSeed = selectedTextForFind();
+      findSeq++;
+      view = "find";
+      requestAnimationFrame(() => findView?.focus());
     } else if ((e.ctrlKey || e.metaKey) && e.key === "s") {
       e.preventDefault();
       if (doc.dirty && user) showSubmitForm = true;
@@ -3205,7 +3224,7 @@
       <!-- Panel header with view tabs and controls. flex-wrap so the strip
            reflows cleanly when the column is narrow (three-column layout). -->
       <div class="px-3 py-2 bg-surface-alt border-b border-border flex flex-wrap items-center gap-x-1 gap-y-1.5">
-        {#each [["ingest", "Ingest", "Rendered view"], ["edit", "Edit", "Rich markdown editor"], ["raw", "Raw", "Edit raw markdown with frontmatter"], ["diff", "Diff", "View changes from original"], ["predigest", "Pre-digest", "Exactly what the model receives - read-only (ADR 0042)"]] as [id, label, tip]}
+        {#each [["ingest", "Ingest", "Rendered view"], ["edit", "Edit", "Rich markdown editor"], ["raw", "Raw", "Edit raw markdown with frontmatter"], ["diff", "Diff", "View changes from original"], ["find", "Find", "Find and replace in this record (Ctrl+F)"], ["predigest", "Pre-digest", "Exactly what the model receives - read-only (ADR 0042)"]] as [id, label, tip]}
           <button
             onclick={() => { view = id as typeof view; }}
             class="text-xs font-ui font-medium px-2 py-1 rounded transition-colors cursor-pointer
@@ -3595,21 +3614,17 @@
               p-4 font-mono outline-none border-none"
             spellcheck="false"
           ></textarea>
-          {#if findOpen}
-            <FindReplaceBar
-              bind:this={findBar}
-              text={currentBody()}
-              onreplace={(t) => doc.editBody(t)}
-              onlocate={(start, end) => {
-                rawTextarea?.focus();
-                rawTextarea?.setSelectionRange(start, end);
-              }}
-              onclose={() => {
-                findOpen = false;
-              }}
-            />
-          {/if}
         </div>
+
+      {:else if view === "find"}
+        <FindReplaceView
+          bind:this={findView}
+          text={currentBody()}
+          seed={findSeed}
+          seedSeq={findSeq}
+          onreplace={(t) => doc.editBody(t)}
+          onclose={() => { view = "ingest"; }}
+        />
 
       {:else if isWordRecord}
         <!-- Per-word-timestamp record: isolated word-level editor. No
@@ -3644,6 +3659,7 @@
             oneventnote={(at, text) => doc.insertEventNote(at, text)}
             oneventnoteedit={(g, ordinal, text) => doc.editWordNote(g, ordinal, text)}
             oneventnoteremove={(g, ordinal) => doc.removeWordNote(g, ordinal)}
+            onselectiontext={(t) => (wordSelectionText = t)}
             onseek={(seconds) => {
               if (ytPlayer && playerReady) {
                 const t = Math.max(0, seconds);
