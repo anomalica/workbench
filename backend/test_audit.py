@@ -51,6 +51,14 @@ class TestParseLocation:
         span = parse_location("67-82")
         assert span.timed and (span.start, span.end) == (67.0, 82.0)
 
+    def test_fractional_seconds_the_canonical_transcript_scheme(self):
+        # HH:MM:SS.d - the scheme the variant-run normalises transcripts to.
+        span = parse_location("00:02:40.5-00:02:55.0")
+        assert span.timed and (span.start, span.end) == (160.5, 175.0)
+
+    def test_fractional_only_allowed_in_the_seconds_field(self):
+        assert parse_location("00:2.5:40").timed is False
+
     def test_line_reference_is_untimed(self):
         span = parse_location("lines 54-57")
         assert span.timed is False and span.raw == "lines 54-57"

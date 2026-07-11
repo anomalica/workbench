@@ -70,13 +70,25 @@ class TimeSpan:
 
 
 def _clock_to_seconds(clock: str) -> float | None:
-    """`HH:MM:SS` / `MM:SS` / bare seconds -> seconds. None if not a clock."""
+    """`HH:MM:SS.d` / `HH:MM:SS` / `MM:SS` / bare seconds -> seconds, or None if
+    not a clock. The canonical transcript scheme the variant-run emits is
+    HH:MM:SS.d, so the final field may carry fractional seconds; earlier fields
+    are whole numbers."""
     parts = clock.strip().split(":")
-    if not parts or not all(p.strip().isdigit() for p in parts):
+    if not parts:
         return None
     secs = 0.0
-    for p in parts:
-        secs = secs * 60 + int(p)
+    for i, raw in enumerate(parts):
+        p = raw.strip()
+        if p.isdigit():
+            secs = secs * 60 + int(p)
+        elif i == len(parts) - 1:  # only the seconds field may be fractional
+            try:
+                secs = secs * 60 + float(p)
+            except ValueError:
+                return None
+        else:
+            return None
     return secs
 
 
