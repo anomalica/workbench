@@ -44,6 +44,7 @@
   import DiffViewer from "./DiffViewer.svelte";
   import MilkdownEditor from "./MilkdownEditor.svelte";
   import FindReplaceView from "./FindReplaceView.svelte";
+  import AuditView from "./AuditView.svelte";
   import EpubViewer from "./EpubViewer.svelte";
   import WordTranscript from "./WordTranscript.svelte";
   import ReadableText from "./ReadableText.svelte";
@@ -217,7 +218,7 @@
 
   // View mode for the ingest column's sub-tabs (rendered/edit/raw/diff/find).
   // Digest is no longer a sub-tab; it lives in its own column.
-  let view = $state<"ingest" | "edit" | "diff" | "raw" | "predigest" | "find">("ingest");
+  let view = $state<"ingest" | "edit" | "diff" | "raw" | "predigest" | "find" | "audit">("ingest");
   // The pre-digest (ADR 0042), computed LIVE from the working body so the
   // reviewer can mark a section irrelevant and re-preview before submitting.
   // Recomputes (debounced) while the tab is open and the body changes. The
@@ -3224,7 +3225,7 @@
       <!-- Panel header with view tabs and controls. flex-wrap so the strip
            reflows cleanly when the column is narrow (three-column layout). -->
       <div class="px-3 py-2 bg-surface-alt border-b border-border flex flex-wrap items-center gap-x-1 gap-y-1.5">
-        {#each [["ingest", "Ingest", "Rendered view"], ["edit", "Edit", "Rich markdown editor"], ["raw", "Raw", "Edit raw markdown with frontmatter"], ["diff", "Diff", "View changes from original"], ["find", "Find", "Find and replace in this record (Ctrl+F)"], ["predigest", "Pre-digest", "Exactly what the model receives - read-only (ADR 0042)"]] as [id, label, tip]}
+        {#each [["ingest", "Ingest", "Rendered view"], ["edit", "Edit", "Rich markdown editor"], ["raw", "Raw", "Edit raw markdown with frontmatter"], ["diff", "Diff", "View changes from original"], ["find", "Find", "Find and replace in this record (Ctrl+F)"], ["audit", "Audit", "Compare model extraction variants of this record"], ["predigest", "Pre-digest", "Exactly what the model receives - read-only (ADR 0042)"]] as [id, label, tip]}
           <button
             onclick={() => { view = id as typeof view; }}
             class="text-xs font-ui font-medium px-2 py-1 rounded transition-colors cursor-pointer
@@ -3625,6 +3626,9 @@
           onreplace={(t) => doc.editBody(t)}
           onclose={() => { view = "ingest"; }}
         />
+
+      {:else if view === "audit"}
+        <AuditView hash={ingest.content_hash} />
 
       {:else if isWordRecord}
         <!-- Per-word-timestamp record: isolated word-level editor. No

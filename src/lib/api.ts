@@ -234,6 +234,56 @@ export async function fetchDigest(hash: string): Promise<DigestDocument | null> 
   return res.json();
 }
 
+/** A member claim within an audit cluster: one variant's phrasing of a fact. */
+export interface AuditMember {
+  variant: string;
+  model: string;
+  claim_id: string;
+  location: string;
+  quote: string;
+  text: string;
+}
+
+/** A meaning-cluster within a source passage - the same fact as one or more
+ *  variants stated it. `singleton` = only one variant produced it. */
+export interface AuditCluster {
+  id: string;
+  singleton: boolean;
+  variants: string[];
+  members: AuditMember[];
+}
+
+export interface AuditPassage {
+  index: number;
+  start: number;
+  end: number;
+  raw_locations: string[];
+  clusters: AuditCluster[];
+}
+
+export interface AuditVariant {
+  id: string;
+  model: string;
+  cost_usd: number | null;
+  prompt_ids: string[];
+  claim_count: number;
+}
+
+export interface AuditPayload {
+  record: { hash: string; friendly_name: string };
+  variants: AuditVariant[];
+  passages: AuditPassage[];
+}
+
+/** Fetch the model/digest audit comparison for a record. Null when no extraction
+ *  variant has been produced yet (404). */
+export async function fetchAudit(hash: string): Promise<AuditPayload | null> {
+  const res = await fetch(readPath(`/api/ingests/${hash}/audit`));
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`Failed to fetch audit: ${res.status}`);
+  return res.json();
+}
+
 /** Check whether an ingest exists for a given full hash. */
 export async function ingestExists(fullHash: string): Promise<boolean> {
   const res = await fetch(readPath(`/api/ingests/${fullHash}`));
