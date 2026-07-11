@@ -65,6 +65,8 @@
     oneventnote,
     oneventnoteedit,
     oneventnoteremove,
+    onhighlight,
+    onclearhighlight,
     onselectiontext,
     onseek,
     onplayceiling,
@@ -112,6 +114,10 @@
     oneventnoteedit?: (gIndex: number, ordinal: number, text: string) => void;
     /** Remove the ordinal-th event note on a word. */
     oneventnoteremove?: (gIndex: number, ordinal: number) => void;
+    /** Highlight the selected word range [from, to] (mint a new highlight). */
+    onhighlight?: (from: number, to: number) => void;
+    /** Clear every highlight overlapping the selected word range [from, to]. */
+    onclearhighlight?: (from: number, to: number) => void;
     /** Report the selected words as plain text whenever the selection changes.
      *  The transcript is `select-none` with a custom word range, so the host
      *  cannot read this selection from `window.getSelection()` - Ctrl+F seeds
@@ -141,6 +147,31 @@
   let parsed = $derived(parseWords(body));
   let words = $derived(parsed.words);
   let runs = $derived(parsed.runs);
+
+  // Reviewer highlights, rendered as stacked underline bands so overlapping
+  // highlights read as distinct lines rather than a merged blob. Each highlight
+  // gets a palette colour by its order in the record; a word covered by several
+  // shows one band per highlight. Colours are cosmetic only - a highlight is
+  // emphasis, not a category - and cycle for legible overlap.
+  const HL_PALETTE = ["#f59e0b", "#14b8a6", "#8b5cf6", "#ec4899", "#3b82f6", "#84cc16"];
+  let highlightBandsByWord = $derived.by(() => {
+    const cols = new Map<number, string[]>();
+    parsed.highlights.forEach((h, i) => {
+      const colour = HL_PALETTE[i % HL_PALETTE.length];
+      for (let g = h.fromWord; g <= h.toWord; g++) {
+        const list = cols.get(g) ?? [];
+        list.push(colour);
+        cols.set(g, list);
+      }
+    });
+    // Each band is a box-shadow line a couple of pixels below the last, so N
+    // highlights stack as N underlines under the word.
+    const style = new Map<number, string>();
+    for (const [g, list] of cols) {
+      style.set(g, list.map((c, i) => `0 ${2 * (i + 1)}px 0 0 ${c}`).join(","));
+    }
+    return style;
+  });
 
   // Speaker filter + irrelevant-hiding: when a filter is active only matching
   // turns render, and `[irrelevant]` turns hide unless the eye toggle is off.
@@ -224,6 +255,12 @@
   // within one speaker run. `anchor` is where a click/drag started.
   let anchor = $state<number | null>(null);
   let range = $state<{ from: number; to: number } | null>(null);
+  // True when a highlight overlaps the current selection, so the bar offers
+  // "Clear highlight" instead of "Highlight".
+  let selectionHasHighlight = $derived.by(() => {
+    if (!range) return false;
+    return parsed.highlights.some((h) => h.toWord >= range!.from && h.fromWord <= range!.to);
+  });
   let dragging = $state(false);
   let pickerOpen = $state(false);
   // startWord of the run whose header picker is open (header click reassigns
@@ -770,6 +807,11 @@
     c.toggle("wt-resume", g === resumeWord);
     c.toggle("wt-active", g === activeWord);
     c.toggle("wt-observed", observed.has(g));
+    // Reviewer-highlight underline bands: sparse, so set the inline box-shadow
+    // straight onto the word rather than a class per possible band count.
+    const bands = highlightBandsByWord.get(g);
+    el.style.boxShadow = bands ?? "";
+    c.toggle("wt-highlight", bands !== undefined);
   }
 
   function reapplyAll() {
@@ -849,6 +891,7 @@
   $effect(() => {
     void visibleRuns;
     void styleEpoch;
+    void highlightBandsByWord; // re-apply bands when a highlight is added/cleared
     const el = scrollEl;
     untrack(() => {
       if (!el) return;
@@ -1168,6 +1211,25 @@
       >
         Add note
       </button>
+      {#if onhighlight}
+        <div class="w-px h-4 bg-border" aria-hidden="true"></div>
+        <button
+          onclick={() => { if (range) { onhighlight?.(range.from, range.to); clearSelection(); } }}
+          class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
+          title="Highlight these words (highlights may overlap)"
+        >
+          Highlight
+        </button>
+      {/if}
+      {#if onclearhighlight && selectionHasHighlight}
+        <button
+          onclick={() => { if (range) { onclearhighlight?.(range.from, range.to); clearSelection(); } }}
+          class="text-xs font-ui font-medium text-on-surface-secondary cursor-pointer hover:underline"
+          title="Remove the highlight(s) over these words"
+        >
+          Clear
+        </button>
+      {/if}
       <button
         onclick={clearSelection}
         class="p-0.5 rounded cursor-pointer text-on-surface-muted/60 hover:text-on-surface hover:bg-surface-alt transition-colors"

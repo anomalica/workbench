@@ -372,6 +372,38 @@ export class DocumentStore {
     this.editWordNote(gIndex, ordinal, "");
   }
 
+  /** Highlight the inclusive word range [from, to] in a PWTS body: mint a fresh
+   *  id and write the inline `{{highlight-start/end: id}}` marker pair around the
+   *  words. Overlap-capable - a new highlight never disturbs an existing one. */
+  addWordHighlight(from: number, to: number) {
+    const [fm, body] = splitFrontmatter(this.current);
+    const parsed = parseWords(body);
+    const lo = Math.min(from, to);
+    const hi = Math.max(from, to);
+    if (lo < 0 || hi >= parsed.words.length) return;
+    const id = makeHighlightId(parsed.highlights.map((h) => h.id));
+    const highlights = [...parsed.highlights, { id, fromWord: lo, toWord: hi }];
+    const result =
+      fm +
+      serializeWords(parsed.words, parsed.runs, parsed.lineEndWords, parsed.preamble, highlights);
+    if (result !== this.current) this.pushEdit(result);
+  }
+
+  /** Remove every highlight that overlaps the inclusive word range [from, to] -
+   *  the "clear highlight" over a selection. */
+  clearWordHighlights(from: number, to: number) {
+    const [fm, body] = splitFrontmatter(this.current);
+    const parsed = parseWords(body);
+    const lo = Math.min(from, to);
+    const hi = Math.max(from, to);
+    const highlights = parsed.highlights.filter((h) => h.toWord < lo || h.fromWord > hi);
+    if (highlights.length === parsed.highlights.length) return;
+    const result =
+      fm +
+      serializeWords(parsed.words, parsed.runs, parsed.lineEndWords, parsed.preamble, highlights);
+    if (result !== this.current) this.pushEdit(result);
+  }
+
   // --- All structural operations use parse-modify-serialize ---
 
   private editSegments(fn: (segs: Segment[]) => boolean) {
@@ -569,6 +601,7 @@ import {
   replaceWordRange,
   eventNoteAnchorIndex,
 } from "$lib/transcript-words";
+import { makeHighlightId } from "$lib/highlight-markers";
 
 /** The bare inner text of an event note: brackets are the on-disk notation, not
  *  content, so any the caller passed are stripped (and stray brackets can never

@@ -3659,6 +3659,8 @@
             oneventnote={(at, text) => doc.insertEventNote(at, text)}
             oneventnoteedit={(g, ordinal, text) => doc.editWordNote(g, ordinal, text)}
             oneventnoteremove={(g, ordinal) => doc.removeWordNote(g, ordinal)}
+            onhighlight={(from, to) => doc.addWordHighlight(from, to)}
+            onclearhighlight={(from, to) => doc.clearWordHighlights(from, to)}
             onselectiontext={(t) => (wordSelectionText = t)}
             onseek={(seconds) => {
               if (ytPlayer && playerReady) {
