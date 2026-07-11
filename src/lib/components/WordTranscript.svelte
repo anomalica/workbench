@@ -151,10 +151,16 @@
   // Reviewer highlights, rendered as stacked underline bands so overlapping
   // highlights read as distinct lines rather than a merged blob. Each highlight
   // gets a palette colour by its order in the record; a word covered by several
-  // shows one band per highlight. Colours are cosmetic only - a highlight is
-  // emphasis, not a category - and cycle for legible overlap.
+  // shows one band per highlight. Depth reads from the NUMBER of bands, not
+  // their thickness - every band is the same thin weight, so three or four
+  // overlaps stay legible without crowding (anomalica/master's call). Colours
+  // are cosmetic only - a highlight is emphasis, not a category.
   const HL_PALETTE = ["#f59e0b", "#14b8a6", "#8b5cf6", "#ec4899", "#3b82f6", "#84cc16"];
-  let highlightBandsByWord = $derived.by(() => {
+  const BAND_H = 2; // px, band thickness
+  const BAND_PITCH = 3; // px, band + 1px transparent gap
+  // gIndex -> the highlight colours covering that word, innermost (nearest the
+  // text) first.
+  let highlightColorsByWord = $derived.by(() => {
     const cols = new Map<number, string[]>();
     parsed.highlights.forEach((h, i) => {
       const colour = HL_PALETTE[i % HL_PALETTE.length];
@@ -164,14 +170,34 @@
         cols.set(g, list);
       }
     });
-    // Each band is a box-shadow line a couple of pixels below the last, so N
-    // highlights stack as N underlines under the word.
-    const style = new Map<number, string>();
-    for (const [g, list] of cols) {
-      style.set(g, list.map((c, i) => `0 ${2 * (i + 1)}px 0 0 ${c}`).join(","));
-    }
-    return style;
+    return cols;
   });
+
+  // Paint (or clear) a word's highlight bands as layered gradient underlines in
+  // its padding strip: each a `BAND_H`px line, `BAND_PITCH`px apart, stacking
+  // downward from just below the glyphs so overlaps are separate lines. Uses
+  // backgrounds (not box-shadow) so the gaps are genuinely transparent.
+  function applyWordHighlight(el: HTMLElement, cols: string[] | undefined) {
+    const s = el.style;
+    if (!cols || cols.length === 0) {
+      s.backgroundImage = "";
+      s.backgroundPosition = "";
+      s.backgroundSize = "";
+      s.backgroundRepeat = "";
+      s.paddingBottom = "";
+      return;
+    }
+    const n = cols.length;
+    s.backgroundImage = cols.map((c) => `linear-gradient(${c}, ${c})`).join(",");
+    s.backgroundRepeat = "no-repeat";
+    s.backgroundSize = cols.map(() => `100% ${BAND_H}px`).join(",");
+    // Band i (i=0 innermost) sits `(n-1-i)*PITCH`px up from the padding bottom,
+    // so band 0 hugs the text and the rest step downward.
+    s.backgroundPosition = cols
+      .map((_, i) => `left 0 bottom ${(n - 1 - i) * BAND_PITCH}px`)
+      .join(",");
+    s.paddingBottom = `${(n - 1) * BAND_PITCH + BAND_H}px`;
+  }
 
   // Speaker filter + irrelevant-hiding: when a filter is active only matching
   // turns render, and `[irrelevant]` turns hide unless the eye toggle is off.
@@ -807,11 +833,11 @@
     c.toggle("wt-resume", g === resumeWord);
     c.toggle("wt-active", g === activeWord);
     c.toggle("wt-observed", observed.has(g));
-    // Reviewer-highlight underline bands: sparse, so set the inline box-shadow
-    // straight onto the word rather than a class per possible band count.
-    const bands = highlightBandsByWord.get(g);
-    el.style.boxShadow = bands ?? "";
-    c.toggle("wt-highlight", bands !== undefined);
+    // Reviewer-highlight underline bands: sparse, so paint straight onto the
+    // word rather than carry a class per possible band count.
+    const cols = highlightColorsByWord.get(g);
+    applyWordHighlight(el, cols);
+    c.toggle("wt-highlight", cols !== undefined);
   }
 
   function reapplyAll() {
@@ -891,7 +917,7 @@
   $effect(() => {
     void visibleRuns;
     void styleEpoch;
-    void highlightBandsByWord; // re-apply bands when a highlight is added/cleared
+    void highlightColorsByWord; // re-apply bands when a highlight is added/cleared
     const el = scrollEl;
     untrack(() => {
       if (!el) return;
@@ -1379,7 +1405,10 @@
             {obs}/{total}
           </button>
         </div>
-        <p class="pl-6 text-sm text-on-surface leading-relaxed">
+        <!-- leading-[1.75]: a touch more than relaxed so highlight underline
+             bands sit in real leading below a wrapped line, never reaching the
+             text below. -->
+        <p class="pl-6 text-sm text-on-surface leading-[1.75]">
           {#each Array.from({ length: run.endWord - run.startWord + 1 }, (_, k) => run.startWord + k) as g (g)}<span
               data-word-index={g}
               class="wt-word">{words[g].text}</span>{" "}
