@@ -39,9 +39,33 @@ def parse_claims(doc: dict, variant_id: str, model: str) -> list[Claim]:
                     location=str(c.get("location", "")),
                     quote=str(c.get("quote", "")),
                     text=str(c.get("text", "")),
+                    claim_type=str(c.get("type", "") or ""),
+                    attestation=str(c.get("attestation", "") or ""),
+                    speaker=_speaker_name(c.get("speaker")),
+                    refs=_ref_names(c.get("refs")),
                 )
             )
     return claims
+
+
+def _speaker_name(speaker) -> str:
+    """The speaker's display name from a claim's `speaker` (a {id, name} map)."""
+    if isinstance(speaker, dict):
+        return str(speaker.get("name", "") or "")
+    return str(speaker or "")
+
+
+def _ref_names(refs) -> tuple[str, ...]:
+    """The entity names a claim references (its `refs`, each an {id, name} map) -
+    the model's take on what the claim is sourced to / about."""
+    if not isinstance(refs, list):
+        return ()
+    out = []
+    for r in refs:
+        name = r.get("name") if isinstance(r, dict) else r
+        if name:
+            out.append(str(name))
+    return tuple(out)
 
 
 def _variant_cost(doc: dict) -> float | None:
@@ -139,6 +163,10 @@ def audit_payload(variants: list[Variant], similar: Similar) -> dict:
                                 "location": m.location,
                                 "quote": m.quote,
                                 "text": m.text,
+                                "claim_type": m.claim_type,
+                                "attestation": m.attestation,
+                                "speaker": m.speaker,
+                                "refs": list(m.refs),
                             }
                             for m in cl.members
                         ],

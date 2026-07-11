@@ -38,6 +38,13 @@ class Claim:
     reviewer. `location` is the raw source-location string (a timecode range on
     transcripts); `quote` is the verbatim source span the model cited and `text`
     is the model's claim statement - clustering runs over `text`.
+
+    The epistemic frame (`claim_type`, `attestation`, `speaker`, `refs`) is how
+    the model captured the claim - hearsay vs fact, third-hand vs first-hand, who
+    said it, what it cites. The audit surfaces it per member so a reviewer can
+    see whether one variant flattened it (dropped the attestation or the source
+    ref) where another preserved it. `refs` is a tuple so the frozen claim stays
+    hashable.
     """
 
     variant: str
@@ -46,6 +53,10 @@ class Claim:
     location: str
     quote: str
     text: str
+    claim_type: str = ""
+    attestation: str = ""
+    speaker: str = ""
+    refs: tuple[str, ...] = ()
 
 
 # --- source passages --------------------------------------------------------

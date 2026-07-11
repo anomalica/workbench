@@ -59,6 +59,41 @@ class TestParseClaims:
     def test_no_claim_sections_is_empty(self):
         assert parse_claims({"model": "opus"}, "v", "m") == []
 
+    def test_surfaces_the_epistemic_frame(self):
+        doc = {
+            "domain_claims": [
+                {
+                    "id": "c1",
+                    "type": "hearsay",
+                    "attestation": "third_hand",
+                    "speaker": {"id": "s1", "name": "Stewart, Jon"},
+                    "refs": [
+                        {"id": "r1", "name": "DIA source"},
+                        {"id": "r2", "name": "Tau Ceti"},
+                    ],
+                    "location": "0:00-0:30",
+                    "quote": "Q",
+                    "text": "T",
+                }
+            ]
+        }
+        c = parse_claims(doc, "opus", "opus")[0]
+        assert c.claim_type == "hearsay"
+        assert c.attestation == "third_hand"
+        assert c.speaker == "Stewart, Jon"
+        assert c.refs == ("DIA source", "Tau Ceti")
+
+    def test_epistemic_frame_defaults_empty_when_absent(self):
+        c = parse_claims(
+            {"domain_claims": [{"id": "x", "text": "flat fact"}]}, "haiku", "haiku"
+        )[0]
+        assert (
+            c.claim_type == ""
+            and c.attestation == ""
+            and c.speaker == ""
+            and c.refs == ()
+        )
+
 
 class TestLoadVariant:
     def test_reads_model_cost_and_prompt_ids(self):

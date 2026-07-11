@@ -74,14 +74,40 @@
     return out;
   }
 
-  // Distinct phrasings in a cluster, one per variant (the wording each model
-  // used). Same text from several variants shows once, tagged with all of them.
-  function phrasings(c: AuditCluster): { text: string; variants: string[] }[] {
-    const byText = new Map<string, Set<string>>();
+  // Cluster members grouped by (wording + epistemic frame): variants that
+  // captured the fact identically collapse to one row; a variant that flattened
+  // it (dropped the attestation or a source ref) splits onto its own row, so the
+  // difference the gold exists to catch is visible at a glance.
+  interface MemberRow {
+    text: string;
+    claim_type: string;
+    attestation: string;
+    refs: string[];
+    variants: string[];
+  }
+  function memberRows(c: AuditCluster): MemberRow[] {
+    const by = new Map<string, MemberRow>();
     for (const m of c.members) {
-      (byText.get(m.text) ?? byText.set(m.text, new Set()).get(m.text)!).add(m.variant);
+      const key = `${m.text}|${m.claim_type}|${m.attestation}|${m.refs.join(",")}`;
+      const row = by.get(key);
+      if (row) row.variants.push(m.variant);
+      else
+        by.set(key, {
+          text: m.text,
+          claim_type: m.claim_type,
+          attestation: m.attestation,
+          refs: m.refs,
+          variants: [m.variant],
+        });
     }
-    return [...byText.entries()].map(([text, vs]) => ({ text, variants: [...vs] }));
+    return [...by.values()];
+  }
+
+  // A compact epistemic frame label: type · attestation · refs. Empty parts drop.
+  function frameLabel(r: MemberRow): string {
+    const parts = [r.claim_type, r.attestation].filter(Boolean);
+    if (r.refs.length) parts.push(`refs: ${r.refs.join(", ")}`);
+    return parts.join(" · ");
   }
 </script>
 
@@ -155,16 +181,24 @@
                         ></span>
                       {/each}
                     </span>
-                    <div class="min-w-0 flex-1">
-                      {#each phrasings(c) as ph}
-                        <p class="text-sm text-on-surface leading-snug">
-                          {ph.text}
-                          {#if !c.singleton && ph.variants.length < c.variants.length}
-                            <span class="text-[10px] text-on-surface-muted">
-                              ({ph.variants.map((v) => modelOf.get(v)).join(", ")})
-                            </span>
+                    <div class="min-w-0 flex-1 space-y-1">
+                      {#each memberRows(c) as row}
+                        {@const label = frameLabel(row)}
+                        <div>
+                          <p class="text-sm text-on-surface leading-snug">
+                            {row.text}
+                            {#if memberRows(c).length > 1}
+                              <span class="text-[10px] text-on-surface-muted">
+                                ({row.variants.map((v) => modelOf.get(v)).join(", ")})
+                              </span>
+                            {/if}
+                          </p>
+                          {#if label}
+                            <p class="text-[10px] font-mono text-on-surface-muted/80 leading-tight">
+                              {label}
+                            </p>
                           {/if}
-                        </p>
+                        </div>
                       {/each}
                     </div>
                     {#if c.singleton}

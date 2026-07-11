@@ -234,7 +234,9 @@ export async function fetchDigest(hash: string): Promise<DigestDocument | null> 
   return res.json();
 }
 
-/** A member claim within an audit cluster: one variant's phrasing of a fact. */
+/** A member claim within an audit cluster: one variant's phrasing of a fact,
+ *  plus how it framed it epistemically (hearsay vs fact, attestation, refs) so a
+ *  flattening by one variant is visible against another. */
 export interface AuditMember {
   variant: string;
   model: string;
@@ -242,6 +244,10 @@ export interface AuditMember {
   location: string;
   quote: string;
   text: string;
+  claim_type: string;
+  attestation: string;
+  speaker: string;
+  refs: string[];
 }
 
 /** A meaning-cluster within a source passage - the same fact as one or more
