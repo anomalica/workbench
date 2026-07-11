@@ -2009,6 +2009,55 @@ def get_digest(full_hash: str) -> JSONResponse:
     return JSONResponse(_filter_digest(digest))
 
 
+def _hash_to_friendly_name(full_hash: str) -> str | None:
+    """The digester's friendly record name (stem, version suffix stripped) for an
+    ingest content_hash - the key under which its digest and variants are filed.
+    None if no ingest record matches the hash."""
+    records_dir = ingests_path / "records"
+    if not records_dir.exists():
+        return None
+    for symlink in records_dir.glob("*.md"):
+        try:
+            with open(symlink.resolve()) as f:
+                frontmatter, _, _ = parse_frontmatter(f.read())
+        except OSError:
+            continue
+        if normalise_hash(frontmatter.get("content_hash")) == full_hash:
+            return re.sub(r"\.v\d+$", "", symlink.stem)
+    return None
+
+
+@app.get("/api/ingests/{full_hash}/audit")
+def get_audit(full_hash: str) -> JSONResponse:
+    """The model/digest audit view for a record: every extraction variant's
+    claims, grouped by source passage and clustered by meaning, with singleton
+    flags and per-variant cost. Read-only. 404 when no variant has been produced.
+
+    Clustering uses a lexical PLACEHOLDER similarity while the assimilator's
+    embedding space is wired in - the singleton/overlap structure is real but the
+    meaning-merge is approximate until then.
+    """
+    if not FULL_HASH_PATTERN.match(full_hash):
+        raise HTTPException(status_code=404, detail="Not found")
+    name = _hash_to_friendly_name(full_hash)
+    if name is None:
+        raise HTTPException(status_code=404, detail="Unknown record")
+
+    from backend.audit_load import build_audit
+    from backend.audit_similarity import lexical_similar
+
+    try:
+        payload = build_audit(digests_path, name, lexical_similar())
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to build audit: {exc}"
+        ) from exc
+    if not payload["variants"]:
+        raise HTTPException(status_code=404, detail="No extraction variants for record")
+    payload["record"] = {"hash": full_hash, "friendly_name": name}
+    return JSONResponse(payload)
+
+
 # --- Knowledge-graph review (read-only over the assimilator DB) ----------
 # Surfaces the assimilator's merged entity graph for human inspection - above
 # all the merge decisions (a node's aliases), so a bad merge is reviewable.
