@@ -46,7 +46,11 @@ export interface RawRange {
 // `---` fence: a bare `---` line in a body is a markdown horizontal rule, and
 // treating it as a fence would swallow everything up to the next one.
 const HIDDEN_PATTERNS: RegExp[] = [
-  /\{\{t:[0-9.]+\}\}/g, // per-word timestamps
+  // Every inline `{{...}}` annotation - timestamps, highlight markers, and keyed
+  // notes alike. Stripping the whole family (not just `{{t:}}`) is what lets a
+  // multi-word search cross a highlight or note boundary; a marker sitting
+  // between two words must not break "my consciousness" the way `{{t:}}` did.
+  /\{\{[\s\S]*?\}\}/g,
   /<!--[\s\S]*?-->/g, // speaker, file_page, irrelevant markers
   /^\d{2}:\d{2}:\d{2}(?:\.\d+)?[ \t]/gm, // line-leading timecode
 ];

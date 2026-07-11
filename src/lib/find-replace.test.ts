@@ -30,6 +30,18 @@ describe("buildSearchText", () => {
     expect(st.text).not.toContain("Bob");
   });
 
+  it("hides highlight markers so a search crosses them", () => {
+    const st = buildSearchText("{{highlight-start: a}}my {{highlight-end: a}}consciousness");
+    expect(st.text).toBe("my consciousness");
+    expect(findMatches(st, "my consciousness")).toHaveLength(1);
+  });
+
+  it("hides a keyed note so its interior is not matched as prose", () => {
+    const st = buildSearchText("the {{Fravor: holds up photo}} evidence");
+    expect(st.text).toBe("the  evidence");
+    expect(findMatches(st, "holds")).toHaveLength(0);
+  });
+
   it("hides a line-leading timecode but not a time inside the prose", () => {
     const st = buildSearchText("00:01:24.1 we met at 00:01:24.1 sharp");
     expect(st.text).toBe("we met at 00:01:24.1 sharp");
