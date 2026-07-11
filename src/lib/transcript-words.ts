@@ -20,12 +20,27 @@ export interface SpeakerRun {
   endWord: number;
 }
 
+/** A reviewer highlight over an inclusive word range, keyed by its opaque id.
+ *  In a word record a highlight always falls on word boundaries (it is authored
+ *  from a word selection), so it is carried as `[fromWord, toWord]` rather than
+ *  character offsets - which lets it ride through word edits by index remap, the
+ *  way `lineEndWords` does. Serialised as the inline `{{highlight-start: id}}` /
+ *  `{{highlight-end: id}}` marker pair. Overlap-capable: ranges may nest or
+ *  cross, and the id keeps a close matched to its open. */
+export interface WordHighlight {
+  id: string;
+  fromWord: number;
+  toWord: number;
+}
+
 export interface ParsedWords {
   words: Word[];
   runs: SpeakerRun[];
   /** gIndex of the last word on each original body line, so the line-break
    *  structure can be reproduced exactly on serialise. */
   lineEndWords: Set<number>;
+  /** Reviewer highlights as inclusive word ranges, in start order. */
+  highlights: WordHighlight[];
   /** Everything in the body before the first `<!-- speaker -->` comment (the
    *  title heading, published line, blank separators). Re-emitted verbatim so a
    *  reassign doesn't destroy the record's `# PWTS ...` title. */
@@ -45,6 +60,24 @@ const WORD_TOKEN = /\{\{t:(\d+(?:\.\d+)?)\}\}([\s\S]*?)(?=\{\{t:|$)/g;
 // `[...]` in a word segment is always a note, never prose (record-format.md -
 // the bracket meta-notation).
 const NOTE_TOKEN = /\[[^\]]*\]/g;
+// An inline highlight marker (reserved key, machine-read). A start opens at the
+// word whose `{{t:}}` follows it; an end closes at the word whose text precedes
+// it. serializeWords glues them in exactly those positions.
+const HL_MARKER = /\{\{highlight-(start|end):\s*([A-Za-z0-9_-]+)\s*\}\}/g;
+
+/** Pull highlight markers out of a segment, returning the marker-free text and
+ *  the markers in order. */
+function extractHighlightMarkers(s: string): {
+  rest: string;
+  markers: { dir: "start" | "end"; id: string }[];
+} {
+  const markers: { dir: "start" | "end"; id: string }[] = [];
+  const rest = s.replace(HL_MARKER, (_m, dir, id) => {
+    markers.push({ dir, id });
+    return "";
+  });
+  return { rest, markers };
+}
 
 /** Split a `{{t:}}` segment's text into the spoken word and the event notes
  *  that follow it. `{{t:1.5}}had [laughs]` yields word "had" + note "laughs".
@@ -97,24 +130,69 @@ export function parseWords(body: string): ParsedWords {
   let currentSpeaker = "";
   let gIndex = 0;
 
+  // Highlight resolution state, threaded across lines within a speaker run.
+  // `openMap` holds live highlights (id -> the word they opened on); a start
+  // waits in `pendingStarts` until the next word is emitted (it opens THERE);
+  // an end closes the current/last word. Anything still open at a speaker
+  // change or end of body auto-closes on the run's last word.
+  const highlights: WordHighlight[] = [];
+  const openMap = new Map<string, number>();
+  let pendingStarts: string[] = [];
+  let lastEmitted = -1;
+
+  const openAt = (id: string, g: number) => {
+    if (openMap.has(id)) {
+      const from = openMap.get(id)!;
+      if (g - 1 >= from) highlights.push({ id, fromWord: from, toWord: g - 1 });
+    }
+    openMap.set(id, g);
+  };
+  const closeAt = (id: string, g: number) => {
+    if (!openMap.has(id)) return; // orphan end - dropped
+    const from = openMap.get(id)!;
+    if (g >= from) highlights.push({ id, fromWord: from, toWord: g });
+    openMap.delete(id);
+  };
+  const applyMarkers = (markers: { dir: "start" | "end"; id: string }[], closeTarget: number) => {
+    for (const mk of markers) {
+      if (mk.dir === "start") pendingStarts.push(mk.id);
+      else if (closeTarget >= 0) closeAt(mk.id, closeTarget);
+    }
+  };
+  const endRun = () => {
+    for (const [id, from] of openMap)
+      if (lastEmitted >= from) highlights.push({ id, fromWord: from, toWord: lastEmitted });
+    openMap.clear();
+    pendingStarts = [];
+  };
+
   for (const raw of rawLines) {
     const line = raw.trim();
 
     const speakerMatch = line.match(INLINE_SPEAKER);
     if (speakerMatch) {
+      endRun(); // a highlight never crosses a speaker turn
       currentSpeaker = speakerMatch[1].trim();
       continue;
     }
 
     if (!hasWordTimestamps(line)) continue;
 
+    // Markers in the leading region (before the first `{{t:}}`) lead the first
+    // word of the line: a start opens it, an end closes the previous word.
+    const firstToken = line.indexOf("{{t:");
+    if (firstToken > 0)
+      applyMarkers(extractHighlightMarkers(line.slice(0, firstToken)).markers, lastEmitted);
+
     let lastOnLine = -1;
     WORD_TOKEN.lastIndex = 0;
     let m = WORD_TOKEN.exec(line);
     while (m !== null) {
-      // The capture runs to the next marker. Split off any bracketed event
-      // notes: the remainder is the spoken word (internal spaces kept).
-      const { word: text, notes: segNotes } = splitSegment(m[2]);
+      // Split highlight markers off the segment first: a start trails this word
+      // (opens the next), an end closes this word. Then split event notes; the
+      // remainder is the spoken word.
+      const { rest, markers } = extractHighlightMarkers(m[2]);
+      const { word: text, notes: segNotes } = splitSegment(rest);
       if (text) {
         const start = parseFloat(m[1]);
         words.push({ text, start, gIndex, ...(segNotes.length ? { notes: segNotes } : {}) });
@@ -126,13 +204,23 @@ export function parseWords(body: string): ParsedWords {
           runs.push({ speaker: currentSpeaker, startWord: gIndex, endWord: gIndex });
         }
 
+        // Highlights waiting from an earlier marker open on this word; this
+        // segment's own markers open the next word / close this one.
+        for (const id of pendingStarts) openAt(id, gIndex);
+        pendingStarts = [];
+        applyMarkers(markers, gIndex);
+
+        lastEmitted = gIndex;
         lastOnLine = gIndex;
         gIndex++;
-      } else if (segNotes.length && words.length > 0) {
-        // Notes with no word of their own (the legacy note-as-word form) attach
-        // to the previous real word, dropping the stray timestamp.
-        const prev = words[words.length - 1];
-        prev.notes = [...(prev.notes ?? []), ...segNotes];
+      } else {
+        // No word of its own: markers still count (end closes the last real
+        // word, start pends), and any notes re-anchor to the previous word.
+        applyMarkers(markers, lastEmitted);
+        if (segNotes.length && words.length > 0) {
+          const prev = words[words.length - 1];
+          prev.notes = [...(prev.notes ?? []), ...segNotes];
+        }
       }
       m = WORD_TOKEN.exec(line);
     }
@@ -140,8 +228,12 @@ export function parseWords(body: string): ParsedWords {
       lineEndWords.add(lastOnLine);
     }
   }
+  endRun(); // close anything still open at end of body
 
-  return { words, runs, lineEndWords, preamble };
+  highlights.sort(
+    (a, b) => a.fromWord - b.fromWord || a.toWord - b.toWord || a.id.localeCompare(b.id),
+  );
+  return { words, runs, lineEndWords, highlights, preamble };
 }
 
 /** The gIndex of the word a bracketed event note anchors ONTO for time `at`:
@@ -170,11 +262,25 @@ export function serializeWords(
   runs: SpeakerRun[],
   lineEndWords: Set<number>,
   preamble = "",
+  highlights: WordHighlight[] = [],
 ): string {
   const speakerByWord = new Array<string>(words.length);
   for (const run of runs) {
     for (let i = run.startWord; i <= run.endWord; i++) speakerByWord[i] = run.speaker;
   }
+
+  // Highlight markers glue onto a word's token: starts before its `{{t:}}`, ends
+  // after its text. A word can open/close several (overlap), so collect per word.
+  const startsAt = new Map<number, string[]>();
+  const endsAt = new Map<number, string[]>();
+  for (const h of highlights) {
+    (startsAt.get(h.fromWord) ?? startsAt.set(h.fromWord, []).get(h.fromWord)!).push(h.id);
+    (endsAt.get(h.toWord) ?? endsAt.set(h.toWord, []).get(h.toWord)!).push(h.id);
+  }
+  const startMarkers = (i: number) =>
+    (startsAt.get(i) ?? []).map((id) => `{{highlight-start: ${id}}}`).join("");
+  const endMarkers = (i: number) =>
+    (endsAt.get(i) ?? []).map((id) => `{{highlight-end: ${id}}}`).join("");
 
   const out: string[] = [];
   let lastSpeaker: string | null = null;
@@ -202,7 +308,9 @@ export function serializeWords(
     const noteSuffix = words[i].notes?.length
       ? ` ${words[i].notes!.map((n) => `[${n}]`).join(" ")}`
       : "";
-    lineTokens.push(`{{t:${words[i].start.toFixed(2)}}}${words[i].text}${noteSuffix}`);
+    lineTokens.push(
+      `${startMarkers(i)}{{t:${words[i].start.toFixed(2)}}}${words[i].text}${noteSuffix}${endMarkers(i)}`,
+    );
 
     if (lineEndWords.has(i)) flushLine();
   }
@@ -210,6 +318,25 @@ export function serializeWords(
 
   const transcript = out.join("\n") + (out.length ? "\n" : "");
   return preamble + transcript;
+}
+
+/** Remap highlight word ranges under an index transform, dropping any that
+ *  collapse to nothing. `mapFrom`/`mapTo` move a highlight's start/end word to
+ *  its new index; a boundary landing inside a removed/expanded span clamps to
+ *  that span's surviving edge. Keeps highlights riding with the words through
+ *  the same edits that shift `lineEndWords`. */
+function remapHighlights(
+  highlights: WordHighlight[],
+  mapFrom: (i: number) => number,
+  mapTo: (i: number) => number,
+): WordHighlight[] {
+  const out: WordHighlight[] = [];
+  for (const h of highlights) {
+    const fromWord = mapFrom(h.fromWord);
+    const toWord = mapTo(h.toWord);
+    if (toWord >= fromWord) out.push({ id: h.id, fromWord, toWord });
+  }
+  return out;
 }
 
 /** Split the word at `gIndex` into one word per `pieces` entry, inside the same
@@ -224,7 +351,7 @@ export function splitWord(
   pieces: string[],
   mediaDuration?: number,
 ): ParsedWords {
-  const { words, runs, lineEndWords, preamble } = parsed;
+  const { words, runs, lineEndWords, highlights, preamble } = parsed;
   if (gIndex < 0 || gIndex >= words.length) return parsed;
   if (pieces.length <= 1) {
     if (pieces.length === 1 && words[gIndex].text !== pieces[0]) {
@@ -271,10 +398,19 @@ export function splitWord(
   const newLineEndWords = new Set<number>();
   for (const e of lineEndWords) newLineEndWords.add(e === gIndex ? gIndex + (k - 1) : shift(e));
 
+  // The split word expands: a highlight starting on it keeps its first piece; one
+  // ending on (or spanning) it grows to cover all pieces.
+  const newHighlights = remapHighlights(
+    highlights,
+    (i) => (i > gIndex ? i + (k - 1) : i),
+    (i) => (i >= gIndex ? i + (k - 1) : i),
+  );
+
   return {
     words: newWords,
     runs: newRuns,
     lineEndWords: newLineEndWords,
+    highlights: newHighlights,
     preamble,
   };
 }
@@ -294,12 +430,13 @@ export function replaceWordRange(
   to: number,
   newWords: { text: string; start: number }[],
 ): ParsedWords {
-  const { words, runs, lineEndWords, preamble } = parsed;
+  const { words, runs, lineEndWords, highlights, preamble } = parsed;
   if (from < 0 || to >= words.length || from > to) return parsed;
   const clean = newWords
     .map((w) => ({ text: w.text.trim(), start: w.start }))
     .filter((w) => w.text);
   const delta = clean.length - (to - from + 1);
+  const replLen = clean.length;
 
   // Event notes on the replaced words are not word content and the editor never
   // surfaces them, so carry them onto the last replacement word rather than
@@ -345,7 +482,21 @@ export function replaceWordRange(
   }
   if (rangeEndedLine && clean.length > 0) newLineEndWords.add(from + clean.length - 1);
 
-  return { words: out, runs: mergeAdjacentRuns(newRuns), lineEndWords: newLineEndWords, preamble };
+  // A highlight boundary inside the replaced range clamps to the new words'
+  // edge; entirely-inside highlights of a deleted range collapse and drop.
+  const newHighlights = remapHighlights(
+    highlights,
+    (i) => (i < from ? i : i <= to ? from : i + delta),
+    (i) => (i < from ? i : i <= to ? from + replLen - 1 : i + delta),
+  );
+
+  return {
+    words: out,
+    runs: mergeAdjacentRuns(newRuns),
+    lineEndWords: newLineEndWords,
+    highlights: newHighlights,
+    preamble,
+  };
 }
 
 /** Reassign the inclusive word range [fromGIndex, toGIndex] to `newSpeaker`,

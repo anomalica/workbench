@@ -163,7 +163,13 @@ export class DocumentStore {
     parsed: ReturnType<typeof parseWords>,
     newRuns: ReturnType<typeof reassignSpeaker>,
   ): string {
-    const newBody = serializeWords(parsed.words, newRuns, parsed.lineEndWords, parsed.preamble);
+    const newBody = serializeWords(
+      parsed.words,
+      newRuns,
+      parsed.lineEndWords,
+      parsed.preamble,
+      parsed.highlights,
+    );
     // Reconcile the frontmatter speakers: KEEP real names the reviewer curated,
     // even when they have no body occurrences (a name added before assigning,
     // or un-named from the body) - only the user removes named speakers; auto-
@@ -258,7 +264,13 @@ export class DocumentStore {
     const [fm, body] = splitFrontmatter(this.current);
     const parsed = parseWords(body);
     const next = splitWord(parsed, gIndex, clean.split(" "));
-    const newBody = serializeWords(next.words, next.runs, next.lineEndWords, next.preamble);
+    const newBody = serializeWords(
+      next.words,
+      next.runs,
+      next.lineEndWords,
+      next.preamble,
+      next.highlights,
+    );
     const result = fm + newBody;
     if (result !== this.current) this.pushEdit(result);
   }
@@ -275,7 +287,13 @@ export class DocumentStore {
     const clamped = Math.max(prev, Math.min(next, start));
     if (Math.abs(clamped - parsed.words[gIndex].start) < 0.005) return;
     parsed.words[gIndex] = { ...parsed.words[gIndex], start: clamped };
-    const newBody = serializeWords(parsed.words, parsed.runs, parsed.lineEndWords, parsed.preamble);
+    const newBody = serializeWords(
+      parsed.words,
+      parsed.runs,
+      parsed.lineEndWords,
+      parsed.preamble,
+      parsed.highlights,
+    );
     const result = fm + newBody;
     if (result !== this.current) this.pushEdit(result);
   }
@@ -289,7 +307,13 @@ export class DocumentStore {
     const parsed = parseWords(body);
     if (from < 0 || to >= parsed.words.length || from > to) return;
     const next = replaceWordRange(parsed, from, to, newWords);
-    const newBody = serializeWords(next.words, next.runs, next.lineEndWords, next.preamble);
+    const newBody = serializeWords(
+      next.words,
+      next.runs,
+      next.lineEndWords,
+      next.preamble,
+      next.highlights,
+    );
     // Reconcile frontmatter speakers to those still present (mirrors
     // serialiseWithReconcile): keep curated named speakers, drop default
     // "Speaker N" entries, add any new names, rewrite only on change.
@@ -319,7 +343,9 @@ export class DocumentStore {
     const words = parsed.words.map((w, i) =>
       i === anchor ? { ...w, notes: [...(w.notes ?? []), token] } : w,
     );
-    this.editBody(serializeWords(words, parsed.runs, parsed.lineEndWords, parsed.preamble));
+    this.editBody(
+      serializeWords(words, parsed.runs, parsed.lineEndWords, parsed.preamble, parsed.highlights),
+    );
   }
 
   /** Edit (or, with empty text, remove) the `ordinal`-th event note on the word
@@ -337,7 +363,9 @@ export class DocumentStore {
     const words = parsed.words.map((w, i) =>
       i === gIndex ? { ...w, notes: notes.length ? notes : undefined } : w,
     );
-    this.editBody(serializeWords(words, parsed.runs, parsed.lineEndWords, parsed.preamble));
+    this.editBody(
+      serializeWords(words, parsed.runs, parsed.lineEndWords, parsed.preamble, parsed.highlights),
+    );
   }
 
   removeWordNote(gIndex: number, ordinal: number) {
