@@ -250,13 +250,33 @@ export interface AuditMember {
   refs: string[];
 }
 
+/** A reviewer's per-member judgement within an adjudicated cluster. */
+export interface AuditGoldMember {
+  variant: string;
+  claim_id: string;
+  verdict: string; // correct | flattened | misattributed | overhedged
+}
+
+/** The reviewer's adjudication (gold) on a cluster or a missed source claim. */
+export interface AuditGold {
+  gold_id?: string;
+  verdict: string; // real | hallucinated | not_asserted | missed
+  location?: string;
+  text?: string;
+  members?: AuditGoldMember[];
+  attribution?: Record<string, unknown>;
+  note?: string;
+}
+
 /** A meaning-cluster within a source passage - the same fact as one or more
- *  variants stated it. `singleton` = only one variant produced it. */
+ *  variants stated it. `singleton` = only one variant produced it. `gold` is the
+ *  reviewer's adjudication, when marked. */
 export interface AuditCluster {
   id: string;
   singleton: boolean;
   variants: string[];
   members: AuditMember[];
+  gold?: AuditGold;
 }
 
 export interface AuditPassage {
@@ -279,6 +299,7 @@ export interface AuditPayload {
   record: { hash: string; friendly_name: string };
   variants: AuditVariant[];
   passages: AuditPassage[];
+  missed?: AuditGold[];
 }
 
 /** Fetch the model/digest audit comparison for a record. Null when no extraction
@@ -287,6 +308,21 @@ export async function fetchAudit(hash: string): Promise<AuditPayload | null> {
   const res = await fetch(readPath(`/api/ingests/${hash}/audit`));
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`Failed to fetch audit: ${res.status}`);
+  return res.json();
+}
+
+/** Record an adjudication (the reviewer's gold) on a cluster or missed claim.
+ *  Returns the assigned gold_id. */
+export async function putAuditVerdict(
+  hash: string,
+  adjudication: AuditGold,
+): Promise<{ gold_id: string }> {
+  const res = await fetch(`/api/ingests/${hash}/audit/verdict`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(adjudication),
+  });
+  if (!res.ok) throw new Error(`Failed to save verdict: ${res.status}`);
   return res.json();
 }
 

@@ -31,7 +31,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from anomalica_common import pre_digest
 from anomalica_common.review_gate import digestibility
 
-from backend import curation, graph, models, proposals, roles, tuning
+from backend import audit_gold, curation, graph, models, proposals, roles, tuning
 from backend.auth import setup_auth
 from backend.sync import GIT_LOCK, SyncManager
 
@@ -1042,6 +1042,36 @@ class LocalIngestSource(IngestSource):
         with open(path) as f:
             return json.load(f)
 
+    def save_audit(
+        self,
+        full_hash: str,
+        gold: dict,
+        author_name: str,
+        author_email: str,
+    ) -> bool:
+        """Write the audit-gold sidecar (`{hash}.audit.json`) next to the record
+        and commit it. The auto-push watcher lands it on origin."""
+        entry = self._scan().get(full_hash) or self._scan_archived().get(full_hash)
+        if entry is None:
+            return False
+        md_path, frontmatter = entry
+        path = md_path.parent / f"{full_hash}.audit.json"
+        path.write_text(json.dumps(gold, indent=2, ensure_ascii=False) + "\n")
+        title = frontmatter.get("title", full_hash[:12])
+        self._git_commit_paths(
+            [path],
+            f"audit gold: {title}",
+            author_name=author_name,
+            author_email=author_email,
+        )
+        return True
+
+    def audit_store_dir(self, full_hash: str) -> Path | None:
+        """The directory holding a record's `{hash}.audit.json` (store, or
+        store/v1/ for an archived record)."""
+        entry = self._scan().get(full_hash) or self._scan_archived().get(full_hash)
+        return entry[0].parent if entry else None
+
     def save_highlights(
         self,
         full_hash: str,
@@ -1183,6 +1213,12 @@ class GitHubIngestSource(IngestSource):
 
     def save_highlights(self, **kwargs: object) -> bool:
         raise NotImplementedError("GitHubIngestSource is not yet implemented")
+
+    def save_audit(self, **kwargs: object) -> bool:
+        raise NotImplementedError("GitHubIngestSource is not yet implemented")
+
+    def audit_store_dir(self, full_hash: str):
+        return None
 
     def reviewed_by_email(self, email: str) -> dict[str, str]:
         # TODO: query the GitHub REST API for commits authored by this email
@@ -2054,15 +2090,17 @@ def _hash_to_friendly_name(full_hash: str) -> str | None:
 
 
 @app.get("/api/ingests/{full_hash}/audit")
-def get_audit(full_hash: str) -> JSONResponse:
+def get_audit(full_hash: str, request: Request) -> JSONResponse:
     """The model/digest audit view for a record: every extraction variant's
     claims, grouped by source passage and clustered by meaning, with singleton
-    flags and per-variant cost. Read-only. 404 when no variant has been produced.
+    flags, per-variant cost, and the reviewer's adjudication gold attached.
+    Reviewer-gated (an internal quality tool). 404 when no variant exists.
 
     Clustering uses a lexical PLACEHOLDER similarity while the assimilator's
     embedding space is wired in - the singleton/overlap structure is real but the
     meaning-merge is approximate until then.
     """
+    _require_role(request, "reviewer")
     if not FULL_HASH_PATTERN.match(full_hash):
         raise HTTPException(status_code=404, detail="Not found")
     name = _hash_to_friendly_name(full_hash)
@@ -2081,7 +2119,69 @@ def get_audit(full_hash: str) -> JSONResponse:
     if not payload["variants"]:
         raise HTTPException(status_code=404, detail="No extraction variants for record")
     payload["record"] = {"hash": full_hash, "friendly_name": name}
+    _attach_audit_gold(full_hash, payload)
     return JSONResponse(payload)
+
+
+def _attach_audit_gold(full_hash: str, payload: dict) -> None:
+    """Stamp each cluster with its adjudication (matched by member provenance)
+    and collect `missed` entries (a source claim no variant captured) into
+    payload['missed']. Leaves clusters unadjudicated where no gold exists."""
+    store_dir = source.audit_store_dir(full_hash)
+    if store_dir is None:
+        payload["missed"] = []
+        return
+    gold = audit_gold.read(store_dir, full_hash)
+    clusters = [c for p in payload["passages"] for c in p["clusters"]]
+    missed = []
+    for adj in gold.get("adjudications", []):
+        if adj.get("verdict") == "missed" or not adj.get("members"):
+            missed.append(adj)
+            continue
+        cluster = audit_gold.match_adjudication(adj, clusters)
+        if cluster is not None:
+            cluster["gold"] = adj
+    payload["missed"] = missed
+
+
+@app.put("/api/ingests/{full_hash}/audit/verdict")
+def put_audit_verdict(full_hash: str, body: dict, request: Request) -> JSONResponse:
+    """Create or update one adjudication (the reviewer's gold on a claim
+    cluster). Body is the adjudication entry; an absent gold_id mints one. Writes
+    `{hash}.audit.json` and commits it. Reviewer-gated."""
+    user = _require_role(request, "reviewer")
+    if not FULL_HASH_PATTERN.match(full_hash):
+        raise HTTPException(status_code=404, detail="Not found")
+    store_dir = source.audit_store_dir(full_hash)
+    if store_dir is None:
+        raise HTTPException(status_code=404, detail="Unknown record")
+    verdict = body.get("verdict")
+    if verdict not in audit_gold.CLUSTER_VERDICTS:
+        raise HTTPException(status_code=400, detail="Invalid verdict")
+
+    gold = audit_gold.read(store_dir, full_hash)
+    audit_gold.upsert(gold, body)
+    if not source.save_audit(full_hash, gold, user["name"], user["email"]):
+        raise HTTPException(status_code=404, detail="Not found")
+    return JSONResponse({"saved": True, "gold_id": body["gold_id"]})
+
+
+@app.delete("/api/ingests/{full_hash}/audit/verdict/{gold_id}")
+def delete_audit_verdict(
+    full_hash: str, gold_id: str, request: Request
+) -> JSONResponse:
+    """Remove one adjudication by gold_id. Reviewer-gated."""
+    user = _require_role(request, "reviewer")
+    if not FULL_HASH_PATTERN.match(full_hash):
+        raise HTTPException(status_code=404, detail="Not found")
+    store_dir = source.audit_store_dir(full_hash)
+    if store_dir is None:
+        raise HTTPException(status_code=404, detail="Unknown record")
+    gold = audit_gold.read(store_dir, full_hash)
+    if not audit_gold.remove(gold, gold_id):
+        raise HTTPException(status_code=404, detail="No such adjudication")
+    source.save_audit(full_hash, gold, user["name"], user["email"])
+    return JSONResponse({"deleted": True})
 
 
 # --- Knowledge-graph review (read-only over the assimilator DB) ----------

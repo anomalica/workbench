@@ -5,7 +5,15 @@
   // which variants produced it and their phrasings, singletons (one variant only)
   // flagged as unique recall or hallucination. Read-only for now; per-cluster
   // adjudication is the next layer.
-  import { fetchAudit, type AuditPayload, type AuditCluster } from "$lib/api";
+  import {
+    fetchAudit,
+    putAuditVerdict,
+    type AuditPayload,
+    type AuditPassage,
+    type AuditCluster,
+    type AuditMember,
+    type AuditGold,
+  } from "$lib/api";
 
   let { hash }: { hash: string } = $props();
 
@@ -109,6 +117,66 @@
     if (r.refs.length) parts.push(`refs: ${r.refs.join(", ")}`);
     return parts.join(" · ");
   }
+
+  // --- adjudication (the gold): mark each cluster real/hallucinated/not-asserted;
+  // for a `real` cluster, mark each member correct or how it went wrong. Persisted
+  // to {hash}.audit.json; the digester's grader scores variants against it. ---
+  const CLUSTER_VERDICTS = ["real", "hallucinated", "not_asserted"] as const;
+  const CLUSTER_LABEL: Record<string, string> = {
+    real: "Real",
+    hallucinated: "Hallucinated",
+    not_asserted: "Not asserted",
+  };
+  const MEMBER_VERDICTS = ["correct", "flattened", "misattributed", "overhedged"] as const;
+  const MEMBER_LABEL: Record<string, string> = {
+    correct: "correct",
+    flattened: "flattened",
+    misattributed: "mis-attributed",
+    overhedged: "over-hedged",
+  };
+
+  let recordHash = $derived(payload?.record.hash ?? "");
+
+  function memberVerdictOf(c: AuditCluster, m: AuditMember): string {
+    return (
+      c.gold?.members?.find((g) => g.variant === m.variant && g.claim_id === m.claim_id)?.verdict ??
+      "correct"
+    );
+  }
+
+  // Build + persist the adjudication for a cluster, carrying existing member
+  // verdicts. `memberOverride` sets one member's verdict (for the per-member
+  // controls); a bare verdict change keeps the members as they were.
+  async function saveGold(
+    c: AuditCluster,
+    p: AuditPassage,
+    verdict: string,
+    memberOverride?: { member: AuditMember; verdict: string },
+  ) {
+    const members = c.members.map((m) => ({
+      variant: m.variant,
+      claim_id: m.claim_id,
+      verdict:
+        memberOverride && memberOverride.member.variant === m.variant &&
+        memberOverride.member.claim_id === m.claim_id
+          ? memberOverride.verdict
+          : memberVerdictOf(c, m),
+    }));
+    const gold: AuditGold = {
+      gold_id: c.gold?.gold_id,
+      verdict,
+      location: p.raw_locations[0] ?? "",
+      text: c.members[0]?.text ?? "",
+      members,
+    };
+    try {
+      const { gold_id } = await putAuditVerdict(recordHash, gold);
+      c.gold = { ...gold, gold_id };
+      payload = payload; // nested mutation -> reassign to refresh
+    } catch {
+      /* leave the UI unchanged on failure */
+    }
+  }
 </script>
 
 <div class="flex-1 flex flex-col min-h-0 font-ui bg-surface">
@@ -210,6 +278,52 @@
                       </span>
                     {/if}
                   </div>
+
+                  <!-- Adjudication: mark the cluster, and (when real) each member. -->
+                  <div class="mt-1.5 pt-1.5 border-t border-border/40 flex flex-wrap items-center gap-1">
+                    {#each CLUSTER_VERDICTS as v}
+                      <button
+                        onclick={() => saveGold(c, p, v)}
+                        class="text-[11px] font-medium rounded px-1.5 py-0.5 cursor-pointer transition-colors
+                          {c.gold?.verdict === v
+                            ? v === 'real'
+                              ? 'bg-success text-on-success'
+                              : 'bg-error text-on-error'
+                            : 'text-on-surface-muted hover:bg-surface-alt'}"
+                        title="Mark this claim {CLUSTER_LABEL[v]}"
+                      >
+                        {CLUSTER_LABEL[v]}
+                      </button>
+                    {/each}
+                    {#if c.gold && c.gold.verdict !== "real" && !c.singleton}
+                      <span class="text-[10px] text-on-surface-muted/70 ml-1">both variants marked</span>
+                    {/if}
+                  </div>
+
+                  {#if c.gold?.verdict === "real" && c.members.length > 1}
+                    <!-- Per member: did it get the framing right, or flatten it? -->
+                    <div class="mt-1 space-y-0.5">
+                      {#each c.members as m (m.variant + m.claim_id)}
+                        <div class="flex items-center gap-1 text-[10px]">
+                          <span class="w-2 h-2 rounded-full flex-none" style="background:{colourOf.get(m.variant)}"></span>
+                          <span class="text-on-surface-muted w-14 flex-none truncate">{modelOf.get(m.variant)}</span>
+                          {#each MEMBER_VERDICTS as mv}
+                            <button
+                              onclick={() => saveGold(c, p, "real", { member: m, verdict: mv })}
+                              class="rounded px-1 py-0.5 cursor-pointer transition-colors
+                                {memberVerdictOf(c, m) === mv
+                                  ? mv === 'correct'
+                                    ? 'bg-success/80 text-on-success'
+                                    : 'bg-warning text-on-warning'
+                                  : 'text-on-surface-muted/70 hover:bg-surface-alt'}"
+                            >
+                              {MEMBER_LABEL[mv]}
+                            </button>
+                          {/each}
+                        </div>
+                      {/each}
+                    </div>
+                  {/if}
                 </div>
               {/each}
             </div>

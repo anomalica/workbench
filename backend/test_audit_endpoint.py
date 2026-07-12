@@ -74,6 +74,13 @@ def audit_client(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(server, "ingests_path", ingests)
     monkeypatch.setattr(server, "digests_path", digests)
+    # The audit view is reviewer-gated; grant the test user that role.
+    (ingests / "roles.yaml").write_text("rev: reviewer\n")
+    monkeypatch.setattr(
+        server,
+        "_require_user",
+        lambda request: {"login": "rev", "name": "Rev", "email": "rev@x.invalid"},
+    )
     return TestClient(server.app)
 
 
