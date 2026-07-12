@@ -50,10 +50,12 @@
     pushed: boolean;
   }
 
-  // Wheel over a timestamp scrubs it: a coarse step for finding the word, a fine
-  // one (Shift) for landing on it. Matches the on-disk 10ms resolution.
-  const WHEEL_STEP = 0.1;
+  // Wheel over a timestamp scrubs it: FINE by default (the on-disk 10ms
+  // resolution) so you land on the onset the waveform shows you, COARSE with
+  // Shift (100ms) to jump. Shift = accelerate, matching the design-tool
+  // nudge convention (Figma/Illustrator: base nudge small, Shift 10x).
   const WHEEL_STEP_FINE = 0.01;
+  const WHEEL_STEP_COARSE = 0.1;
   // How long a retime waits before replaying. Long enough that a wheel roll or a
   // held arrow key coalesces into one preview of where you settled, short enough
   // that a single nudge sounds immediate.
@@ -175,7 +177,7 @@
     if (e.deltaY === 0) return;
     e.preventDefault();
     selected = i;
-    const step = e.shiftKey ? WHEEL_STEP_FINE : WHEEL_STEP;
+    const step = e.shiftKey ? WHEEL_STEP_COARSE : WHEEL_STEP_FINE;
     setStart(i, items[i].start + (e.deltaY < 0 ? step : -step));
   }
 
@@ -309,7 +311,7 @@
     <p class="px-4 pt-2 text-xs text-on-surface-muted">
       Up/down or Enter move between words; space starts a new word at the caret;
       Ctrl+Enter saves. Retime with the buttons, left/right (50ms), or the wheel over
-      a timestamp (100ms, Shift for 10ms): a word shunts its neighbours along, but
+      a timestamp (10ms, Shift for 100ms): a word shunts its neighbours along, but
       never the words either side of the selection. Clicking a word - or retiming one -
       plays from it to the end of the selection, then stops. Amber = auto-positioned;
       ringed = shunted.
@@ -353,8 +355,8 @@
                   ? 'bg-primary text-on-primary'
                   : 'bg-surface-alt text-on-surface-secondary hover:bg-surface-alt/70'}"
             title={item.auto
-              ? "Auto-positioned - click to play from here and confirm. Wheel to retime (Shift: 10ms)"
-              : "Click to play from here. Wheel to retime (Shift: 10ms)"}
+              ? "Auto-positioned - click to play from here and confirm. Wheel to retime (Shift: 100ms)"
+              : "Click to play from here. Wheel to retime (Shift: 100ms)"}
           >
             {item.start.toFixed(2)}s
           </button>
