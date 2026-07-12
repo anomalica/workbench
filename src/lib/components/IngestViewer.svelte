@@ -1535,9 +1535,45 @@
   let playbackRate = $state(1);
   const playbackRates = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
 
+  // The local <audio>/<video> element, for records with an archived source file
+  // rather than a YouTube embed. The playback controls below drive whichever of
+  // the two is active, so click-a-word, play-from-here, the selection ceiling
+  // and the speed control all work the same for a local audio record as they do
+  // for a YouTube video - they used to be YouTube-only.
+  let mediaEl = $state<HTMLMediaElement | null>(null);
+
+  function mediaSeek(seconds: number, play = true) {
+    const t = Math.max(0, seconds);
+    if (ytPlayer && playerReady) {
+      ytPlayer.seekTo(t, true);
+      if (play) ytPlayer.playVideo();
+      else ytPlayer.pauseVideo();
+    } else if (mediaEl) {
+      mediaEl.currentTime = t;
+      if (play) void mediaEl.play();
+      else mediaEl.pause();
+    }
+  }
+  function mediaPause() {
+    if (ytPlayer && playerReady) ytPlayer.pauseVideo();
+    else mediaEl?.pause();
+  }
+  function mediaCurrentTime(): number {
+    if (ytPlayer && playerReady) return ytPlayer.getCurrentTime();
+    return mediaEl?.currentTime ?? currentTime;
+  }
+  function mediaIsPlaying(): boolean {
+    if (ytPlayer && playerReady) return ytPlayer.getPlayerState() === 1;
+    return !!mediaEl && !mediaEl.paused;
+  }
+  function mediaAvailable(): boolean {
+    return (!!ytPlayer && playerReady) || !!mediaEl;
+  }
+
   function setPlaybackRate(rate: number) {
     playbackRate = rate;
     if (ytPlayer && playerReady) ytPlayer.setPlaybackRate(rate);
+    if (mediaEl) mediaEl.playbackRate = rate;
   }
   let activeSegment = $state(-1);
   let timeInterval: ReturnType<typeof setInterval> | null = null;
@@ -1621,7 +1657,7 @@
     if (!ceilingArmed || playCeiling === null) return;
     const durationMs = ((playCeiling - seconds) / (playbackRate || 1)) * 1000;
     ceilingTimer = setTimeout(() => {
-      if (ytPlayer && playerReady) ytPlayer.pauseVideo();
+      mediaPause();
       ceilingArmed = false;
       ceilingTimer = null;
     }, Math.max(0, durationMs));
@@ -1632,10 +1668,24 @@
     playCeiling = until;
     cancelCeilingTimer();
     ceilingArmed = false;
-    if (until === null || !ytPlayer || !playerReady) return;
+    if (until === null || !mediaAvailable()) return;
     // Opening the editor mid-playback must clamp the run already under way.
-    if (ytPlayer.getPlayerState() === 1) armCeilingFrom(ytPlayer.getCurrentTime());
+    if (mediaIsPlaying()) armCeilingFrom(mediaCurrentTime());
     else ceilingArmed = currentTime < until;
+  }
+
+  // The local element's timeupdate fires ~4x/sec: mirror the YouTube interval's
+  // played-tracking and ceiling stop so a local audio record behaves the same.
+  function onMediaTimeUpdate(el: HTMLMediaElement) {
+    currentTime = el.currentTime;
+    if (!el.paused) {
+      trackPlayback(el.currentTime, Number.isFinite(el.duration) ? el.duration : undefined);
+    }
+    if (ceilingArmed && playCeiling !== null && el.currentTime >= playCeiling) {
+      el.pause();
+      ceilingArmed = false;
+      cancelCeilingTimer();
+    }
   }
 
   // Speaker selection - for merging and UI highlight.
@@ -2379,10 +2429,10 @@
   function handleKeydown(e: KeyboardEvent) {
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
     if (e.target instanceof HTMLElement && e.target.isContentEditable) return;
-    if (e.key === " " && ytId && ytPlayer && playerReady) {
+    if (e.key === " " && mediaAvailable()) {
       e.preventDefault();
-      if (ytPlayer.getPlayerState() === 1) ytPlayer.pauseVideo();
-      else ytPlayer.playVideo();
+      if (mediaIsPlaying()) mediaPause();
+      else mediaSeek(mediaCurrentTime(), true);
       return;
     }
     if ((e.ctrlKey || e.metaKey) && (e.key === "f" || e.key === "h")) {
@@ -3097,22 +3147,49 @@
             </div>
           </div>
         {:else if localSourceUrl && (isAudio || isVideo)}
-          <div class="flex-none p-4">
-            <video
-              controls
-              src={localSourceUrl}
-              class="w-full rounded"
-              ontimeupdate={(e) => {
-                const el = e.currentTarget;
-                currentTime = el.currentTime;
-                if (!el.paused) {
-                  trackPlayback(el.currentTime, Number.isFinite(el.duration) ? el.duration : undefined);
-                }
-              }}
-              onseeking={() => { playWindow = null; }}
-            >
-              <track kind="captions" />
-            </video>
+          <div class="flex-none p-4 space-y-2">
+            {#if isVideo}
+              <video
+                bind:this={mediaEl}
+                controls
+                src={localSourceUrl}
+                class="w-full rounded"
+                ontimeupdate={(e) => onMediaTimeUpdate(e.currentTarget)}
+                onloadedmetadata={(e) => { e.currentTarget.playbackRate = playbackRate; }}
+                onseeking={() => { playWindow = null; }}
+              >
+                <track kind="captions" />
+              </video>
+            {:else}
+              <!-- Audio has no picture: a bare <audio> bar, not a tall empty
+                   <video> box. Same element ref + handlers, so click-a-word,
+                   play-from-here and the speed control all drive it. -->
+              <audio
+                bind:this={mediaEl}
+                controls
+                src={localSourceUrl}
+                class="w-full"
+                ontimeupdate={(e) => onMediaTimeUpdate(e.currentTarget)}
+                onloadedmetadata={(e) => { e.currentTarget.playbackRate = playbackRate; }}
+                onseeking={() => { playWindow = null; }}
+              ></audio>
+            {/if}
+            <!-- Speed control, matching the YouTube player's. -->
+            <div class="flex items-center gap-1">
+              <span class="text-[10px] font-ui uppercase tracking-wide text-on-surface-muted mr-1 flex-none">Speed</span>
+              {#each playbackRates as rate (rate)}
+                <button
+                  onclick={() => setPlaybackRate(rate)}
+                  class="text-xs font-ui rounded px-1.5 py-0.5 tabular-nums transition-colors cursor-pointer
+                    {playbackRate === rate
+                      ? 'bg-primary/15 text-primary font-medium'
+                      : 'text-on-surface-muted hover:bg-surface-alt hover:text-on-surface'}"
+                  title="Set playback speed to {rate}x"
+                >
+                  {rate}x
+                </button>
+              {/each}
+            </div>
           </div>
         {:else if localSourceUrl && isWeb && sourceContentType === "application/pdf"}
           <!-- "page_render" snapshot: a paginated PDF of the page taken
@@ -3667,25 +3744,19 @@
             onclearhighlight={(from, to) => doc.clearWordHighlights(from, to)}
             onselectiontext={(t) => (wordSelectionText = t)}
             onseek={(seconds) => {
-              if (ytPlayer && playerReady) {
-                const t = Math.max(0, seconds);
-                ytPlayer.seekTo(t, true);
-                ytPlayer.playVideo();
-                // Playing a word inside the open editor runs on through the
-                // following words and stops at the selection's end.
-                armCeilingFrom(t);
-              }
+              const t = Math.max(0, seconds);
+              mediaSeek(t, true);
+              // Playing a word inside the open editor runs on through the
+              // following words and stops at the selection's end.
+              armCeilingFrom(t);
             }}
             onplayceiling={setPlayCeiling}
             onmarkresume={(seconds) => {
               // Park the playhead at the marked word (paused) so the reviewer's
               // next Play resumes from there - and so continued playback doesn't
               // auto-observe the still-unobserved word just past the marker.
-              if (ytPlayer && playerReady) {
-                cancelCeilingTimer();
-                ytPlayer.seekTo(Math.max(0, seconds), true);
-                ytPlayer.pauseVideo();
-              }
+              cancelCeilingTimer();
+              mediaSeek(Math.max(0, seconds), false);
             }}
             onverdict={(v) => (wordVerdict = v)}
           />
