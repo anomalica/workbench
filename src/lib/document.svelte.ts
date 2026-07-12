@@ -417,6 +417,25 @@ export class DocumentStore {
     if (result !== this.current) this.pushEdit(result);
   }
 
+  /** Remove a single highlight by id (the markup side-list remove). */
+  removeWordHighlight(id: string) {
+    const [fm, body] = splitFrontmatter(this.current);
+    const parsed = parseWords(body);
+    const highlights = parsed.highlights.filter((h) => h.id !== id);
+    if (highlights.length === parsed.highlights.length) return;
+    const result =
+      fm +
+      serializeWords(
+        parsed.words,
+        parsed.runs,
+        parsed.lineEndWords,
+        parsed.preamble,
+        highlights,
+        parsed.spanNotes,
+      );
+    if (result !== this.current) this.pushEdit(result);
+  }
+
   /** Remove every highlight that overlaps the inclusive word range [from, to] -
    *  the "clear highlight" over a selection. */
   clearWordHighlights(from: number, to: number) {

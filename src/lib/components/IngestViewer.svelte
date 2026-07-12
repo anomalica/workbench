@@ -47,6 +47,7 @@
   import AuditView from "./AuditView.svelte";
   import EpubViewer from "./EpubViewer.svelte";
   import WordTranscript from "./WordTranscript.svelte";
+  import MarkupSidebar from "./MarkupSidebar.svelte";
   import ReadableText from "./ReadableText.svelte";
   import EditableMetadata from "./EditableMetadata.svelte";
   import ReviewHistory from "./ReviewHistory.svelte";
@@ -195,6 +196,27 @@
   // Parsed word runs for word records (drives the per-word playback skip below);
   // null otherwise. Memoised on the live body.
   let parsedWords = $derived(isWordRecord ? parseWords(currentBody()) : null);
+
+  // The ingest-column sub-tabs. Word records get a Markup tab (cross-speaker
+  // highlight/note authoring) and DROP the Edit tab: the rich markdown editor
+  // mangles a `{{t:}}`-laden transcript, so Raw is the honest editable view.
+  // Prose records keep Edit and have no Markup surface yet.
+  let recordTabs = $derived.by<[string, string, string][]>(() => {
+    const tabs: [string, string, string][] = [["ingest", "Ingest", "Rendered view"]];
+    if (isWordRecord) {
+      tabs.push(["markup", "Markup", "Highlights and notes over the transcript"]);
+    } else {
+      tabs.push(["edit", "Edit", "Rich markdown editor"]);
+    }
+    tabs.push(
+      ["raw", "Raw", "Edit raw markdown with frontmatter"],
+      ["diff", "Diff", "View changes from original"],
+      ["find", "Find", "Find and replace in this record (Ctrl+F)"],
+      ["audit", "Audit", "Compare model extraction variants of this record"],
+      ["predigest", "Pre-digest", "Exactly what the model receives - read-only (ADR 0042)"],
+    );
+    return tabs;
+  });
   // Per-speaker WORD counts for the speaker panel (word records); null for v1,
   // where the panel counts segments instead.
   let wordSpeakerRows = $derived(parsedWords ? speakerWordCounts(parsedWords.runs) : null);
@@ -218,7 +240,26 @@
 
   // View mode for the ingest column's sub-tabs (rendered/edit/raw/diff/find).
   // Digest is no longer a sub-tab; it lives in its own column.
-  let view = $state<"ingest" | "edit" | "diff" | "raw" | "predigest" | "find" | "audit">("ingest");
+  let view = $state<
+    "ingest" | "markup" | "edit" | "diff" | "raw" | "predigest" | "find" | "audit"
+  >("ingest");
+  // Fall back to Ingest when the active tab isn't offered for this record (e.g.
+  // Edit on a word record, or Markup after switching to a prose record).
+  $effect(() => {
+    if (!recordTabs.some(([id]) => id === view)) view = "ingest";
+  });
+
+  // Markup side-list navigation: clicking a mark scrolls the transcript to its
+  // word range and flashes it; `seq` re-triggers a repeat click. `focusedMarkId`
+  // highlights the active row in the sidebar.
+  let markupFocus = $state<{ from: number; to: number; seq: number } | null>(null);
+  let focusedMarkId = $state<string | null>(null);
+  let markupFocusSeq = 0;
+  function focusMark(from: number, to: number, id: string) {
+    markupFocusSeq += 1;
+    markupFocus = { from, to, seq: markupFocusSeq };
+    focusedMarkId = id;
+  }
   // The pre-digest (ADR 0042), computed LIVE from the working body so the
   // reviewer can mark a section irrelevant and re-preview before submitting.
   // Recomputes (debounced) while the tab is open and the body changes. The
@@ -3302,7 +3343,7 @@
       <!-- Panel header with view tabs and controls. flex-wrap so the strip
            reflows cleanly when the column is narrow (three-column layout). -->
       <div class="px-3 py-2 bg-surface-alt border-b border-border flex flex-wrap items-center gap-x-1 gap-y-1.5">
-        {#each [["ingest", "Ingest", "Rendered view"], ["edit", "Edit", "Rich markdown editor"], ["raw", "Raw", "Edit raw markdown with frontmatter"], ["diff", "Diff", "View changes from original"], ["find", "Find", "Find and replace in this record (Ctrl+F)"], ["audit", "Audit", "Compare model extraction variants of this record"], ["predigest", "Pre-digest", "Exactly what the model receives - read-only (ADR 0042)"]] as [id, label, tip]}
+        {#each recordTabs as [id, label, tip]}
           <button
             onclick={() => { view = id as typeof view; }}
             class="text-xs font-ui font-medium px-2 py-1 rounded transition-colors cursor-pointer
@@ -3706,6 +3747,42 @@
 
       {:else if view === "audit"}
         <AuditView hash={ingest.content_hash} />
+
+      {:else if view === "markup"}
+        <!-- Markup: read-only transcript with cross-speaker selection for
+             highlights + notes, and a navigable list of every mark on the right.
+             Editing lives in the Ingest tab. -->
+        <div class="flex-1 flex min-h-0">
+          <div class="relative flex-1 flex flex-col min-h-0">
+            <WordTranscript
+              mode="markup"
+              body={currentBody()}
+              namedSpeakers={namedSpeakersOrdered}
+              {currentTime}
+              {filteredSpeakers}
+              {hideIrrelevant}
+              storageKey={`workbench:observed:${ingest.content_hash}`}
+              serverObserved={serverObservedWords}
+              focusWords={markupFocus}
+              onreassign={() => {}}
+              onhighlight={(from, to) => doc.addWordHighlight(from, to)}
+              onclearhighlight={(from, to) => doc.clearWordHighlights(from, to)}
+              onspannote={(from, to, text) => doc.addWordSpanNote(from, to, text)}
+              onspannoteedit={(id, text) => doc.editWordSpanNote(id, text)}
+              onspannoteremove={(id) => doc.removeWordSpanNote(id)}
+              onselectiontext={(t) => (wordSelectionText = t)}
+              onseek={(seconds) => mediaSeek(Math.max(0, seconds), true)}
+            />
+          </div>
+          <MarkupSidebar
+            body={currentBody()}
+            focusedId={focusedMarkId}
+            onfocus={focusMark}
+            onremovehighlight={(id) => doc.removeWordHighlight(id)}
+            onremovenote={(id) => doc.removeWordSpanNote(id)}
+            onremovepointnote={(g, ordinal) => doc.removeWordNote(g, ordinal)}
+          />
+        </div>
 
       {:else if isWordRecord}
         <!-- Per-word-timestamp record: isolated word-level editor. No

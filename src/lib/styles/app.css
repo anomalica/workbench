@@ -98,6 +98,13 @@ body {
   background-color: color-mix(in srgb, #fde047 60%, transparent);
   box-shadow: 0 0 0 1px #eab308;
 }
+/* A markup mark focused from the side list: a ring + brief pulse so the clicked
+   highlight/note is unmistakable after the scroll. */
+.wt-word.wt-markup-focus {
+  color: var(--color-on-surface);
+  background-color: color-mix(in srgb, var(--color-primary) 22%, transparent);
+  box-shadow: 0 0 0 1px var(--color-primary);
+}
 .wt-word.wt-sel {
   color: var(--color-on-surface);
   background-color: color-mix(in srgb, var(--color-primary) 30%, transparent);

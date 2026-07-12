@@ -53,6 +53,8 @@
 
   let {
     body,
+    mode = "edit",
+    focusWords = null,
     namedSpeakers = [],
     currentTime = 0,
     filteredSpeakers = new Set<string>(),
@@ -79,6 +81,15 @@
     /** Transcript body (everything after the frontmatter) using `{{t:N.N}}`
      *  per-word markers. */
     body: string;
+    /** "edit" (default): word editing + speaker reassign, selection clamped to
+     *  one speaker turn. "markup": read-only annotation - editing affordances
+     *  hidden, selection spans speakers freely, and the floating bar offers
+     *  Highlight/Note/Clear instead of the edit actions. */
+    mode?: "edit" | "markup";
+    /** Scroll to + flash an inclusive word range (the markup side list clicking a
+     *  mark). `seq` is bumped per navigation so re-clicking the same mark
+     *  re-triggers. */
+    focusWords?: { from: number; to: number; seq: number } | null;
     /** Named speakers from the frontmatter, for picker ordering. */
     namedSpeakers?: string[];
     /** Current media playback position in seconds, for karaoke highlighting. */
@@ -252,6 +263,16 @@
     return s;
   });
 
+  // Words in the currently-focused markup range (side-list click), for the
+  // flash emphasis. Cleared when focusWords is null.
+  let focusWordSet = $derived.by(() => {
+    const s = new Set<number>();
+    const f = focusWords;
+    if (!f) return s;
+    for (let g = f.from; g <= f.to; g++) s.add(g);
+    return s;
+  });
+
   // Word indices inside `[irrelevant]` turns. Excluded from coverage entirely:
   // not observed, not counted in the denominator. Marking a block irrelevant is
   // a deliberate "this doesn't need reviewing" signal.
@@ -316,6 +337,21 @@
     if (!range) return false;
     return parsed.highlights.some((h) => h.toWord >= range!.from && h.fromWord <= range!.to);
   });
+  // Span notes overlapping the current selection (for the markup-bar Clear).
+  let spanNotesInSelection = $derived.by(() => {
+    if (!range) return [];
+    return parsed.spanNotes.filter((n) => n.toWord >= range!.from && n.fromWord <= range!.to);
+  });
+  let selectionHasMarkup = $derived(selectionHasHighlight || spanNotesInSelection.length > 0);
+
+  /** Markup Clear: strip every highlight AND span note overlapping the
+   *  selection, then drop the selection. */
+  function clearMarkupUnderSelection() {
+    if (!range) return;
+    if (selectionHasHighlight) onclearhighlight?.(range.from, range.to);
+    for (const n of spanNotesInSelection) onspannoteremove?.(n.id);
+    clearSelection();
+  }
   let dragging = $state(false);
   let pickerOpen = $state(false);
   // startWord of the run whose header picker is open (header click reassigns
@@ -749,6 +785,24 @@
   }
 
   function onWindowKeydown(e: KeyboardEvent) {
+    // Escape dismisses an active word selection (and its floating bar / picker).
+    // The edit-selection dialog handles its own Escape, so defer while it is open
+    // or while focus is in a field (typing in a note/dialog).
+    if (e.key === "Escape") {
+      if (editingSelection || inEditableTarget(e.target)) return;
+      if (composeSpanNote) {
+        e.preventDefault();
+        cancelSpanNote();
+        return;
+      }
+      if (pickerOpen || headerPicker !== null || range) {
+        e.preventDefault();
+        pickerOpen = false;
+        headerPicker = null;
+        clearSelection();
+      }
+      return;
+    }
     // Ctrl/Cmd-C copies the selected words. Defer to the browser when focus is
     // in a field or there's a real text selection (e.g. note text), so normal
     // copy keeps working there.
@@ -915,6 +969,7 @@
     applyWordHighlight(el, cols);
     c.toggle("wt-highlight", cols !== undefined);
     c.toggle("wt-spannote", spanNoteWordSet.has(g));
+    c.toggle("wt-markup-focus", focusWordSet.has(g));
   }
 
   function reapplyAll() {
@@ -974,7 +1029,9 @@
   }
 
   // Double-click a word to jump straight into the editor on that single word.
+  // Markup is read-only, so there is no word editor to open.
   function onContainerDblClick(e: MouseEvent) {
+    if (mode === "markup") return;
     const el = (e.target as HTMLElement | null)?.closest?.("[data-word-index]") as HTMLElement | null;
     if (!el) return;
     selectWord(Number(el.dataset.wordIndex), false);
@@ -996,6 +1053,7 @@
     void styleEpoch;
     void highlightColorsByWord; // re-apply bands when a highlight is added/cleared
     void spanNoteWordSet; // re-apply tint when a span note is added/cleared/re-ranged
+    void focusWordSet; // re-apply markup focus flash
     const el = scrollEl;
     untrack(() => {
       if (!el) return;
@@ -1049,9 +1107,17 @@
   });
 
   function clampToRun(a: number, b: number): { from: number; to: number } | null {
+    // Markup annotates across speakers, so a selection there is only bounded by
+    // the transcript itself; editing must stay in one turn (reassign/split are
+    // per-turn operations), so it clamps `b` into the anchor's run.
+    if (mode === "markup") {
+      if (words.length === 0) return null;
+      const lo = Math.max(0, Math.min(a, b));
+      const hi = Math.min(words.length - 1, Math.max(a, b));
+      return { from: lo, to: hi };
+    }
     const run = runOfWord.get(a);
     if (!run) return null;
-    // Clamp b into the anchor's run so a drag/shift can't cross a speaker turn.
     const lo = Math.max(run.startWord, Math.min(a, b));
     const hi = Math.min(run.endWord, Math.max(a, b));
     return { from: lo, to: hi };
@@ -1170,7 +1236,35 @@
     });
   });
 
+  // Scroll to a side-list-clicked markup range (its first word, centred), same
+  // retry-across-frames reasoning as the claim scroll.
+  function scrollToFocus() {
+    const first = focusWords?.from;
+    if (first === undefined) return;
+    let attempts = 0;
+    const tryScroll = () => {
+      const el = scrollEl?.querySelector<HTMLElement>(`[data-word-index="${first}"]`);
+      if (!el || !scrollEl) {
+        if (attempts++ < 20) requestAnimationFrame(tryScroll);
+        return;
+      }
+      const view = scrollEl.getBoundingClientRect();
+      const word = el.getBoundingClientRect();
+      const target = scrollEl.scrollTop + (word.top - view.top) - view.height * 0.4;
+      scrollEl.scrollTo({ top: Math.max(0, target) });
+    };
+    requestAnimationFrame(tryScroll);
+  }
+
+  $effect(() => {
+    void focusWords?.seq;
+    untrack(() => {
+      if (focusWords) scrollToFocus();
+    });
+  });
+
   function toggleHeaderPicker(run: SpeakerRun) {
+    if (mode === "markup") return; // no speaker reassignment in read-only markup
     // Opening a header picker deselects any word range to avoid two live menus.
     anchor = null;
     range = null;
@@ -1352,54 +1446,10 @@
       <span class="text-xs font-ui text-on-surface-secondary tabular-nums">
         {count} word{count === 1 ? "" : "s"}
       </span>
-      <div class="w-px h-4 bg-border" aria-hidden="true"></div>
-      <div class="relative">
-        <button
-          onclick={(e) => {
-            e.stopPropagation();
-            pickerOpen = !pickerOpen;
-          }}
-          class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline flex items-center gap-1"
-          title="Assign these words to a speaker"
-        >
-          Assign speaker
-          <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
-          </svg>
-        </button>
-        {#if pickerOpen}
-          {@render speakerMenu(selectedSpeaker, chooseSpeaker)}
-        {/if}
-      </div>
-      <div class="w-px h-4 bg-border" aria-hidden="true"></div>
-      <button
-        onclick={cycleCase}
-        class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline tabular-nums min-w-7 text-center"
-        title="Cycle case: lowercase -> Capitalised -> UPPERCASE"
-      >
-        {caseLabel}
-      </button>
-      <div class="w-px h-4 bg-border" aria-hidden="true"></div>
-      <button
-        onclick={() => { pickerOpen = false; editingSelection = true; }}
-        class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
-        title={single
-          ? "Edit this word: text, timing, split or delete"
-          : "Edit the selected words together: text, timing, add/delete words"}
-      >
-        {single ? "Edit word" : "Edit selection"}
-      </button>
-      <div class="w-px h-4 bg-border" aria-hidden="true"></div>
-      <button
-        onclick={() => {
-          if (range && words[range.from]) addNoteAt(words[range.from].start);
-        }}
-        class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
-        title="Add a note at this word's moment"
-      >
-        Add note
-      </button>
-      {#if onhighlight}
+      {#if mode === "markup"}
+        <!-- Annotation actions: mint a highlight (no text) or a note (with text),
+             and clear any mark under the selection. Editing lives in the Ingest
+             tab; markup is read-only over the words. -->
         <div class="w-px h-4 bg-border" aria-hidden="true"></div>
         <button
           onclick={() => { if (range) { onhighlight?.(range.from, range.to); clearSelection(); } }}
@@ -1408,24 +1458,61 @@
         >
           Highlight
         </button>
-      {/if}
-      {#if onclearhighlight && selectionHasHighlight}
-        <button
-          onclick={() => { if (range) { onclearhighlight?.(range.from, range.to); clearSelection(); } }}
-          class="text-xs font-ui font-medium text-on-surface-secondary cursor-pointer hover:underline"
-          title="Remove the highlight(s) over these words"
-        >
-          Clear
-        </button>
-      {/if}
-      {#if onspannote}
         <div class="w-px h-4 bg-border" aria-hidden="true"></div>
         <button
           onclick={startSpanNote}
           class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
           title="Attach a note over these words - what's on screen, context the words miss"
         >
-          Note range
+          Note
+        </button>
+        {#if selectionHasMarkup}
+          <div class="w-px h-4 bg-border" aria-hidden="true"></div>
+          <button
+            onclick={clearMarkupUnderSelection}
+            class="text-xs font-ui font-medium text-on-surface-secondary cursor-pointer hover:underline"
+            title="Remove the highlight(s)/note(s) over these words"
+          >
+            Clear
+          </button>
+        {/if}
+      {:else}
+        <div class="w-px h-4 bg-border" aria-hidden="true"></div>
+        <div class="relative">
+          <button
+            onclick={(e) => {
+              e.stopPropagation();
+              pickerOpen = !pickerOpen;
+            }}
+            class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline flex items-center gap-1"
+            title="Assign these words to a speaker"
+          >
+            Assign speaker
+            <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+          {#if pickerOpen}
+            {@render speakerMenu(selectedSpeaker, chooseSpeaker)}
+          {/if}
+        </div>
+        <div class="w-px h-4 bg-border" aria-hidden="true"></div>
+        <button
+          onclick={cycleCase}
+          class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline tabular-nums min-w-7 text-center"
+          title="Cycle case: lowercase -> Capitalised -> UPPERCASE"
+        >
+          {caseLabel}
+        </button>
+        <div class="w-px h-4 bg-border" aria-hidden="true"></div>
+        <button
+          onclick={() => { pickerOpen = false; editingSelection = true; }}
+          class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
+          title={single
+            ? "Edit this word: text, timing, split or delete"
+            : "Edit the selected words together: text, timing, add/delete words"}
+        >
+          {single ? "Edit word" : "Edit selection"}
         </button>
       {/if}
       <button
