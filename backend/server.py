@@ -1072,6 +1072,24 @@ class LocalIngestSource(IngestSource):
         entry = self._scan().get(full_hash) or self._scan_archived().get(full_hash)
         return entry[0].parent if entry else None
 
+    def save_roles(
+        self,
+        roles_map: dict,
+        author_name: str,
+        author_email: str,
+    ) -> bool:
+        """Write `ingests/roles.yaml` and commit it (the auto-push watcher lands
+        it on origin). Roles gate write access, so a change is a real commit to
+        the access-gated ingests repo, attributed to the editor who made it."""
+        path = roles.save_roles(self.store.parent, roles_map)
+        self._git_commit_paths(
+            [path],
+            "roles: update contribution roles",
+            author_name=author_name,
+            author_email=author_email,
+        )
+        return True
+
     def save_highlights(
         self,
         full_hash: str,
@@ -1217,6 +1235,11 @@ class GitHubIngestSource(IngestSource):
     def save_audit(self, **kwargs: object) -> bool:
         raise NotImplementedError("GitHubIngestSource is not yet implemented")
 
+    def save_roles(self, **kwargs: object) -> bool:
+        # Role management is a local-clone (workbench) operation; the static
+        # deploy is read-only and cannot commit.
+        return False
+
     def audit_store_dir(self, full_hash: str):
         return None
 
@@ -1319,6 +1342,62 @@ def my_role(request: Request) -> dict:
     UI can show the Review tab and the propose-vs-commit affordance. The role is
     enforced server-side regardless of what the client does with this."""
     return {"role": _role(request)}
+
+
+# Role management (roles phase 3). Editor-only CRUD over ingests/roles.yaml. A
+# change is a real commit to the access-gated ingests repo; the last-editor guard
+# stops the file being edited into a state where nobody can manage roles again.
+
+
+@app.get("/api/roles")
+def list_roles(request: Request) -> JSONResponse:
+    """The current login -> role map, the role options, and the caller's own
+    login (so the UI can flag self-edits). Editor-only."""
+    user = _require_role(request, "editor")
+    return JSONResponse(
+        {
+            "roles": roles.load_roles(ingests_path),
+            "options": list(roles.ROLES),
+            "self": (user.get("login") or "").lower(),
+        }
+    )
+
+
+@app.put("/api/roles/{login}")
+def set_role(login: str, body: dict, request: Request) -> JSONResponse:
+    """Set `login`'s role. Editor-only. Refuses a change that would leave no
+    editor (the last-editor lockout guard)."""
+    editor = _require_role(request, "editor")
+    login = (login or "").strip().lower()
+    if not login:
+        raise HTTPException(status_code=400, detail="Missing login")
+    role = body.get("role")
+    if role not in roles.ROLES:
+        raise HTTPException(status_code=400, detail="Invalid role")
+    current = roles.load_roles(ingests_path)
+    updated = {**current, login: role}
+    if roles.count_editors(current) > 0 and roles.count_editors(updated) == 0:
+        raise HTTPException(status_code=400, detail="Cannot remove the last editor")
+    if not source.save_roles(updated, editor.get("name", ""), editor.get("email", "")):
+        raise HTTPException(status_code=404, detail="Role management unavailable here")
+    return JSONResponse({"roles": updated})
+
+
+@app.delete("/api/roles/{login}")
+def remove_role(login: str, request: Request) -> JSONResponse:
+    """Remove `login` from the role file (reverts them to the contributor
+    default). Editor-only. Refuses removing the last editor."""
+    editor = _require_role(request, "editor")
+    login = (login or "").strip().lower()
+    current = roles.load_roles(ingests_path)
+    if login not in current:
+        raise HTTPException(status_code=404, detail="Login is not listed")
+    updated = {k: v for k, v in current.items() if k != login}
+    if roles.count_editors(current) > 0 and roles.count_editors(updated) == 0:
+        raise HTTPException(status_code=400, detail="Cannot remove the last editor")
+    if not source.save_roles(updated, editor.get("name", ""), editor.get("email", "")):
+        raise HTTPException(status_code=404, detail="Role management unavailable here")
+    return JSONResponse({"roles": updated})
 
 
 @app.get("/api/ingests")
