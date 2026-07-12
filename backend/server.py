@@ -31,7 +31,16 @@ from fastapi.responses import FileResponse, JSONResponse
 from anomalica_common import pre_digest
 from anomalica_common.review_gate import digestibility
 
-from backend import audit_gold, curation, graph, models, proposals, roles, tuning
+from backend import (
+    audit_gold,
+    curation,
+    graph,
+    models,
+    proposals,
+    roles,
+    tuning,
+    waveform,
+)
 from backend.auth import setup_auth
 from backend.sync import GIT_LOCK, SyncManager
 
@@ -2445,6 +2454,58 @@ def get_source(full_hash: str) -> FileResponse:
     file_path = matches[0]
     media_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
     return FileResponse(file_path, media_type=media_type)
+
+
+@app.get("/api/sources/{full_hash}/waveform")
+def source_waveform(
+    full_hash: str,
+    start: float = 0.0,
+    duration: float = 6.0,
+    bins: int = 400,
+) -> JSONResponse:
+    """Peak amplitudes for a WINDOW of a source's audio, so the timestamp editor
+    can draw a waveform around the word being retimed. ffmpeg extracts just
+    `[start, start+duration]` (fast seek), downsampled to mono 8 kHz, and
+    `pcm_peaks` reduces it to `bins` values in [0, 1] - cheap regardless of the
+    file's total length. Video sources decode their audio track the same way."""
+    if not FULL_HASH_PATTERN.match(full_hash):
+        raise HTTPException(status_code=404, detail="Not found")
+    matches = [p for p in sources_path.glob(f"{full_hash}.*") if p.stem == full_hash]
+    if not matches:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    start = max(0.0, start)
+    duration = max(0.1, min(duration, 60.0))
+    bins = max(1, min(bins, 2000))
+
+    import subprocess
+
+    cmd = [
+        "ffmpeg",
+        "-v",
+        "quiet",
+        "-ss",
+        f"{start:.3f}",
+        "-t",
+        f"{duration:.3f}",
+        "-i",
+        str(matches[0]),
+        "-ac",
+        "1",
+        "-ar",
+        "8000",
+        "-f",
+        "s16le",
+        "-",
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, timeout=25)
+    except (subprocess.SubprocessError, OSError):
+        raise HTTPException(status_code=503, detail="Waveform unavailable")
+    peaks = waveform.pcm_peaks(proc.stdout, bins)
+    return JSONResponse(
+        {"start": start, "duration": duration, "bins": bins, "peaks": peaks}
+    )
 
 
 @app.get("/api/ingests/{full_hash}/media/{filename}")
