@@ -17,8 +17,13 @@ export default defineConfig({
     ...(isVitest ? { conditions: ["browser"] } : {}),
   },
   server: {
+    // Workbench-specific ports so the dev server never silently collides with
+    // another app's Vite (they all default to 5173 and increment, which caused a
+    // churn where the loser got SIGTERM'd). strictPort fails loudly instead.
+    port: 5273,
+    strictPort: true,
     proxy: {
-      "/api": "http://localhost:8000",
+      "/api": "http://localhost:8073",
     },
   },
   test: {

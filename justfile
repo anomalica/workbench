@@ -8,7 +8,7 @@ dev:
     # Watch the shared anomalica-common package too: a bare --reload only sees
     # this repo, so digester/materialise changes there would silently serve a
     # stale pre-digest until a manual restart.
-    uvicorn backend.server:app --port 8000 --reload --reload-dir backend --reload-dir ../anomalica-common/src &
+    uvicorn backend.server:app --port 8073 --reload --reload-dir backend --reload-dir ../anomalica-common/src &
     npm run dev &
     wait
 
@@ -16,7 +16,7 @@ dev:
 backend:
     #!/usr/bin/env bash
     set -a; [ -f .env ] && source .env; set +a
-    uvicorn backend.server:app --port 8000 --reload --reload-dir backend --reload-dir ../anomalica-common/src
+    uvicorn backend.server:app --port 8073 --reload --reload-dir backend --reload-dir ../anomalica-common/src
 
 # Start only the Vite dev server
 frontend:
