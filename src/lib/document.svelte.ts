@@ -169,6 +169,7 @@ export class DocumentStore {
       parsed.lineEndWords,
       parsed.preamble,
       parsed.highlights,
+      parsed.spanNotes,
     );
     // Reconcile the frontmatter speakers: KEEP real names the reviewer curated,
     // even when they have no body occurrences (a name added before assigning,
@@ -270,6 +271,7 @@ export class DocumentStore {
       next.lineEndWords,
       next.preamble,
       next.highlights,
+      next.spanNotes,
     );
     const result = fm + newBody;
     if (result !== this.current) this.pushEdit(result);
@@ -293,6 +295,7 @@ export class DocumentStore {
       parsed.lineEndWords,
       parsed.preamble,
       parsed.highlights,
+      parsed.spanNotes,
     );
     const result = fm + newBody;
     if (result !== this.current) this.pushEdit(result);
@@ -313,6 +316,7 @@ export class DocumentStore {
       next.lineEndWords,
       next.preamble,
       next.highlights,
+      next.spanNotes,
     );
     // Reconcile frontmatter speakers to those still present (mirrors
     // serialiseWithReconcile): keep curated named speakers, drop default
@@ -344,7 +348,14 @@ export class DocumentStore {
       i === anchor ? { ...w, notes: [...(w.notes ?? []), token] } : w,
     );
     this.editBody(
-      serializeWords(words, parsed.runs, parsed.lineEndWords, parsed.preamble, parsed.highlights),
+      serializeWords(
+        words,
+        parsed.runs,
+        parsed.lineEndWords,
+        parsed.preamble,
+        parsed.highlights,
+        parsed.spanNotes,
+      ),
     );
   }
 
@@ -364,7 +375,14 @@ export class DocumentStore {
       i === gIndex ? { ...w, notes: notes.length ? notes : undefined } : w,
     );
     this.editBody(
-      serializeWords(words, parsed.runs, parsed.lineEndWords, parsed.preamble, parsed.highlights),
+      serializeWords(
+        words,
+        parsed.runs,
+        parsed.lineEndWords,
+        parsed.preamble,
+        parsed.highlights,
+        parsed.spanNotes,
+      ),
     );
   }
 
@@ -381,11 +399,21 @@ export class DocumentStore {
     const lo = Math.min(from, to);
     const hi = Math.max(from, to);
     if (lo < 0 || hi >= parsed.words.length) return;
-    const id = makeHighlightId(parsed.highlights.map((h) => h.id));
+    const id = makeHighlightId([
+      ...parsed.highlights.map((h) => h.id),
+      ...parsed.spanNotes.map((n) => n.id),
+    ]);
     const highlights = [...parsed.highlights, { id, fromWord: lo, toWord: hi }];
     const result =
       fm +
-      serializeWords(parsed.words, parsed.runs, parsed.lineEndWords, parsed.preamble, highlights);
+      serializeWords(
+        parsed.words,
+        parsed.runs,
+        parsed.lineEndWords,
+        parsed.preamble,
+        highlights,
+        parsed.spanNotes,
+      );
     if (result !== this.current) this.pushEdit(result);
   }
 
@@ -400,7 +428,97 @@ export class DocumentStore {
     if (highlights.length === parsed.highlights.length) return;
     const result =
       fm +
-      serializeWords(parsed.words, parsed.runs, parsed.lineEndWords, parsed.preamble, highlights);
+      serializeWords(
+        parsed.words,
+        parsed.runs,
+        parsed.lineEndWords,
+        parsed.preamble,
+        highlights,
+        parsed.spanNotes,
+      );
+    if (result !== this.current) this.pushEdit(result);
+  }
+
+  /** Attach a span note over the inclusive word range [from, to] in a PWTS body:
+   *  mint a fresh id (unique across highlights and notes) and write the
+   *  `{{note-start: [id, "text"]}}` / `{{note-end: id}}` marker pair around the
+   *  words. Overlap-capable - a new note never disturbs an existing span. Braces
+   *  are stripped from the text (they would corrupt the `{{ }}` grammar). */
+  addWordSpanNote(from: number, to: number, text: string) {
+    const clean = sanitiseNoteText(text);
+    if (!clean) return;
+    const [fm, body] = splitFrontmatter(this.current);
+    const parsed = parseWords(body);
+    const lo = Math.min(from, to);
+    const hi = Math.max(from, to);
+    if (lo < 0 || hi >= parsed.words.length) return;
+    const id = makeHighlightId([
+      ...parsed.highlights.map((h) => h.id),
+      ...parsed.spanNotes.map((n) => n.id),
+    ]);
+    const spanNotes = [...parsed.spanNotes, { id, fromWord: lo, toWord: hi, text: clean }];
+    const result =
+      fm +
+      serializeWords(
+        parsed.words,
+        parsed.runs,
+        parsed.lineEndWords,
+        parsed.preamble,
+        parsed.highlights,
+        spanNotes,
+      );
+    if (result !== this.current) this.pushEdit(result);
+  }
+
+  /** Edit a span note's text by id. Empty text removes the note (its markers are
+   *  dropped from the body). */
+  editWordSpanNote(id: string, text: string) {
+    const clean = sanitiseNoteText(text);
+    const [fm, body] = splitFrontmatter(this.current);
+    const parsed = parseWords(body);
+    if (!parsed.spanNotes.some((n) => n.id === id)) return;
+    const spanNotes = clean
+      ? parsed.spanNotes.map((n) => (n.id === id ? { ...n, text: clean } : n))
+      : parsed.spanNotes.filter((n) => n.id !== id);
+    const result =
+      fm +
+      serializeWords(
+        parsed.words,
+        parsed.runs,
+        parsed.lineEndWords,
+        parsed.preamble,
+        parsed.highlights,
+        spanNotes,
+      );
+    if (result !== this.current) this.pushEdit(result);
+  }
+
+  removeWordSpanNote(id: string) {
+    this.editWordSpanNote(id, "");
+  }
+
+  /** Re-range an existing span note to the inclusive word range [from, to] -
+   *  the draggable-ends operation. Keeps the note's id and text. */
+  setWordSpanNoteRange(id: string, from: number, to: number) {
+    const [fm, body] = splitFrontmatter(this.current);
+    const parsed = parseWords(body);
+    const lo = Math.min(from, to);
+    const hi = Math.max(from, to);
+    if (lo < 0 || hi >= parsed.words.length) return;
+    if (!parsed.spanNotes.some((n) => n.id === id)) return;
+    const spanNotes = parsed.spanNotes.map((n) =>
+      n.id === id ? { ...n, fromWord: lo, toWord: hi } : n,
+    );
+    const result =
+      fm +
+      serializeWords(
+        parsed.words,
+        parsed.runs,
+        parsed.lineEndWords,
+        parsed.preamble,
+        parsed.highlights,
+        spanNotes,
+      );
     if (result !== this.current) this.pushEdit(result);
   }
 
@@ -609,6 +727,13 @@ import { makeHighlightId } from "$lib/highlight-markers";
 function noteInner(text: string): string {
   // Braces are the on-disk `{{...}}` notation, never part of a note's content;
   // strip any the reviewer typed so they can't break the grammar.
+  return text.replace(/[{}]/g, "").replace(/\s+/g, " ").trim();
+}
+
+/** Sanitise reviewer span-note text: strip braces (they would corrupt the
+ *  `{{ }}` marker grammar) and collapse whitespace. Colons, quotes and other
+ *  punctuation are kept - the serialiser double-quotes and escapes the text. */
+function sanitiseNoteText(text: string): string {
   return text.replace(/[{}]/g, "").replace(/\s+/g, " ").trim();
 }
 

@@ -33,6 +33,22 @@ export interface WordHighlight {
   toWord: number;
 }
 
+/** A reviewer span note over an inclusive word range, keyed by its opaque id and
+ *  carrying free reviewer text ("what was on screen here", context over a
+ *  period). It rides through parse/serialise/word-edits exactly like a
+ *  `WordHighlight` - same paired-marker machinery, same overlap-by-id and orphan
+ *  rules - but additionally carries `text`, which the digester preserves into
+ *  the pre-digest as context (a highlight stays blind). Serialised as the marker
+ *  pair `{{note-start: [id, "text"]}}` / `{{note-end: id}}`. Distinct from a
+ *  point event-note (`{{laughs}}` on a single word's `notes`), which anchors to
+ *  one word and is not a range. */
+export interface WordSpanNote {
+  id: string;
+  fromWord: number;
+  toWord: number;
+  text: string;
+}
+
 export interface ParsedWords {
   words: Word[];
   runs: SpeakerRun[];
@@ -41,6 +57,8 @@ export interface ParsedWords {
   lineEndWords: Set<number>;
   /** Reviewer highlights as inclusive word ranges, in start order. */
   highlights: WordHighlight[];
+  /** Reviewer span notes as inclusive word ranges + text, in start order. */
+  spanNotes: WordSpanNote[];
   /** Everything in the body before the first `<!-- speaker -->` comment (the
    *  title heading, published line, blank separators). Re-emitted verbatim so a
    *  reassign doesn't destroy the record's `# PWTS ...` title. */
@@ -61,23 +79,59 @@ const WORD_TOKEN = /\{\{t:(\d+(?:\.\d+)?)\}\}([\s\S]*?)(?=\{\{t:|$)/g;
 // family so they stop colliding with the `[...]` that real source text is full
 // of - footnote refs `[^1]`, `[sic]`, editorial `[bracketed]` clarifications -
 // which are now left as ordinary word content (record-format.md, ratified). The
-// reserved `{{t:}}` and `{{highlight-*}}` markers are consumed upstream, so any
-// `{{...}}` reaching splitSegment is a note.
+// reserved `{{t:}}`, `{{highlight-*}}` and `{{note-start/end:}}` markers are
+// consumed upstream, so any `{{...}}` reaching splitSegment is a keyed/keyless
+// event note.
 const NOTE_TOKEN = /\{\{([^{}]*)\}\}/g;
-// An inline highlight marker (reserved key, machine-read). A start opens at the
-// word whose `{{t:}}` follows it; an end closes at the word whose text precedes
-// it. serializeWords glues them in exactly those positions.
+// Inline paired markers (reserved keys, machine-read, never authored notes). A
+// start opens at the word whose `{{t:}}` follows it; an end closes at the word
+// whose text precedes it. serializeWords glues them in exactly those positions.
+// Highlights carry only an id; span notes additionally carry reviewer text on
+// their START marker, as a YAML flow list `[id, "text"]` (flat - no nested
+// braces to confuse the `}}` scan; text always double-quoted, so colons and
+// other YAML-significant chars in it are safe). note-end carries the id only.
 const HL_MARKER = /\{\{highlight-(start|end):\s*([A-Za-z0-9_-]+)\s*\}\}/g;
+const NOTE_START_MARKER =
+  /\{\{note-start:\s*\[\s*([A-Za-z0-9_-]+)\s*,\s*"((?:[^"\\]|\\.)*)"\s*\]\s*\}\}/g;
+const NOTE_END_MARKER = /\{\{note-end:\s*([A-Za-z0-9_-]+)\s*\}\}/g;
 
-/** Pull highlight markers out of a segment, returning the marker-free text and
- *  the markers in order. */
-function extractHighlightMarkers(s: string): {
-  rest: string;
-  markers: { dir: "start" | "end"; id: string }[];
-} {
-  const markers: { dir: "start" | "end"; id: string }[] = [];
-  const rest = s.replace(HL_MARKER, (_m, dir, id) => {
-    markers.push({ dir, id });
+/** A pulled paired-marker. `family` selects which resolver (highlight vs span
+ *  note) it feeds; `text` is present only on a span-note start. */
+interface SpanMarker {
+  family: "hl" | "note";
+  dir: "start" | "end";
+  id: string;
+  text?: string;
+}
+
+/** Reverse the escaping serializeSpanNoteText applies (\" -> ", \\ -> \). */
+function unescapeNoteText(s: string): string {
+  return s.replace(/\\(["\\])/g, "$1");
+}
+
+/** Escape reviewer note text for the double-quoted YAML scalar in a note-start
+ *  marker. Braces are NOT handled here - they are stripped at author time
+ *  (document state) because they would corrupt the `{{ }}` grammar itself. */
+export function escapeNoteText(s: string): string {
+  return s.replace(/([\\"])/g, "\\$1");
+}
+
+/** Pull highlight AND span-note markers out of a segment, returning the
+ *  marker-free text and every pulled marker. Both families are stripped before
+ *  the text reaches splitSegment, so a `{{note-start: ...}}` is never mistaken
+ *  for a keyed event note. */
+function extractSpanMarkers(s: string): { rest: string; markers: SpanMarker[] } {
+  const markers: SpanMarker[] = [];
+  let rest = s.replace(HL_MARKER, (_m, dir, id) => {
+    markers.push({ family: "hl", dir, id });
+    return "";
+  });
+  rest = rest.replace(NOTE_START_MARKER, (_m, id, text) => {
+    markers.push({ family: "note", dir: "start", id, text: unescapeNoteText(text) });
+    return "";
+  });
+  rest = rest.replace(NOTE_END_MARKER, (_m, id) => {
+    markers.push({ family: "note", dir: "end", id });
     return "";
   });
   return { rest, markers };
@@ -134,40 +188,71 @@ export function parseWords(body: string): ParsedWords {
   let currentSpeaker = "";
   let gIndex = 0;
 
-  // Highlight resolution state, threaded across lines within a speaker run.
-  // `openMap` holds live highlights (id -> the word they opened on); a start
-  // waits in `pendingStarts` until the next word is emitted (it opens THERE);
-  // an end closes the current/last word. Anything still open at a speaker
-  // change or end of body auto-closes on the run's last word.
-  const highlights: WordHighlight[] = [];
-  const openMap = new Map<string, number>();
-  let pendingStarts: string[] = [];
+  // Paired-marker resolution state, threaded across lines within a speaker run.
+  // Highlights and span notes share identical open/close/orphan logic, so one
+  // resolver type serves both (one instance per family). `open` holds live spans
+  // (id -> the word they opened on, plus any note text); a start waits in
+  // `pending` until the next word is emitted (it opens THERE); an end closes the
+  // current/last word. Anything still open at a speaker change or end of body
+  // auto-closes on the run's last word.
+  interface ResolvedSpan {
+    id: string;
+    fromWord: number;
+    toWord: number;
+    text?: string;
+  }
+  interface SpanResolver {
+    out: ResolvedSpan[];
+    open: Map<string, { from: number; text?: string }>;
+    pending: { id: string; text?: string }[];
+  }
+  const mkResolver = (): SpanResolver => ({ out: [], open: new Map(), pending: [] });
+  const hlR = mkResolver();
+  const noteR = mkResolver();
   let lastEmitted = -1;
 
-  const openAt = (id: string, g: number) => {
-    if (openMap.has(id)) {
-      const from = openMap.get(id)!;
-      if (g - 1 >= from) highlights.push({ id, fromWord: from, toWord: g - 1 });
-    }
-    openMap.set(id, g);
+  const openAt = (r: SpanResolver, id: string, g: number, text?: string) => {
+    const prev = r.open.get(id);
+    if (prev && g - 1 >= prev.from)
+      r.out.push({ id, fromWord: prev.from, toWord: g - 1, text: prev.text });
+    r.open.set(id, { from: g, text });
   };
-  const closeAt = (id: string, g: number) => {
-    if (!openMap.has(id)) return; // orphan end - dropped
-    const from = openMap.get(id)!;
-    if (g >= from) highlights.push({ id, fromWord: from, toWord: g });
-    openMap.delete(id);
+  const closeAt = (r: SpanResolver, id: string, g: number) => {
+    const o = r.open.get(id);
+    if (!o) return; // orphan end - dropped
+    if (g >= o.from) r.out.push({ id, fromWord: o.from, toWord: g, text: o.text });
+    r.open.delete(id);
   };
-  const applyMarkers = (markers: { dir: "start" | "end"; id: string }[], closeTarget: number) => {
+  const flushPending = (r: SpanResolver, g: number) => {
+    for (const p of r.pending) openAt(r, p.id, g, p.text);
+    r.pending = [];
+  };
+  const applyMarkers = (r: SpanResolver, markers: SpanMarker[], closeTarget: number) => {
     for (const mk of markers) {
-      if (mk.dir === "start") pendingStarts.push(mk.id);
-      else if (closeTarget >= 0) closeAt(mk.id, closeTarget);
+      if (mk.dir === "start") r.pending.push({ id: mk.id, text: mk.text });
+      else if (closeTarget >= 0) closeAt(r, mk.id, closeTarget);
     }
+  };
+  const applyBoth = (markers: SpanMarker[], closeTarget: number) => {
+    applyMarkers(
+      hlR,
+      markers.filter((mk) => mk.family === "hl"),
+      closeTarget,
+    );
+    applyMarkers(
+      noteR,
+      markers.filter((mk) => mk.family === "note"),
+      closeTarget,
+    );
   };
   const endRun = () => {
-    for (const [id, from] of openMap)
-      if (lastEmitted >= from) highlights.push({ id, fromWord: from, toWord: lastEmitted });
-    openMap.clear();
-    pendingStarts = [];
+    for (const r of [hlR, noteR]) {
+      for (const [id, o] of r.open)
+        if (lastEmitted >= o.from)
+          r.out.push({ id, fromWord: o.from, toWord: lastEmitted, text: o.text });
+      r.open.clear();
+      r.pending = [];
+    }
   };
 
   for (const raw of rawLines) {
@@ -175,7 +260,7 @@ export function parseWords(body: string): ParsedWords {
 
     const speakerMatch = line.match(INLINE_SPEAKER);
     if (speakerMatch) {
-      endRun(); // a highlight never crosses a speaker turn
+      endRun(); // a span never crosses a speaker turn
       currentSpeaker = speakerMatch[1].trim();
       continue;
     }
@@ -186,16 +271,16 @@ export function parseWords(body: string): ParsedWords {
     // word of the line: a start opens it, an end closes the previous word.
     const firstToken = line.indexOf("{{t:");
     if (firstToken > 0)
-      applyMarkers(extractHighlightMarkers(line.slice(0, firstToken)).markers, lastEmitted);
+      applyBoth(extractSpanMarkers(line.slice(0, firstToken)).markers, lastEmitted);
 
     let lastOnLine = -1;
     WORD_TOKEN.lastIndex = 0;
     let m = WORD_TOKEN.exec(line);
     while (m !== null) {
-      // Split highlight markers off the segment first: a start trails this word
+      // Split paired markers off the segment first: a start trails this word
       // (opens the next), an end closes this word. Then split event notes; the
       // remainder is the spoken word.
-      const { rest, markers } = extractHighlightMarkers(m[2]);
+      const { rest, markers } = extractSpanMarkers(m[2]);
       const { word: text, notes: segNotes } = splitSegment(rest);
       if (text) {
         const start = parseFloat(m[1]);
@@ -208,11 +293,11 @@ export function parseWords(body: string): ParsedWords {
           runs.push({ speaker: currentSpeaker, startWord: gIndex, endWord: gIndex });
         }
 
-        // Highlights waiting from an earlier marker open on this word; this
-        // segment's own markers open the next word / close this one.
-        for (const id of pendingStarts) openAt(id, gIndex);
-        pendingStarts = [];
-        applyMarkers(markers, gIndex);
+        // Spans waiting from an earlier marker open on this word; this segment's
+        // own markers open the next word / close this one.
+        flushPending(hlR, gIndex);
+        flushPending(noteR, gIndex);
+        applyBoth(markers, gIndex);
 
         lastEmitted = gIndex;
         lastOnLine = gIndex;
@@ -220,7 +305,7 @@ export function parseWords(body: string): ParsedWords {
       } else {
         // No word of its own: markers still count (end closes the last real
         // word, start pends), and any notes re-anchor to the previous word.
-        applyMarkers(markers, lastEmitted);
+        applyBoth(markers, lastEmitted);
         if (segNotes.length && words.length > 0) {
           const prev = words[words.length - 1];
           prev.notes = [...(prev.notes ?? []), ...segNotes];
@@ -234,10 +319,15 @@ export function parseWords(body: string): ParsedWords {
   }
   endRun(); // close anything still open at end of body
 
-  highlights.sort(
-    (a, b) => a.fromWord - b.fromWord || a.toWord - b.toWord || a.id.localeCompare(b.id),
-  );
-  return { words, runs, lineEndWords, highlights, preamble };
+  const bySpan = (a: ResolvedSpan, b: ResolvedSpan) =>
+    a.fromWord - b.fromWord || a.toWord - b.toWord || a.id.localeCompare(b.id);
+  const highlights: WordHighlight[] = hlR.out
+    .sort(bySpan)
+    .map(({ id, fromWord, toWord }) => ({ id, fromWord, toWord }));
+  const spanNotes: WordSpanNote[] = noteR.out
+    .sort(bySpan)
+    .map(({ id, fromWord, toWord, text }) => ({ id, fromWord, toWord, text: text ?? "" }));
+  return { words, runs, lineEndWords, highlights, spanNotes, preamble };
 }
 
 /** The gIndex of the word a inline event note anchors ONTO for time `at`:
@@ -267,24 +357,40 @@ export function serializeWords(
   lineEndWords: Set<number>,
   preamble = "",
   highlights: WordHighlight[] = [],
+  spanNotes: WordSpanNote[] = [],
 ): string {
   const speakerByWord = new Array<string>(words.length);
   for (const run of runs) {
     for (let i = run.startWord; i <= run.endWord; i++) speakerByWord[i] = run.speaker;
   }
 
-  // Highlight markers glue onto a word's token: starts before its `{{t:}}`, ends
+  // Paired markers glue onto a word's token: starts before its `{{t:}}`, ends
   // after its text. A word can open/close several (overlap), so collect per word.
-  const startsAt = new Map<number, string[]>();
-  const endsAt = new Map<number, string[]>();
+  // Highlight and note markers share the same slots; a note-start additionally
+  // carries the note text.
+  const hlStartsAt = new Map<number, string[]>();
+  const hlEndsAt = new Map<number, string[]>();
   for (const h of highlights) {
-    (startsAt.get(h.fromWord) ?? startsAt.set(h.fromWord, []).get(h.fromWord)!).push(h.id);
-    (endsAt.get(h.toWord) ?? endsAt.set(h.toWord, []).get(h.toWord)!).push(h.id);
+    (hlStartsAt.get(h.fromWord) ?? hlStartsAt.set(h.fromWord, []).get(h.fromWord)!).push(h.id);
+    (hlEndsAt.get(h.toWord) ?? hlEndsAt.set(h.toWord, []).get(h.toWord)!).push(h.id);
   }
+  const noteStartsAt = new Map<number, WordSpanNote[]>();
+  const noteEndsAt = new Map<number, string[]>();
+  for (const n of spanNotes) {
+    (noteStartsAt.get(n.fromWord) ?? noteStartsAt.set(n.fromWord, []).get(n.fromWord)!).push(n);
+    (noteEndsAt.get(n.toWord) ?? noteEndsAt.set(n.toWord, []).get(n.toWord)!).push(n.id);
+  }
+  // Highlight starts before note starts; note ends before highlight ends. Order
+  // within a slot is cosmetic (parse is order-agnostic there); this keeps a
+  // highlight-only body byte-identical to before span notes existed.
   const startMarkers = (i: number) =>
-    (startsAt.get(i) ?? []).map((id) => `{{highlight-start: ${id}}}`).join("");
+    (hlStartsAt.get(i) ?? []).map((id) => `{{highlight-start: ${id}}}`).join("") +
+    (noteStartsAt.get(i) ?? [])
+      .map((n) => `{{note-start: [${n.id}, "${escapeNoteText(n.text)}"]}}`)
+      .join("");
   const endMarkers = (i: number) =>
-    (endsAt.get(i) ?? []).map((id) => `{{highlight-end: ${id}}}`).join("");
+    (noteEndsAt.get(i) ?? []).map((id) => `{{note-end: ${id}}}`).join("") +
+    (hlEndsAt.get(i) ?? []).map((id) => `{{highlight-end: ${id}}}`).join("");
 
   const out: string[] = [];
   let lastSpeaker: string | null = null;
@@ -324,21 +430,22 @@ export function serializeWords(
   return preamble + transcript;
 }
 
-/** Remap highlight word ranges under an index transform, dropping any that
- *  collapse to nothing. `mapFrom`/`mapTo` move a highlight's start/end word to
- *  its new index; a boundary landing inside a removed/expanded span clamps to
- *  that span's surviving edge. Keeps highlights riding with the words through
- *  the same edits that shift `lineEndWords`. */
-function remapHighlights(
-  highlights: WordHighlight[],
+/** Remap paired-span word ranges (highlights or span notes) under an index
+ *  transform, dropping any that collapse to nothing. `mapFrom`/`mapTo` move a
+ *  span's start/end word to its new index; a boundary landing inside a
+ *  removed/expanded span clamps to that span's surviving edge. Any extra fields
+ *  (a note's `text`) ride through untouched. Keeps spans riding with the words
+ *  through the same edits that shift `lineEndWords`. */
+function remapSpans<T extends { id: string; fromWord: number; toWord: number }>(
+  spans: T[],
   mapFrom: (i: number) => number,
   mapTo: (i: number) => number,
-): WordHighlight[] {
-  const out: WordHighlight[] = [];
-  for (const h of highlights) {
-    const fromWord = mapFrom(h.fromWord);
-    const toWord = mapTo(h.toWord);
-    if (toWord >= fromWord) out.push({ id: h.id, fromWord, toWord });
+): T[] {
+  const out: T[] = [];
+  for (const s of spans) {
+    const fromWord = mapFrom(s.fromWord);
+    const toWord = mapTo(s.toWord);
+    if (toWord >= fromWord) out.push({ ...s, fromWord, toWord });
   }
   return out;
 }
@@ -355,7 +462,7 @@ export function splitWord(
   pieces: string[],
   mediaDuration?: number,
 ): ParsedWords {
-  const { words, runs, lineEndWords, highlights, preamble } = parsed;
+  const { words, runs, lineEndWords, highlights, spanNotes, preamble } = parsed;
   if (gIndex < 0 || gIndex >= words.length) return parsed;
   if (pieces.length <= 1) {
     if (pieces.length === 1 && words[gIndex].text !== pieces[0]) {
@@ -402,19 +509,19 @@ export function splitWord(
   const newLineEndWords = new Set<number>();
   for (const e of lineEndWords) newLineEndWords.add(e === gIndex ? gIndex + (k - 1) : shift(e));
 
-  // The split word expands: a highlight starting on it keeps its first piece; one
+  // The split word expands: a span starting on it keeps its first piece; one
   // ending on (or spanning) it grows to cover all pieces.
-  const newHighlights = remapHighlights(
-    highlights,
-    (i) => (i > gIndex ? i + (k - 1) : i),
-    (i) => (i >= gIndex ? i + (k - 1) : i),
-  );
+  const mapFrom = (i: number) => (i > gIndex ? i + (k - 1) : i);
+  const mapTo = (i: number) => (i >= gIndex ? i + (k - 1) : i);
+  const newHighlights = remapSpans(highlights, mapFrom, mapTo);
+  const newSpanNotes = remapSpans(spanNotes, mapFrom, mapTo);
 
   return {
     words: newWords,
     runs: newRuns,
     lineEndWords: newLineEndWords,
     highlights: newHighlights,
+    spanNotes: newSpanNotes,
     preamble,
   };
 }
@@ -434,7 +541,7 @@ export function replaceWordRange(
   to: number,
   newWords: { text: string; start: number }[],
 ): ParsedWords {
-  const { words, runs, lineEndWords, highlights, preamble } = parsed;
+  const { words, runs, lineEndWords, highlights, spanNotes, preamble } = parsed;
   if (from < 0 || to >= words.length || from > to) return parsed;
   const clean = newWords
     .map((w) => ({ text: w.text.trim(), start: w.start }))
@@ -486,19 +593,19 @@ export function replaceWordRange(
   }
   if (rangeEndedLine && clean.length > 0) newLineEndWords.add(from + clean.length - 1);
 
-  // A highlight boundary inside the replaced range clamps to the new words'
-  // edge; entirely-inside highlights of a deleted range collapse and drop.
-  const newHighlights = remapHighlights(
-    highlights,
-    (i) => (i < from ? i : i <= to ? from : i + delta),
-    (i) => (i < from ? i : i <= to ? from + replLen - 1 : i + delta),
-  );
+  // A span boundary inside the replaced range clamps to the new words' edge;
+  // entirely-inside spans of a deleted range collapse and drop.
+  const mapFrom = (i: number) => (i < from ? i : i <= to ? from : i + delta);
+  const mapTo = (i: number) => (i < from ? i : i <= to ? from + replLen - 1 : i + delta);
+  const newHighlights = remapSpans(highlights, mapFrom, mapTo);
+  const newSpanNotes = remapSpans(spanNotes, mapFrom, mapTo);
 
   return {
     words: out,
     runs: mergeAdjacentRuns(newRuns),
     lineEndWords: newLineEndWords,
     highlights: newHighlights,
+    spanNotes: newSpanNotes,
     preamble,
   };
 }
