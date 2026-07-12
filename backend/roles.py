@@ -9,10 +9,11 @@ login can propose edits but never commit to main. The file is editor-edited
     markhedleyjones: editor
     somereviewer: reviewer
 
-Roles are ordered contributor < reviewer < editor:
+Roles are ordered contributor < reviewer < editor < admin (cumulative):
 - contributor: propose edits (queued, never committed directly).
-- reviewer: + approve/reject proposals; own edits commit directly.
-- editor: + manage roles.
+- reviewer: + approve/reject proposals; own edits commit directly; moderate the queue.
+- editor: + higher-impact ops (archive/unarchive, article directives).
+- admin: + manage roles (the roles tab is admin-only).
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ from pathlib import Path
 
 import yaml
 
-ROLES = ("contributor", "reviewer", "editor")
+ROLES = ("contributor", "reviewer", "editor", "admin")
 DEFAULT_ROLE = "contributor"
 
 
@@ -58,10 +59,11 @@ def at_least(role: str, minimum: str) -> bool:
     return rank >= floor
 
 
-def count_editors(roles_map: dict[str, str]) -> int:
-    """How many logins hold the editor role - used to refuse the last editor's
-    removal so the role file can never lock everyone out."""
-    return sum(1 for role in roles_map.values() if role == "editor")
+def count_admins(roles_map: dict[str, str]) -> int:
+    """How many logins hold the admin role - used to refuse the last admin's
+    removal so role management can never lock everyone out (admin is the only
+    role that can edit roles.yaml)."""
+    return sum(1 for role in roles_map.values() if role == "admin")
 
 
 def save_roles(ingests_path: Path, roles_map: dict[str, str]) -> Path:

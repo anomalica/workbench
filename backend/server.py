@@ -1361,8 +1361,8 @@ def my_role(request: Request) -> dict:
 @app.get("/api/roles")
 def list_roles(request: Request) -> JSONResponse:
     """The current login -> role map, the role options, and the caller's own
-    login (so the UI can flag self-edits). Editor-only."""
-    user = _require_role(request, "editor")
+    login (so the UI can flag self-edits). Admin-only."""
+    user = _require_role(request, "admin")
     return JSONResponse(
         {
             "roles": roles.load_roles(ingests_path),
@@ -1374,9 +1374,10 @@ def list_roles(request: Request) -> JSONResponse:
 
 @app.put("/api/roles/{login}")
 def set_role(login: str, body: dict, request: Request) -> JSONResponse:
-    """Set `login`'s role. Editor-only. Refuses a change that would leave no
-    editor (the last-editor lockout guard)."""
-    editor = _require_role(request, "editor")
+    """Set `login`'s role. Admin-only. Refuses a change that would leave no
+    admin (the last-admin lockout guard - admin is the only role that manages
+    roles)."""
+    admin = _require_role(request, "admin")
     login = (login or "").strip().lower()
     if not login:
         raise HTTPException(status_code=400, detail="Missing login")
@@ -1385,9 +1386,9 @@ def set_role(login: str, body: dict, request: Request) -> JSONResponse:
         raise HTTPException(status_code=400, detail="Invalid role")
     current = roles.load_roles(ingests_path)
     updated = {**current, login: role}
-    if roles.count_editors(current) > 0 and roles.count_editors(updated) == 0:
-        raise HTTPException(status_code=400, detail="Cannot remove the last editor")
-    if not source.save_roles(updated, editor.get("name", ""), editor.get("email", "")):
+    if roles.count_admins(current) > 0 and roles.count_admins(updated) == 0:
+        raise HTTPException(status_code=400, detail="Cannot remove the last admin")
+    if not source.save_roles(updated, admin.get("name", ""), admin.get("email", "")):
         raise HTTPException(status_code=404, detail="Role management unavailable here")
     return JSONResponse({"roles": updated})
 
@@ -1395,16 +1396,16 @@ def set_role(login: str, body: dict, request: Request) -> JSONResponse:
 @app.delete("/api/roles/{login}")
 def remove_role(login: str, request: Request) -> JSONResponse:
     """Remove `login` from the role file (reverts them to the contributor
-    default). Editor-only. Refuses removing the last editor."""
-    editor = _require_role(request, "editor")
+    default). Admin-only. Refuses removing the last admin."""
+    admin = _require_role(request, "admin")
     login = (login or "").strip().lower()
     current = roles.load_roles(ingests_path)
     if login not in current:
         raise HTTPException(status_code=404, detail="Login is not listed")
     updated = {k: v for k, v in current.items() if k != login}
-    if roles.count_editors(current) > 0 and roles.count_editors(updated) == 0:
-        raise HTTPException(status_code=400, detail="Cannot remove the last editor")
-    if not source.save_roles(updated, editor.get("name", ""), editor.get("email", "")):
+    if roles.count_admins(current) > 0 and roles.count_admins(updated) == 0:
+        raise HTTPException(status_code=400, detail="Cannot remove the last admin")
+    if not source.save_roles(updated, admin.get("name", ""), admin.get("email", "")):
         raise HTTPException(status_code=404, detail="Role management unavailable here")
     return JSONResponse({"roles": updated})
 
@@ -1428,8 +1429,8 @@ def list_archived_ingests() -> list[dict]:
 
 @app.post("/api/ingests/{full_hash}/archive")
 def archive_ingest(full_hash: str, request: Request) -> JSONResponse:
-    """Move a record to the archive (store/v1/). Requires reviewer role."""
-    user = _require_role(request, "reviewer")
+    """Move a record to the archive (store/v1/). Requires editor role."""
+    user = _require_role(request, "editor")
     if not FULL_HASH_PATTERN.match(full_hash):
         raise HTTPException(status_code=404, detail="Not found")
     if not source.archive_ingest(full_hash, user):
@@ -1439,8 +1440,8 @@ def archive_ingest(full_hash: str, request: Request) -> JSONResponse:
 
 @app.post("/api/ingests/{full_hash}/unarchive")
 def unarchive_ingest(full_hash: str, request: Request) -> JSONResponse:
-    """Restore a record from the archive back to the active store. Reviewer role."""
-    user = _require_role(request, "reviewer")
+    """Restore a record from the archive back to the active store. Editor role."""
+    user = _require_role(request, "editor")
     if not FULL_HASH_PATTERN.match(full_hash):
         raise HTTPException(status_code=404, detail="Not found")
     if not source.unarchive_ingest(full_hash, user):
@@ -1557,10 +1558,10 @@ def set_article_directives(
     """Write an article's presentation-directive sidecar (local dev; the edge does
     this in production by committing to the content repo). Presentation-only - the
     assembler enforces in-prompt that a directive can never change a fact, and the
-    UI labels it. Requires authentication."""
+    UI labels it. Requires editor role."""
     import yaml as _yaml
 
-    _require_role(request, "reviewer")
+    _require_role(request, "editor")
     path = _article_sidecar_path(section, slug)
     if path is None or not path.parent.is_dir():
         raise HTTPException(status_code=404, detail="Not found")
