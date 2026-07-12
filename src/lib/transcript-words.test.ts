@@ -529,7 +529,7 @@ describe("eventNoteAnchorIndex", () => {
 
 describe("event notes as first-class word annotations", () => {
   it("splits a bracketed note off the word, keeping it on word.notes", () => {
-    const body = "<!-- speaker: S1 -->\n{{t:1.00}}He {{t:2.00}}was [laughs] {{t:3.00}}great.\n";
+    const body = "<!-- speaker: S1 -->\n{{t:1.00}}He {{t:2.00}}was {{laughs}} {{t:3.00}}great.\n";
     const { words } = parseWords(body);
     expect(words.map((w) => w.text)).toEqual(["He", "was", "great."]);
     expect(words[1].notes).toEqual(["laughs"]);
@@ -538,17 +538,17 @@ describe("event notes as first-class word annotations", () => {
 
   it("re-anchors a legacy note-as-word segment onto the previous word, dropping its timestamp", () => {
     const body =
-      "<!-- speaker: S1 -->\n{{t:1.00}}He {{t:2.00}}was {{t:2.10}}[laughs] {{t:3.00}}great.\n";
+      "<!-- speaker: S1 -->\n{{t:1.00}}He {{t:2.00}}was {{t:2.10}}{{laughs}} {{t:3.00}}great.\n";
     const { words } = parseWords(body);
     expect(words.map((w) => w.text)).toEqual(["He", "was", "great."]);
     expect(words[1].notes).toEqual(["laughs"]); // moved onto "was"
   });
 
   it("round-trips a note through serialise with no timestamp of its own", () => {
-    const body = "<!-- speaker: S1 -->\n{{t:1.00}}He {{t:2.00}}was [laughs] {{t:3.00}}great.\n";
+    const body = "<!-- speaker: S1 -->\n{{t:1.00}}He {{t:2.00}}was {{laughs}} {{t:3.00}}great.\n";
     const p = parseWords(body);
     const out = serializeWords(p.words, p.runs, p.lineEndWords, p.preamble);
-    expect(out).toContain("{{t:2.00}}was [laughs]");
+    expect(out).toContain("{{t:2.00}}was {{laughs}}");
     expect(out.match(/\{\{t:/g)?.length).toBe(3); // no marker for the note
     // Stable across a second round-trip.
     const p2 = parseWords(out);
@@ -556,7 +556,7 @@ describe("event notes as first-class word annotations", () => {
   });
 
   it("keeps a multi-word note (spaces and all) as one atomic annotation", () => {
-    const body = "<!-- speaker: S1 -->\n{{t:1.00}}Then [background music] {{t:2.00}}silence.\n";
+    const body = "<!-- speaker: S1 -->\n{{t:1.00}}Then {{background music}} {{t:2.00}}silence.\n";
     const { words } = parseWords(body);
     expect(words.map((w) => w.text)).toEqual(["Then", "silence."]);
     expect(words[0].notes).toEqual(["background music"]);
@@ -565,7 +565,7 @@ describe("event notes as first-class word annotations", () => {
 
 describe("event notes survive editing the word they anchor to", () => {
   it("carries a word's notes onto the last replacement word (edit/split), never dropping them", () => {
-    const body = "<!-- speaker: S1 -->\n{{t:1.00}}He {{t:2.00}}was [laughs] {{t:3.00}}great.\n";
+    const body = "<!-- speaker: S1 -->\n{{t:1.00}}He {{t:2.00}}was {{laughs}} {{t:3.00}}great.\n";
     const p = parseWords(body);
     expect(p.words[1].notes).toEqual(["laughs"]); // note is on "was"
     // Edit "was" and split it into two words (the space-split the word editor does).
@@ -579,7 +579,7 @@ describe("event notes survive editing the word they anchor to", () => {
     expect(noted[0].text).toBe("really"); // the LAST replacement word
     // Round-trips back to the bracket notation on disk.
     const out = serializeWords(next.words, next.runs, next.lineEndWords, next.preamble);
-    expect(out).toContain("[laughs]");
+    expect(out).toContain("{{laughs}}");
     expect(parseWords(out).words.filter((w) => w.notes?.length).length).toBe(1);
   });
 });

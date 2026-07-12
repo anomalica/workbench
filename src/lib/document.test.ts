@@ -816,7 +816,7 @@ describe("insertEventNote attaches a first-class note to a word (not a new word)
 
   it("round-trips the note in the body with no timestamp of its own", () => {
     const out = insertEventNote(FM + BODY, 2.5, "[laughs]");
-    expect(bodyOf(out)).toContain("{{t:2.00}}was [laughs]");
+    expect(bodyOf(out)).toContain("{{t:2.00}}was {{laughs}}");
     // Exactly the three word timestamps - the note added none.
     expect(bodyOf(out).match(/\{\{t:/g)?.length).toBe(3);
   });

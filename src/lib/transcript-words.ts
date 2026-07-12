@@ -7,8 +7,8 @@ export interface Word {
   /** Non-verbal event notes that FOLLOW this word - first-class annotation
    *  objects, not spoken words: no timestamp of their own, never tokenised or
    *  word-edited, rendered as distinct chips. Stored as the BARE inner text
-   *  ("laughs", not "[laughs]"); the `[...]` brackets are the on-disk notation
-   *  that serializeWords adds back. Omitted when the word carries none. */
+   *  ("laughs", not "{{laughs}}"); the `{{ }}` are the on-disk notation that
+   *  serializeWords adds back. Omitted when the word carries none. */
   notes?: string[];
 }
 
@@ -56,10 +56,14 @@ const INLINE_SPEAKER = /^<!--\s*speaker:\s*(.+?)\s*-->$/;
 // mis-recognised word into several words that share one timestamp, so a unit
 // is not restricted to a single token.
 const WORD_TOKEN = /\{\{t:(\d+(?:\.\d+)?)\}\}([\s\S]*?)(?=\{\{t:|$)/g;
-// A bracketed non-verbal event note. Transcripts carry no markdown links, so a
-// `[...]` in a word segment is always a note, never prose (record-format.md -
-// the bracket meta-notation).
-const NOTE_TOKEN = /\[[^\]]*\]/g;
+// An inline reviewer note: `{{...}}` (keyless `{{laughs}}` or keyed
+// `{{Fravor: holds up photo}}`). Reviewer-authored notes moved to the `{{...}}`
+// family so they stop colliding with the `[...]` that real source text is full
+// of - footnote refs `[^1]`, `[sic]`, editorial `[bracketed]` clarifications -
+// which are now left as ordinary word content (record-format.md, ratified). The
+// reserved `{{t:}}` and `{{highlight-*}}` markers are consumed upstream, so any
+// `{{...}}` reaching splitSegment is a note.
+const NOTE_TOKEN = /\{\{([^{}]*)\}\}/g;
 // An inline highlight marker (reserved key, machine-read). A start opens at the
 // word whose `{{t:}}` follows it; an end closes at the word whose text precedes
 // it. serializeWords glues them in exactly those positions.
@@ -79,19 +83,19 @@ function extractHighlightMarkers(s: string): {
   return { rest, markers };
 }
 
-/** Split a `{{t:}}` segment's text into the spoken word and the event notes
- *  that follow it. `{{t:1.5}}had [laughs]` yields word "had" + note "laughs".
- *  The `[...]` brackets are the on-disk NOTATION, not content: the INNER text is
- *  stored (record-format.md - the bracket meta-notation), and serializeWords
- *  wraps it back. A segment that is only `[laughs]` (the legacy note-as-word
- *  form) yields an empty word and the note, so it re-anchors onto the previous
- *  real word and sheds its stray timestamp. */
+/** Split a `{{t:}}` segment's text into the spoken word and the `{{...}}` notes
+ *  that follow it. `{{t:1.5}}had {{laughs}}` yields word "had" + note "laughs".
+ *  The `{{ }}` are the on-disk NOTATION, not content: the INNER text is stored
+ *  ("laughs", not "{{laughs}}"), and serializeWords wraps it back. A segment
+ *  that is only `{{laughs}}` yields an empty word and the note, so it re-anchors
+ *  onto the previous real word and sheds its stray timestamp. A `[...]` in the
+ *  text is NOT a note - it stays as content (footnote refs, `[sic]`, etc.). */
 function splitSegment(raw: string): { word: string; notes: string[] } {
   const notes: string[] = [];
   const word = raw
-    .replace(NOTE_TOKEN, (m) => {
-      const inner = m.slice(1, -1).trim();
-      if (inner) notes.push(inner);
+    .replace(NOTE_TOKEN, (_m, inner: string) => {
+      const t = inner.trim();
+      if (t) notes.push(t);
       return " ";
     })
     .replace(/\s+/g, " ")
@@ -236,7 +240,7 @@ export function parseWords(body: string): ParsedWords {
   return { words, runs, lineEndWords, highlights, preamble };
 }
 
-/** The gIndex of the word a bracketed event note anchors ONTO for time `at`:
+/** The gIndex of the word a inline event note anchors ONTO for time `at`:
  *  the last word starting at or before `at`, or -1 when `at` precedes the first
  *  word (callers clamp to word 0). The note becomes an entry in that word's
  *  `notes`, not a word of its own. Words are time-ordered, so the scan stops at
@@ -304,9 +308,9 @@ export function serializeWords(
     }
 
     if (lineStartWord < 0) lineStartWord = i;
-    // Notes are stored bare; wrap each back in the `[...]` on-disk notation.
+    // Notes are stored bare; wrap each back in the `{{...}}` on-disk notation.
     const noteSuffix = words[i].notes?.length
-      ? ` ${words[i].notes!.map((n) => `[${n}]`).join(" ")}`
+      ? ` ${words[i].notes!.map((n) => `{{${n}}}`).join(" ")}`
       : "";
     lineTokens.push(
       `${startMarkers(i)}{{t:${words[i].start.toFixed(2)}}}${words[i].text}${noteSuffix}${endMarkers(i)}`,

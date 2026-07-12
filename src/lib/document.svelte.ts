@@ -327,7 +327,7 @@ export class DocumentStore {
     if (result !== this.current) this.pushEdit(result);
   }
 
-  /** Attach a bracketed event note (`[laughs]`) as a first-class annotation
+  /** Attach a inline event note (`{{laughs}}`) as a first-class annotation
    *  FOLLOWING the word at time `at` (the last word starting at or before it) in
    *  a per-word-timestamp body. The note is not a word: it carries no timestamp,
    *  is never tokenised, and adds no gIndex - so coverage and the observed set
@@ -607,7 +607,9 @@ import { makeHighlightId } from "$lib/highlight-markers";
  *  content, so any the caller passed are stripped (and stray brackets can never
  *  break the `[...]` round-trip). "" when empty. */
 function noteInner(text: string): string {
-  return text.replace(/[[\]]/g, "").replace(/\s+/g, " ").trim();
+  // Braces are the on-disk `{{...}}` notation, never part of a note's content;
+  // strip any the reviewer typed so they can't break the grammar.
+  return text.replace(/[{}]/g, "").replace(/\s+/g, " ").trim();
 }
 
 function splitFrontmatter(doc: string): [string, string] {

@@ -107,7 +107,7 @@
       to: number,
       newWords: { text: string; start: number }[],
     ) => void;
-    /** Insert a bracketed event note (`[laughs]`) into the body at time
+    /** Insert a inline event note (`{{laughs}}`) into the body at time
      *  `at` - the word-record twin of the segment editor's quick-insert. */
     oneventnote?: (at: number, text: string) => void;
     /** Edit (empty text = remove) the ordinal-th event note on a word. */
@@ -566,12 +566,12 @@
   }
 
   // Quick tags for non-verbal events - the things speech transcription drops.
-  // Picking one writes a bracketed marker (e.g. `[laughs]`) so it reads like a
+  // Picking one writes a inline note marker (e.g. `{{laughs}}`) so it reads like a
   // standard transcript event. Shared with the segment editor's quick-insert.
   const NOTE_PRESETS = EVENT_NOTE_PRESETS;
 
   // Notes are transient compose state only: adding one opens an inline editor,
-  // and committing writes the bracketed token into the BODY (a `{{t:}}[laughs]`
+  // and committing writes the inline note token into the BODY (a `{{t:}}{{laughs}}`
   // word the digester reads as meta), not a localStorage overlay - so a note is
   // real, persists, and reaches extraction, matching the segment editor. An
   // uncommitted note lives only for the compose session.
@@ -712,9 +712,9 @@
     writeEventNoteToBody(note.at, label);
   }
 
-  // Brackets are notation, not content: the reviewer never types them.
+  // Braces are the `{{...}}` notation, not content: the reviewer never types them.
   function blockBrackets(e: KeyboardEvent) {
-    if (e.key === "[" || e.key === "]") e.preventDefault();
+    if (e.key === "{" || e.key === "}") e.preventDefault();
   }
 
   function deleteNote(id: string) {
@@ -1509,7 +1509,7 @@
                         }
                       }}
                       rows="2"
-                      placeholder="Note this moment - a sound, an action (no brackets - added automatically)..."
+                      placeholder="Note this moment - a sound, an action (no braces - added automatically)..."
                       class="w-full bg-surface border border-primary rounded px-1.5 py-1 text-xs text-on-surface outline-none resize-y"
                     ></textarea>
                     <!-- Quick event tags. preventDefault on pointerdown keeps the

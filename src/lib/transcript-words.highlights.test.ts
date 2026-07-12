@@ -93,7 +93,7 @@ describe("parseWords - highlight markers", () => {
 
   it("coexists with an event note on the highlighted word", () => {
     const p = parseWords(
-      body(SP, "{{highlight-start: a}}{{t:1}}word [laughs]{{highlight-end: a}}"),
+      body(SP, "{{highlight-start: a}}{{t:1}}word {{laughs}}{{highlight-end: a}}"),
     );
     expect(p.words[0].text).toBe("word");
     expect(p.words[0].notes).toEqual(["laughs"]);

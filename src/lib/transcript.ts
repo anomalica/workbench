@@ -301,7 +301,7 @@ export const SPECIAL_SPEAKERS = [
 ] as const;
 
 /** Common non-verbal transcript event notes. A reviewer inserts one as an
- *  unkeyed bracketed token (`[laughs]`) at the point the event occurs; the
+ *  unkeyed inline note token (`{{laughs}}`) at the point the event occurs; the
  *  digester reads a `[...]` note in a transcript as a meta event, never spoken
  *  words (record-format.md - the bracket meta-notation). Distinct from the
  *  keyed `{{actor: action}}` inline annotation, which is unchanged. */
@@ -315,7 +315,7 @@ export const EVENT_NOTE_PRESETS = [
   "inaudible",
 ] as const;
 
-/** Splice a bracketed event note `[label]` into `text`, replacing the range
+/** Splice a inline event note `{{label}}` into `text`, replacing the range
  *  [start, end). A single space is padded on either side only where the
  *  neighbour isn't already whitespace, so the token never fuses onto a word.
  *  Returns the new text and the caret position just after the inserted token. */
@@ -325,7 +325,7 @@ export function insertEventNote(
   start: number,
   end: number,
 ): { text: string; cursor: number } {
-  const token = `[${label}]`;
+  const token = `{{${label}}}`;
   const before = text.slice(0, start);
   const after = text.slice(end);
   const lead = before.length > 0 && !/\s$/.test(before) ? " " : "";
