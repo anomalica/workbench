@@ -55,6 +55,8 @@
     body,
     mode = "edit",
     focusWords = null,
+    sourceHash = "",
+    mediaDuration = null,
     namedSpeakers = [],
     currentTime = 0,
     filteredSpeakers = new Set<string>(),
@@ -90,6 +92,11 @@
      *  mark). `seq` is bumped per navigation so re-clicking the same mark
      *  re-triggers. */
     focusWords?: { from: number; to: number; seq: number } | null;
+    /** Source SHA-256 (== content hash for a/v records), so the word editor can
+     *  fetch a waveform window for the audio around a timestamp. */
+    sourceHash?: string;
+    /** Media length in seconds, to clamp the waveform window. */
+    mediaDuration?: number | null;
     /** Named speakers from the frontmatter, for picker ordering. */
     namedSpeakers?: string[];
     /** Current media playback position in seconds, for karaoke highlighting. */
@@ -1847,6 +1854,8 @@
       prevStart={selectionInfo.prevStart}
       nextStart={selectionInfo.nextStart}
       speaker={selectionInfo.speaker}
+      {sourceHash}
+      {mediaDuration}
       {currentTime}
       onseek={(t) => onseek?.(t)}
       oncancel={() => { editingSelection = false; }}

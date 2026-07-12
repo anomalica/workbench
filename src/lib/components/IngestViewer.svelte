@@ -3809,6 +3809,7 @@
             {currentTime}
             {filteredSpeakers}
             {hideIrrelevant}
+            sourceHash={ingest.content_hash}
             storageKey={`workbench:observed:${ingest.content_hash}`}
             serverObserved={serverObservedWords}
             {claimHighlight}

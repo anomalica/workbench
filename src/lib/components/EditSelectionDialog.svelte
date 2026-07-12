@@ -2,6 +2,7 @@
   import type { Word } from "$lib/transcript-words";
   import { retimeWithPush } from "$lib/word-timing";
   import { tick, onMount, onDestroy } from "svelte";
+  import Waveform from "./Waveform.svelte";
 
   // Unified multi-word editor: edit text, delete/insert words, and retime - all
   // in one modal over a selected word range. Replaces the separate edit-word +
@@ -11,6 +12,7 @@
     prevStart = null,
     nextStart = null,
     mediaDuration = null,
+    sourceHash = "",
     speaker = "",
     currentTime = 0,
     onsave,
@@ -19,6 +21,8 @@
   }: {
     /** The selected range's words (within one speaker run), in order. */
     words: Word[];
+    /** Source SHA-256 for the waveform fetch (empty hides the waveform). */
+    sourceHash?: string;
     /** Start of the word just before the selection (lower time bound), or null. */
     prevStart?: number | null;
     /** Start of the word just after the selection (upper time bound), or null. */
@@ -147,6 +151,25 @@
   function nudge(i: number, delta: number) {
     setStart(i, items[i].start + delta);
   }
+
+  // Waveform window: a stable context span around the selection, from the word
+  // before it to the word after (falling back to the original bounds), padded.
+  // Derived from the props (words/prevStart/nextStart), which don't change while
+  // editing - only the internal `items` snapshot retimes - so the markers shift
+  // over a window that stays put.
+  let winStart = $derived(Math.max(0, (prevStart ?? (words[0]?.start ?? 0) - 1) - 0.5));
+  let winDuration = $derived.by(() => {
+    const lastStart = words[words.length - 1]?.start ?? words[0]?.start ?? 0;
+    let end = (nextStart ?? lastStart + 2) + 0.5;
+    if (mediaDuration != null) end = Math.min(end, mediaDuration);
+    return Math.min(30, Math.max(1.5, end - winStart));
+  });
+
+  // Marker per editable word, reflecting its live timestamp; the active
+  // (playhead) row is picked out.
+  let waveMarks = $derived(
+    items.map((it, i) => ({ index: i, start: it.start, label: it.text, active: i === activeRow })),
+  );
 
   function onTimestampWheel(e: WheelEvent, i: number) {
     if (e.deltaY === 0) return;
@@ -291,6 +314,23 @@
       plays from it to the end of the selection, then stops. Amber = auto-positioned;
       ringed = shunted.
     </p>
+
+    {#if sourceHash}
+      <div class="px-3 pt-2 flex-none">
+        <Waveform
+          hash={sourceHash}
+          windowStart={winStart}
+          windowDuration={winDuration}
+          marks={waveMarks}
+          {currentTime}
+          onretime={(index, start) => setStart(index, start)}
+          onseek={(t) => seekNow(t)}
+        />
+        <p class="mt-1 text-[11px] text-on-surface-muted">
+          Drag a marker onto a word's onset to retime it; click the waveform to play from there.
+        </p>
+      </div>
+    {/if}
 
     <div class="flex-1 overflow-auto px-3 py-2 space-y-1">
       {#each items as item, i (i)}
