@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Role-management endpoints (roles phase 3): editor-only CRUD over roles.yaml
-with a last-editor lockout guard. A fake source captures the write instead of
+"""Role-management endpoints (roles phase 3): admin-only CRUD over roles.yaml
+with a last-admin lockout guard. A fake source captures the write instead of
 committing to git."""
 
 import pytest
@@ -27,8 +27,8 @@ class FakeSource:
 def client(tmp_path, monkeypatch):
     ingests = tmp_path / "ingests"
     ingests.mkdir()
-    # Start with one editor and one reviewer.
-    (ingests / "roles.yaml").write_text("boss: editor\nrev: reviewer\n")
+    # boss is an admin (manages roles); rev is a reviewer.
+    (ingests / "roles.yaml").write_text("boss: admin\nrev: reviewer\n")
     monkeypatch.setattr(server, "ingests_path", ingests)
     monkeypatch.setattr(server, "source", FakeSource(ingests))
 
@@ -43,55 +43,62 @@ def client(tmp_path, monkeypatch):
     return tc
 
 
-def test_list_requires_editor(client):
-    client.login("rev")  # reviewer, not editor
+def test_list_requires_admin(client):
+    client.login("rev")  # reviewer, not admin
     assert client.get("/api/roles").status_code == 403
+
+
+def test_editor_cannot_manage_roles(client):
+    # An editor is the top CONTENT role but not admin - role management is admin-only.
+    (client.ingests / "roles.yaml").write_text("boss: admin\ned: editor\n")
+    client.login("ed")
+    assert client.get("/api/roles").status_code == 403
+    assert client.put("/api/roles/x", json={"role": "reviewer"}).status_code == 403
 
 
 def test_list_returns_map_options_and_self(client):
     res = client.get("/api/roles")
     assert res.status_code == 200
     body = res.json()
-    assert body["roles"] == {"boss": "editor", "rev": "reviewer"}
-    assert body["options"] == ["contributor", "reviewer", "editor"]
+    assert body["roles"] == {"boss": "admin", "rev": "reviewer"}
+    assert body["options"] == ["contributor", "reviewer", "editor", "admin"]
     assert body["self"] == "boss"
 
 
 def test_set_role_adds_and_persists(client):
-    res = client.put("/api/roles/newperson", json={"role": "reviewer"})
+    res = client.put("/api/roles/newperson", json={"role": "editor"})
     assert res.status_code == 200
-    assert res.json()["roles"]["newperson"] == "reviewer"
-    # Persisted so a re-read reflects it.
-    assert roles.load_roles(client.ingests)["newperson"] == "reviewer"
+    assert res.json()["roles"]["newperson"] == "editor"
+    assert roles.load_roles(client.ingests)["newperson"] == "editor"
 
 
 def test_set_role_rejects_unknown_role(client):
-    assert client.put("/api/roles/x", json={"role": "admin"}).status_code == 400
+    assert client.put("/api/roles/x", json={"role": "superuser"}).status_code == 400
 
 
-def test_set_role_requires_editor(client):
+def test_set_role_requires_admin(client):
     client.login("rev")
     assert client.put("/api/roles/x", json={"role": "reviewer"}).status_code == 403
 
 
-def test_cannot_demote_the_last_editor(client):
-    # boss is the only editor; demoting to reviewer would leave zero editors.
-    res = client.put("/api/roles/boss", json={"role": "reviewer"})
+def test_cannot_demote_the_last_admin(client):
+    # boss is the only admin; demoting to editor would leave zero admins.
+    res = client.put("/api/roles/boss", json={"role": "editor"})
     assert res.status_code == 400
-    assert roles.load_roles(client.ingests)["boss"] == "editor"  # unchanged
+    assert roles.load_roles(client.ingests)["boss"] == "admin"  # unchanged
 
 
-def test_cannot_remove_the_last_editor(client):
+def test_cannot_remove_the_last_admin(client):
     res = client.delete("/api/roles/boss")
     assert res.status_code == 400
     assert "boss" in roles.load_roles(client.ingests)
 
 
-def test_can_demote_an_editor_when_another_remains(client):
-    client.put("/api/roles/second", json={"role": "editor"})  # now two editors
-    res = client.put("/api/roles/boss", json={"role": "reviewer"})
+def test_can_demote_an_admin_when_another_remains(client):
+    client.put("/api/roles/second", json={"role": "admin"})  # now two admins
+    res = client.put("/api/roles/boss", json={"role": "editor"})
     assert res.status_code == 200
-    assert roles.load_roles(client.ingests)["boss"] == "reviewer"
+    assert roles.load_roles(client.ingests)["boss"] == "editor"
 
 
 def test_remove_role_reverts_to_default(client):

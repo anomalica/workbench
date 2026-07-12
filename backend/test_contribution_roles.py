@@ -97,9 +97,17 @@ def test_contributor_cannot_archive(env):
     assert stub.archived is False
 
 
-def test_reviewer_can_archive(env):
+def test_reviewer_cannot_archive(env):
+    # Archive is an editor+ op now (the 4-tier op-split): reviewers lost it.
     client_as, stub, _ = env
     res = client_as("rev").post(f"/api/ingests/{HASH}/archive")
+    assert res.status_code == 403
+    assert stub.archived is False
+
+
+def test_editor_can_archive(env):
+    client_as, stub, _ = env
+    res = client_as("boss").post(f"/api/ingests/{HASH}/archive")
     assert res.status_code == 200
     assert stub.archived is True
 
