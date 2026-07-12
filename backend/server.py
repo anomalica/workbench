@@ -2228,7 +2228,12 @@ def get_source(full_hash: str) -> FileResponse:
     if not FULL_HASH_PATTERN.match(full_hash):
         raise HTTPException(status_code=404, detail="Not found")
 
-    matches = list(sources_path.glob(f"{full_hash}.*"))
+    # Serve the source media file, not a sidecar sitting beside it. A source can
+    # have a companion like `{hash}.transcript.json`; `{hash}.*` matches that too
+    # and glob order is arbitrary, so taking the first match served the transcript
+    # JSON (unplayable) for records that have one - every .ogg NASA record did.
+    # The source file's stem is exactly the hash; a sidecar's is `{hash}.transcript`.
+    matches = [p for p in sources_path.glob(f"{full_hash}.*") if p.stem == full_hash]
     if not matches:
         raise HTTPException(status_code=404, detail="Not found")
 
