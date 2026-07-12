@@ -47,7 +47,7 @@
   import AuditView from "./AuditView.svelte";
   import EpubViewer from "./EpubViewer.svelte";
   import WordTranscript from "./WordTranscript.svelte";
-  import MarkupSidebar from "./MarkupSidebar.svelte";
+  import MarkupList from "./MarkupList.svelte";
   import ReadableText from "./ReadableText.svelte";
   import EditableMetadata from "./EditableMetadata.svelte";
   import ReviewHistory from "./ReviewHistory.svelte";
@@ -249,9 +249,17 @@
     if (!recordTabs.some(([id]) => id === view)) view = "ingest";
   });
 
-  // Markup side-list navigation: clicking a mark scrolls the transcript to its
-  // word range and flashes it; `seq` re-triggers a repeat click. `focusedMarkId`
-  // highlights the active row in the sidebar.
+  // Count of every mark on the record (highlights + span notes + point beats),
+  // for the collapsible Markup section header.
+  let markCount = $derived.by(() => {
+    if (!parsedWords) return 0;
+    const points = parsedWords.words.reduce((n, w) => n + (w.notes?.length ?? 0), 0);
+    return parsedWords.highlights.length + parsedWords.spanNotes.length + points;
+  });
+
+  // Markup list navigation: clicking a mark scrolls the transcript to its word
+  // range and flashes it; `seq` re-triggers a repeat click. `focusedMarkId`
+  // highlights the active row in the list.
   let markupFocus = $state<{ from: number; to: number; seq: number } | null>(null);
   let focusedMarkId = $state<string | null>(null);
   let markupFocusSeq = 0;
@@ -3065,6 +3073,30 @@
     </details>
   {/snippet}
 
+  <!-- Markup list: a collapsible in the left panel (only in the Markup tab),
+       below Speakers. Clicking a mark scrolls the read-only transcript to it. -->
+  {#snippet markupPanel()}
+    <details open class="group border-t border-border">
+      <summary class="px-4 py-2 bg-surface-alt cursor-pointer flex items-center gap-2 select-none">
+        <svg class="w-3 h-3 text-on-surface-muted transition-transform group-open:rotate-90" fill="currentColor" viewBox="0 0 20 20">
+          <path d="M6 4l8 6-8 6V4z" />
+        </svg>
+        <span class="text-xs font-ui font-medium text-on-surface-secondary uppercase">Markup</span>
+        <span class="text-xs text-on-surface-muted ml-auto">{markCount}</span>
+      </summary>
+      <div class="px-3 py-2">
+        <MarkupList
+          body={currentBody()}
+          focusedId={focusedMarkId}
+          onfocus={focusMark}
+          onremovehighlight={(id) => doc.removeWordHighlight(id)}
+          onremovenote={(id) => doc.removeWordSpanNote(id)}
+          onremovepointnote={(g, ordinal) => doc.removeWordNote(g, ordinal)}
+        />
+      </div>
+    </details>
+  {/snippet}
+
   <div class="flex-1 min-h-0 {theatreActive ? 'grid' : 'flex'}" style={theatreActive ? theatreGridStyle : ''}>
     {#if visibleCols.source}
       <!-- Source panel: in theatre it's the full-width video band (header +
@@ -3303,6 +3335,9 @@
         {#if hasTranscript && !theatreActive}
           <div class="flex-1 overflow-auto border-t border-border min-h-0">
             {@render speakersPanel()}
+            {#if view === "markup"}
+              {@render markupPanel()}
+            {/if}
           </div>
         {/if}
     </div>
@@ -3312,6 +3347,9 @@
       <!-- Speakers as its own column beneath the video in theatre mode. -->
       <div style="grid-area: spk" class="flex flex-col min-h-0 overflow-auto border-r border-border">
         {@render speakersPanel()}
+        {#if view === "markup"}
+          {@render markupPanel()}
+        {/if}
       </div>
     {/if}
 
@@ -3750,37 +3788,27 @@
 
       {:else if view === "markup"}
         <!-- Markup: read-only transcript with cross-speaker selection for
-             highlights + notes, and a navigable list of every mark on the right.
-             Editing lives in the Ingest tab. -->
-        <div class="flex-1 flex min-h-0">
-          <div class="relative flex-1 flex flex-col min-h-0">
-            <WordTranscript
-              mode="markup"
-              body={currentBody()}
-              namedSpeakers={namedSpeakersOrdered}
-              {currentTime}
-              {filteredSpeakers}
-              {hideIrrelevant}
-              storageKey={`workbench:observed:${ingest.content_hash}`}
-              serverObserved={serverObservedWords}
-              focusWords={markupFocus}
-              onreassign={() => {}}
-              onhighlight={(from, to) => doc.addWordHighlight(from, to)}
-              onclearhighlight={(from, to) => doc.clearWordHighlights(from, to)}
-              onspannote={(from, to, text) => doc.addWordSpanNote(from, to, text)}
-              onspannoteedit={(id, text) => doc.editWordSpanNote(id, text)}
-              onspannoteremove={(id) => doc.removeWordSpanNote(id)}
-              onselectiontext={(t) => (wordSelectionText = t)}
-              onseek={(seconds) => mediaSeek(Math.max(0, seconds), true)}
-            />
-          </div>
-          <MarkupSidebar
+             highlights + notes. The mark list lives in the left panel's Markup
+             section. Editing lives in the Ingest tab. -->
+        <div class="relative flex-1 flex flex-col min-h-0">
+          <WordTranscript
+            mode="markup"
             body={currentBody()}
-            focusedId={focusedMarkId}
-            onfocus={focusMark}
-            onremovehighlight={(id) => doc.removeWordHighlight(id)}
-            onremovenote={(id) => doc.removeWordSpanNote(id)}
-            onremovepointnote={(g, ordinal) => doc.removeWordNote(g, ordinal)}
+            namedSpeakers={namedSpeakersOrdered}
+            {currentTime}
+            {filteredSpeakers}
+            {hideIrrelevant}
+            storageKey={`workbench:observed:${ingest.content_hash}`}
+            serverObserved={serverObservedWords}
+            focusWords={markupFocus}
+            onreassign={() => {}}
+            onhighlight={(from, to) => doc.addWordHighlight(from, to)}
+            onclearhighlight={(from, to) => doc.clearWordHighlights(from, to)}
+            onspannote={(from, to, text) => doc.addWordSpanNote(from, to, text)}
+            onspannoteedit={(id, text) => doc.editWordSpanNote(id, text)}
+            onspannoteremove={(id) => doc.removeWordSpanNote(id)}
+            onselectiontext={(t) => (wordSelectionText = t)}
+            onseek={(seconds) => mediaSeek(Math.max(0, seconds), true)}
           />
         </div>
 
