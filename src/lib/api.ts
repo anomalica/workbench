@@ -718,6 +718,43 @@ export async function rejectProposal(id: string): Promise<boolean> {
   return res.ok;
 }
 
+export interface RolesResponse {
+  roles: Record<string, string>;
+  options: string[];
+  self: string;
+}
+
+export async function fetchRoles(): Promise<RolesResponse> {
+  const res = await fetch("/api/roles");
+  if (!res.ok) return { roles: {}, options: ["contributor", "reviewer", "editor"], self: "" };
+  return await res.json();
+}
+
+/** Set a login's role. Returns the new map, or an error message (e.g. the
+ *  last-editor guard) on failure. */
+export async function setRole(
+  login: string,
+  role: string,
+): Promise<{ roles?: Record<string, string>; error?: string }> {
+  const res = await fetch(`/api/roles/${encodeURIComponent(login)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ role }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) return { error: data.detail ?? "Failed to set role" };
+  return { roles: data.roles };
+}
+
+export async function removeRole(
+  login: string,
+): Promise<{ roles?: Record<string, string>; error?: string }> {
+  const res = await fetch(`/api/roles/${encodeURIComponent(login)}`, { method: "DELETE" });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) return { error: data.detail ?? "Failed to remove role" };
+  return { roles: data.roles };
+}
+
 export async function hashFile(file: File): Promise<string> {
   // Stream the file through an incremental SHA-256 in chunks. The old
   // file.arrayBuffer() + crypto.subtle.digest loaded the whole file into

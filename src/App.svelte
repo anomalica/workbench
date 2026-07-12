@@ -29,6 +29,7 @@
   import CurationView from "$lib/components/CurationView.svelte";
   import ArticlesView from "$lib/components/ArticlesView.svelte";
   import ReviewView from "$lib/components/ReviewView.svelte";
+  import RolesView from "$lib/components/RolesView.svelte";
   import { carryoverState } from "$lib/carryover";
   import { themeState } from "$lib/theme.svelte";
   import { trackView, trackEvent } from "$lib/umami";
@@ -38,7 +39,7 @@
   // Top-level view: record review (default), knowledge-graph review, or curation.
   // (The Schedule view + processing-mode runner moved to the local `scheduler`
   // repo - this workbench is review-only.)
-  let appMode = $state<"records" | "graph" | "curate" | "articles" | "review">("records");
+  let appMode = $state<"records" | "graph" | "curate" | "articles" | "review" | "roles">("records");
   // A node to open directly in the graph view (deep link /graph/<node_id>), so a
   // claim-count / any link can jump straight to that node's claims in context.
   let graphNodeId = $state<string | undefined>(undefined);
@@ -55,6 +56,7 @@
   let myRole = $state<string>("contributor");
   let pendingProposals = $state(0);
   let canReview = $derived(myRole === "reviewer" || myRole === "editor");
+  let canManageRoles = $derived(myRole === "editor");
 
   async function reloadPending() {
     if (!canReview) {
@@ -440,6 +442,11 @@
     reloadPending();
   }
 
+  function showRoles() {
+    appMode = "roles";
+    history.pushState(null, "", "/roles");
+  }
+
   // Open a record in the workbench review view by its public hash (the 56-char
   // record_hash an Articles record-page carries). Mirrors the deep-link path so
   // a not-yet-reviewable record surfaces the same friendly notice.
@@ -470,6 +477,10 @@
       appMode = "review";
       loadIngests(); // ReviewView needs the record list for hash->title
       return;
+    }
+    if (path === "roles") {
+      appMode = "roles";
+      return; // RolesView fetches its own data
     }
     if (path.startsWith("graph/")) {
       const id = path.slice("graph/".length);
@@ -568,6 +579,14 @@
           {/if}
         </button>
       {/if}
+      {#if canManageRoles}
+        <button
+          onclick={showRoles}
+          class="text-sm font-ui px-2.5 py-1 rounded cursor-pointer transition-colors
+            {appMode === 'roles' ? 'bg-bone/15 text-bone' : 'text-bone/50 hover:text-bone/80 hover:bg-bone/10'}"
+          title="Manage contribution roles (editor only)"
+        >Roles</button>
+      {/if}
     </nav>
     <div class="flex-1"></div>
     {#if syncStatus}
@@ -638,7 +657,9 @@
   </header>
 
   <main class="flex-1 flex flex-col min-h-0">
-    {#if appMode === "review"}
+    {#if appMode === "roles"}
+      <RolesView />
+    {:else if appMode === "review"}
       <ReviewView {ingests} onqueuechange={reloadPending} />
     {:else if appMode === "curate"}
       <CurationView />
