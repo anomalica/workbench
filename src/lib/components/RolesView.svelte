@@ -14,7 +14,7 @@
   let newRole = $state("reviewer");
 
   let sortedLogins = $derived(Object.keys(roles).sort());
-  let editorCount = $derived(Object.values(roles).filter((r) => r === "editor").length);
+  let adminCount = $derived(Object.values(roles).filter((r) => r === "admin").length);
 
   async function load() {
     loading = true;
@@ -68,7 +68,8 @@
   }
 
   function roleHint(role: string): string {
-    if (role === "editor") return "manages roles + everything a reviewer can do";
+    if (role === "admin") return "manages roles + everything an editor can do";
+    if (role === "editor") return "archive + article directives + everything a reviewer can do";
     if (role === "reviewer") return "approves proposals; own edits commit directly";
     return "proposes edits (queued, never committed directly)";
   }
@@ -128,10 +129,10 @@
               <td class="px-4 py-2 text-right">
                 <button
                   onclick={() => remove(login)}
-                  disabled={busy === login || (roles[login] === "editor" && editorCount <= 1)}
+                  disabled={busy === login || (roles[login] === "admin" && adminCount <= 1)}
                   class="text-xs font-ui text-on-surface-muted hover:text-error cursor-pointer disabled:opacity-30 disabled:cursor-default"
-                  title={roles[login] === "editor" && editorCount <= 1
-                    ? "Can't remove the last editor"
+                  title={roles[login] === "admin" && adminCount <= 1
+                    ? "Can't remove the last admin"
                     : "Remove (reverts to contributor)"}
                 >
                   Remove
@@ -172,8 +173,11 @@
       </div>
     </div>
 
-    <p class="mt-3 text-xs text-on-surface-muted">
-      {roleHint("editor")} · {roleHint("reviewer")} · {roleHint("contributor")}
+    <p class="mt-3 text-xs text-on-surface-muted leading-relaxed">
+      <span class="font-medium">admin</span> {roleHint("admin")} ·
+      <span class="font-medium">editor</span> {roleHint("editor")} ·
+      <span class="font-medium">reviewer</span> {roleHint("reviewer")} ·
+      <span class="font-medium">contributor</span> {roleHint("contributor")}
     </p>
   {/if}
 </div>

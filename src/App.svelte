@@ -55,8 +55,8 @@
   // the queue is actioned (afterAction in ReviewView) via reloadPending.
   let myRole = $state<string>("contributor");
   let pendingProposals = $state(0);
-  let canReview = $derived(myRole === "reviewer" || myRole === "editor");
-  let canManageRoles = $derived(myRole === "editor");
+  let canReview = $derived(myRole === "reviewer" || myRole === "editor" || myRole === "admin");
+  let canManageRoles = $derived(myRole === "admin");
 
   async function reloadPending() {
     if (!canReview) {
@@ -584,7 +584,7 @@
           onclick={showRoles}
           class="text-sm font-ui px-2.5 py-1 rounded cursor-pointer transition-colors
             {appMode === 'roles' ? 'bg-bone/15 text-bone' : 'text-bone/50 hover:text-bone/80 hover:bg-bone/10'}"
-          title="Manage contribution roles (editor only)"
+          title="Manage contribution roles (admin only)"
         >Roles</button>
       {/if}
     </nav>
@@ -648,7 +648,11 @@
         {#if user.avatar_url}
           <img src={user.avatar_url} alt="" class="w-5 h-5 rounded-full" />
         {/if}
-        <span class="text-bone/80 text-sm">{user.name}</span>
+        <span class="text-bone/80 text-sm leading-tight">
+          Signed in as <span class="font-medium">{user.login || user.name}</span>
+          <span class="text-bone/50">·</span>
+          <span class="text-bone/60 capitalize">{myRole}</span>
+        </span>
         <a href="/api/auth/logout" class="text-bone/40 text-xs hover:text-bone/60 transition-colors">Log out</a>
       </div>
     {:else}
