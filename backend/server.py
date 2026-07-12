@@ -31,7 +31,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from anomalica_common import pre_digest
 from anomalica_common.review_gate import digestibility
 
-from backend import curation, graph, models, tuning
+from backend import curation, graph, models, proposals, roles, tuning
 from backend.auth import setup_auth
 from backend.sync import GIT_LOCK, SyncManager
 
@@ -1257,6 +1257,34 @@ def _require_user(request: Request) -> dict:
     return user
 
 
+def _role_of_user(user: dict | None) -> str:
+    """A user's contribution role from `ingests/roles.yaml` (read per request so
+    a change takes effect without a restart). Contributor by default and for
+    anonymous."""
+    return roles.role_of((user or {}).get("login"), ingests_path)
+
+
+def _role(request: Request) -> str:
+    return _role_of_user(request.session.get("user"))
+
+
+def _require_role(request: Request, minimum: str) -> dict:
+    """Require a logged-in user whose role is at least `minimum`. 401 when not
+    logged in, 403 when under-privileged."""
+    user = _require_user(request)
+    if not roles.at_least(_role_of_user(user), minimum):
+        raise HTTPException(status_code=403, detail=f"Requires {minimum} role")
+    return user
+
+
+@app.get("/api/me/role")
+def my_role(request: Request) -> dict:
+    """The logged-in user's contribution role (contributor for anonymous), so the
+    UI can show the Review tab and the propose-vs-commit affordance. The role is
+    enforced server-side regardless of what the client does with this."""
+    return {"role": _role(request)}
+
+
 @app.get("/api/ingests")
 def list_ingests() -> list[dict]:
     """Return summary metadata for every available ingest.
@@ -1276,8 +1304,8 @@ def list_archived_ingests() -> list[dict]:
 
 @app.post("/api/ingests/{full_hash}/archive")
 def archive_ingest(full_hash: str, request: Request) -> JSONResponse:
-    """Move a record to the archive (store/v1/). Requires authentication."""
-    user = _require_user(request)
+    """Move a record to the archive (store/v1/). Requires reviewer role."""
+    user = _require_role(request, "reviewer")
     if not FULL_HASH_PATTERN.match(full_hash):
         raise HTTPException(status_code=404, detail="Not found")
     if not source.archive_ingest(full_hash, user):
@@ -1287,8 +1315,8 @@ def archive_ingest(full_hash: str, request: Request) -> JSONResponse:
 
 @app.post("/api/ingests/{full_hash}/unarchive")
 def unarchive_ingest(full_hash: str, request: Request) -> JSONResponse:
-    """Restore a record from the archive back to the active store. Requires auth."""
-    user = _require_user(request)
+    """Restore a record from the archive back to the active store. Reviewer role."""
+    user = _require_role(request, "reviewer")
     if not FULL_HASH_PATTERN.match(full_hash):
         raise HTTPException(status_code=404, detail="Not found")
     if not source.unarchive_ingest(full_hash, user):
@@ -1408,9 +1436,7 @@ def set_article_directives(
     UI labels it. Requires authentication."""
     import yaml as _yaml
 
-    user = request.session.get("user")
-    if not user:
-        raise HTTPException(status_code=401, detail="Login required")
+    _require_role(request, "reviewer")
     path = _article_sidecar_path(section, slug)
     if path is None or not path.parent.is_dir():
         raise HTTPException(status_code=404, detail="Not found")
@@ -2371,9 +2397,9 @@ def put_highlights(full_hash: str, body: dict, request: Request) -> JSONResponse
     Expects {"complete": bool, "spans": [{start,end,text,note?}],
     "rejected": [{start,end,text}]}. Offsets are validated against the
     current body (code points, text must match exactly); highlight spans
-    must be non-overlapping. Requires authentication.
+    must be non-overlapping. Requires reviewer role.
     """
-    user = _require_user(request)
+    user = _require_role(request, "reviewer")
     if not FULL_HASH_PATTERN.match(full_hash):
         raise HTTPException(status_code=404, detail="Not found")
     ingest = source.get_ingest(full_hash)
@@ -2552,9 +2578,7 @@ def submit_review(full_hash: str, body: dict, request: Request) -> JSONResponse:
     `{hash}.review.json` sidecar and committed with the review.
     Requires authentication.
     """
-    user = request.session.get("user")
-    if not user:
-        raise HTTPException(status_code=401, detail="Login required")
+    user = _require_user(request)
 
     if not FULL_HASH_PATTERN.match(full_hash):
         raise HTTPException(status_code=404, detail="Not found")
@@ -2566,6 +2590,24 @@ def submit_review(full_hash: str, body: dict, request: Request) -> JSONResponse:
     notes = body.get("notes", "").strip()
     spans = _validate_spans(body.get("spans"))
     obs_cov, digestible_flag, total_units = _validate_verdict(body.get("verdict"))
+
+    # Contributors (the default for any authenticated-but-unlisted login) cannot
+    # commit to live data: their edit is queued as a proposal for a reviewer to
+    # approve. Reviewers and editors commit directly, as before.
+    if not roles.at_least(_role_of_user(user), "reviewer"):
+        entry = proposals.enqueue(
+            ingests_path,
+            record_hash=full_hash,
+            content=content,
+            author=user,
+            notes=notes,
+            spans=spans,
+            verdict=body.get("verdict"),
+        )
+        return JSONResponse(
+            {"submitted": True, "status": "pending", "proposal_id": entry["id"]},
+            status_code=202,
+        )
 
     if not source.save_ingest(full_hash, content):
         raise HTTPException(status_code=404, detail="Not found")

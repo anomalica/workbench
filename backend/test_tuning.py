@@ -53,10 +53,17 @@ def ingests_repo(tmp_path):
 def client(ingests_repo, tmp_path, monkeypatch):
     monkeypatch.setattr(server, "source", LocalIngestSource(ingests_repo))
     monkeypatch.setattr(server, "grading_path", tmp_path / "grading")
+    # Highlights is a reviewer action; grant the test user that role.
+    (ingests_repo / "roles.yaml").write_text("rev: reviewer\n")
+    monkeypatch.setattr(server, "ingests_path", ingests_repo)
     monkeypatch.setattr(
         server,
         "_require_user",
-        lambda request: {"email": "reviewer@example.invalid", "name": "Reviewer"},
+        lambda request: {
+            "login": "rev",
+            "email": "reviewer@example.invalid",
+            "name": "Reviewer",
+        },
     )
     return TestClient(server.app)
 
@@ -251,10 +258,16 @@ def archived_client(ingests_repo, monkeypatch):
         ["git", "commit", "-q", "-m", "archive record"], cwd=ingests_repo, check=True
     )
     monkeypatch.setattr(server, "source", LocalIngestSource(ingests_repo))
+    (ingests_repo / "roles.yaml").write_text("rev: reviewer\n")
+    monkeypatch.setattr(server, "ingests_path", ingests_repo)
     monkeypatch.setattr(
         server,
         "_require_user",
-        lambda request: {"email": "reviewer@example.invalid", "name": "Reviewer"},
+        lambda request: {
+            "login": "rev",
+            "email": "reviewer@example.invalid",
+            "name": "Reviewer",
+        },
     )
     return TestClient(server.app)
 
