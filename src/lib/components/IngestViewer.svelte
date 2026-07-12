@@ -3742,6 +3742,9 @@
             oneventnoteremove={(g, ordinal) => doc.removeWordNote(g, ordinal)}
             onhighlight={(from, to) => doc.addWordHighlight(from, to)}
             onclearhighlight={(from, to) => doc.clearWordHighlights(from, to)}
+            onspannote={(from, to, text) => doc.addWordSpanNote(from, to, text)}
+            onspannoteedit={(id, text) => doc.editWordSpanNote(id, text)}
+            onspannoteremove={(id) => doc.removeWordSpanNote(id)}
             onselectiontext={(t) => (wordSelectionText = t)}
             onseek={(seconds) => {
               const t = Math.max(0, seconds);

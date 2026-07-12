@@ -67,6 +67,9 @@
     oneventnoteremove,
     onhighlight,
     onclearhighlight,
+    onspannote,
+    onspannoteedit,
+    onspannoteremove,
     onselectiontext,
     onseek,
     onplayceiling,
@@ -118,6 +121,12 @@
     onhighlight?: (from: number, to: number) => void;
     /** Clear every highlight overlapping the selected word range [from, to]. */
     onclearhighlight?: (from: number, to: number) => void;
+    /** Attach a span note (free text) over the selected word range [from, to]. */
+    onspannote?: (from: number, to: number, text: string) => void;
+    /** Edit an existing span note's text by id (empty text removes it). */
+    onspannoteedit?: (id: string, text: string) => void;
+    /** Remove a span note by id. */
+    onspannoteremove?: (id: string) => void;
     /** Report the selected words as plain text whenever the selection changes.
      *  The transcript is `select-none` with a custom word range, so the host
      *  cannot read this selection from `window.getSelection()` - Ctrl+F seeds
@@ -198,6 +207,26 @@
       .join(",");
     s.paddingBottom = `${(n - 1) * BAND_PITCH + BAND_H}px`;
   }
+
+  // Reviewer span notes: free text attached to a word RANGE ("what was on screen
+  // here"), distinct from the point event-notes on a single word. Words inside
+  // any span note get a subtle background tint (a distinct treatment from the
+  // highlight underline bands); the note text is shown in an inline card at the
+  // range's first word.
+  let spanNoteWordSet = $derived.by(() => {
+    const s = new Set<number>();
+    for (const n of parsed.spanNotes) for (let g = n.fromWord; g <= n.toWord; g++) s.add(g);
+    return s;
+  });
+  let spanNotesByStartWord = $derived.by(() => {
+    const m = new Map<number, typeof parsed.spanNotes>();
+    for (const n of parsed.spanNotes) {
+      const list = m.get(n.fromWord) ?? [];
+      list.push(n);
+      m.set(n.fromWord, list);
+    }
+    return m;
+  });
 
   // Speaker filter + irrelevant-hiding: when a filter is active only matching
   // turns render, and `[irrelevant]` turns hide unless the eye toggle is off.
@@ -620,6 +649,53 @@
     addNoteAt(currentTime);
   }
 
+  // --- Span notes: free text over a word range --------------------------------
+  // Composing a new span note holds the selected range + draft text until saved;
+  // editing an existing one is by its id. Both write to the body via the host
+  // handlers (real, persisted markers), mirroring the point-note commit path.
+  let composeSpanNote = $state<{ from: number; to: number; text: string } | null>(null);
+  let editingSpanNoteId = $state<string | null>(null);
+  let editingSpanNoteText = $state("");
+  let spanNoteInputEl = $state<HTMLTextAreaElement>();
+
+  /** Begin a span note over the current selection: capture the range, drop the
+   *  selection (so the compose card is readable), and focus the editor. */
+  function startSpanNote() {
+    if (!range) return;
+    composeSpanNote = { from: range.from, to: range.to, text: "" };
+    pickerOpen = false;
+    clearSelection();
+    setTimeout(() => spanNoteInputEl?.focus(), 0);
+  }
+
+  /** Commit the compose draft to a real span note (no-op on empty text). */
+  function commitSpanNote() {
+    const c = composeSpanNote;
+    composeSpanNote = null;
+    if (!c) return;
+    if (c.text.trim()) onspannote?.(c.from, c.to, c.text);
+  }
+
+  function cancelSpanNote() {
+    composeSpanNote = null;
+  }
+
+  function startSpanNoteEdit(id: string, text: string) {
+    editingSpanNoteId = id;
+    editingSpanNoteText = text;
+    setTimeout(() => spanNoteInputEl?.focus(), 0);
+  }
+
+  function saveSpanNoteEdit(id: string) {
+    editingSpanNoteId = null;
+    onspannoteedit?.(id, editingSpanNoteText);
+  }
+
+  function removeSpanNote(id: string) {
+    if (editingSpanNoteId === id) editingSpanNoteId = null;
+    onspannoteremove?.(id);
+  }
+
   /** Plain text of the current word selection, words space-joined as shown. */
   function selectionText(): string {
     if (!range) return "";
@@ -838,6 +914,7 @@
     const cols = highlightColorsByWord.get(g);
     applyWordHighlight(el, cols);
     c.toggle("wt-highlight", cols !== undefined);
+    c.toggle("wt-spannote", spanNoteWordSet.has(g));
   }
 
   function reapplyAll() {
@@ -918,6 +995,7 @@
     void visibleRuns;
     void styleEpoch;
     void highlightColorsByWord; // re-apply bands when a highlight is added/cleared
+    void spanNoteWordSet; // re-apply tint when a span note is added/cleared/re-ranged
     const el = scrollEl;
     untrack(() => {
       if (!el) return;
@@ -1175,6 +1253,90 @@
   </div>
 {/snippet}
 
+<!-- A span-note card: shown inline at the range's first word. Distinct from the
+     amber point-note cards (primary-tinted, monitor icon) to read as range
+     context, not an in-flow beat. -->
+{#snippet spanNoteCard(id: string, text: string, count: number)}
+  <span
+    style="display:flex"
+    class="my-1.5 items-start gap-1.5 rounded border border-primary/50 bg-primary-container/20 px-2 py-1 text-xs not-italic text-on-surface select-text"
+  >
+    <svg class="w-3.5 h-3.5 flex-none mt-0.5 text-primary" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+      <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+      <path stroke-linecap="round" d="M8 21h8M12 17v4" />
+    </svg>
+    {#if editingSpanNoteId === id}
+      <span style="display:flex" class="flex-1 min-w-0 flex-col gap-1.5">
+        <textarea
+          bind:this={spanNoteInputEl}
+          bind:value={editingSpanNoteText}
+          onblur={() => saveSpanNoteEdit(id)}
+          onkeydown={(e) => { blockBrackets(e); if (e.key === "Escape") { e.preventDefault(); saveSpanNoteEdit(id); } }}
+          rows="2"
+          placeholder="What the words miss here - on-screen text, an image, context... (empty removes the note)"
+          class="w-full bg-surface border border-primary rounded px-1.5 py-1 text-xs text-on-surface outline-none resize-y"
+        ></textarea>
+        <button onclick={() => saveSpanNoteEdit(id)} class="self-start text-xs font-ui font-medium text-primary cursor-pointer hover:underline">Save</button>
+      </span>
+    {:else}
+      <span class="flex-none text-[10px] font-ui uppercase tracking-wide text-primary/70 mt-0.5 tabular-nums">
+        {count}w
+      </span>
+      <span class="flex-1 min-w-0 whitespace-pre-wrap font-medium">{text}</span>
+      <button
+        onclick={() => startSpanNoteEdit(id, text)}
+        class="flex-none text-on-surface-muted/70 hover:text-primary cursor-pointer"
+        title="Edit note" aria-label="Edit note"
+      >
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+          <path stroke-linecap="round" stroke-linejoin="round" d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+        </svg>
+      </button>
+      <button
+        onclick={() => removeSpanNote(id)}
+        class="flex-none text-on-surface-muted/70 hover:text-error cursor-pointer"
+        title="Remove note" aria-label="Remove note"
+      >
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" d="M6 18L18 6M6 6l12 12" />
+        </svg>
+      </button>
+    {/if}
+  </span>
+{/snippet}
+
+<!-- The compose card for a new span note over the just-selected range. -->
+{#snippet spanNoteCompose()}
+  <span
+    style="display:flex"
+    class="my-1.5 items-start gap-1.5 rounded border border-primary bg-primary-container/20 px-2 py-1 text-xs not-italic text-on-surface select-text"
+  >
+    <svg class="w-3.5 h-3.5 flex-none mt-0.5 text-primary" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+      <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+      <path stroke-linecap="round" d="M8 21h8M12 17v4" />
+    </svg>
+    <span style="display:flex" class="flex-1 min-w-0 flex-col gap-1.5">
+      <textarea
+        bind:this={spanNoteInputEl}
+        bind:value={composeSpanNote!.text}
+        onblur={commitSpanNote}
+        onkeydown={(e) => {
+          blockBrackets(e);
+          if (e.key === "Escape") { e.preventDefault(); cancelSpanNote(); }
+        }}
+        rows="2"
+        placeholder="What the words miss over these words - on-screen text, an image, context (no braces)..."
+        class="w-full bg-surface border border-primary rounded px-1.5 py-1 text-xs text-on-surface outline-none resize-y"
+      ></textarea>
+      <span style="display:flex" class="items-center gap-3">
+        <button onmousedown={(e) => e.preventDefault()} onclick={commitSpanNote} class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline">Save</button>
+        <button onmousedown={(e) => e.preventDefault()} onclick={cancelSpanNote} class="text-xs font-ui text-on-surface-muted hover:text-on-surface cursor-pointer">Cancel</button>
+      </span>
+    </span>
+  </span>
+{/snippet}
+
 <!-- Selection action bar, floating just above the first selected word, shown
      when a word range is selected. -->
 {#if range}
@@ -1254,6 +1416,16 @@
           title="Remove the highlight(s) over these words"
         >
           Clear
+        </button>
+      {/if}
+      {#if onspannote}
+        <div class="w-px h-4 bg-border" aria-hidden="true"></div>
+        <button
+          onclick={startSpanNote}
+          class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
+          title="Attach a note over these words - what's on screen, context the words miss"
+        >
+          Note range
         </button>
       {/if}
       <button
@@ -1567,6 +1739,15 @@
                 {/if}
               </span>
             {/each}
+            <!-- Span notes starting at this word: free text over a word range,
+                 shown as a card at the range's first word. The tinted words
+                 (.wt-spannote) show its extent. -->
+            {#each spanNotesByStartWord.get(g) ?? [] as sn (sn.id)}
+              {@render spanNoteCard(sn.id, sn.text, sn.toWord - sn.fromWord + 1)}
+            {/each}
+            {#if composeSpanNote?.from === g}
+              {@render spanNoteCompose()}
+            {/if}
           {/each}
         </p>
       </div>

@@ -70,6 +70,14 @@ body {
 .wt-word.wt-observed {
   color: var(--color-on-surface);
 }
+/* Span-note tint: a faint background over every word a reviewer span note
+   covers, so the noted stretch is visible while reading. Set before the
+   transient states below so a selection / active / claim / resume word takes
+   over its background during interaction; it coexists with the highlight
+   underline bands, which paint the bottom padding rather than the background. */
+.wt-word.wt-spannote {
+  background-color: color-mix(in srgb, var(--color-primary) 12%, transparent);
+}
 .wt-word.wt-active {
   color: var(--color-on-surface);
   background-color: color-mix(in srgb, #fbbf24 40%, transparent);
