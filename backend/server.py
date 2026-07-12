@@ -2763,6 +2763,127 @@ def list_my_reviews(request: Request) -> JSONResponse:
     return JSONResponse({"reviewed": reviewed})
 
 
+# Proposal review queue (roles phase 2). A contributor's submit is queued as a
+# proposal (see submit_review); these endpoints let a reviewer/editor list them,
+# see the diff, and approve (commit as the contributor) or reject (drop). SECURITY:
+# the store holds unreviewed content from anyone, so every list/read here is
+# reviewer-gated; only the /mine endpoint is contributor-visible and returns just
+# the caller's own pending proposals.
+
+
+@app.get("/api/proposals/mine")
+def my_proposals(request: Request) -> JSONResponse:
+    """A contributor's own pending proposals (metadata only), so they can see
+    what they've submitted is queued. Declared before /{pid} so "mine" is not
+    captured as an id."""
+    user = _require_user(request)
+    login = user.get("login", "")
+    mine = [
+        p
+        for p in proposals.list_pending(ingests_path)
+        if p.get("author_login") == login
+    ]
+    return JSONResponse({"proposals": mine})
+
+
+@app.get("/api/proposals")
+def list_proposals(request: Request) -> JSONResponse:
+    """Every pending proposal (metadata only, no content). Reviewer/editor."""
+    _require_role(request, "reviewer")
+    return JSONResponse({"proposals": proposals.list_pending(ingests_path)})
+
+
+@app.get("/api/proposals/{pid}")
+def get_proposal(pid: str, request: Request) -> JSONResponse:
+    """One proposal with its full proposed content, plus the CURRENT record
+    content so the client can diff. Reviewer/editor."""
+    _require_role(request, "reviewer")
+    entry = proposals.get(ingests_path, pid)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    current = source.get_ingest(entry["record_hash"])
+    # The record may have been re-ingested/removed since the proposal; still
+    # show the proposed content so the reviewer can decide (empty current diffs
+    # as an all-add).
+    current_content = (current["raw_frontmatter"] + current["body"]) if current else ""
+    record_title = ""
+    if current:
+        record_title = current.get("frontmatter", {}).get("title", "")
+    return JSONResponse(
+        {
+            "proposal": entry,
+            "current_content": current_content,
+            "record_exists": current is not None,
+            "record_title": record_title,
+        }
+    )
+
+
+@app.post("/api/proposals/{pid}/approve")
+def approve_proposal(pid: str, request: Request) -> JSONResponse:
+    """Approve a proposal: commit its content to ingests attributed to the
+    contributor (approved-by the reviewer), then drop the queue entry. Reuses
+    the same save + coverage + commit path as a direct reviewer submit."""
+    reviewer = _require_role(request, "reviewer")
+    entry = proposals.get(ingests_path, pid)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    full_hash = entry["record_hash"]
+    if not FULL_HASH_PATTERN.match(full_hash):
+        raise HTTPException(status_code=404, detail="Not found")
+
+    content = entry.get("content")
+    if not content or not isinstance(content, str):
+        raise HTTPException(status_code=400, detail="Proposal has no content")
+
+    if not source.save_ingest(full_hash, content):
+        raise HTTPException(status_code=404, detail="Record not found")
+
+    notes = (entry.get("notes") or "").strip()
+    spans = _validate_spans(entry.get("spans"))
+    obs_cov, digestible_flag, total_units = _validate_verdict(entry.get("verdict"))
+    author_email = entry.get("author_email") or ""
+    if (spans or obs_cov is not None) and author_email:
+        source.append_coverage(
+            full_hash=full_hash,
+            email=author_email,
+            spans=spans,
+            notes=notes,
+            observed_coverage=obs_cov,
+            digestible=digestible_flag,
+            total_units=total_units,
+        )
+
+    # Commit as the contributor; the reviewer who approved is recorded in the
+    # message body so the audit trail carries both identities.
+    approver = reviewer.get("name") or reviewer.get("login") or "a reviewer"
+    commit_notes = (
+        f"{notes}\n\nApproved by {approver}" if notes else f"Approved by {approver}"
+    )
+    source.commit_review(
+        full_hash=full_hash,
+        author_name=entry.get("author_name")
+        or entry.get("author_login")
+        or "Contributor",
+        author_email=author_email or "contributor@anomalica.is",
+        notes=commit_notes,
+    )
+    proposals.remove(ingests_path, pid)
+    return JSONResponse({"approved": True})
+
+
+@app.post("/api/proposals/{pid}/reject")
+def reject_proposal(pid: str, request: Request) -> JSONResponse:
+    """Reject a proposal: drop the queue entry (the full-content snapshot is
+    discarded). Reviewer/editor."""
+    _require_role(request, "reviewer")
+    if proposals.get(ingests_path, pid) is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    proposals.remove(ingests_path, pid)
+    return JSONResponse({"rejected": True})
+
+
 # Verification: cloze-challenge proof of possession.
 # Reviewers prove they have the source by filling in N short cloze blanks
 # drawn from the body. The sidecar (`{hash}.verification.json`) lives next
