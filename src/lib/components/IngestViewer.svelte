@@ -48,6 +48,7 @@
   import EpubViewer from "./EpubViewer.svelte";
   import WordTranscript from "./WordTranscript.svelte";
   import MarkupList from "./MarkupList.svelte";
+  import SpeakerFilter from "./SpeakerFilter.svelte";
   import ReadableText from "./ReadableText.svelte";
   import EditableMetadata from "./EditableMetadata.svelte";
   import ReviewHistory from "./ReviewHistory.svelte";
@@ -3047,28 +3048,42 @@
         <span class="text-xs text-on-surface-muted ml-auto">{visibleSpeakerIds.size}</span>
       </summary>
       <div class="px-3 py-2">
-        <SpeakerManager
-          {segments}
-          rows={wordSpeakerRows}
-          {namedSpeakers}
-          {selectedSpeakers}
-          {filteredSpeakers}
-          onselect={handleSpeakerSelection}
-          onfilter={(id) => {
-            // Show only this speaker; clicking the sole-filtered speaker clears
-            // it. Multi-speaker filters are still built via the section eye.
-            filteredSpeakers =
-              filteredSpeakers.size === 1 && filteredSpeakers.has(id)
-                ? new Set()
-                : new Set([id]);
-          }}
-          onsetfilter={(ids) => { filteredSpeakers = new Set(ids); }}
-          onrename={renameSpeaker}
-          onmerge={mergeSpeakers}
-          onaddnamed={addNamedSpeaker}
-          onremovenamed={removeNamedSpeaker}
-          onrenamenamed={renameNamedSpeaker}
-        />
+        {#if view === "markup"}
+          <!-- Markup filters by speaker but never edits them. -->
+          <SpeakerFilter
+            rows={wordSpeakerRows}
+            {filteredSpeakers}
+            onfilter={(id) => {
+              filteredSpeakers =
+                filteredSpeakers.size === 1 && filteredSpeakers.has(id)
+                  ? new Set()
+                  : new Set([id]);
+            }}
+          />
+        {:else}
+          <SpeakerManager
+            {segments}
+            rows={wordSpeakerRows}
+            {namedSpeakers}
+            {selectedSpeakers}
+            {filteredSpeakers}
+            onselect={handleSpeakerSelection}
+            onfilter={(id) => {
+              // Show only this speaker; clicking the sole-filtered speaker clears
+              // it. Multi-speaker filters are still built via the section eye.
+              filteredSpeakers =
+                filteredSpeakers.size === 1 && filteredSpeakers.has(id)
+                  ? new Set()
+                  : new Set([id]);
+            }}
+            onsetfilter={(ids) => { filteredSpeakers = new Set(ids); }}
+            onrename={renameSpeaker}
+            onmerge={mergeSpeakers}
+            onaddnamed={addNamedSpeaker}
+            onremovenamed={removeNamedSpeaker}
+            onrenamenamed={renameNamedSpeaker}
+          />
+        {/if}
       </div>
     </details>
   {/snippet}

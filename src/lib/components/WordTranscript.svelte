@@ -411,6 +411,30 @@
   // mutated) so reactivity fires regardless of Set-proxy behaviour.
   let observed = $state(new Set<number>());
   let lastPlayTime = -1;
+
+  // Markup shows only observed, relevant content: you can't mark up what you
+  // haven't reviewed. `markupVisible` is the gIndex set (observed AND not
+  // irrelevant); `renderRuns` are the turns with any such word (all turns in
+  // edit mode). The word loop hides the rest. `[irrelevant]` turns never show in
+  // markup regardless of the eye toggle.
+  let markupVisible = $derived.by(() => {
+    const s = new Set<number>();
+    if (mode !== "markup") return s;
+    for (let g = 0; g < words.length; g++) {
+      if (observed.has(g) && !irrelevantWords.has(g)) s.add(g);
+    }
+    return s;
+  });
+  let renderRuns = $derived.by(() => {
+    if (mode !== "markup") return visibleRuns;
+    return runs.filter((r) => {
+      if (r.speaker === SPEAKER_IRRELEVANT) return false;
+      if (filteredSpeakers.size > 0 && !filteredSpeakers.has(r.speaker)) return false;
+      for (let g = r.startWord; g <= r.endWord; g++) if (markupVisible.has(g)) return true;
+      return false;
+    });
+  });
+  let markupEmpty = $derived(mode === "markup" && markupVisible.size === 0);
   // "Resume here" marker: the last observed word before the first unobserved
   // gap, dropped by Jump to unobserved. A persistent position indicator (and
   // play-resume point), distinct from the amber cursor and from a selection.
@@ -1056,7 +1080,8 @@
   // an observed change with no DOM delta (epoch bump). Deliberately tracks only
   // those signals - NOT range/active/etc - so a selection never triggers it.
   $effect(() => {
-    void visibleRuns;
+    void renderRuns;
+    void markupVisible; // markup hides unobserved words; restyle when that set moves
     void styleEpoch;
     void highlightColorsByWord; // re-apply bands when a highlight is added/cleared
     void spanNoteWordSet; // re-apply tint when a span note is added/cleared/re-ranged
@@ -1536,7 +1561,9 @@
 {/if}
 
 <!-- Top toolbar: drop a time-anchored note at the current playback moment
-     (also bound to the `v` key, handled in IngestViewer). -->
+     (also bound to the `v` key, handled in IngestViewer) plus observation
+     controls. Hidden in markup, which is read-only and annotation-only. -->
+{#if mode !== "markup"}
 <div class="flex-none flex items-center gap-2 px-4 py-1.5 border-b border-border bg-surface-alt">
   <button
     onclick={() => addNoteAtCurrentTime()}
@@ -1595,6 +1622,7 @@
   {/if}
   <span class="text-xs font-ui text-on-surface-muted/60">{notes.length} note{notes.length === 1 ? "" : "s"}</span>
 </div>
+{/if}
 
 <div
   bind:this={scrollEl}
@@ -1611,9 +1639,19 @@
     onpointerover={onContainerPointerOver}
     ondblclick={onContainerDblClick}
   >
-    {#each visibleRuns as run (run.startWord)}
+    {#if markupEmpty}
+      <p class="px-6 py-8 text-sm text-on-surface-muted max-w-prose">
+        Nothing to mark up yet. Only content you've observed (and that isn't marked
+        irrelevant) shows here - observe the transcript in the Ingest tab first,
+        then come back to highlight and note it.
+      </p>
+    {/if}
+    {#each renderRuns as run (run.startWord)}
       {@const obs = observedInRun(run)}
       {@const total = run.endWord - run.startWord + 1}
+      {@const runGs = Array.from({ length: total }, (_, k) => run.startWord + k).filter(
+        (g) => mode !== "markup" || markupVisible.has(g),
+      )}
       <!-- content-visibility:auto lets the browser skip layout/paint for runs
            off-screen while keeping their words in the DOM (so jump-to-word,
            claim links and karaoke centring still find them). It clips overflow,
@@ -1626,56 +1664,66 @@
           : 'auto'};contain-intrinsic-size:auto {runIntrinsic(run)}px"
       >
         <div class="flex items-center justify-between gap-2 pb-1">
-          <!-- Clickable speaker chip: reassigns the whole turn. -->
-          <div class="relative inline-block">
-            <button
-              onclick={(e) => {
-                e.stopPropagation();
-                toggleHeaderPicker(run);
-              }}
-              class="group flex items-center gap-2 cursor-pointer rounded px-1 -mx-1 hover:bg-primary-container/30 transition-colors"
-              title="Change this speaker"
-            >
+          {#if mode === "markup"}
+            <!-- Read-only speaker label: markup doesn't reassign speakers. -->
+            <div class="flex items-center gap-2 px-1 -mx-1">
               <div class="w-4 flex-none flex items-center justify-center">
                 <SpeakerDot speaker={run.speaker} />
               </div>
-              <span class="text-xs font-ui font-medium text-primary group-hover:underline">
-                {run.speaker}
-              </span>
-              <svg
-                class="w-3 h-3 text-on-surface-muted/60"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                viewBox="0 0 24 24"
+              <span class="text-xs font-ui font-medium text-on-surface-secondary">{run.speaker}</span>
+            </div>
+          {:else}
+            <!-- Clickable speaker chip: reassigns the whole turn. -->
+            <div class="relative inline-block">
+              <button
+                onclick={(e) => {
+                  e.stopPropagation();
+                  toggleHeaderPicker(run);
+                }}
+                class="group flex items-center gap-2 cursor-pointer rounded px-1 -mx-1 hover:bg-primary-container/30 transition-colors"
+                title="Change this speaker"
               >
-                <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
-              </svg>
+                <div class="w-4 flex-none flex items-center justify-center">
+                  <SpeakerDot speaker={run.speaker} />
+                </div>
+                <span class="text-xs font-ui font-medium text-primary group-hover:underline">
+                  {run.speaker}
+                </span>
+                <svg
+                  class="w-3 h-3 text-on-surface-muted/60"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  viewBox="0 0 24 24"
+                >
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+              {#if headerPicker === run.startWord}
+                {@render speakerMenu(run.speaker, (name) => chooseRunSpeaker(run, name))}
+              {/if}
+            </div>
+            <!-- Observation progress for this turn. Clicking selects the turn so
+                 it can be marked seen deliberately (no one-click mark-all). -->
+            <button
+              onclick={() => selectBlock(run)}
+              class="flex-none text-[10px] font-mono tabular-nums px-1.5 py-0.5 rounded cursor-pointer transition-colors
+                {obs >= total
+                ? 'text-primary hover:bg-primary-container/30'
+                : 'text-on-surface-muted/60 hover:bg-surface-alt hover:text-on-surface'}"
+              title={obs >= total
+                ? "This turn is fully observed - click to select it"
+                : `${obs} of ${total} words observed - click to select this turn, then Mark seen`}
+            >
+              {obs}/{total}
             </button>
-            {#if headerPicker === run.startWord}
-              {@render speakerMenu(run.speaker, (name) => chooseRunSpeaker(run, name))}
-            {/if}
-          </div>
-          <!-- Observation progress for this turn. Clicking selects the turn so
-               it can be marked seen deliberately (no one-click mark-all). -->
-          <button
-            onclick={() => selectBlock(run)}
-            class="flex-none text-[10px] font-mono tabular-nums px-1.5 py-0.5 rounded cursor-pointer transition-colors
-              {obs >= total
-              ? 'text-primary hover:bg-primary-container/30'
-              : 'text-on-surface-muted/60 hover:bg-surface-alt hover:text-on-surface'}"
-            title={obs >= total
-              ? "This turn is fully observed - click to select it"
-              : `${obs} of ${total} words observed - click to select this turn, then Mark seen`}
-          >
-            {obs}/{total}
-          </button>
+          {/if}
         </div>
         <!-- leading-[1.75]: a touch more than relaxed so highlight underline
              bands sit in real leading below a wrapped line, never reaching the
              text below. -->
         <p class="pl-6 text-sm text-on-surface leading-[1.75]">
-          {#each Array.from({ length: run.endWord - run.startWord + 1 }, (_, k) => run.startWord + k) as g (g)}<span
+          {#each runGs as g (g)}<span
               data-word-index={g}
               class="wt-word">{words[g].text}</span>{" "}
             <!-- Committed event notes on this word: first-class annotation
