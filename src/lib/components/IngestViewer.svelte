@@ -3071,12 +3071,16 @@
             onfilter={(id) => {
               // Show only this speaker; clicking the sole-filtered speaker clears
               // it. Multi-speaker filters are still built via the section eye.
-              filteredSpeakers =
-                filteredSpeakers.size === 1 && filteredSpeakers.has(id)
-                  ? new Set()
-                  : new Set([id]);
+              const clearing = filteredSpeakers.size === 1 && filteredSpeakers.has(id);
+              filteredSpeakers = clearing ? new Set() : new Set([id]);
+              // Filtering TO [irrelevant] has to reveal it, else the filter shows
+              // nothing (irrelevant is hidden by default). No auto-restore on clear.
+              if (!clearing && id === SPEAKER_IRRELEVANT) hideIrrelevant = false;
             }}
-            onsetfilter={(ids) => { filteredSpeakers = new Set(ids); }}
+            onsetfilter={(ids) => {
+              filteredSpeakers = new Set(ids);
+              if (ids.includes(SPEAKER_IRRELEVANT)) hideIrrelevant = false;
+            }}
             onrename={renameSpeaker}
             onmerge={mergeSpeakers}
             onaddnamed={addNamedSpeaker}
