@@ -59,7 +59,20 @@ describe("parseWords - highlight markers", () => {
     expect(covered(p)).toEqual({ out: "a b c", in: "b" });
   });
 
-  it("auto-closes an unclosed highlight at a speaker change", () => {
+  it("a paired highlight spans a speaker change (markup is cross-speaker)", () => {
+    const p = parseWords(
+      body(
+        SP,
+        "{{highlight-start: a}}{{t:1}}one {{t:2}}two",
+        "<!-- speaker: B -->",
+        "{{t:3}}three{{highlight-end: a}}",
+      ),
+    );
+    // The highlight covers the whole back-and-forth, across the turn.
+    expect(covered(p)).toEqual({ a: "one two three" });
+  });
+
+  it("an unclosed highlight extends to end of body, across speaker turns", () => {
     const p = parseWords(
       body(
         SP,
@@ -68,8 +81,8 @@ describe("parseWords - highlight markers", () => {
         "{{t:3}}three",
       ),
     );
-    // Closes on A's last word (two), never spilling into B's turn.
-    expect(covered(p)).toEqual({ a: "one two" });
+    // No matching end: closes at the last word of the record, not the turn.
+    expect(covered(p)).toEqual({ a: "one two three" });
   });
 
   it("drops an end with no matching open", () => {

@@ -55,7 +55,19 @@ describe("parseWords - span-note markers", () => {
     });
   });
 
-  it("auto-closes an unclosed span note at a speaker change", () => {
+  it("a paired span note spans a speaker change (markup is cross-speaker)", () => {
+    const p = parseWords(
+      body(
+        SP,
+        '{{note-start: [a, "ctx"]}}{{t:1}}one {{t:2}}two',
+        "<!-- speaker: B -->",
+        "{{t:3}}three{{note-end: a}}",
+      ),
+    );
+    expect(noted(p)).toEqual({ a: { words: "one two three", text: "ctx" } });
+  });
+
+  it("an unclosed span note extends to end of body, across speaker turns", () => {
     const p = parseWords(
       body(
         SP,
@@ -64,7 +76,7 @@ describe("parseWords - span-note markers", () => {
         "{{t:3}}three",
       ),
     );
-    expect(noted(p)).toEqual({ a: { words: "one two", text: "ctx" } });
+    expect(noted(p)).toEqual({ a: { words: "one two three", text: "ctx" } });
   });
 
   it("drops a note-end with no matching open", () => {
