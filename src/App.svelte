@@ -7,6 +7,8 @@
     fetchIngest,
     fetchDigest,
     fetchCurrentUser,
+    fetchMyRole,
+    fetchProposals,
     fetchReviewedHashes,
     fetchSyncStatus,
     provenanceOf,
@@ -26,6 +28,7 @@
   import GraphView from "$lib/components/GraphView.svelte";
   import CurationView from "$lib/components/CurationView.svelte";
   import ArticlesView from "$lib/components/ArticlesView.svelte";
+  import ReviewView from "$lib/components/ReviewView.svelte";
   import { carryoverState } from "$lib/carryover";
   import { themeState } from "$lib/theme.svelte";
   import { trackView, trackEvent } from "$lib/umami";
@@ -35,7 +38,7 @@
   // Top-level view: record review (default), knowledge-graph review, or curation.
   // (The Schedule view + processing-mode runner moved to the local `scheduler`
   // repo - this workbench is review-only.)
-  let appMode = $state<"records" | "graph" | "curate" | "articles">("records");
+  let appMode = $state<"records" | "graph" | "curate" | "articles" | "review">("records");
   // A node to open directly in the graph view (deep link /graph/<node_id>), so a
   // claim-count / any link can jump straight to that node's claims in context.
   let graphNodeId = $state<string | undefined>(undefined);
@@ -46,9 +49,28 @@
   // URL points at a specific record, cleared in selectIngest's finally.
   let openingRecord = $state(false);
 
+  // The user's contribution role gates the Review tab (reviewer/editor only);
+  // `pendingProposals` badges the tab with the queue depth. Both refresh when
+  // the queue is actioned (afterAction in ReviewView) via reloadPending.
+  let myRole = $state<string>("contributor");
+  let pendingProposals = $state(0);
+  let canReview = $derived(myRole === "reviewer" || myRole === "editor");
+
+  async function reloadPending() {
+    if (!canReview) {
+      pendingProposals = 0;
+      return;
+    }
+    pendingProposals = (await fetchProposals()).length;
+  }
+
   fetchCurrentUser().then((u) => {
     user = u;
     if (u) loadReviews();
+    if (u) fetchMyRole().then((r) => {
+      myRole = r;
+      reloadPending();
+    });
   });
 
   // Sync-state indicator for the local backend: localhost work must be
@@ -412,6 +434,12 @@
     history.pushState(null, "", "/articles");
   }
 
+  function showReview() {
+    appMode = "review";
+    history.pushState(null, "", "/review");
+    reloadPending();
+  }
+
   // Open a record in the workbench review view by its public hash (the 56-char
   // record_hash an Articles record-page carries). Mirrors the deep-link path so
   // a not-yet-reviewable record surfaces the same friendly notice.
@@ -437,6 +465,11 @@
     if (path === "articles") {
       appMode = "articles";
       return; // ArticlesView fetches its own listing
+    }
+    if (path === "review") {
+      appMode = "review";
+      loadIngests(); // ReviewView needs the record list for hash->title
+      return;
     }
     if (path.startsWith("graph/")) {
       const id = path.slice("graph/".length);
@@ -520,6 +553,21 @@
           {appMode === 'articles' ? 'bg-bone/15 text-bone' : 'text-bone/50 hover:text-bone/80 hover:bg-bone/10'}"
         title="Browse the assembled knowledge-article pages"
       >Articles</button>
+      {#if canReview}
+        <button
+          onclick={showReview}
+          class="text-sm font-ui px-2.5 py-1 rounded cursor-pointer transition-colors flex items-center gap-1.5
+            {appMode === 'review' ? 'bg-bone/15 text-bone' : 'text-bone/50 hover:text-bone/80 hover:bg-bone/10'}"
+          title="Review contributor edit proposals: approve or reject"
+        >
+          Review
+          {#if pendingProposals > 0}
+            <span class="text-[10px] font-semibold tabular-nums px-1.5 py-0.5 rounded-full bg-primary text-on-primary leading-none">
+              {pendingProposals}
+            </span>
+          {/if}
+        </button>
+      {/if}
     </nav>
     <div class="flex-1"></div>
     {#if syncStatus}
@@ -590,7 +638,9 @@
   </header>
 
   <main class="flex-1 flex flex-col min-h-0">
-    {#if appMode === "curate"}
+    {#if appMode === "review"}
+      <ReviewView {ingests} onqueuechange={reloadPending} />
+    {:else if appMode === "curate"}
       <CurationView />
     {:else if appMode === "articles"}
       <ArticlesView onOpenRecord={openRecordByHash} {user} />

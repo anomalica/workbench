@@ -668,6 +668,56 @@ export async function fetchCurrentUser(): Promise<User | null> {
   return data.user || null;
 }
 
+/** The logged-in user's contribution role (contributor|reviewer|editor), so the
+ *  UI can show the Review tab and the propose-vs-commit affordance. Enforced
+ *  server-side regardless. Defaults to contributor when not logged in. */
+export async function fetchMyRole(): Promise<string> {
+  const res = await fetch("/api/me/role");
+  if (!res.ok) return "contributor";
+  return (await res.json()).role ?? "contributor";
+}
+
+/** A pending proposal's metadata (no content - the diff is fetched per item). */
+export interface ProposalSummary {
+  id: string;
+  record_hash: string;
+  author_login: string;
+  author_name: string;
+  author_email: string;
+  notes: string;
+  created_at: string;
+  status: string;
+}
+
+export interface ProposalDetail {
+  proposal: ProposalSummary & { content: string };
+  current_content: string;
+  record_exists: boolean;
+  record_title: string;
+}
+
+export async function fetchProposals(): Promise<ProposalSummary[]> {
+  const res = await fetch("/api/proposals");
+  if (!res.ok) return [];
+  return (await res.json()).proposals ?? [];
+}
+
+export async function fetchProposal(id: string): Promise<ProposalDetail | null> {
+  const res = await fetch(`/api/proposals/${id}`);
+  if (!res.ok) return null;
+  return await res.json();
+}
+
+export async function approveProposal(id: string): Promise<boolean> {
+  const res = await fetch(`/api/proposals/${id}/approve`, { method: "POST" });
+  return res.ok;
+}
+
+export async function rejectProposal(id: string): Promise<boolean> {
+  const res = await fetch(`/api/proposals/${id}/reject`, { method: "POST" });
+  return res.ok;
+}
+
 export async function hashFile(file: File): Promise<string> {
   // Stream the file through an incremental SHA-256 in chunks. The old
   // file.arrayBuffer() + crypto.subtle.digest loaded the whole file into
