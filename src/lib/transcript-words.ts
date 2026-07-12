@@ -104,7 +104,7 @@ interface SpanMarker {
   text?: string;
 }
 
-/** Reverse the escaping serializeSpanNoteText applies (\" -> ", \\ -> \). */
+/** Reverse the escaping escapeNoteText applies (\" -> ", \\ -> \). */
 function unescapeNoteText(s: string): string {
   return s.replace(/\\(["\\])/g, "$1");
 }
@@ -260,7 +260,11 @@ export function parseWords(body: string): ParsedWords {
 
     const speakerMatch = line.match(INLINE_SPEAKER);
     if (speakerMatch) {
-      endRun(); // a span never crosses a speaker turn
+      // Spans (highlights + notes) may cross speaker turns - a reviewer marks up
+      // a whole back-and-forth. Only a genuinely-unclosed span auto-closes, and
+      // it does so at end of body (endRun below), not per turn. This lifts the
+      // earlier "a highlight never crosses a speaker turn" rule now that markup
+      // is a cross-speaker surface.
       currentSpeaker = speakerMatch[1].trim();
       continue;
     }
