@@ -251,11 +251,22 @@
     if (!recordTabs.some(([id]) => id === view)) view = "ingest";
   });
 
-  // The word editor's waveform fetches /api/sources/{hash}/waveform - ffmpeg, so
-  // Python-only. Production serves a static SPA + the Deno edge and has no such
-  // route, so withhold the hash there: the editor then renders without a
-  // waveform rather than spinning on a 404.
-  let waveformSourceHash = $derived(STATIC_READS ? "" : ingest.content_hash);
+  // The word editor's waveform needs peaks. Locally the backend cuts the window
+  // with ffmpeg; online there is no ffmpeg, so it reads the ingester's
+  // `sources/{hash}.peaks.json` sidecar - which exists only where the original
+  // itself is open-zone addressable. Withhold the hash otherwise, so the editor
+  // renders without a waveform rather than spinning on a 404.
+  let waveformSourceHash = $derived(
+    !STATIC_READS || resolveSourceAddress({
+      staticReads: true,
+      sourceKey: ingest.content_hash,
+      archivedExt: ingest.frontmatter.archived_ext,
+      copyrightStatus: ingest.copyright_status,
+      isMedia: true,
+    }).kind !== "none"
+      ? ingest.content_hash
+      : "",
+  );
 
   // Count of every mark on the record (highlights + span notes + point beats),
   // for the collapsible Markup section header.

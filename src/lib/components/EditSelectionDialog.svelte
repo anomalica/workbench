@@ -323,6 +323,7 @@
           hash={sourceHash}
           windowStart={winStart}
           windowDuration={winDuration}
+          mediaDuration={mediaDuration ?? 0}
           marks={waveMarks}
           {currentTime}
           onretime={(index, start) => setStart(index, start)}

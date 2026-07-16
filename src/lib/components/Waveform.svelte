@@ -1,15 +1,23 @@
 <script lang="ts">
   import { untrack } from "svelte";
+  import { STATIC_READS } from "$lib/api";
+  import { decodePeaks, sliceWindow, type PeaksSidecar } from "$lib/peaks";
 
   // A windowed waveform for the timestamp editor: peaks for [windowStart,
-  // windowStart+windowDuration] fetched from the backend (ffmpeg-extracted, so it
-  // scales to any media length), word-timestamp markers drawn on top and
+  // windowStart+windowDuration], word-timestamp markers drawn on top and
   // draggable to retime, plus a playhead. Coordinates are a fixed 1000x100 SVG
   // viewBox stretched to the container, so drawing needs no pixel width.
+  //
+  // Where the peaks come from differs by deployment. LOCALLY the backend cuts the
+  // window with ffmpeg (fast seek - instant at any file length). ONLINE there is
+  // no ffmpeg, so the ingester's whole-file sidecar is fetched once per record
+  // and the window is sliced from it; after that first fetch, panning and zooming
+  // need no network at all.
   let {
     hash,
     windowStart,
     windowDuration,
+    mediaDuration = 0,
     marks,
     currentTime = 0,
     onretime,
@@ -18,6 +26,10 @@
     hash: string;
     windowStart: number;
     windowDuration: number;
+    /** The media element's OWN duration. Online this maps the sidecar's peaks
+     *  onto the timeline: peaks span the whole file by construction, so this is
+     *  authoritative where the sidecar's declared duration may not be. */
+    mediaDuration?: number;
     /** The word timestamps to mark, each with its row index for the retime
      *  callback. `start` is absolute seconds. */
     marks: { index: number; start: number; label: string; active: boolean }[];
@@ -35,30 +47,57 @@
   let svgEl = $state<SVGSVGElement>();
   let dragIndex = $state<number | null>(null);
 
+  // The whole-file sidecar, kept per record so panning/zooming online costs no
+  // network after the first window. Module-scoped: remounting the editor on the
+  // same record should not refetch ~60KB-750KB.
+  let fullPeaks: Float32Array | null = null;
+  let fullPeaksHash = "";
+
   // Fetch peaks whenever the window changes (record load / different selection),
   // NOT while dragging - the window is stable during an edit.
   $effect(() => {
     const h = hash;
     const s = windowStart;
     const d = windowDuration;
-    untrack(() => void fetchPeaks(h, s, d));
+    const md = mediaDuration;
+    untrack(() => void loadPeaks(h, s, d, md));
   });
 
-  async function fetchPeaks(h: string, s: number, d: number) {
+  async function loadPeaks(h: string, s: number, d: number, md: number) {
     loading = true;
     failed = false;
     try {
-      const res = await fetch(
-        `/api/sources/${h}/waveform?start=${s.toFixed(3)}&duration=${d.toFixed(3)}&bins=${BINS}`,
-      );
-      if (!res.ok) throw new Error(String(res.status));
-      peaks = (await res.json()).peaks ?? [];
+      peaks = STATIC_READS ? await staticPeaks(h, s, d, md) : await windowedPeaks(h, s, d);
     } catch {
       failed = true;
       peaks = [];
     } finally {
       loading = false;
     }
+  }
+
+  /** Local: ffmpeg cuts exactly the window asked for. */
+  async function windowedPeaks(h: string, s: number, d: number): Promise<number[]> {
+    const res = await fetch(
+      `/api/sources/${h}/waveform?start=${s.toFixed(3)}&duration=${d.toFixed(3)}&bins=${BINS}`,
+    );
+    if (!res.ok) throw new Error(String(res.status));
+    return (await res.json()).peaks ?? [];
+  }
+
+  /** Online: slice the window out of the ingester's whole-file sidecar. */
+  async function staticPeaks(h: string, s: number, d: number, md: number): Promise<number[]> {
+    if (fullPeaksHash !== h || !fullPeaks) {
+      const res = await fetch(`/sources/${h}.peaks.json`);
+      if (!res.ok) throw new Error(String(res.status));
+      const sidecar: PeaksSidecar = await res.json();
+      fullPeaks = decodePeaks(sidecar.peaks);
+      fullPeaksHash = h;
+    }
+    // Map onto the MEDIA's duration, not the sidecar's declared one: the peaks
+    // span the whole file, and the player knows its own length even when a
+    // sidecar header is wrong.
+    return sliceWindow(fullPeaks, md || 0, s, d, BINS);
   }
 
   /** Time -> x in the 0..1000 viewBox space (clamped to the window). */
