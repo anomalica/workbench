@@ -644,7 +644,7 @@ export function loadEnv(): Env {
   return {
     clientId: get("GITHUB_CLIENT_ID"),
     clientSecret: get("GITHUB_CLIENT_SECRET"),
-    publicUrl: get("PUBLIC_URL", "http://localhost:5173"),
+    publicUrl: get("PUBLIC_URL", "http://localhost:5273"),
     sessionSecret: get("SESSION_SECRET", "dev-insecure-secret"),
     serviceToken: get("GITHUB_SERVICE_TOKEN"),
     owner: get("GITHUB_OWNER", "anomalica"),

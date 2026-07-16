@@ -90,7 +90,12 @@ Deno.test("editFile retries on a sha conflict then succeeds", async () => {
   assertEquals(getCount, 2); // re-read before the retry
 });
 
-Deno.test("listCommits maps the commits API + summarises the message", async () => {
+// The FULL message is carried, subject + body - NOT just the subject line. The
+// reviewer's own notes ("Reviewed up to 20%") live in the body, and that is
+// exactly what someone resuming after an interruption needs. The display summary
+// is derived downstream by commitSummary() in main.ts, so truncating here would
+// destroy the notes before anything could show them.
+Deno.test("listCommits maps the commits API, preserving the reviewer's notes", async () => {
   const fetchImpl: FetchLike = (url) => {
     assert(url.includes("/commits?path="));
     return Promise.resolve({
@@ -100,7 +105,7 @@ Deno.test("listCommits maps the commits API + summarises the message", async () 
           {
             commit: {
               author: { name: "Mark", email: "m@x.com", date: "2026-06-22T02:35:31Z" },
-              message: "review: fix names\n\ntrailer",
+              message: "review: fix names\n\nReviewed up to 20%",
             },
           },
         ]),
@@ -109,7 +114,12 @@ Deno.test("listCommits maps the commits API + summarises the message", async () 
   const gh = new GitHubClient("t", "anomalica", "main", fetchImpl);
   const commits = await gh.listCommits("ingests", "store/abc.v2.md");
   assertEquals(commits, [
-    { by: "Mark", email: "m@x.com", at: "2026-06-22T02:35:31Z", message: "review: fix names" },
+    {
+      by: "Mark",
+      email: "m@x.com",
+      at: "2026-06-22T02:35:31Z",
+      message: "review: fix names\n\nReviewed up to 20%",
+    },
   ]);
 });
 
