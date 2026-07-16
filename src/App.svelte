@@ -30,6 +30,7 @@
   import ArticlesView from "$lib/components/ArticlesView.svelte";
   import ReviewView from "$lib/components/ReviewView.svelte";
   import RolesView from "$lib/components/RolesView.svelte";
+  import ModelCompareView from "$lib/components/ModelCompareView.svelte";
   import { carryoverState } from "$lib/carryover";
   import { themeState } from "$lib/theme.svelte";
   import { trackView, trackEvent } from "$lib/umami";
@@ -39,7 +40,9 @@
   // Top-level view: record review (default), knowledge-graph review, or curation.
   // (The Schedule view + processing-mode runner moved to the local `scheduler`
   // repo - this workbench is review-only.)
-  let appMode = $state<"records" | "graph" | "curate" | "articles" | "review" | "roles">("records");
+  let appMode = $state<
+    "records" | "graph" | "curate" | "articles" | "review" | "roles" | "models"
+  >("records");
   // A node to open directly in the graph view (deep link /graph/<node_id>), so a
   // claim-count / any link can jump straight to that node's claims in context.
   let graphNodeId = $state<string | undefined>(undefined);
@@ -447,6 +450,11 @@
     history.pushState(null, "", "/roles");
   }
 
+  function showModels() {
+    appMode = "models";
+    history.pushState(null, "", "/models");
+  }
+
   // Open a record in the workbench review view by its public hash (the 56-char
   // record_hash an Articles record-page carries). Mirrors the deep-link path so
   // a not-yet-reviewable record surfaces the same friendly notice.
@@ -481,6 +489,10 @@
     if (path === "roles") {
       appMode = "roles";
       return; // RolesView fetches its own data
+    }
+    if (path === "models") {
+      appMode = "models";
+      return; // ModelCompareView fetches its own list and reads ?h= itself
     }
     if (path.startsWith("graph/")) {
       const id = path.slice("graph/".length);
@@ -579,6 +591,14 @@
           {/if}
         </button>
       {/if}
+      {#if canReview}
+        <button
+          onclick={showModels}
+          class="text-sm font-ui px-2.5 py-1 rounded cursor-pointer transition-colors
+            {appMode === 'models' ? 'bg-bone/15 text-bone' : 'text-bone/50 hover:text-bone/80 hover:bg-bone/10'}"
+          title="Compare model variants of a digest side by side and judge which is better"
+        >Models</button>
+      {/if}
       {#if canManageRoles}
         <button
           onclick={showRoles}
@@ -661,7 +681,9 @@
   </header>
 
   <main class="flex-1 flex flex-col min-h-0">
-    {#if appMode === "roles"}
+    {#if appMode === "models"}
+      <ModelCompareView />
+    {:else if appMode === "roles"}
       <RolesView />
     {:else if appMode === "review"}
       <ReviewView {ingests} onqueuechange={reloadPending} />
