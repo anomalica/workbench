@@ -13,7 +13,9 @@ Plain Svelte 5 single-page application. No server-side rendering, no meta-framew
 - **Tailwind CSS v4** with shared design tokens from brand
 - **FastAPI** (Python) backend in `backend/`, serving git repository operations
 
-The backend lives in this repository under `backend/` and is started alongside the frontend during development. During development, Vite (port 5173) proxies `/api` requests to the FastAPI backend (port 8000). In production, FastAPI serves both the API and the built static files.
+The backend lives in this repository under `backend/` and is started alongside the frontend during development. During development, Vite (port 5273) proxies `/api` requests to the FastAPI backend (port 8073). These ports are deliberately not Vite's default 5173: every Vite app defaults to it and silently increments on a clash, so two projects would fight over one port. `strictPort` now fails loudly instead.
+
+In production the FastAPI backend is **not** deployed. The built SPA is served as static files from the CDN, and `/api` is answered by the Deno edge script in `edge/` (Bunny Edge Scripting), which reads prerendered JSON snapshots. A change to `backend/` therefore has no effect on production unless it is mirrored in `edge/`.
 
 ## Key libraries (planned)
 
@@ -30,14 +32,14 @@ Requires `just`, Node.js, and Python with `uvicorn` + FastAPI available (see `ba
 
 ```bash
 npm install
-just dev          # Starts FastAPI on :8000 and Vite on :5173 together
+just dev          # Starts FastAPI on :8073 and Vite on :5273 together
 ```
 
 Individual services:
 
 ```bash
-just backend      # FastAPI only (uvicorn with --reload on :8000)
-just frontend     # Vite dev server only (:5173) - API calls will fail without backend
+just backend      # FastAPI only (uvicorn with --reload on :8073)
+just frontend     # Vite dev server only (:5273) - API calls will fail without backend
 ```
 
 `npm run dev` is the same as `just frontend` - frontend-only, backend must be started separately.
