@@ -44,6 +44,13 @@ just frontend     # Vite dev server only (:5273) - API calls will fail without b
 
 `npm run dev` is the same as `just frontend` - frontend-only, backend must be started separately.
 
+GitHub login works locally: the OAuth callback goes to `PUBLIC_URL` (default
+`http://localhost:5273`) so it passes through the Vite proxy and the session cookie
+lands on the same origin the app is served from. The dev OAuth app accepts any
+localhost port, so the 5273 port choice needs no OAuth change. Its credentials live
+in a gitignored `.env` (`GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET`), which `just dev`
+sources; it is a different app from the production one.
+
 ## Build
 
 ```bash
