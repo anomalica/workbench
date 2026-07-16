@@ -36,6 +36,7 @@
   import { safeLocalSet } from "$lib/storage";
   import { parseTranscript, parseTimeToSeconds, secondsToTime, findActiveSegmentForTime, segmentAtTime, nextRelevantSegmentAfter, extractFrontmatterSpeakers, isSegmentIrrelevant, isSpecialSpeaker, nextSpeakerName, groupSegmentsBySpeaker, orderedNamedSpeakers, SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE, SPEAKER_GROUP } from "$lib/transcript";
   import { nextSegmentBoundary, singleEndForCurrentTime } from "$lib/playback";
+  import { resolveSourceAddress } from "$lib/source-address";
   import type { Segment } from "$lib/transcript";
   import SpeakerManager from "./SpeakerManager.svelte";
   import SplitEditor from "./SplitEditor.svelte";
@@ -1059,14 +1060,21 @@
 
   $effect(() => {
     if (isPublic && !localSourceFile && !localSourceUrl && !ytId) {
-      // Online (static-read) the edge has no /api/sources route; public source
-      // FILES are served straight from the CDN at /sources/<hash>.<ext>. Only
-      // PDFs are served that way - web uses the source_url link-out, video the
-      // embed - so skip the fetch for non-PDF public sources in static mode.
-      if (STATIC_READS && !isPdf) return;
-      const srcUrl = STATIC_READS ? `/sources/${sourceKey}.pdf` : `/api/sources/${sourceKey}`;
+      const address = resolveSourceAddress({
+        staticReads: STATIC_READS,
+        sourceKey,
+        archivedExt: ingest.frontmatter.archived_ext,
+        copyrightStatus: ingest.copyright_status,
+        isMedia: isAudio || isVideo,
+      });
+      if (address.kind === "none") return;
+      if (address.kind === "stream") {
+        localSourceUrl = address.url;
+        accessGranted = true;
+        return;
+      }
       loadingFile = true;
-      fetch(srcUrl)
+      fetch(address.url)
         .then(async (res) => {
           if (!res.ok) return null;
           const blob = await res.blob();
