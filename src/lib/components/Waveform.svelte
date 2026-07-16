@@ -2,6 +2,7 @@
   import { untrack } from "svelte";
   import { STATIC_READS } from "$lib/api";
   import { decodePeaks, sliceWindow, type PeaksSidecar } from "$lib/peaks";
+  import { resolvePeaksUrl } from "$lib/source-address";
 
   // A windowed waveform for the timestamp editor: peaks for [windowStart,
   // windowStart+windowDuration], word-timestamp markers drawn on top and
@@ -18,6 +19,7 @@
     windowStart,
     windowDuration,
     mediaDuration = 0,
+    copyrightStatus = null,
     marks,
     currentTime = 0,
     onretime,
@@ -26,6 +28,9 @@
     hash: string;
     windowStart: number;
     windowDuration: number;
+    /** Decides whether the peaks sidecar is openly addressable - peaks follow the
+     *  transcript's visibility, not the original file's. */
+    copyrightStatus?: string | null;
     /** The media element's OWN duration. Online this maps the sidecar's peaks
      *  onto the timeline: peaks span the whole file by construction, so this is
      *  authoritative where the sidecar's declared duration may not be. */
@@ -88,7 +93,9 @@
   /** Online: slice the window out of the ingester's whole-file sidecar. */
   async function staticPeaks(h: string, s: number, d: number, md: number): Promise<number[]> {
     if (fullPeaksHash !== h || !fullPeaks) {
-      const res = await fetch(`/sources/${h}.peaks.json`);
+      const url = resolvePeaksUrl(h, copyrightStatus);
+      if (!url) throw new Error("peaks not addressable");
+      const res = await fetch(url);
       if (!res.ok) throw new Error(String(res.status));
       const sidecar: PeaksSidecar = await res.json();
       fullPeaks = decodePeaks(sidecar.peaks);

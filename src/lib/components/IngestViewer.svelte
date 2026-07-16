@@ -36,7 +36,7 @@
   import { safeLocalSet } from "$lib/storage";
   import { parseTranscript, parseTimeToSeconds, secondsToTime, findActiveSegmentForTime, segmentAtTime, nextRelevantSegmentAfter, extractFrontmatterSpeakers, isSegmentIrrelevant, isSpecialSpeaker, nextSpeakerName, groupSegmentsBySpeaker, orderedNamedSpeakers, SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE, SPEAKER_GROUP } from "$lib/transcript";
   import { nextSegmentBoundary, singleEndForCurrentTime } from "$lib/playback";
-  import { resolveSourceAddress } from "$lib/source-address";
+  import { resolveSourceAddress, resolvePeaksUrl } from "$lib/source-address";
   import type { Segment } from "$lib/transcript";
   import SpeakerManager from "./SpeakerManager.svelte";
   import SplitEditor from "./SplitEditor.svelte";
@@ -252,18 +252,16 @@
   });
 
   // The word editor's waveform needs peaks. Locally the backend cuts the window
-  // with ffmpeg; online there is no ffmpeg, so it reads the ingester's
-  // `sources/{hash}.peaks.json` sidecar - which exists only where the original
-  // itself is open-zone addressable. Withhold the hash otherwise, so the editor
-  // renders without a waveform rather than spinning on a 404.
+  // with ffmpeg (any record with an archived file); online there is no ffmpeg, so
+  // it reads the ingester's `sources/{hash}.peaks.json` sidecar. That sidecar
+  // follows the TRANSCRIPT's visibility, not the original file's, so this is
+  // deliberately NOT resolveSourceAddress: a publicly_accessible record's audio
+  // stays gated while its peaks are open, which is exactly the case where the
+  // waveform matters most - the audio can't be served, so the peaks are the only
+  // way to see it. Withhold the hash when there is nothing to fetch, so the
+  // editor renders without a waveform rather than spinning on a 404.
   let waveformSourceHash = $derived(
-    !STATIC_READS || resolveSourceAddress({
-      staticReads: true,
-      sourceKey: ingest.content_hash,
-      archivedExt: ingest.frontmatter.archived_ext,
-      copyrightStatus: ingest.copyright_status,
-      isMedia: true,
-    }).kind !== "none"
+    !STATIC_READS || resolvePeaksUrl(ingest.content_hash, ingest.copyright_status)
       ? ingest.content_hash
       : "",
   );
@@ -1627,6 +1625,17 @@
   const noteMediaDuration = (el: HTMLMediaElement) => {
     mediaDuration = Number.isFinite(el.duration) && el.duration > 0 ? el.duration : null;
   };
+  // The YouTube player is the other playback surface, and reports its length the
+  // same way. onReady can fire before the duration is known, so retry briefly
+  // rather than settle for null and draw a flat waveform.
+  function noteYtDuration(attempt = 0) {
+    const d = ytPlayer && playerReady ? ytPlayer.getDuration() : 0;
+    if (Number.isFinite(d) && d > 0) {
+      mediaDuration = d;
+      return;
+    }
+    if (attempt < 10) setTimeout(() => noteYtDuration(attempt + 1), 300);
+  }
 
   function mediaSeek(seconds: number, play = true) {
     const t = Math.max(0, seconds);
@@ -2301,6 +2310,12 @@
         onReady: () => {
           playerReady = true;
           ytPlayer?.setPlaybackRate(playbackRate);
+          // A YouTube-backed record has no <audio> element, so the waveform's
+          // peaks have nothing to map onto unless the duration comes from the
+          // player. These are exactly the records whose audio can't be served
+          // (it stays gated), which makes the peaks the only way to see the
+          // sound - so a flat waveform here would defeat the whole point.
+          noteYtDuration();
           // Cold-load claim deep link: the digest resolved and set the
           // highlight before the player existed, so the seek was skipped.
           // Now that it's ready, land on the claim's start (paused).
@@ -3913,6 +3928,7 @@
             {hideIrrelevant}
             sourceHash={waveformSourceHash}
             {mediaDuration}
+            copyrightStatus={ingest.copyright_status}
             storageKey={`workbench:observed:${ingest.content_hash}`}
             serverObserved={serverObservedWords}
             {claimHighlight}

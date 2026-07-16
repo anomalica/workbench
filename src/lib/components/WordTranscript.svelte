@@ -57,6 +57,7 @@
     focusWords = null,
     sourceHash = "",
     mediaDuration = null,
+    copyrightStatus = null,
     namedSpeakers = [],
     currentTime = 0,
     filteredSpeakers = new Set<string>(),
@@ -97,6 +98,9 @@
     sourceHash?: string;
     /** Media length in seconds, to clamp the waveform window. */
     mediaDuration?: number | null;
+    /** Record copyright status - decides whether the peaks sidecar is openly
+     *  addressable online. */
+    copyrightStatus?: string | null;
     /** Named speakers from the frontmatter, for picker ordering. */
     namedSpeakers?: string[];
     /** Current media playback position in seconds, for karaoke highlighting. */
@@ -1904,6 +1908,7 @@
       speaker={selectionInfo.speaker}
       {sourceHash}
       {mediaDuration}
+      {copyrightStatus}
       {currentTime}
       onseek={(t) => onseek?.(t)}
       oncancel={() => { editingSelection = false; }}

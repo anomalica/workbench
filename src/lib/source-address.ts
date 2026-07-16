@@ -25,6 +25,28 @@ export type SourceAddressInput = {
 // asking directly only produces a broken fetch and an error panel.
 const OPEN_ZONE_STATUS = "public_domain";
 
+// PEAKS ARE NOT THE FILE. A waveform sidecar is in the same disclosure class as
+// the TRANSCRIPT - which Mark opened for publicly_accessible in 75519a4 - not the
+// same class as the original bytes. His ruling (2026-07-17): "open the peaks up
+// for publicly_accessible, same reasoning as the transcripts" - the sources are
+// already publicly accessible and ours are just more accurate transcripts; peaks
+// are a weaker derivative still, carrying 100 amplitudes/sec, no words, and no
+// way to reconstruct the audio.
+//
+// So peaks and originals DELIBERATELY DIVERGE for publicly_accessible: the .opus
+// stays gated, its peaks are open. That is the decision, not an inconsistency to
+// reconcile - do not "fix" it by routing peaks through resolveSourceAddress.
+// licensed/restricted (the copyrighted books) and any unknown/absent status stay
+// gated, same fail-closed allow-list as the snapshot.
+const PEAKS_OPEN_STATUSES = new Set(["public_domain", "open_licence", "publicly_accessible"]);
+
+/** The peaks sidecar's URL, or null where it is not openly addressable. */
+export function resolvePeaksUrl(sourceKey: string, copyrightStatus?: string | null): string | null {
+  if (!sourceKey) return null;
+  if (!copyrightStatus || !PEAKS_OPEN_STATUSES.has(copyrightStatus)) return null;
+  return `/sources/${sourceKey}.peaks.json`;
+}
+
 export function resolveSourceAddress(input: SourceAddressInput): SourceAddress {
   const { staticReads, sourceKey, archivedExt, copyrightStatus, isMedia } = input;
   if (!sourceKey) return { kind: "none" };

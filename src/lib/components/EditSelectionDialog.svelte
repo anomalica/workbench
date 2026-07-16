@@ -13,6 +13,7 @@
     nextStart = null,
     mediaDuration = null,
     sourceHash = "",
+    copyrightStatus = null,
     speaker = "",
     currentTime = 0,
     onsave,
@@ -23,6 +24,7 @@
     words: Word[];
     /** Source SHA-256 for the waveform fetch (empty hides the waveform). */
     sourceHash?: string;
+    copyrightStatus?: string | null;
     /** Start of the word just before the selection (lower time bound), or null. */
     prevStart?: number | null;
     /** Start of the word just after the selection (upper time bound), or null. */
@@ -324,6 +326,7 @@
           windowStart={winStart}
           windowDuration={winDuration}
           mediaDuration={mediaDuration ?? 0}
+          {copyrightStatus}
           marks={waveMarks}
           {currentTime}
           onretime={(index, start) => setStart(index, start)}
