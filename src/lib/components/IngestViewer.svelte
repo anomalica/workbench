@@ -1617,6 +1617,17 @@
   // for a YouTube video - they used to be YouTube-only.
   let mediaEl = $state<HTMLMediaElement | null>(null);
 
+  // The playing media's OWN length, read off the element once metadata lands.
+  // This is the authority for where a word sits in the audio: it is measured
+  // from the bytes being played, which no frontmatter field can be (the
+  // record's `duration` was the end of the last transcribed segment - up to 82s
+  // short on some records). The online waveform maps its whole-file peaks onto
+  // this, so peaks stay aligned with what the reviewer actually hears.
+  let mediaDuration = $state<number | null>(null);
+  const noteMediaDuration = (el: HTMLMediaElement) => {
+    mediaDuration = Number.isFinite(el.duration) && el.duration > 0 ? el.duration : null;
+  };
+
   function mediaSeek(seconds: number, play = true) {
     const t = Math.max(0, seconds);
     if (ytPlayer && playerReady) {
@@ -3289,7 +3300,8 @@
                 src={localSourceUrl}
                 class="w-full rounded"
                 ontimeupdate={(e) => onMediaTimeUpdate(e.currentTarget)}
-                onloadedmetadata={(e) => { e.currentTarget.playbackRate = playbackRate; }}
+                onloadedmetadata={(e) => { e.currentTarget.playbackRate = playbackRate; noteMediaDuration(e.currentTarget); }}
+                ondurationchange={(e) => noteMediaDuration(e.currentTarget)}
                 onseeking={() => { playWindow = null; }}
               >
                 <track kind="captions" />
@@ -3304,7 +3316,8 @@
                 src={localSourceUrl}
                 class="w-full"
                 ontimeupdate={(e) => onMediaTimeUpdate(e.currentTarget)}
-                onloadedmetadata={(e) => { e.currentTarget.playbackRate = playbackRate; }}
+                onloadedmetadata={(e) => { e.currentTarget.playbackRate = playbackRate; noteMediaDuration(e.currentTarget); }}
+                ondurationchange={(e) => noteMediaDuration(e.currentTarget)}
                 onseeking={() => { playWindow = null; }}
               ></audio>
             {/if}
@@ -3899,6 +3912,7 @@
             {filteredSpeakers}
             {hideIrrelevant}
             sourceHash={waveformSourceHash}
+            {mediaDuration}
             storageKey={`workbench:observed:${ingest.content_hash}`}
             serverObserved={serverObservedWords}
             {claimHighlight}
