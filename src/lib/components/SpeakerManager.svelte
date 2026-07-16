@@ -189,7 +189,7 @@
       <button
         onclick={(e) => { e.stopPropagation(); onfilter(row.id); }}
         class="flex-none cursor-pointer"
-        title="Click to filter the transcript to this speaker"
+        title="Click to filter to this speaker; click others to add them (several at once)"
       >
         <SpeakerDot speaker={row.id} size="md" ring={filteredSpeakers.has(row.id)} />
       </button>
@@ -271,7 +271,7 @@
           {filteredSpeakers.has(row.id)
             ? 'bg-primary/20 text-primary'
             : 'text-on-surface-muted hover:bg-surface hover:text-on-surface'}"
-        title="Click to filter the transcript to this speaker"
+        title="Click to filter to this speaker; click others to add them (several at once)"
       >{row.total}</button>
     </div>
   {/each}
@@ -370,7 +370,7 @@
         <button
           onclick={(e) => { e.stopPropagation(); onfilter(row.id); }}
           class="flex-none cursor-pointer"
-          title="Click to filter the transcript to this speaker"
+          title="Click to filter to this speaker; click others to add them (several at once)"
         >
           <SpeakerDot speaker={row.id} size="md" ring={filteredSpeakers.has(row.id)} />
         </button>
@@ -381,7 +381,7 @@
             {filteredSpeakers.has(row.id)
               ? 'bg-primary/20 text-primary'
               : 'text-on-surface-muted hover:bg-surface hover:text-on-surface'}"
-          title="Click to filter the transcript to this speaker"
+          title="Click to filter to this speaker; click others to add them (several at once)"
         >{row.total}</button>
       </div>
     {/each}
@@ -421,7 +421,7 @@
         <button
           onclick={(e) => { e.stopPropagation(); onfilter(row.id); }}
           class="flex-none cursor-pointer"
-          title="Click to filter the transcript to this speaker"
+          title="Click to filter to this speaker; click others to add them (several at once)"
         >
           <SpeakerDot speaker={row.id} size="md" ring={filteredSpeakers.has(row.id)} />
         </button>
@@ -499,7 +499,7 @@
             {filteredSpeakers.has(row.id)
               ? 'bg-primary/20 text-primary'
               : 'text-on-surface-muted hover:bg-surface hover:text-on-surface'}"
-          title="Click to filter the transcript to this speaker"
+          title="Click to filter to this speaker; click others to add them (several at once)"
         >{row.total}</button>
       </div>
     {/each}

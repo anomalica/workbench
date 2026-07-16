@@ -29,7 +29,7 @@
         onclick={() => onfilter(r.id)}
         class="w-full flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer transition-colors select-none
           {active ? 'bg-primary-container/30 ring-1 ring-primary/30' : 'hover:bg-surface-alt'}"
-        title="Filter the transcript to this speaker"
+        title="Click to filter to this speaker; click others to add them (several at once)"
       >
         <SpeakerDot speaker={r.id} size="md" ring={active} />
         <span class="flex-1 min-w-0 text-left text-sm font-ui text-on-surface truncate">{r.id}</span>

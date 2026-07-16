@@ -3066,10 +3066,12 @@
             rows={wordSpeakerRows}
             {filteredSpeakers}
             onfilter={(id) => {
-              filteredSpeakers =
-                filteredSpeakers.size === 1 && filteredSpeakers.has(id)
-                  ? new Set()
-                  : new Set([id]);
+              // Toggle in/out, same as the Ingest panel: several speakers can be
+              // held at once; empty = show all.
+              const next = new Set(filteredSpeakers);
+              if (next.has(id)) next.delete(id);
+              else next.add(id);
+              filteredSpeakers = next;
             }}
           />
         {:else}
@@ -3081,13 +3083,16 @@
             {filteredSpeakers}
             onselect={handleSpeakerSelection}
             onfilter={(id) => {
-              // Show only this speaker; clicking the sole-filtered speaker clears
-              // it. Multi-speaker filters are still built via the section eye.
-              const clearing = filteredSpeakers.size === 1 && filteredSpeakers.has(id);
-              filteredSpeakers = clearing ? new Set() : new Set([id]);
-              // Filtering TO [irrelevant] has to reveal it, else the filter shows
-              // nothing (irrelevant is hidden by default). No auto-restore on clear.
-              if (!clearing && id === SPEAKER_IRRELEVANT) hideIrrelevant = false;
+              // A click TOGGLES this speaker in/out of the filter, so two or three
+              // can be held at once and read side by side. Empty set = show all
+              // (so clicking the last one off restores everything).
+              const next = new Set(filteredSpeakers);
+              if (next.has(id)) next.delete(id);
+              else next.add(id);
+              filteredSpeakers = next;
+              // Filtering TO [irrelevant] has to reveal it, else it shows nothing
+              // (irrelevant is hidden by default). No auto-restore when unpicked.
+              if (next.has(SPEAKER_IRRELEVANT)) hideIrrelevant = false;
             }}
             onsetfilter={(ids) => {
               filteredSpeakers = new Set(ids);
