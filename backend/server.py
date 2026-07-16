@@ -2405,13 +2405,14 @@ def models_compare(content_hash: str) -> dict:
 @app.post("/api/models/judgment")
 def models_judgment(body: dict, request: Request) -> dict:
     """Persist a 'which model is better' judgment (workbench-owned, queryable),
-    attributed to the logged-in reviewer."""
-    user = request.session.get("user")
+    attributed to the logged-in reviewer. Reviewer-gated: it is an assessment
+    written to live data, the same class as an audit verdict."""
+    user = _require_role(request, "reviewer")
     result = models.save_judgment(
         body.get("content_hash"),
         body.get("models_compared") or [],
         body.get("chosen_model"),
-        judged_by=(user.get("email") if user else "") or "",
+        judged_by=user.get("email", ""),
         notes=body.get("notes") or "",
     )
     if not result.get("ok"):
