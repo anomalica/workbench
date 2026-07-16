@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resolveSourceAddress } from "./source-address";
+import { resolveSourceAddress, resolvePeaksUrl } from "./source-address";
 
 // These expectations are pinned to PROBED behaviour of the live zone, not to
 // assumption: a public_domain object serves 206, while a publicly_accessible one
@@ -75,5 +75,50 @@ describe("resolveSourceAddress: static (CDN) reads", () => {
 
   it("addresses nothing without a source key", () => {
     expect(resolveSourceAddress({ ...base, sourceKey: "" })).toEqual({ kind: "none" });
+  });
+});
+
+describe("resolvePeaksUrl: peaks follow the TRANSCRIPT's visibility, not the file's", () => {
+  // Mark's ruling, 2026-07-17: "open the peaks up for publicly_accessible, same
+  // reasoning as the transcripts" - i.e. the allow-list he set for transcript
+  // bodies in 75519a4, NOT the original-file routing. These two rules diverging
+  // is the decision; a future reader must not collapse them back together.
+
+  it("serves peaks for every status whose transcript is already public", () => {
+    for (const status of ["public_domain", "open_licence", "publicly_accessible"]) {
+      expect(resolvePeaksUrl("abc123", status)).toBe("/sources/abc123.peaks.json");
+    }
+  });
+
+  it("DIVERGES from the original file for publicly_accessible - the point of the ruling", () => {
+    // The audio itself stays gated (an unsigned URL 404s)...
+    expect(
+      resolveSourceAddress({
+        staticReads: true,
+        sourceKey: "abc123",
+        archivedExt: "opus",
+        copyrightStatus: "publicly_accessible",
+        isMedia: true,
+      }),
+    ).toEqual({ kind: "none" });
+    // ...while its peaks are open. This is exactly the case the waveform exists
+    // for: the audio can't be served, so peaks are the only way to see it.
+    expect(resolvePeaksUrl("abc123", "publicly_accessible")).toBe("/sources/abc123.peaks.json");
+  });
+
+  it("keeps the copyrighted books gated", () => {
+    expect(resolvePeaksUrl("abc123", "licensed")).toBeNull();
+    expect(resolvePeaksUrl("abc123", "restricted")).toBeNull();
+  });
+
+  it("fails closed on an unknown or absent status", () => {
+    expect(resolvePeaksUrl("abc123", "some_future_status")).toBeNull();
+    expect(resolvePeaksUrl("abc123", null)).toBeNull();
+    expect(resolvePeaksUrl("abc123", undefined)).toBeNull();
+    expect(resolvePeaksUrl("abc123", "")).toBeNull();
+  });
+
+  it("addresses nothing without a source key", () => {
+    expect(resolvePeaksUrl("", "public_domain")).toBeNull();
   });
 });
