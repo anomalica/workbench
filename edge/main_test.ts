@@ -22,10 +22,30 @@ const ENV: Env = {
 };
 const NOW = 1000;
 const HASH = "a".repeat(64);
-const USER: User = { name: "Rev", email: "rev@x.com", login: "rev", avatar_url: "" };
+const USER: User = {
+  name: "Rev",
+  email: "rev@x.com",
+  login: "rev",
+  avatar_url: "",
+};
 
 class FakeGitHub {
   files = new Map<string, string>();
+  /** Paths the fixture seeded rather than the code under test writing them, so
+   *  a "writes nothing" assertion stays meaningful. */
+  seeded = new Set<string>();
+  /** Files actually written by the code under test. */
+  get wrote(): string[] {
+    return [...this.files.keys()].filter((k) => !this.seeded.has(k));
+  }
+  constructor() {
+    // Every write route is role-gated (edge/lib/roles.ts), so the fixture user
+    // needs a role or nothing would be writable. `rev` is an editor: that covers
+    // the reviewer-level writes (records, curation) AND the editor-level ones
+    // (article directives). The gate itself is tested explicitly below.
+    this.files.set("ingests/roles.yaml", "rev: editor\n");
+    this.seeded.add("ingests/roles.yaml");
+  }
   put(repo: string, path: string, text: string) {
     this.files.set(`${repo}/${path}`, text);
   }
@@ -119,7 +139,11 @@ Deno.test("gate start never leaks answers; submit all-correct -> signed Bunny UR
   const submitRes = await handleRequest(
     req(`/api/ingests/${HASH}/verification/submit`, {
       method: "POST",
-      body: JSON.stringify({ session_id: started.session_id, responses, ext: "mp4" }),
+      body: JSON.stringify({
+        session_id: started.session_id,
+        responses,
+        ext: "mp4",
+      }),
     }),
     ENV,
     deps(gh),
@@ -243,7 +267,7 @@ Deno.test("article directives: PUT needs auth", async () => {
     deps(gh),
   );
   assertEquals(res.status, 401);
-  assertEquals(gh.files.size, 0);
+  assertEquals(gh.wrote, []);
 });
 
 Deno.test("article directives: writes the per-article sidecar as a YAML list", async () => {
@@ -302,7 +326,7 @@ Deno.test("article directives: rejects an invalid slug (traversal/extension), wr
     deps(gh),
   );
   assertEquals(res.status, 404);
-  assertEquals(gh.files.size, 0);
+  assertEquals(gh.wrote, []);
 });
 
 Deno.test("article directives: a non-array body is a 400", async () => {
@@ -317,7 +341,7 @@ Deno.test("article directives: a non-array body is a 400", async () => {
     deps(gh),
   );
   assertEquals(res.status, 400);
-  assertEquals(gh.files.size, 0);
+  assertEquals(gh.wrote, []);
 });
 
 Deno.test("curation merge needs auth, then appends a ledger entry", async () => {
@@ -410,7 +434,10 @@ Deno.test("review of a V2 record writes the canonical .v2.md, not a stray .md", 
     req(`/api/ingests/${HASH}`, {
       method: "PUT",
       headers: { cookie: await cookie() },
-      body: JSON.stringify({ content: "# corrected v2 body\n", notes: "fix speakers" }),
+      body: JSON.stringify({
+        content: "# corrected v2 body\n",
+        notes: "fix speakers",
+      }),
     }),
     ENV,
     deps(gh),
@@ -425,8 +452,18 @@ Deno.test("review history: public read, maps git commits, drops reviewer email",
   const gh = new FakeGitHub();
   gh.put("ingests", `store/${HASH}.v2.md`, "body\n"); // v2 record -> history reads .v2.md
   gh.commits.set(`ingests/store/${HASH}.v2.md`, [
-    { by: "Mark", email: "mark@x.com", at: "2026-06-22T02:35:31Z", message: "review: fix names" },
-    { by: "Sam", email: "sam@x.com", at: "2026-06-21T09:00:00Z", message: "review: first pass" },
+    {
+      by: "Mark",
+      email: "mark@x.com",
+      at: "2026-06-22T02:35:31Z",
+      message: "review: fix names",
+    },
+    {
+      by: "Sam",
+      email: "sam@x.com",
+      at: "2026-06-21T09:00:00Z",
+      message: "review: first pass",
+    },
   ]);
   const res = await handleRequest(req(`/api/ingests/${HASH}/history`), ENV, deps(gh)); // no cookie
   assertEquals(res.status, 200);
@@ -481,7 +518,11 @@ Deno.test("unknown route -> 404", async () => {
 
 Deno.test("a GitHub write failure surfaces a 502, not a bare 500", async () => {
   const gh = {
-    getFile: () => Promise.resolve(null),
+    // roles.yaml must resolve or the role gate 403s before the write is reached.
+    getFile: (_repo: string, path: string) =>
+      Promise.resolve(
+        path === "roles.yaml" ? ({ text: "rev: editor\n", sha: "s" } as FileState) : null,
+      ),
     editFile: () => Promise.reject(new GitHubError(401, "Bad credentials")),
     listCommits: () => Promise.resolve([]),
   };
@@ -501,4 +542,110 @@ Deno.test("a GitHub write failure surfaces a 502, not a bare 500", async () => {
   );
   assertEquals(res.status, 502);
   assertEquals((await res.json()).detail, "upstream write failed: GitHub 401");
+});
+
+// --- role gate (the production write gate) ---------------------------------
+// Until this existed the edge gated writes on "is there a session" alone, so any
+// GitHub login could commit to the live ingests repo. These pin that shut.
+
+const asUser = async (login: string) =>
+  (await makeSessionCookie(ENV, { ...USER, login }, NOW)).split(";")[0];
+
+const putReview = (gh: FakeGitHub, ck: string) =>
+  handleRequest(
+    req(`/api/ingests/${HASH}`, {
+      method: "PUT",
+      headers: { cookie: ck },
+      body: JSON.stringify({
+        content: "---\ntitle: T\n---\nbody\n",
+        notes: "",
+      }),
+    }),
+    ENV,
+    deps(gh),
+  );
+
+Deno.test("role gate: an UNLISTED login cannot write a record (the hole)", async () => {
+  const gh = new FakeGitHub(); // roles.yaml lists `rev` only
+  const res = await putReview(gh, await asUser("randomer"));
+  assertEquals(res.status, 403);
+  assertEquals(gh.wrote, []);
+});
+
+Deno.test("role gate: an explicit contributor cannot write a record", async () => {
+  const gh = new FakeGitHub();
+  gh.put("ingests", "roles.yaml", "rev: editor\nnewbie: contributor\n");
+  gh.seeded.add("ingests/roles.yaml");
+  const res = await putReview(gh, await asUser("newbie"));
+  assertEquals(res.status, 403);
+  assertEquals(gh.wrote, []);
+});
+
+Deno.test("role gate: fails CLOSED when roles.yaml is missing", async () => {
+  const gh = new FakeGitHub();
+  gh.files.delete("ingests/roles.yaml"); // no role file at all
+  const res = await putReview(gh, await asUser("rev"));
+  assertEquals(res.status, 403);
+  assertEquals(gh.wrote, []);
+});
+
+Deno.test("role gate: a reviewer CAN write a record", async () => {
+  const gh = new FakeGitHub();
+  gh.put("ingests", "roles.yaml", "rev: reviewer\n");
+  gh.seeded.add("ingests/roles.yaml");
+  const res = await putReview(gh, await asUser("rev"));
+  assertEquals(res.status, 200);
+});
+
+Deno.test("role gate: article directives need editor - a reviewer is refused", async () => {
+  const gh = new FakeGitHub();
+  gh.put("ingests", "roles.yaml", "rev: reviewer\n");
+  gh.seeded.add("ingests/roles.yaml");
+  const res = await handleRequest(
+    req(`/api/articles/people/luis-elizondo/directives`, {
+      method: "PUT",
+      headers: { cookie: await asUser("rev") },
+      body: JSON.stringify({ directives: ["x"] }),
+    }),
+    ENV,
+    deps(gh),
+  );
+  assertEquals(res.status, 403);
+  assertEquals(gh.wrote, []);
+});
+
+Deno.test("role gate: curation needs reviewer - an unlisted login is refused", async () => {
+  const gh = new FakeGitHub();
+  const res = await handleRequest(
+    req("/api/curation/reject", {
+      method: "POST",
+      headers: { cookie: await asUser("randomer") },
+      body: JSON.stringify({
+        nodes: [
+          { id: "n1", name: "A", node_type: "matter" },
+          { id: "n2", name: "B", node_type: "matter" },
+        ],
+      }),
+    }),
+    ENV,
+    deps(gh),
+  );
+  assertEquals(res.status, 403);
+  assertEquals(gh.wrote, []);
+});
+
+Deno.test("me/role: reports the caller's role; unlisted -> contributor", async () => {
+  const gh = new FakeGitHub();
+  const mine = await handleRequest(
+    req("/api/me/role", { headers: { cookie: await asUser("rev") } }),
+    ENV,
+    deps(gh),
+  );
+  assertEquals(await mine.json(), { role: "editor" });
+  const theirs = await handleRequest(
+    req("/api/me/role", { headers: { cookie: await asUser("randomer") } }),
+    ENV,
+    deps(gh),
+  );
+  assertEquals(await theirs.json(), { role: "contributor" });
 });
