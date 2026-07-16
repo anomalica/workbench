@@ -58,8 +58,16 @@
   // the queue is actioned (afterAction in ReviewView) via reloadPending.
   let myRole = $state<string>("contributor");
   let pendingProposals = $state(0);
-  let canReview = $derived(myRole === "reviewer" || myRole === "editor" || myRole === "admin");
-  let canManageRoles = $derived(myRole === "admin");
+  // These tabs are backed by the PYTHON backend (proposals, roles, model
+  // variants), which production does not run - it serves a static SPA + the Deno
+  // edge, and their reads have no `.json` snapshot to fall back on (see
+  // readPath). Showing them in a static build ships tabs that 404, so they are
+  // local-only until those routes exist online.
+  let liveBackend = $derived(!STATIC_READS);
+  let canReview = $derived(
+    liveBackend && (myRole === "reviewer" || myRole === "editor" || myRole === "admin"),
+  );
+  let canManageRoles = $derived(liveBackend && myRole === "admin");
 
   async function reloadPending() {
     if (!canReview) {
@@ -481,16 +489,19 @@
       appMode = "articles";
       return; // ArticlesView fetches its own listing
     }
-    if (path === "review") {
+    // The Python-backed views are local-only (see liveBackend): a static build
+    // has no API behind them, so a direct link falls through to Records rather
+    // than rendering a view that 404s.
+    if (path === "review" && !STATIC_READS) {
       appMode = "review";
       loadIngests(); // ReviewView needs the record list for hash->title
       return;
     }
-    if (path === "roles") {
+    if (path === "roles" && !STATIC_READS) {
       appMode = "roles";
       return; // RolesView fetches its own data
     }
-    if (path === "models") {
+    if (path === "models" && !STATIC_READS) {
       appMode = "models";
       return; // ModelCompareView fetches its own list and reads ?h= itself
     }
