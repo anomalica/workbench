@@ -57,6 +57,8 @@
   // same record should not refetch ~60KB-750KB.
   let fullPeaks: Float32Array | null = null;
   let fullPeaksHash = "";
+  // Seconds of audio the cached peaks cover, per the sidecar that produced them.
+  let fullPeaksSpan = 0;
 
   // Fetch peaks whenever the window changes (record load / different selection),
   // NOT while dragging - the window is stable during an edit.
@@ -99,12 +101,18 @@
       if (!res.ok) throw new Error(String(res.status));
       const sidecar: PeaksSidecar = await res.json();
       fullPeaks = decodePeaks(sidecar.peaks);
+      fullPeaksSpan = sidecar.duration;
       fullPeaksHash = h;
     }
-    // Map onto the MEDIA's duration, not the sidecar's declared one: the peaks
-    // span the whole file, and the player knows its own length even when a
-    // sidecar header is wrong.
-    return sliceWindow(fullPeaks, md || 0, s, d, BINS);
+    // The x-axis is the span the PEAKS cover, which only the sidecar can state:
+    // its duration is derived from the same PCM the peaks are reduced from, so
+    // the two agree by construction. The player's own duration is NOT that span
+    // and is the worse choice for both surfaces - YouTube rounds to the whole
+    // second (reports 4685 for a 4684.89s source, ~0.5s adrift by the end of a
+    // 78-minute file), and a local element measures the container, not the
+    // decode (7ms out). Fall back to it only when the sidecar cannot say.
+    const span = fullPeaksSpan > 0 ? fullPeaksSpan : md || 0;
+    return sliceWindow(fullPeaks, span, s, d, BINS);
   }
 
   /** Time -> x in the 0..1000 viewBox space (clamped to the window). */

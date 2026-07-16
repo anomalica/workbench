@@ -36,14 +36,32 @@ describe("sliceWindow", () => {
     expect(Math.max(...out)).toBe(1);
   });
 
-  it("maps against the MEDIA's duration, not a declared one", () => {
-    // The anti-drift property. Same peaks, but the media is really 20s: the
-    // spike at bin 500 of 1000 is then at t=10s, not t=5s. A consumer trusting a
-    // declared 100 bins/sec would look for it at 5s and find silence.
+  it("maps against the SPAN it is given, not an assumed bins-per-second", () => {
+    // The anti-drift property. Same peaks, but they span 20s: the spike at bin
+    // 500 of 1000 is then at t=10s, not t=5s. A consumer hardcoding 100 bins/sec
+    // would look for it at 5s and find silence.
     const out = sliceWindow(peaks, 20, 9, 2, 200); // window [9s, 11s)
     expect(Math.max(...out)).toBe(1);
     const atFive = sliceWindow(peaks, 20, 4, 2, 200);
     expect(Math.max(...atFive)).toBe(0);
+  });
+
+  it("a rounded span misplaces a late onset - why the sidecar's exact duration wins", () => {
+    // YouTube reports whole seconds: 4685 for a 4684.89s source. The caller must
+    // pass the sidecar's exact span, not the player's, or a spike near the end
+    // lands adrift. 100 bins/sec over 4684.89s, spike at the very last second.
+    const n = Math.round(4684.89 * 100);
+    const long = new Float32Array(n);
+    const spikeAt = 4684.0; // seconds
+    long[Math.floor(spikeAt * 100)] = 1;
+
+    // Exact span: the spike is found in a tight window around 4684.0s.
+    const exact = sliceWindow(long, 4684.89, 4683.9, 0.2, 20);
+    expect(Math.max(...exact)).toBe(1);
+
+    // Rounded span (the YT-reported number): the same window now misses it.
+    const rounded = sliceWindow(long, 4685, 4683.9, 0.2, 20);
+    expect(Math.max(...rounded)).toBe(0);
   });
 
   it("re-reduces by MAX so a zoomed-out window keeps its onsets", () => {
