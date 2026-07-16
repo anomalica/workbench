@@ -30,6 +30,7 @@ import { stringify as stringifyYaml } from "jsr:@std/yaml@1";
 import { signedUrl } from "./lib/bunny.ts";
 import { needed, scoreSession, startSession } from "./lib/gate.ts";
 import { type Author, type FileState, GitHubClient, GitHubError } from "./lib/github.ts";
+import { atLeast, DEFAULT_ROLE, parseRoles, type Role, roleOf } from "./lib/roles.ts";
 import {
   appendEntry,
   buildMergeEntry,
@@ -112,6 +113,16 @@ function sample<T>(pool: T[], n: number): T[] {
     [copy[i], copy[j]] = [copy[j], copy[i]];
   }
   return copy.slice(0, n);
+}
+
+/** The login -> role map from `ingests/roles.yaml`. Fails CLOSED: if the file is
+ *  missing or unreadable the map is empty, so every login resolves to
+ *  contributor and no write is allowed. Read per request - the file is tiny, and
+ *  a revoked role must take effect immediately, not after a redeploy. */
+async function loadRoles(env: Env, deps: Deps): Promise<Record<string, Role>> {
+  const file = await deps.github.getFile(env.ingestsRepo, "roles.yaml");
+  if (!file) return {};
+  return parseRoles(file.text);
 }
 
 async function loadSidecar(env: Env, deps: Deps, hash: string): Promise<Sidecar | null> {
@@ -240,13 +251,20 @@ async function handleGate(
         body.responses ?? {},
         deps.nowSec(),
       );
-      if (!result.ok) return err(400, `Invalid or expired session (${result.reason})`);
+      if (!result.ok) {
+        return err(400, `Invalid or expired session (${result.reason})`);
+      }
       passed = result.passed;
       score = result.score;
       need = result.needed;
     }
 
-    const out: Record<string, unknown> = { passed, method, score, needed: need };
+    const out: Record<string, unknown> = {
+      passed,
+      method,
+      score,
+      needed: need,
+    };
     if (passed) {
       // Mint a short-lived signed Bunny URL for exactly this verified hash.
       const ext = body.ext && EXT.test(body.ext) ? body.ext : null;
@@ -348,7 +366,9 @@ async function handleReviewWrite(
           sidecar.schema = "anomalica/review-coverage/1";
           sidecar.observed_coverage = verdict.observed_coverage;
           sidecar.digestible = !!verdict.digestible;
-          if (verdict.total_units != null) sidecar.total_units = verdict.total_units;
+          if (verdict.total_units != null) {
+            sidecar.total_units = verdict.total_units;
+          }
         }
         return JSON.stringify(sidecar, null, 2) + "\n";
       },
@@ -473,7 +493,11 @@ async function handleHistory(hash: string, env: Env, deps: Deps): Promise<Respon
   const bodyPath = await resolveBodyPath(env, deps, hash);
   const commits = await deps.github.listCommits(env.ingestsRepo, bodyPath);
   return json({
-    history: commits.map((c) => ({ by: c.by, at: c.at, summary: commitSummary(c.message) })),
+    history: commits.map((c) => ({
+      by: c.by,
+      at: c.at,
+      summary: commitSummary(c.message),
+    })),
   });
 }
 
@@ -492,14 +516,20 @@ async function handleArticleDirectives(
   deps: Deps,
   user: User,
 ): Promise<Response> {
-  if (!ARTICLE_SECTION.test(section) || !ARTICLE_SLUG.test(slug)) return notFound();
+  if (!ARTICLE_SECTION.test(section) || !ARTICLE_SLUG.test(slug)) {
+    return notFound();
+  }
   const body = (await req.json().catch(() => ({}))) as { directives?: unknown };
-  if (!Array.isArray(body.directives)) return err(400, "Missing directives list");
+  if (!Array.isArray(body.directives)) {
+    return err(400, "Missing directives list");
+  }
 
   const seen = new Set<string>();
   const directives: string[] = [];
   for (const d of body.directives) {
-    if (typeof d !== "string") return err(400, "Each directive must be a string");
+    if (typeof d !== "string") {
+      return err(400, "Each directive must be a string");
+    }
     const s = d.trim();
     if (!s) continue;
     if (s.length > MAX_DIRECTIVE_LEN) return err(400, "Directive too long");
@@ -525,7 +555,9 @@ async function route(req: Request, env: Env, deps: Deps): Promise<Response> {
   const { pathname } = new URL(req.url);
   const method = req.method;
 
-  if (pathname.startsWith("/api/auth/")) return handleAuth(pathname, req, env, deps);
+  if (pathname.startsWith("/api/auth/")) {
+    return handleAuth(pathname, req, env, deps);
+  }
 
   // Gate (public reads + the possession challenge - no login needed to prove possession).
   const gate = pathname.match(/^\/api\/ingests\/([^/]+)\/verification(?:\/(start|submit))?$/);
@@ -544,25 +576,46 @@ async function route(req: Request, env: Env, deps: Deps): Promise<Response> {
     return handleHistory(history[1], env, deps);
   }
 
-  // Everything past here writes - require a logged-in reviewer.
+  // Everything past here writes - require a logged-in user AND a role that may
+  // write. Being logged in is NOT enough: unlisted logins default to contributor
+  // and are refused, which is what stops any GitHub account committing to live
+  // data. Mirrors backend/roles.py; see edge/lib/roles.ts.
   const user = await readSession(env, req.headers.get("cookie"), deps.nowSec());
+
+  /** 401 when logged out, 403 when the role is below `minimum`, else null. */
+  const denyUnless = async (minimum: Role): Promise<Response | null> => {
+    if (!user) return err(401, "Login required");
+    const role = roleOf(user.login, await loadRoles(env, deps));
+    return atLeast(role, minimum) ? null : err(403, `Requires ${minimum} role`);
+  };
+
+  // The caller's own role, so the UI can show the right affordances. Login-only:
+  // it reveals nothing but your own role.
+  if (pathname === "/api/me/role" && method === "GET") {
+    if (!user) return json({ role: DEFAULT_ROLE });
+    return json({ role: roleOf(user.login, await loadRoles(env, deps)) });
+  }
 
   const review = pathname.match(/^\/api\/ingests\/([^/]+)$/);
   if (review && method === "PUT") {
-    if (!user) return err(401, "Login required");
-    return handleReviewWrite(review[1], req, env, deps, user);
+    const denied = await denyUnless("reviewer");
+    if (denied) return denied;
+    return handleReviewWrite(review[1], req, env, deps, user!);
   }
 
   const curate = pathname.match(/^\/api\/curation\/(merge|unmerge|reject|unreject)$/);
   if (curate && method === "POST") {
-    if (!user) return err(401, "Login required");
-    return handleCuration(curate[1], req, env, deps, user);
+    const denied = await denyUnless("reviewer");
+    if (denied) return denied;
+    return handleCuration(curate[1], req, env, deps, user!);
   }
 
+  // Article directives are an editor+ op (the four-tier op-split).
   const directives = pathname.match(/^\/api\/articles\/([^/]+)\/([^/]+)\/directives$/);
   if (directives && method === "PUT") {
-    if (!user) return err(401, "Login required");
-    return handleArticleDirectives(directives[1], directives[2], req, env, deps, user);
+    const denied = await denyUnless("editor");
+    if (denied) return denied;
+    return handleArticleDirectives(directives[1], directives[2], req, env, deps, user!);
   }
 
   return notFound();
