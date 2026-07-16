@@ -1692,25 +1692,37 @@
   // there would make Play a dead button.
   let playCeiling: number | null = null;
   let ceilingArmed = false;
-  let ceilingTimer: ReturnType<typeof setTimeout> | null = null;
+  let ceilingRaf: number | null = null;
 
   function cancelCeilingTimer() {
-    if (ceilingTimer) {
-      clearTimeout(ceilingTimer);
-      ceilingTimer = null;
+    if (ceilingRaf !== null) {
+      cancelAnimationFrame(ceilingRaf);
+      ceilingRaf = null;
     }
   }
 
+  /** Stop playback at `playCeiling` by watching the MEDIA clock, not a wall
+   *  clock. A wall-clock timer armed at seek time fires early, because the seek
+   *  + decode stall means audio starts up to ~100ms after the click: previewing
+   *  a 180ms word played only ~75ms of it and cut off mid-word, which reads as
+   *  "it isn't playing from the timestamp". Polling per frame is accurate to
+   *  ~16ms and is immune to startup latency, buffering and playback-rate changes
+   *  (timeupdate alone only fires ~4x/sec, so it would overshoot by up to 250ms). */
   function armCeilingFrom(seconds: number) {
     cancelCeilingTimer();
     ceilingArmed = playCeiling !== null && seconds < playCeiling;
     if (!ceilingArmed || playCeiling === null) return;
-    const durationMs = ((playCeiling - seconds) / (playbackRate || 1)) * 1000;
-    ceilingTimer = setTimeout(() => {
-      mediaPause();
-      ceilingArmed = false;
-      ceilingTimer = null;
-    }, Math.max(0, durationMs));
+    const tick = () => {
+      ceilingRaf = null;
+      if (!ceilingArmed || playCeiling === null) return;
+      if (mediaCurrentTime() >= playCeiling) {
+        mediaPause();
+        ceilingArmed = false;
+        return;
+      }
+      ceilingRaf = requestAnimationFrame(tick);
+    };
+    ceilingRaf = requestAnimationFrame(tick);
   }
 
   function setPlayCeiling(until: number | null) {
