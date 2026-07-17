@@ -1,10 +1,14 @@
 <script lang="ts">
-  // Model/digest audit view: compare a record's extraction variants against each
-  // other, walking the record passage by passage. Per passage, the source on one
-  // side and the claims clustered by meaning on the other - each cluster showing
-  // which variants produced it and their phrasings, singletons (one variant only)
-  // flagged as unique recall or hallucination. Read-only for now; per-cluster
-  // adjudication is the next layer.
+  // Auditing a record's extraction variants: walk the source chunk by chunk and,
+  // for each chunk, see what EVERY model made of it side by side.
+  //
+  // The shape is deliberate. Source on the left, one COLUMN PER MODEL on the
+  // right, one row per distinct fact, and a cell for every model in every row -
+  // including an explicit "nothing" where a model found nothing. The previous
+  // clustered shape rendered a fact once with an "only haiku" badge, which made
+  // every judgement relative: to read one row you had to hold the other models
+  // in your head and infer their silence from an absence. Here a row is
+  // standalone - what each model said, and who said nothing, is on its face.
   import {
     fetchAudit,
     putAuditVerdict,
@@ -14,25 +18,32 @@
     type AuditMember,
     type AuditGold,
   } from "$lib/api";
+  import {
+    auditGrid,
+    passageQuotes,
+    passageTally,
+    memberLines,
+    frameLabel,
+    type AuditGridRow,
+  } from "$lib/audit-grid";
 
   let { hash }: { hash: string } = $props();
 
   let status = $state<"loading" | "ready" | "empty" | "error">("loading");
   let payload = $state<AuditPayload | null>(null);
 
-  // Colour per variant, by its order in the record - reused in the summary and in
-  // every cluster's attribution so a model reads the same colour throughout.
+  // Colour per model, by its order in the record - the column header, the tally
+  // and any per-cell marker all read the same colour.
   const PALETTE = ["#0ea5e9", "#f59e0b", "#8b5cf6", "#ec4899", "#22c55e", "#ef4444"];
   let colourOf = $derived.by(() => {
     const m = new Map<string, string>();
     (payload?.variants ?? []).forEach((v, i) => m.set(v.id, PALETTE[i % PALETTE.length]));
     return m;
   });
-  let modelOf = $derived.by(() => {
-    const m = new Map<string, string>();
-    (payload?.variants ?? []).forEach((v) => m.set(v.id, v.model));
-    return m;
-  });
+
+  let variants = $derived(payload?.variants ?? []);
+  // The grid's column template: the source chunk, then one equal column per model.
+  let columns = $derived(`minmax(0,1fr) ${variants.map(() => "minmax(0,1fr)").join(" ")}`);
 
   $effect(() => {
     const h = hash;
@@ -66,61 +77,9 @@
     return raws[0] ?? "—";
   }
 
-  // The distinct source quotes a passage's claims cited - the "source side".
-  function passageQuotes(clusters: AuditCluster[]): string[] {
-    const seen = new Set<string>();
-    const out: string[] = [];
-    for (const c of clusters) {
-      for (const m of c.members) {
-        const q = m.quote.trim();
-        if (q && q !== "(mock)" && !seen.has(q)) {
-          seen.add(q);
-          out.push(q);
-        }
-      }
-    }
-    return out;
-  }
-
-  // Cluster members grouped by (wording + epistemic frame): variants that
-  // captured the fact identically collapse to one row; a variant that flattened
-  // it (dropped the attestation or a source ref) splits onto its own row, so the
-  // difference the gold exists to catch is visible at a glance.
-  interface MemberRow {
-    text: string;
-    claim_type: string;
-    attestation: string;
-    refs: string[];
-    variants: string[];
-  }
-  function memberRows(c: AuditCluster): MemberRow[] {
-    const by = new Map<string, MemberRow>();
-    for (const m of c.members) {
-      const key = `${m.text}|${m.claim_type}|${m.attestation}|${m.refs.join(",")}`;
-      const row = by.get(key);
-      if (row) row.variants.push(m.variant);
-      else
-        by.set(key, {
-          text: m.text,
-          claim_type: m.claim_type,
-          attestation: m.attestation,
-          refs: m.refs,
-          variants: [m.variant],
-        });
-    }
-    return [...by.values()];
-  }
-
-  // A compact epistemic frame label: type · attestation · refs. Empty parts drop.
-  function frameLabel(r: MemberRow): string {
-    const parts = [r.claim_type, r.attestation].filter(Boolean);
-    if (r.refs.length) parts.push(`refs: ${r.refs.join(", ")}`);
-    return parts.join(" · ");
-  }
-
-  // --- adjudication (the gold): mark each cluster real/hallucinated/not-asserted;
-  // for a `real` cluster, mark each member correct or how it went wrong. Persisted
-  // to {hash}.audit.json; the digester's grader scores variants against it. ---
+  // --- adjudication (the gold): mark each fact real/hallucinated/not-asserted;
+  // for a `real` fact, mark each model's rendering correct or how it went wrong.
+  // Persisted to {hash}.audit.json; the digester's grader scores variants on it.
   const CLUSTER_VERDICTS = ["real", "hallucinated", "not_asserted"] as const;
   const CLUSTER_LABEL: Record<string, string> = {
     real: "Real",
@@ -144,9 +103,6 @@
     );
   }
 
-  // Build + persist the adjudication for a cluster, carrying existing member
-  // verdicts. `memberOverride` sets one member's verdict (for the per-member
-  // controls); a bare verdict change keeps the members as they were.
   async function saveGold(
     c: AuditCluster,
     p: AuditPassage,
@@ -177,6 +133,10 @@
       /* leave the UI unchanged on failure */
     }
   }
+
+  function rowsOf(p: AuditPassage): AuditGridRow[] {
+    return auditGrid(p, variants);
+  }
 </script>
 
 <div class="flex-1 flex flex-col min-h-0 font-ui bg-surface">
@@ -190,10 +150,10 @@
   {:else if status === "error"}
     <p class="p-6 text-sm text-error">Could not load the audit for this record.</p>
   {:else if payload}
-    <!-- Variant summary: model, claim count, cost - colour-keyed to the clusters. -->
-    <div class="flex-none px-4 py-3 border-b border-border bg-surface-alt flex flex-wrap items-center gap-3">
+    <!-- Variant summary: model, claim count, cost - colour-keyed to the columns. -->
+    <div class="flex-none px-4 py-3 border-b border-border bg-surface-alt flex flex-wrap items-center gap-x-4 gap-y-2">
       <span class="text-xs font-medium text-on-surface-secondary">
-        {payload.variants.length} variants · {payload.passages.length} passages
+        {payload.variants.length} models · {payload.passages.length} chunks
       </span>
       {#each payload.variants as v (v.id)}
         <span class="inline-flex items-center gap-1.5 text-xs">
@@ -209,125 +169,150 @@
 
     <div class="flex-1 overflow-auto min-h-0">
       {#each payload.passages as p (p.index)}
-        <section class="border-b border-border/60">
-          <header class="px-4 py-1.5 bg-surface-alt/40 flex items-center gap-2 sticky top-0">
-            <span class="text-xs font-mono tabular-nums text-on-surface-secondary">
+        {@const rows = rowsOf(p)}
+        {@const tally = passageTally(p, variants)}
+        <section class="border-b-4 border-border/60">
+          <!-- Chunk header: where in the source, and what each model found HERE
+               (an explicit 0 included - "found nothing here" is a finding). -->
+          <header class="px-4 py-2 bg-surface-alt/60 flex flex-wrap items-center gap-x-3 gap-y-1 sticky top-0 z-10 border-b border-border">
+            <span class="text-xs font-mono tabular-nums font-medium text-on-surface-secondary">
               {passageLabel(p.start, p.end, p.raw_locations)}
             </span>
             <span class="text-[11px] text-on-surface-muted">
-              {p.clusters.length} claim{p.clusters.length === 1 ? "" : "s"}
+              {rows.length} claim{rows.length === 1 ? "" : "s"} in this chunk
             </span>
+            <span class="flex-1"></span>
+            {#each tally as t (t.variant)}
+              <span
+                class="inline-flex items-center gap-1 text-[11px] tabular-nums
+                  {t.count === 0 ? 'text-on-surface-muted/60' : 'text-on-surface-secondary'}"
+                title={t.count === 0
+                  ? `${t.model} found nothing in this chunk`
+                  : `${t.model} produced ${t.count} claim${t.count === 1 ? "" : "s"} here`}
+              >
+                <span class="w-1.5 h-1.5 rounded-full flex-none" style="background:{colourOf.get(t.variant)}"></span>
+                {t.model} {t.count}
+              </span>
+            {/each}
           </header>
 
-          <div class="grid grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] gap-4 px-4 py-3">
-            <!-- Source side: the verbatim spans the models cited. -->
-            <div class="text-sm text-on-surface-secondary space-y-1.5 min-w-0">
-              {#each passageQuotes(p.clusters) as q}
-                <p class="border-l-2 border-border pl-2 leading-snug">{q}</p>
-              {:else}
-                <p class="text-on-surface-muted/60 italic">no source quote</p>
+          <!-- Column headers: SOURCE, then one per model. -->
+          <div class="grid gap-px bg-border/40 border-b border-border" style="grid-template-columns: {columns}">
+            <div class="bg-surface-alt/40 px-3 py-1">
+              <span class="text-[10px] font-semibold uppercase tracking-wide text-on-surface-muted">Source</span>
+            </div>
+            {#each variants as v (v.id)}
+              <div class="bg-surface-alt/40 px-3 py-1 flex items-center gap-1.5">
+                <span class="w-2 h-2 rounded-full flex-none" style="background:{colourOf.get(v.id)}"></span>
+                <span class="text-[10px] font-semibold uppercase tracking-wide text-on-surface-secondary">{v.model}</span>
+              </div>
+            {/each}
+          </div>
+
+          {#if rows.length === 0}
+            <div class="grid gap-px bg-border/40" style="grid-template-columns: {columns}">
+              <div class="bg-surface px-3 py-3 text-sm text-on-surface-secondary space-y-1.5">
+                {#each passageQuotes(p.clusters) as q}
+                  <p class="border-l-2 border-border pl-2 leading-snug">{q}</p>
+                {:else}
+                  <p class="text-on-surface-muted/60 italic text-xs">no source quote</p>
+                {/each}
+              </div>
+              {#each variants as v (v.id)}
+                <div class="bg-surface px-3 py-3">
+                  <p class="text-xs italic text-on-surface-muted/60">nothing</p>
+                </div>
               {/each}
             </div>
+          {/if}
 
-            <!-- Cluster side: one row per fact, its variants and phrasings. -->
-            <div class="space-y-2 min-w-0">
-              {#each p.clusters as c (c.id)}
-                <div
-                  class="rounded border px-2.5 py-1.5
-                    {c.singleton
-                      ? 'border-warning/50 bg-warning-container/15'
-                      : 'border-border bg-surface-alt/30'}"
-                >
-                  <div class="flex items-start gap-2">
-                    <!-- Which variants produced this fact. -->
-                    <span class="flex-none flex items-center gap-1 pt-0.5">
-                      {#each c.variants as vid}
-                        <span
-                          class="w-2 h-2 rounded-full"
-                          style="background:{colourOf.get(vid)}"
-                          title={modelOf.get(vid)}
-                        ></span>
-                      {/each}
-                    </span>
-                    <div class="min-w-0 flex-1 space-y-1">
-                      {#each memberRows(c) as row}
-                        {@const label = frameLabel(row)}
+          <!-- One row per fact. Every model has a cell; an empty one SAYS so. -->
+          {#each rows as row (row.cluster.id)}
+            <div
+              class="grid gap-px bg-border/40 {row.singleton ? 'ring-1 ring-inset ring-warning/40' : ''}"
+              style="grid-template-columns: {columns}"
+            >
+              <!-- Source: the span this fact was drawn from. -->
+              <div class="bg-surface px-3 py-2.5 min-w-0">
+                {#if row.cluster.members.length}
+                  {@const quotes = passageQuotes([row.cluster])}
+                  {#each quotes as q}
+                    <p class="text-sm text-on-surface-secondary border-l-2 border-border pl-2 leading-snug">{q}</p>
+                  {:else}
+                    <p class="text-xs italic text-on-surface-muted/60">no source quote</p>
+                  {/each}
+                {:else}
+                  <p class="text-xs italic text-on-surface-muted/60">no source quote</p>
+                {/if}
+
+                <!-- Adjudication sits with the source, since it judges the FACT,
+                     not any one model's wording of it. -->
+                <div class="mt-2 flex flex-wrap items-center gap-1">
+                  {#each CLUSTER_VERDICTS as v}
+                    <button
+                      onclick={() => saveGold(row.cluster, p, v)}
+                      class="text-[11px] font-medium rounded px-1.5 py-0.5 cursor-pointer transition-colors
+                        {row.cluster.gold?.verdict === v
+                          ? v === 'real'
+                            ? 'bg-success text-on-success'
+                            : 'bg-error text-on-error'
+                          : 'text-on-surface-muted hover:bg-surface-alt'}"
+                      title="Mark this claim {CLUSTER_LABEL[v]}"
+                    >
+                      {CLUSTER_LABEL[v]}
+                    </button>
+                  {/each}
+                </div>
+              </div>
+
+              <!-- One cell per model: its rendering, or an explicit nothing. -->
+              {#each row.cells as cell (cell.variant)}
+                <div class="bg-surface px-3 py-2.5 min-w-0">
+                  {#if !cell.present}
+                    <p
+                      class="text-xs italic text-on-surface-muted/60"
+                      title="{cell.model} produced no claim for this fact"
+                    >
+                      nothing
+                    </p>
+                  {:else}
+                    <div class="space-y-1.5">
+                      {#each memberLines(cell.members) as line}
+                        {@const label = frameLabel(line)}
                         <div>
-                          <p class="text-sm text-on-surface leading-snug">
-                            {row.text}
-                            {#if memberRows(c).length > 1}
-                              <span class="text-[10px] text-on-surface-muted">
-                                ({row.variants.map((v) => modelOf.get(v)).join(", ")})
-                              </span>
-                            {/if}
-                          </p>
+                          <p class="text-sm text-on-surface leading-snug">{line.text}</p>
                           {#if label}
-                            <p class="text-[10px] font-mono text-on-surface-muted/80 leading-tight">
-                              {label}
-                            </p>
+                            <p class="text-[10px] font-mono text-on-surface-muted/80 leading-tight">{label}</p>
                           {/if}
                         </div>
                       {/each}
-                    </div>
-                    {#if c.singleton}
-                      <span
-                        class="flex-none text-[10px] font-medium text-on-warning-container bg-warning-container/60 rounded px-1.5 py-0.5"
-                        title="Only one variant produced this - unique recall or a hallucination"
-                      >
-                        only {modelOf.get(c.variants[0])}
-                      </span>
-                    {/if}
-                  </div>
 
-                  <!-- Adjudication: mark the cluster, and (when real) each member. -->
-                  <div class="mt-1.5 pt-1.5 border-t border-border/40 flex flex-wrap items-center gap-1">
-                    {#each CLUSTER_VERDICTS as v}
-                      <button
-                        onclick={() => saveGold(c, p, v)}
-                        class="text-[11px] font-medium rounded px-1.5 py-0.5 cursor-pointer transition-colors
-                          {c.gold?.verdict === v
-                            ? v === 'real'
-                              ? 'bg-success text-on-success'
-                              : 'bg-error text-on-error'
-                            : 'text-on-surface-muted hover:bg-surface-alt'}"
-                        title="Mark this claim {CLUSTER_LABEL[v]}"
-                      >
-                        {CLUSTER_LABEL[v]}
-                      </button>
-                    {/each}
-                    {#if c.gold && c.gold.verdict !== "real" && !c.singleton}
-                      <span class="text-[10px] text-on-surface-muted/70 ml-1">both variants marked</span>
-                    {/if}
-                  </div>
-
-                  {#if c.gold?.verdict === "real" && c.members.length > 1}
-                    <!-- Per member: did it get the framing right, or flatten it? -->
-                    <div class="mt-1 space-y-0.5">
-                      {#each c.members as m (m.variant + m.claim_id)}
-                        <div class="flex items-center gap-1 text-[10px]">
-                          <span class="w-2 h-2 rounded-full flex-none" style="background:{colourOf.get(m.variant)}"></span>
-                          <span class="text-on-surface-muted w-14 flex-none truncate">{modelOf.get(m.variant)}</span>
-                          {#each MEMBER_VERDICTS as mv}
-                            <button
-                              onclick={() => saveGold(c, p, "real", { member: m, verdict: mv })}
-                              class="rounded px-1 py-0.5 cursor-pointer transition-colors
-                                {memberVerdictOf(c, m) === mv
-                                  ? mv === 'correct'
-                                    ? 'bg-success/80 text-on-success'
-                                    : 'bg-warning text-on-warning'
-                                  : 'text-on-surface-muted/70 hover:bg-surface-alt'}"
-                            >
-                              {MEMBER_LABEL[mv]}
-                            </button>
-                          {/each}
-                        </div>
-                      {/each}
+                      <!-- When the fact is real, grade THIS model's rendering. -->
+                      {#if row.cluster.gold?.verdict === "real"}
+                        {#each cell.members as m (m.claim_id)}
+                          <div class="flex flex-wrap items-center gap-1 pt-0.5">
+                            {#each MEMBER_VERDICTS as mv}
+                              <button
+                                onclick={() => saveGold(row.cluster, p, "real", { member: m, verdict: mv })}
+                                class="text-[10px] rounded px-1 py-0.5 cursor-pointer transition-colors
+                                  {memberVerdictOf(row.cluster, m) === mv
+                                    ? mv === 'correct'
+                                      ? 'bg-success/80 text-on-success'
+                                      : 'bg-warning text-on-warning'
+                                    : 'text-on-surface-muted/70 hover:bg-surface-alt'}"
+                              >
+                                {MEMBER_LABEL[mv]}
+                              </button>
+                            {/each}
+                          </div>
+                        {/each}
+                      {/if}
                     </div>
                   {/if}
                 </div>
               {/each}
             </div>
-          </div>
+          {/each}
         </section>
       {/each}
     </div>
