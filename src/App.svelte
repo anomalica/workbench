@@ -11,7 +11,6 @@
     fetchProposals,
     fetchReviewedHashes,
     fetchSyncStatus,
-    provenanceOf,
     STATIC_READS,
   } from "$lib/api";
   import type {
@@ -135,10 +134,6 @@
   // Click-to-filter on a creator or publisher value (empty = no filter).
   let filterCreator = $state<string>("");
   let filterPublisher = $state<string>("");
-  // Show only records that are currently digestible (100% observed).
-  let filterDigestible = $state(false);
-  // Show only records whose acquisition origin is untraceable.
-  let filterUntraceable = $state(false);
   let reviewedTimes = $state<Record<string, string>>({});
   let reviewedHashes = $derived(new Set(Object.keys(reviewedTimes)));
 
@@ -231,8 +226,6 @@
         if (filterType !== "all" && i.source_type !== filterType) return false;
         if (filterCreator && !i.creators.includes(filterCreator)) return false;
         if (filterPublisher && i.publisher !== filterPublisher) return false;
-        if (filterDigestible && !i.digestible) return false;
-        if (filterUntraceable && provenanceOf(i).traceable) return false;
         if (filterBlocksRedigest && !(i.digested && !i.digestible)) return false;
         // A carried-over record awaiting verification still needs review,
         // even though a stale trailer marks its hash reviewed.
@@ -825,40 +818,16 @@
                 >{type.charAt(0).toUpperCase() + type.slice(1)}</button>
               {/each}
             </div>
-            {#if user}
+            {#if blocksRedigestCount > 0}
               <div class="flex items-center gap-1 border-l border-border pl-3">
-                {#each [["all", "All"], ["needs_review", "Needs review"], ["reviewed", "Reviewed"]] as [id, label]}
-                  <button
-                    onclick={() => { filterReviewed = id as typeof filterReviewed; }}
-                    class="text-xs font-ui px-2 py-1 rounded cursor-pointer transition-colors
-                      {filterReviewed === id ? 'bg-primary text-on-primary' : 'text-on-surface-secondary hover:bg-surface'}"
-                  >{label}</button>
-                {/each}
-              </div>
-            {/if}
-
-            <div class="flex items-center gap-1 border-l border-border pl-3">
-              <button
-                onclick={() => { filterDigestible = !filterDigestible; }}
-                class="text-xs font-ui px-2 py-1 rounded cursor-pointer transition-colors
-                  {filterDigestible ? 'bg-success/20 text-success' : 'text-on-surface-secondary hover:bg-surface'}"
-                title="Show only fully-reviewed records, ready for the digester"
-              >Ready to digest</button>
-              <button
-                onclick={() => { filterUntraceable = !filterUntraceable; }}
-                class="text-xs font-ui px-2 py-1 rounded cursor-pointer transition-colors
-                  {filterUntraceable ? 'bg-warning/20 text-warning' : 'text-on-surface-secondary hover:bg-surface'}"
-                title="Show only records with no recoverable source/origin"
-              >Untraceable</button>
-              {#if blocksRedigestCount > 0}
                 <button
                   onclick={() => { filterBlocksRedigest = !filterBlocksRedigest; }}
                   class="text-xs font-ui px-2 py-1 rounded cursor-pointer transition-colors
                     {filterBlocksRedigest ? 'bg-warning/20 text-warning' : 'text-on-surface-secondary hover:bg-surface'}"
                   title="Records digested under the old gate before review sign-off - review them to unblock a clean re-digest"
                 >Blocks re-digest ({blocksRedigestCount})</button>
-              {/if}
-            </div>
+              </div>
+            {/if}
 
             <!-- Date-field selector: what value the Date column shows
                  and what "Date" sort uses. Lives in the toolbar so the
@@ -918,12 +887,25 @@
             {/if}
           {/if}
 
+          <!-- Review status, Archived included: they are four states of one
+               question ("which records am I looking at?"), so they read as one
+               group. This sits outside the !showArchived block deliberately - it
+               is the only way back out of the archived view. -->
           <div class="flex items-center gap-1 {!showArchived ? 'border-l border-border pl-3' : ''}">
+            {#if user}
+              {#each [["all", "All"], ["needs_review", "Needs review"], ["reviewed", "Reviewed"]] as [id, label]}
+                <button
+                  onclick={() => { if (showArchived) toggleArchived(); filterReviewed = id as typeof filterReviewed; }}
+                  class="text-xs font-ui px-2 py-1 rounded cursor-pointer transition-colors
+                    {!showArchived && filterReviewed === id ? 'bg-primary text-on-primary' : 'text-on-surface-secondary hover:bg-surface'}"
+                >{label}</button>
+              {/each}
+            {/if}
             <button
-              onclick={toggleArchived}
+              onclick={() => { if (!showArchived) toggleArchived(); }}
               class="text-xs font-ui px-2 py-1 rounded cursor-pointer transition-colors
                 {showArchived ? 'bg-primary text-on-primary' : 'text-on-surface-secondary hover:bg-surface'}"
-              title={showArchived ? 'Show active records' : 'Show archived records'}
+              title="Show archived records"
             >Archived</button>
           </div>
 
@@ -978,7 +960,7 @@
               onfiltercreator={(c) => { filterCreator = filterCreator === c ? "" : c; }}
               onfilterpublisher={(p) => { filterPublisher = filterPublisher === p ? "" : p; }}
             />
-          {:else if searchQuery || filterType !== "all" || filterCreator || filterPublisher || filterDigestible || filterUntraceable}
+          {:else if searchQuery || filterType !== "all" || filterCreator || filterPublisher || filterBlocksRedigest || filterReviewed !== "all"}
             <p class="text-on-surface-muted text-sm p-6">No ingests match your search.</p>
           {:else}
             <p class="text-on-surface-muted text-sm p-6">No ingests found.</p>
