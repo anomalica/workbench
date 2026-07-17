@@ -292,6 +292,11 @@ export interface AuditVariant {
   model: string;
   cost_usd: number | null;
   prompt_ids: string[];
+  /** Digest of the prompt SHAs this variant ran. Two variants are like-for-like
+   *  ONLY if this matches - `prompt_ids` carries the version LABEL, which lies
+   *  (two variants both say "claims:v3" while running different prompts). Empty
+   *  = unknown, which must never be treated as a match. */
+  prompt_fingerprint: string;
   claim_count: number;
 }
 

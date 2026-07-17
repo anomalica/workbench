@@ -47,6 +47,14 @@
   });
 
   let variants = $derived(payload?.variants ?? []);
+  // Is this a like-for-like comparison? Only if every variant ran the SAME
+  // prompt. An unknown ("") fingerprint counts as not-verified, never as a
+  // match: a prompt difference read as a model difference is the one wrong
+  // conclusion this view can produce.
+  let promptFingerprints = $derived([...new Set(variants.map((v) => v.prompt_fingerprint))]);
+  let mixedPrompts = $derived(
+    variants.length > 1 && (promptFingerprints.length > 1 || promptFingerprints[0] === ""),
+  );
   /** Longest model name, so the per-line labels form a readable gutter without a
    *  fixed width that truncates at 20 models with long names. */
   let labelCh = $derived(Math.min(14, Math.max(6, ...variants.map((v) => v.model.length), 6)));
@@ -161,6 +169,16 @@
       <span class="text-xs font-medium text-on-surface-secondary">
         {payload.variants.length} models · {payload.passages.length} chunks
       </span>
+      {#if mixedPrompts}
+        <span
+          class="inline-flex items-center gap-1 text-[11px] font-medium text-on-error bg-error/80 rounded px-2 py-0.5"
+          title={promptFingerprints.includes("")
+            ? "At least one variant does not record which prompt it ran, so this cannot be verified as like-for-like."
+            : `These variants ran DIFFERENT prompts (${promptFingerprints.join(" vs ")}). A gap between them is a prompt difference as much as a model difference - do not read it as a model comparison.`}
+        >
+          NOT like-for-like: prompts differ
+        </span>
+      {/if}
       {#each payload.variants as v (v.id)}
         <span class="inline-flex items-center gap-1.5 text-xs">
           <span class="w-2.5 h-2.5 rounded-full flex-none" style="background:{colourOf.get(v.id)}"></span>
@@ -168,6 +186,12 @@
           <span class="text-on-surface-muted tabular-nums">{v.claim_count} claims</span>
           {#if v.cost_usd != null}
             <span class="text-on-surface-muted tabular-nums">${v.cost_usd.toFixed(2)}</span>
+          {/if}
+          {#if mixedPrompts}
+            <span
+              class="font-mono text-[10px] text-on-surface-muted/80"
+              title="Prompt fingerprint - the prompts this variant actually ran"
+            >{v.prompt_fingerprint || "prompt unknown"}</span>
           {/if}
         </span>
       {/each}

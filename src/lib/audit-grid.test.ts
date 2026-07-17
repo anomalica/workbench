@@ -10,8 +10,22 @@ import {
 import type { AuditCluster, AuditMember, AuditPassage, AuditVariant } from "$lib/api";
 
 const variants: AuditVariant[] = [
-  { id: "v-haiku", model: "haiku", cost_usd: 0.28, prompt_ids: [], claim_count: 2 },
-  { id: "v-sonnet", model: "sonnet", cost_usd: 0.81, prompt_ids: [], claim_count: 1 },
+  {
+    id: "v-haiku",
+    model: "haiku",
+    cost_usd: 0.28,
+    prompt_ids: [],
+    prompt_fingerprint: "515508ce",
+    claim_count: 2,
+  },
+  {
+    id: "v-sonnet",
+    model: "sonnet",
+    cost_usd: 0.81,
+    prompt_ids: [],
+    prompt_fingerprint: "515508ce",
+    claim_count: 1,
+  },
 ];
 
 function member(variant: string, text: string, extra: Partial<AuditMember> = {}): AuditMember {
@@ -72,7 +86,14 @@ describe("gridRow: every model always gets a cell", () => {
   it("a model producing nothing anywhere still gets a column of empty cells", () => {
     const threeModels = [
       ...variants,
-      { id: "v-opus", model: "opus", cost_usd: 6.7, prompt_ids: [], claim_count: 0 },
+      {
+        id: "v-opus",
+        model: "opus",
+        cost_usd: 6.7,
+        prompt_ids: [],
+        prompt_fingerprint: "515508ce",
+        claim_count: 0,
+      },
     ];
     const row = gridRow(cluster("c1", [member("v-haiku", "x")]), threeModels);
     expect(row.cells.map((c) => `${c.model}:${c.present}`)).toEqual([
@@ -152,7 +173,14 @@ describe("passageTally: what each model did in this chunk, zeros included", () =
   it("counts per model and states an explicit zero", () => {
     const threeModels = [
       ...variants,
-      { id: "v-opus", model: "opus", cost_usd: null, prompt_ids: [], claim_count: 0 },
+      {
+        id: "v-opus",
+        model: "opus",
+        cost_usd: null,
+        prompt_ids: [],
+        prompt_fingerprint: "515508ce",
+        claim_count: 0,
+      },
     ];
     expect(passageTally(passage, threeModels)).toEqual([
       { variant: "v-haiku", model: "haiku", count: 2 },

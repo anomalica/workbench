@@ -15,6 +15,8 @@ lists `domain_claims` / `infrastructure_claims`.
 
 from __future__ import annotations
 
+import hashlib
+
 from pathlib import Path
 
 import yaml
@@ -84,6 +86,24 @@ def _variant_cost(doc: dict) -> float | None:
     return total if seen else None
 
 
+def prompt_fingerprint(doc: dict) -> str:
+    """Short digest of the prompt SHAs a variant ran, as the identity of "which
+    prompt was this?".
+
+    NOT the version label: two variants can both say `version: v3` and have
+    different claims prompts (403ed351 vs 3a766d14 today), so keying on the label
+    silently presents a prompt difference as a model difference. Order-stable, so
+    the same prompt set always fingerprints the same."""
+    shas = sorted(
+        str(p.get("sha256", ""))
+        for p in (doc.get("prompts") or [])
+        if isinstance(p, dict) and p.get("sha256")
+    )
+    if not shas:
+        return ""
+    return hashlib.sha256("|".join(shas).encode()).hexdigest()[:8]
+
+
 def load_variant(doc: dict, variant_id: str) -> Variant:
     """Build a Variant from a parsed digest doc."""
     model = str(doc.get("model", "") or "")
@@ -98,6 +118,7 @@ def load_variant(doc: dict, variant_id: str) -> Variant:
         claims=parse_claims(doc, variant_id, model),
         cost_usd=_variant_cost(doc),
         prompt_ids=prompt_ids,
+        prompt_fingerprint=prompt_fingerprint(doc),
     )
 
 
@@ -140,6 +161,7 @@ def audit_payload(variants: list[Variant], similar: Similar) -> dict:
                 "model": v.model,
                 "cost_usd": v.cost_usd,
                 "prompt_ids": v.prompt_ids,
+                "prompt_fingerprint": v.prompt_fingerprint,
                 "claim_count": len(v.claims),
             }
             for v in variants

@@ -16,24 +16,35 @@
   // there; without the ingest beside it, "what did the models miss?" is
   // unanswerable, and that is the question this view exists to answer.
   import { onMount } from "svelte";
+  import { marked } from "marked";
   import {
     fetchComparable,
     fetchComparison,
-    fetchIngest,
+    fetchPredigest,
     saveJudgment,
     type ComparableIngest,
-    type IngestDetail,
     type ModelComparison,
     type ModelJudgment,
+    type Predigest,
   } from "$lib/api";
-  import { plainLines, bodyWordCount } from "$lib/ingest-plain";
+  import { bodyWordCount } from "$lib/ingest-plain";
   import AuditView from "./AuditView.svelte";
 
   let comparable = $state<ComparableIngest[]>([]);
   let selected = $state<string | null>(null);
   let comparison = $state<ModelComparison | null>(null);
   let judgment = $state<ModelJudgment | null>(null);
-  let record = $state<IngestDetail | null>(null);
+  // The PRE-DIGEST, not the ingest: it is the materialised, deterministic model
+  // input - the precise bytes the model read, with irrelevant regions stripped
+  // and timestamps removed. That distinction decides blame. Judging recall
+  // against the ingest would fault a model for missing text the pre-digest never
+  // showed it. It is also already clean markdown, so it renders as prose without
+  // the ingest viewer's annotation pipeline. (ADR 0042; computed by the same
+  // materialise() the digester runs, so preview == digest input byte-for-byte.)
+  let predigest = $state<Predigest | null>(null);
+  /** Models to show. Empty = all: with twenty models the reviewer narrows to the
+   *  few being compared, but the default must never hide a model silently. */
+  let hidden = $state<Set<string>>(new Set());
   let loading = $state(false);
   let error = $state<string | null>(null);
 
@@ -42,8 +53,8 @@
   let saving = $state(false);
   let saveNote = $state<string | null>(null);
 
-  let lines = $derived(record ? plainLines(record.body) : []);
-  let words = $derived(record ? bodyWordCount(record.body) : 0);
+  let renderedBody = $derived(predigest ? marked.parse(predigest.body) : "");
+  let words = $derived(predigest ? bodyWordCount(predigest.body) : 0);
   let title = $derived(comparable.find((c) => c.content_hash === selected)?.title ?? "");
 
   function syncUrl() {
@@ -56,18 +67,19 @@
     error = null;
     comparison = null;
     judgment = null;
-    record = null;
+    predigest = null;
+    hidden = new Set();
     saveNote = null;
     chosen = null;
     notes = "";
     syncUrl();
     try {
-      const [r, rec] = await Promise.all([fetchComparison(hash), fetchIngest(hash)]);
+      const [r, pre] = await Promise.all([fetchComparison(hash), fetchPredigest(hash)]);
       comparison = r.comparison;
       judgment = r.judgment;
       chosen = r.judgment?.chosen_model ?? null;
       notes = r.judgment?.notes ?? "";
-      record = rec;
+      predigest = pre;
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
@@ -78,7 +90,7 @@
   function backToList() {
     selected = null;
     comparison = null;
-    record = null;
+    predigest = null;
     error = null;
     history.replaceState(null, "", "/digests");
   }
@@ -204,28 +216,32 @@
     {#if error}<p class="flex-none px-6 py-2 text-sm text-error">{error}</p>{/if}
 
     <div class="flex-1 flex min-h-0">
-      <!-- THE INGEST. The control for "what got missed?" - read it and see. -->
+      <!-- THE MODEL'S INPUT. The control for "what got missed?": read it and see
+           what nothing pulled out of it. -->
       <div class="w-1/2 flex-none border-r border-border flex flex-col min-h-0 bg-surface">
         <div class="flex-none px-4 py-1.5 border-b border-border bg-surface-alt/40 flex items-center gap-2">
-          <span class="text-[10px] font-semibold uppercase tracking-wide text-on-surface-muted">Ingest</span>
+          <span class="text-[10px] font-semibold uppercase tracking-wide text-on-surface-muted">Pre-digest</span>
+          <span class="text-[11px] text-on-surface-muted">exactly what the models read</span>
           {#if words}
-            <span class="text-[11px] text-on-surface-muted tabular-nums">{words} words</span>
+            <span class="text-[11px] text-on-surface-muted tabular-nums">· {words} words</span>
+          {/if}
+          <span class="flex-1"></span>
+          {#if predigest?.stored_matches === false}
+            <span
+              class="text-[10px] font-medium text-on-warning-container bg-warning-container/60 rounded px-1.5 py-0.5"
+              title="The record has changed since it was digested - these models read an older input than the one shown"
+            >input has changed since digest</span>
           {/if}
         </div>
-        <div class="flex-1 overflow-auto px-4 py-3">
+        <div class="flex-1 overflow-auto px-5 py-4">
           {#if loading}
-            <p class="text-sm text-on-surface-muted">Loading ingest…</p>
-          {:else if lines.length === 0}
-            <p class="text-sm text-on-surface-muted italic">This record has no readable body.</p>
+            <p class="text-sm text-on-surface-muted">Loading…</p>
+          {:else if !predigest}
+            <p class="text-sm text-on-surface-muted italic">No pre-digest available for this record.</p>
           {:else}
-            <div class="space-y-2 max-w-prose">
-              {#each lines as l, i (i)}
-                <p class="text-sm text-on-surface leading-relaxed">
-                  {#if l.speaker}
-                    <span class="text-[11px] font-medium text-on-surface-muted mr-1.5">{l.speaker}</span>
-                  {/if}{l.text}
-                </p>
-              {/each}
+            <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+            <div class="prose-ingest max-w-prose text-sm text-on-surface leading-relaxed">
+              {@html renderedBody}
             </div>
           {/if}
         </div>

@@ -276,6 +276,16 @@ class Variant:
     claims: list[Claim]
     cost_usd: float | None = None
     prompt_ids: list[str] = field(default_factory=list)
+    # A digest of the prompt SHAs this variant ran. The identity of a comparison
+    # is (model, prompt) - two variants are like-for-like only if this matches.
+    #
+    # It exists because the VERSION LABEL LIES: jon-stewart's opus variant and the
+    # haiku/sonnet pairs both declare `version: v3`, while their claims prompts
+    # are 403ed351 and 3a766d14 - different prompts wearing the same label. A
+    # reviewer comparing those reads a PROMPT difference as a MODEL difference,
+    # which is the one conclusion this view exists to support. Only the sha can
+    # tell them apart, so the sha is what we key on.
+    prompt_fingerprint: str = ""
 
 
 def claims_of(variants: list[Variant]) -> list[Claim]:
