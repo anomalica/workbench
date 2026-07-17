@@ -2247,6 +2247,18 @@ def put_audit_verdict(full_hash: str, body: dict, request: Request) -> JSONRespo
     verdict = body.get("verdict")
     if verdict not in audit_gold.CLUSTER_VERDICTS:
         raise HTTPException(status_code=400, detail="Invalid verdict")
+    # `worth` is optional (absent = not yet judged) but must be from the vocab if
+    # present: the body is stored as given, so an unvalidated value would be
+    # written into gold the digester's eval later scores on.
+    worth = body.get("worth")
+    if worth is not None and worth not in audit_gold.WORTH:
+        raise HTTPException(status_code=400, detail="Invalid worth")
+    # Worth judges a fact that EXISTS. On a hallucination there is nothing to be
+    # worth anything, so a worth there is a contradiction, not a preference.
+    if worth is not None and verdict != "real":
+        raise HTTPException(
+            status_code=400, detail="worth applies only to a `real` claim"
+        )
 
     gold = audit_gold.read(store_dir, full_hash)
     audit_gold.upsert(gold, body)

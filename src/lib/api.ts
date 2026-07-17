@@ -259,6 +259,9 @@ export interface AuditGoldMember {
 
 /** The reviewer's adjudication (gold) on a cluster or a missed source claim. */
 export interface AuditGold {
+  /** Orthogonal to `verdict`: is a correctly-extracted claim worth having?
+   *  Optional - absent means not yet judged, never "fine". Only on `real`. */
+  worth?: string;
   gold_id?: string;
   verdict: string; // real | hallucinated | not_asserted | missed
   location?: string;

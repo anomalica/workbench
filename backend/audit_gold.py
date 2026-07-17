@@ -10,6 +10,8 @@ claim:
       "gold_id": "<uuid4>",          # assigned once, immutable - survives edits
                                      #   and re-runs; NOT derived from content
       "verdict": "real",             # real | hallucinated | not_asserted | missed
+      "worth": "carries",            # carries | incidental | noise; OPTIONAL,
+                                     #   absent = not yet judged. Only on `real`.
       "location": "01:41:55.0-01:45:35.0",
       "text": "the fact as adjudicated",
       "attribution": { ... },        # on `real`: copied from the `correct` member
@@ -19,6 +21,27 @@ claim:
       ],
       "note": ""
     }
+
+TWO ORTHOGONAL AXES, and the distinction is the point. `verdict` is about
+CORRECTNESS - did the model extract a fact the source actually asserts. `worth` is
+about VALUE - was the fact worth extracting at all. They are independent: a claim
+can be `real` (accurately pulled from the source, correctly attributed, faithfully
+worded) and still be `noise`. Every verdict in the original vocabulary was a
+correctness verdict, so the gold could not express Mark's actual complaint -
+"haiku is pulling out a lot of low value facts that are quite unrelated to
+anything of value" - and a grader scoring precision on correctness alone would
+rank a model well on exactly the axis he is objecting to.
+
+Noise is a thing the pipeline CAUSES, not an accident: claims.txt instructs
+"EXHAUSTIVE EXTRACTION: Do not summarise or curate. Capture every factual
+statement, however incidental". The prompt has that dial; without `worth` the gold
+has no way to read it.
+
+Kept as a separate optional field rather than a fifth verdict because collapsing
+them loses which knob to turn: a hallucination is a fidelity bug, noise is a
+curation-policy choice. Optional so existing gold stays valid and an ungraded
+claim reads as ungraded rather than implicitly fine. Converged with
+anomalica/digester, who consume it in `digester eval`.
 
 The gold_id is minted once and never recomputed (a text edit must not fork the
 entry). Matching a fresh variant run to gold is a SEPARATE job, done by
@@ -37,6 +60,13 @@ SCHEMA = "anomalica/audit/1"
 
 CLUSTER_VERDICTS = ("real", "hallucinated", "not_asserted", "missed")
 MEMBER_VERDICTS = ("correct", "flattened", "misattributed", "overhedged")
+
+# The WORTH axis - orthogonal to CLUSTER_VERDICTS, never a member of it.
+#   carries    - the record would be poorer without this claim
+#   incidental - true and harmless; fine to keep, nobody would miss it
+#   noise      - correctly extracted and not worth a row (boilerplate, restated
+#                framing, the speaker thanking a guest)
+WORTH = ("carries", "incidental", "noise")
 
 
 def empty(record_hash: str) -> dict:

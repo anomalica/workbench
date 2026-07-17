@@ -117,11 +117,39 @@
   // --- adjudication (the gold): mark each fact real/hallucinated/not-asserted;
   // for a `real` fact, mark each model's rendering correct or how it went wrong.
   // Persisted to {hash}.audit.json; the digester's grader scores variants on it.
+  // THREE QUESTIONS, asked at three different things - which was the whole
+  // problem. Mark: "what am I actually clicking real/hallucinated on, because
+  // below that you list all the models - are we saying it for the extract, or
+  // are we rating a model? It's unusably confusing." He was right: the verdict
+  // judges the FACT, the worth judges the FACT, the wording judges ONE MODEL's
+  // rendering of it, and nothing on screen said so. Each control now carries its
+  // question in the UI, next to the thing it is about.
   const CLUSTER_VERDICTS = ["real", "hallucinated", "not_asserted"] as const;
   const CLUSTER_LABEL: Record<string, string> = {
     real: "Real",
     hallucinated: "Hallucinated",
     not_asserted: "Not asserted",
+  };
+  const CLUSTER_HELP: Record<string, string> = {
+    real: "The source asserts this, and the models read it correctly",
+    hallucinated: "The source does not assert this - the model invented it",
+    not_asserted: "The source mentions it but does not assert it as fact",
+  };
+
+  // WORTH - orthogonal to the verdict, and the axis Mark actually cares about:
+  // "haiku is pulling out a lot of low value facts that are quite unrelated to
+  // anything of value". A claim can be perfectly real and still junk, so this is
+  // a separate question, not a fourth verdict.
+  const WORTHS = ["carries", "incidental", "noise"] as const;
+  const WORTH_LABEL: Record<string, string> = {
+    carries: "Carries",
+    incidental: "Incidental",
+    noise: "Noise",
+  };
+  const WORTH_HELP: Record<string, string> = {
+    carries: "The record would be poorer without this claim",
+    incidental: "True and harmless - fine to keep, nobody would miss it",
+    noise: "Correctly extracted and not worth a row (boilerplate, restated framing)",
   };
   const MEMBER_VERDICTS = ["correct", "flattened", "misattributed", "overhedged"] as const;
   const MEMBER_LABEL: Record<string, string> = {
@@ -129,6 +157,12 @@
     flattened: "flattened",
     misattributed: "mis-attributed",
     overhedged: "over-hedged",
+  };
+  const MEMBER_HELP: Record<string, string> = {
+    correct: "This model worded the fact faithfully",
+    flattened: "Lost the framing - dropped an attestation or a source ref",
+    misattributed: "Attributed the fact to the wrong person or source",
+    overhedged: "Hedged a fact the source states plainly",
   };
 
   let recordHash = $derived(payload?.record.hash ?? "");
@@ -145,6 +179,7 @@
     p: AuditPassage,
     verdict: string,
     memberOverride?: { member: AuditMember; verdict: string },
+    worth?: string | null,
   ) {
     const members = c.members.map((m) => ({
       variant: m.variant,
@@ -155,12 +190,17 @@
           ? memberOverride.verdict
           : memberVerdictOf(c, m),
     }));
+    // Worth judges a fact that exists, so it only rides along on `real`. Moving
+    // off `real` drops it rather than leaving a worth attached to a claim we have
+    // just said isn't there.
+    const keptWorth = verdict === "real" ? (worth === undefined ? c.gold?.worth : worth) : undefined;
     const gold: AuditGold = {
       gold_id: c.gold?.gold_id,
       verdict,
       location: p.raw_locations[0] ?? "",
       text: c.members[0]?.text ?? "",
       members,
+      ...(keptWorth ? { worth: keptWorth } : {}),
     };
     try {
       const { gold_id } = await putAuditVerdict(recordHash, gold);
@@ -323,26 +363,53 @@
                     <p class="text-xs italic text-on-surface-muted/60">no source quote</p>
                   {/each}
                 </div>
-                <div class="flex flex-none items-center gap-1">
-                  {#each CLUSTER_VERDICTS as v}
-                    <button
-                      onclick={() => saveGold(row.cluster, p, v)}
-                      disabled={!canGrade}
-                      class="text-[11px] font-medium rounded px-1.5 py-0.5 transition-colors
-                        {!canGrade
-                          ? 'text-on-surface-muted/40 cursor-not-allowed'
-                          : row.cluster.gold?.verdict === v
-                            ? v === 'real'
-                              ? 'bg-success text-on-success cursor-pointer'
-                              : 'bg-error text-on-error cursor-pointer'
-                            : 'text-on-surface-muted hover:bg-surface-alt cursor-pointer'}"
-                      title={!canGrade
-                        ? "Grading is off here: the models were not compared at this location, so this cluster is an artefact"
-                        : `Mark this claim ${CLUSTER_LABEL[v]}`}
-                    >
-                      {CLUSTER_LABEL[v]}
-                    </button>
-                  {/each}
+                <div class="flex flex-none flex-col items-end gap-1">
+                  <!-- QUESTION 1, about the FACT: does the source assert it? -->
+                  <div class="flex items-center gap-1">
+                    <span class="text-[10px] text-on-surface-muted/80 mr-0.5">Does the source say this?</span>
+                    {#each CLUSTER_VERDICTS as v}
+                      <button
+                        onclick={() => saveGold(row.cluster, p, v)}
+                        disabled={!canGrade}
+                        class="text-[11px] font-medium rounded px-1.5 py-0.5 transition-colors
+                          {!canGrade
+                            ? 'text-on-surface-muted/40 cursor-not-allowed'
+                            : row.cluster.gold?.verdict === v
+                              ? v === 'real'
+                                ? 'bg-success text-on-success cursor-pointer'
+                                : 'bg-error text-on-error cursor-pointer'
+                              : 'text-on-surface-muted hover:bg-surface-alt cursor-pointer'}"
+                        title={!canGrade
+                          ? "Grading is off here: the models were not compared at this location, so this cluster is an artefact"
+                          : CLUSTER_HELP[v]}
+                      >
+                        {CLUSTER_LABEL[v]}
+                      </button>
+                    {/each}
+                  </div>
+
+                  <!-- QUESTION 2, also about the FACT, and the one that picks a
+                       model: was it worth extracting? Only meaningful once the
+                       fact is real - there is nothing to value in a hallucination. -->
+                  {#if canGrade && row.cluster.gold?.verdict === "real"}
+                    <div class="flex items-center gap-1">
+                      <span class="text-[10px] text-on-surface-muted/80 mr-0.5">Worth extracting?</span>
+                      {#each WORTHS as w}
+                        <button
+                          onclick={() => saveGold(row.cluster, p, "real", undefined, w)}
+                          class="text-[11px] font-medium rounded px-1.5 py-0.5 cursor-pointer transition-colors
+                            {row.cluster.gold?.worth === w
+                              ? w === 'noise'
+                                ? 'bg-warning text-on-warning'
+                                : 'bg-primary text-on-primary'
+                              : 'text-on-surface-muted hover:bg-surface-alt'}"
+                          title={WORTH_HELP[w]}
+                        >
+                          {WORTH_LABEL[w]}
+                        </button>
+                      {/each}
+                    </div>
+                  {/if}
                 </div>
               </div>
 
@@ -374,7 +441,10 @@
                         {/each}
                         {#if row.cluster.gold?.verdict === "real" && canGrade}
                           {#each cell.members as m (m.claim_id)}
+                            <!-- QUESTION 3, about THIS MODEL only: did it word
+                                 the fact faithfully? Not about the fact. -->
                             <div class="flex flex-wrap items-center gap-1">
+                              <span class="text-[10px] text-on-surface-muted/70 mr-0.5">{cell.model}'s wording:</span>
                               {#each MEMBER_VERDICTS as mv}
                                 <button
                                   onclick={() => saveGold(row.cluster, p, "real", { member: m, verdict: mv })}
@@ -384,6 +454,7 @@
                                         ? 'bg-success/80 text-on-success'
                                         : 'bg-warning text-on-warning'
                                       : 'text-on-surface-muted/70 hover:bg-surface-alt'}"
+                                  title={MEMBER_HELP[mv]}
                                 >
                                   {MEMBER_LABEL[mv]}
                                 </button>
