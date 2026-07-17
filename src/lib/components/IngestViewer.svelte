@@ -37,6 +37,7 @@
   import { parseTranscript, parseTimeToSeconds, secondsToTime, findActiveSegmentForTime, segmentAtTime, nextRelevantSegmentAfter, extractFrontmatterSpeakers, isSegmentIrrelevant, isSpecialSpeaker, nextSpeakerName, groupSegmentsBySpeaker, orderedNamedSpeakers, SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE, SPEAKER_GROUP } from "$lib/transcript";
   import { nextSegmentBoundary, singleEndForCurrentTime } from "$lib/playback";
   import { resolveSourceAddress, resolvePeaksUrl } from "$lib/source-address";
+  import { savePlayhead, loadPlayhead, shouldPersist } from "$lib/playhead";
   import type { Segment } from "$lib/transcript";
   import SpeakerManager from "./SpeakerManager.svelte";
   import SplitEditor from "./SplitEditor.svelte";
@@ -1622,8 +1623,38 @@
   // short on some records). The online waveform maps its whole-file peaks onto
   // this, so peaks stay aligned with what the reviewer actually hears.
   let mediaDuration = $state<number | null>(null);
+
+  // WHERE YOU WERE. A record opened at 0:00 every time, so anyone part-way
+  // through a 3.5-hour video had to hunt for their place; and flicking
+  // Ingest <-> Markup keeps the audio playing (the element never remounts) while
+  // the transcript re-renders at the top, so the words and the sound disagree
+  // about where you are. The playhead is the anchor for both.
+  let lastPersisted = 0;
+  let restoredFor = "";
+
+  function persistPlayhead(seconds: number) {
+    if (!shouldPersist(lastPersisted, seconds)) return;
+    if (savePlayhead(ingest.content_hash, seconds)) lastPersisted = seconds;
+  }
+
+  /** Seek to the remembered position, once per record. Never autoplays: resuming
+   *  where you were is a courtesy, starting sound unbidden is not. */
+  function restorePlayhead(seek: (t: number) => void, duration?: number) {
+    if (restoredFor === ingest.content_hash) return;
+    restoredFor = ingest.content_hash;
+    const t = loadPlayhead(ingest.content_hash, duration);
+    if (t !== null) {
+      seek(t);
+      currentTime = t;
+    }
+  }
   const noteMediaDuration = (el: HTMLMediaElement) => {
     mediaDuration = Number.isFinite(el.duration) && el.duration > 0 ? el.duration : null;
+    // Metadata is the first moment a seek will stick - before it, currentTime is
+    // silently ignored.
+    restorePlayhead((t) => {
+      el.currentTime = t;
+    }, mediaDuration ?? undefined);
   };
   // The YouTube player is the other playback surface, and reports its length the
   // same way. onReady can fire before the duration is known, so retry briefly
@@ -1785,6 +1816,7 @@
   // played-tracking and ceiling stop so a local audio record behaves the same.
   function onMediaTimeUpdate(el: HTMLMediaElement) {
     currentTime = el.currentTime;
+    persistPlayhead(el.currentTime);
     if (!el.paused) {
       trackPlayback(el.currentTime, Number.isFinite(el.duration) ? el.duration : undefined);
     }
@@ -2316,6 +2348,10 @@
           // (it stays gated), which makes the peaks the only way to see the
           // sound - so a flat waveform here would defeat the whole point.
           noteYtDuration();
+          restorePlayhead((t) => {
+            ytPlayer?.seekTo(t, true);
+            ytPlayer?.pauseVideo();
+          }, ytPlayer?.getDuration());
           // Cold-load claim deep link: the digest resolved and set the
           // highlight before the player existed, so the seek was skipped.
           // Now that it's ready, land on the claim's start (paused).

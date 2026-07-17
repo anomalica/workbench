@@ -34,6 +34,9 @@ const EVICTABLE_PREFIXES = [
   "workbench:read:",
   "workbench:coverage:",
   "workbench:lastseg:",
+  // Where the reviewer was in a record's audio. Pure convenience: evicting it
+  // costs them their place, never their work.
+  "workbench:playhead:",
 ];
 
 // Every prefix keyed by a record's content_hash - the full set a record's
