@@ -62,6 +62,32 @@ def _content_hash(v: dict) -> str:
     return ((v.get("record") or {}).get("content_hash") or "").removeprefix("sha256:")
 
 
+def _store_dir() -> Path:
+    """The ACTIVE record store. Archiving moves a record to store/v1/ and deletes
+    its records/ symlink, so presence here is what "in the active corpus" means -
+    and a name-based lookup through records/ cannot tell you, because the symlink
+    is exactly what archiving removes."""
+    return (
+        Path(
+            os.environ.get(
+                "INGESTS_PATH", str(Path(__file__).resolve().parents[2] / "ingests")
+            )
+        )
+        / "store"
+    )
+
+
+def _is_active(content_hash: str) -> bool:
+    """Is this record still in the active corpus? Resolve by CONTENT HASH against
+    store/, never by directory name: the variants directory is named for a record
+    and keeps that name after the record is archived out from under it."""
+    if not content_hash:
+        return False
+    return (_store_dir() / f"{content_hash}.md").is_file() or (
+        _store_dir() / f"{content_hash}.v2.md"
+    ).is_file()
+
+
 def _variant_dirs() -> list[Path]:
     base = _variants_dir()
     if not base.exists():
@@ -82,6 +108,13 @@ def list_comparable() -> list[dict]:
         if len(variants) < 2:
             continue
         first = variants[0][1]
+        # Archived records are not offered. Mark archived pantex while its
+        # variants stayed on disk, so the list kept advertising it and opening it
+        # 404'd - the audit resolves a record by name through records/, and
+        # archiving deletes that symlink. Choosing a model for a record that has
+        # been dropped from the corpus is wasted grading either way.
+        if not _is_active(_content_hash(first)):
+            continue
         out.append(
             {
                 "content_hash": _content_hash(first),
