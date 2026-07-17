@@ -120,6 +120,12 @@
   let sourceFile = $state<File | null>(null);
   let error = $state<string | null>(null);
   let loading = $state(true);
+  // Whether the record list has been FETCHED (successfully or not). `loading`
+  // alone cannot say: it starts true for the cold load, so a destination that
+  // never needs the list (Digests, Roles, Curate) leaves it true forever, and
+  // arriving at Ingests afterwards shows "Loading ingests..." with no fetch
+  // behind it. See ensureIngests.
+  let ingestsLoaded = $state(false);
   let searchQuery = $state("");
   let filterType = $state<string>("all");
   let filterReviewed = $state<"all" | "needs_review" | "reviewed">("all");
@@ -339,6 +345,7 @@
   }
 
   async function loadIngests() {
+    loading = true;
     try {
       ingests = await fetchIngests();
       // Garbage-collect local drafts (doc/notes/observed/coverage/etc.) for
@@ -357,7 +364,16 @@
       error = "Could not connect to the backend. Is the API server running?";
     } finally {
       loading = false;
+      ingestsLoaded = true;
     }
+  }
+
+  /** Fetch the record list if it has not been fetched yet. Ingests is reachable
+   *  from destinations that never load it (a cold load straight into /digests,
+   *  then a click on Ingests), so it must fetch for itself rather than trust
+   *  that something upstream already did. */
+  function ensureIngests() {
+    if (!ingestsLoaded) loadIngests();
   }
 
   // Position of the currently-open record within the filtered+sorted list,
@@ -427,12 +443,14 @@
     error = null;
     appMode = "records";
     history.pushState(null, "", "/");
+    ensureIngests();
   }
 
   // On load: check URL for a public hash and try to open the matching ingest
   function showRecords() {
     appMode = "records";
     if (!selectedIngest) history.pushState(null, "", "/");
+    ensureIngests();
   }
 
   function showGraph() {
