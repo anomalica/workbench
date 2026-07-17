@@ -30,7 +30,7 @@
   import ArticlesView from "$lib/components/ArticlesView.svelte";
   import ReviewView from "$lib/components/ReviewView.svelte";
   import RolesView from "$lib/components/RolesView.svelte";
-  import ModelCompareView from "$lib/components/ModelCompareView.svelte";
+  import DigestsView from "$lib/components/DigestsView.svelte";
   import { carryoverState } from "$lib/carryover";
   import { themeState } from "$lib/theme.svelte";
   import { trackView, trackEvent } from "$lib/umami";
@@ -40,12 +40,16 @@
   // Top-level view: record review (default), knowledge-graph review, or curation.
   // (The Schedule view + processing-mode runner moved to the local `scheduler`
   // repo - this workbench is review-only.)
+  // "curate" is no longer a top-level destination - it lives inside the knowledge
+  // graph, since exploring and curating act on the same object. "articles" is
+  // withdrawn until Assembly (briefs + content together) replaces it.
   let appMode = $state<
-    "records" | "graph" | "curate" | "articles" | "review" | "roles" | "models"
+    "records" | "graph" | "curate" | "inbox" | "roles" | "digests"
   >("records");
   // A node to open directly in the graph view (deep link /graph/<node_id>), so a
   // claim-count / any link can jump straight to that node's claims in context.
   let graphNodeId = $state<string | undefined>(undefined);
+  let userMenuOpen = $state(false);
   // True while a cold-load deep link (e.g. /<public_hash>#claim-<uuid>) is
   // resolving: list fetch then record + digest fetch. Drives a centred
   // "Opening record..." indicator so the user sees progress instead of a
@@ -442,13 +446,13 @@
     history.pushState(null, "", "/curate");
   }
 
-  function showArticles() {
-    appMode = "articles";
+  function _removedShowArticles() {
+    appMode = "records";
     history.pushState(null, "", "/articles");
   }
 
-  function showReview() {
-    appMode = "review";
+  function showInbox() {
+    appMode = "inbox";
     history.pushState(null, "", "/review");
     reloadPending();
   }
@@ -458,8 +462,8 @@
     history.pushState(null, "", "/roles");
   }
 
-  function showModels() {
-    appMode = "models";
+  function showDigests() {
+    appMode = "digests";
     history.pushState(null, "", "/models");
   }
 
@@ -485,15 +489,11 @@
       appMode = "curate";
       return; // CurationView fetches its own data + reads its URL query
     }
-    if (path === "articles") {
-      appMode = "articles";
-      return; // ArticlesView fetches its own listing
-    }
     // The Python-backed views are local-only (see liveBackend): a static build
     // has no API behind them, so a direct link falls through to Records rather
     // than rendering a view that 404s.
-    if (path === "review" && !STATIC_READS) {
-      appMode = "review";
+    if ((path === "inbox" || path === "review") && !STATIC_READS) {
+      appMode = "inbox";
       loadIngests(); // ReviewView needs the record list for hash->title
       return;
     }
@@ -501,9 +501,9 @@
       appMode = "roles";
       return; // RolesView fetches its own data
     }
-    if (path === "models" && !STATIC_READS) {
-      appMode = "models";
-      return; // ModelCompareView fetches its own list and reads ?h= itself
+    if ((path === "digests" || path === "models") && !STATIC_READS) {
+      appMode = "digests";
+      return; // DigestsView fetches its own list and reads ?h= itself
     }
     if (path.startsWith("graph/")) {
       const id = path.slice("graph/".length);
@@ -568,55 +568,21 @@
         onclick={showRecords}
         class="text-sm font-ui px-2.5 py-1 rounded cursor-pointer transition-colors
           {appMode === 'records' ? 'bg-bone/15 text-bone' : 'text-bone/50 hover:text-bone/80 hover:bg-bone/10'}"
-      >Records</button>
+        title="Review source material on its way to becoming an ingest"
+      >Ingests</button>
       <button
         onclick={showGraph}
         class="text-sm font-ui px-2.5 py-1 rounded cursor-pointer transition-colors
-          {appMode === 'graph' ? 'bg-bone/15 text-bone' : 'text-bone/50 hover:text-bone/80 hover:bg-bone/10'}"
-        title="Review the assimilator's merged knowledge graph"
-      >Graph</button>
-      <button
-        onclick={showCurate}
-        class="text-sm font-ui px-2.5 py-1 rounded cursor-pointer transition-colors
-          {appMode === 'curate' ? 'bg-bone/15 text-bone' : 'text-bone/50 hover:text-bone/80 hover:bg-bone/10'}"
-        title="Curate the graph - merge duplicate entities"
-      >Curate</button>
-      <button
-        onclick={showArticles}
-        class="text-sm font-ui px-2.5 py-1 rounded cursor-pointer transition-colors
-          {appMode === 'articles' ? 'bg-bone/15 text-bone' : 'text-bone/50 hover:text-bone/80 hover:bg-bone/10'}"
-        title="Browse the assembled knowledge-article pages"
-      >Articles</button>
+          {appMode === 'graph' || appMode === 'curate' ? 'bg-bone/15 text-bone' : 'text-bone/50 hover:text-bone/80 hover:bg-bone/10'}"
+        title="Explore and curate the assimilator's merged knowledge graph"
+      >Knowledge Graph</button>
       {#if canReview}
         <button
-          onclick={showReview}
-          class="text-sm font-ui px-2.5 py-1 rounded cursor-pointer transition-colors flex items-center gap-1.5
-            {appMode === 'review' ? 'bg-bone/15 text-bone' : 'text-bone/50 hover:text-bone/80 hover:bg-bone/10'}"
-          title="Review contributor edit proposals: approve or reject"
-        >
-          Review
-          {#if pendingProposals > 0}
-            <span class="text-[10px] font-semibold tabular-nums px-1.5 py-0.5 rounded-full bg-primary text-on-primary leading-none">
-              {pendingProposals}
-            </span>
-          {/if}
-        </button>
-      {/if}
-      {#if canReview}
-        <button
-          onclick={showModels}
+          onclick={showDigests}
           class="text-sm font-ui px-2.5 py-1 rounded cursor-pointer transition-colors
-            {appMode === 'models' ? 'bg-bone/15 text-bone' : 'text-bone/50 hover:text-bone/80 hover:bg-bone/10'}"
-          title="Compare model variants of a digest side by side and judge which is better"
-        >Models</button>
-      {/if}
-      {#if canManageRoles}
-        <button
-          onclick={showRoles}
-          class="text-sm font-ui px-2.5 py-1 rounded cursor-pointer transition-colors
-            {appMode === 'roles' ? 'bg-bone/15 text-bone' : 'text-bone/50 hover:text-bone/80 hover:bg-bone/10'}"
-          title="Manage contribution roles (admin only)"
-        >Roles</button>
+            {appMode === 'digests' ? 'bg-bone/15 text-bone' : 'text-bone/50 hover:text-bone/80 hover:bg-bone/10'}"
+          title="See what each model made of a record, chunk by chunk, and choose between them"
+        >Digests</button>
       {/if}
     </nav>
     <div class="flex-1"></div>
@@ -655,6 +621,29 @@
         </span>
       {/if}
     {/if}
+    {#if canReview}
+      <button
+        onclick={showInbox}
+        class="relative p-1.5 rounded transition-colors
+          {appMode === 'inbox' ? 'bg-bone/15 text-bone' : 'text-bone/60 hover:text-bone hover:bg-bone/10'}"
+        title={pendingProposals > 0
+          ? `Inbox - ${pendingProposals} item${pendingProposals === 1 ? "" : "s"} waiting`
+          : "Inbox - nothing waiting"}
+        aria-label="Inbox"
+      >
+        <!-- tray -->
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round"
+            d="M4 13h3l1.5 3h7L17 13h3M4 13V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v7M4 13v5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5" />
+        </svg>
+        {#if pendingProposals > 0}
+          <span
+            class="absolute -top-0.5 -right-0.5 min-w-4 h-4 px-1 flex items-center justify-center
+                   text-[10px] font-semibold tabular-nums rounded-full bg-primary text-on-primary leading-none"
+          >{pendingProposals > 99 ? "99+" : pendingProposals}</span>
+        {/if}
+      </button>
+    {/if}
     <button
       onclick={() => themeState.toggle()}
       class="p-1.5 rounded text-bone/60 hover:text-bone hover:bg-bone/10 transition-colors"
@@ -675,16 +664,42 @@
       {/if}
     </button>
     {#if user}
-      <div class="flex items-center gap-2">
-        {#if user.avatar_url}
-          <img src={user.avatar_url} alt="" class="w-5 h-5 rounded-full" />
+      <div class="relative">
+        <button
+          onclick={() => { userMenuOpen = !userMenuOpen; }}
+          class="flex items-center gap-2 px-1.5 py-1 rounded transition-colors
+            {userMenuOpen ? 'bg-bone/15' : 'hover:bg-bone/10'}"
+          title="Account"
+        >
+          {#if user.avatar_url}
+            <img src={user.avatar_url} alt="" class="w-5 h-5 rounded-full" />
+          {/if}
+          <span class="text-bone/80 text-sm leading-tight">
+            <span class="font-medium">{user.login || user.name}</span>
+            <span class="text-bone/40 mx-0.5">/</span><span class="text-bone/60 capitalize">{myRole}</span>
+          </span>
+          <svg class="w-3 h-3 text-bone/50" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+          </svg>
+        </button>
+        {#if userMenuOpen}
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <!-- svelte-ignore a11y_click_events_have_key_events -->
+          <div class="fixed inset-0 z-40" onclick={() => { userMenuOpen = false; }}></div>
+          <div class="absolute right-0 top-full mt-1 z-50 min-w-40 rounded border border-border bg-surface shadow-lg py-1">
+            {#if canManageRoles}
+              <button
+                onclick={() => { userMenuOpen = false; showRoles(); }}
+                class="w-full text-left px-3 py-1.5 text-sm font-ui cursor-pointer transition-colors
+                  {appMode === 'roles' ? 'text-primary' : 'text-on-surface hover:bg-surface-alt'}"
+              >Roles</button>
+            {/if}
+            <a
+              href="/api/auth/logout"
+              class="block px-3 py-1.5 text-sm font-ui text-on-surface hover:bg-surface-alt transition-colors"
+            >Log out</a>
+          </div>
         {/if}
-        <span class="text-bone/80 text-sm leading-tight">
-          Signed in as <span class="font-medium">{user.login || user.name}</span>
-          <span class="text-bone/50">·</span>
-          <span class="text-bone/60 capitalize">{myRole}</span>
-        </span>
-        <a href="/api/auth/logout" class="text-bone/40 text-xs hover:text-bone/60 transition-colors">Log out</a>
       </div>
     {:else}
       <a href="/api/auth/login" class="text-bone/60 text-sm hover:text-bone transition-colors">Log in</a>
@@ -692,18 +707,37 @@
   </header>
 
   <main class="flex-1 flex flex-col min-h-0">
-    {#if appMode === "models"}
-      <ModelCompareView />
+    {#if appMode === "digests"}
+      <DigestsView />
     {:else if appMode === "roles"}
       <RolesView />
-    {:else if appMode === "review"}
+    {:else if appMode === "inbox"}
       <ReviewView {ingests} onqueuechange={reloadPending} />
-    {:else if appMode === "curate"}
-      <CurationView />
-    {:else if appMode === "articles"}
-      <ArticlesView onOpenRecord={openRecordByHash} {user} />
-    {:else if appMode === "graph"}
-      <GraphView initialNodeId={graphNodeId} />
+    {:else if appMode === "graph" || appMode === "curate"}
+      <!-- Exploring and curating act on the SAME object, so curate is a mode of
+           the graph rather than a separate destination - two top-level tabs was
+           the mistake. -->
+      <div class="flex-1 flex flex-col min-h-0">
+        <div class="flex-none flex items-center gap-1 px-4 py-1.5 border-b border-border bg-surface-alt/50 font-ui">
+          <button
+            onclick={showGraph}
+            class="text-xs px-2 py-1 rounded cursor-pointer transition-colors
+              {appMode === 'graph' ? 'bg-primary/15 text-primary font-medium' : 'text-on-surface-secondary hover:bg-surface-alt'}"
+            title="Explore the merged knowledge graph"
+          >Explore</button>
+          <button
+            onclick={showCurate}
+            class="text-xs px-2 py-1 rounded cursor-pointer transition-colors
+              {appMode === 'curate' ? 'bg-primary/15 text-primary font-medium' : 'text-on-surface-secondary hover:bg-surface-alt'}"
+            title="Merge duplicate entities in the graph"
+          >Curate</button>
+        </div>
+        {#if appMode === "curate"}
+          <CurationView />
+        {:else}
+          <GraphView initialNodeId={graphNodeId} />
+        {/if}
+      </div>
     {:else if openingRecord && !selectedIngest}
       <!-- Cold-load deep-link: list + record + digest are fetching. Show a
            centred indicator so the user knows the click registered. Hidden
