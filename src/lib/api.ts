@@ -491,6 +491,7 @@ export interface HighlightSpan {
 }
 
 export interface HighlightsSidecar {
+  complete_ranges?: { start: number; end: number; note?: string }[];
   schema: string;
   record_hash: string;
   body_sha256: string;
@@ -523,7 +524,15 @@ export async function fetchHighlights(
 
 export async function saveHighlights(
   hash: string,
-  payload: { complete: boolean; spans: HighlightSpan[]; rejected: HighlightSpan[] },
+  payload: {
+    complete: boolean;
+    spans: HighlightSpan[];
+    rejected: HighlightSpan[];
+    /** Which regions the reviewer actually swept. Inside one, an unhighlighted
+     *  sentence means "judged not claim-worthy"; outside every range it means
+     *  "not looked at", and eval scores nothing there. */
+    complete_ranges?: { start: number; end: number; note?: string }[];
+  },
 ): Promise<{ saved: boolean; body_sha256: string }> {
   const res = await fetch(`/api/ingests/${hash}/highlights`, {
     method: "PUT",

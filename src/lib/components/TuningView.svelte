@@ -38,6 +38,16 @@
   let spans = $state<UiSpan[]>([]);
   let rejected = $state<UiSpan[]>([]);
   let complete = $state(false);
+  // Which PARTS were swept. On a record too long to treat wall-to-wall (the Jon
+  // Stewart video is 3.5 hours), "Reviewed in full" is a lie and its absence
+  // makes every gap ambiguous - "read it, not claim-worthy" vs "never looked".
+  // A swept range says: inside here, an unhighlighted sentence is a judgement.
+  // Outside every range, nothing is scored. See backend/tuning.py.
+  let completeRanges = $state<{ start: number; end: number; note?: string }[]>([]);
+  // Selecting text normally makes a HIGHLIGHT. Sweep mode makes the selection a
+  // swept RANGE instead - a mode rather than a modifier, because highlighting is
+  // the constant action and sweeping happens two or three times a session.
+  let sweepMode = $state(false);
   let dirty = $state(false);
   let loading = $state(true);
   let loadError = $state<string | null>(null);
@@ -74,6 +84,7 @@
       const sidecar = hl.highlights;
       if (sidecar) {
         complete = sidecar.complete;
+        completeRanges = sidecar.complete_ranges ?? [];
         lastReviewed = { by: sidecar.reviewed_by, at: sidecar.reviewed_at };
         if (sidecar.body_sha256 === raw.body_sha256) {
           spans = loadSpans(body, sidecar.spans ?? []);
@@ -98,6 +109,7 @@
         spans = [];
         rejected = [];
         complete = false;
+        completeRanges = [];
         lastReviewed = null;
         reanchorNotice = null;
         dirty = false;
@@ -155,11 +167,43 @@
     const end = displayToRaw(segments[b.seg], b.d, "end");
     const span = trimSpan(body, start, end);
     if (!span) return;
+    if (sweepMode) {
+      // A swept range, not a highlight: it records that this region was READ,
+      // so the gaps inside it become evidence rather than ambiguity.
+      completeRanges = mergeRanges([...completeRanges, { start: span.start, end: span.end }]);
+      dirty = true;
+      sel.removeAllRanges();
+      return;
+    }
     spans = addSpan(body, spans, span);
     dirty = true;
     selectedSpan = spans.findIndex((s) => s.start <= span.start && s.end >= span.end);
     sel.removeAllRanges();
   }
+
+  /** Touching or overlapping sweeps are ONE region - two adjacent sweeps left
+   *  separate would let the same gap be scored twice. Mirrors validate_ranges in
+   *  backend/tuning.py, which re-merges server-side regardless. */
+  function mergeRanges(rs: { start: number; end: number; note?: string }[]) {
+    const sorted = [...rs].sort((a, b) => a.start - b.start || a.end - b.end);
+    const out: { start: number; end: number; note?: string }[] = [];
+    for (const r of sorted) {
+      const prev = out[out.length - 1];
+      if (prev && r.start <= prev.end) prev.end = Math.max(prev.end, r.end);
+      else out.push({ ...r });
+    }
+    return out;
+  }
+
+  function removeRange(index: number) {
+    completeRanges = completeRanges.filter((_, i) => i !== index);
+    dirty = true;
+  }
+
+  /** Roughly how much of the record has been swept - the denominator for "is
+   *  this enough to score precision on?". */
+  let sweptChars = $derived(completeRanges.reduce((n, r) => n + (r.end - r.start), 0));
+  let sweptPct = $derived(body.length ? Math.round((sweptChars / body.length) * 100) : 0);
 
   function removeSpan(index: number) {
     spans = spans.filter((_, i) => i !== index);
@@ -188,6 +232,7 @@
         complete,
         spans: saveSpans(body, spans),
         rejected: saveSpans(body, rejected),
+        complete_ranges: completeRanges,
       });
       bodySha = res.body_sha256;
       dirty = false;
@@ -366,6 +411,63 @@
               Save failed: {saveError}
             </div>
           {/if}
+
+          <!-- Sweeping a SECTION: what makes precision measurable on a record
+               too long to treat whole. Sits above "Reviewed in full" because on
+               a 3.5-hour video it is the realistic option, not the fallback. -->
+          <div class="rounded border border-border bg-surface-alt/40 p-2.5">
+            <button
+              onclick={() => (sweepMode = !sweepMode)}
+              disabled={!user}
+              class="w-full text-left text-sm font-ui font-medium rounded px-2 py-1 transition-colors
+                {sweepMode
+                  ? 'bg-primary text-on-primary cursor-pointer'
+                  : user
+                    ? 'text-on-surface hover:bg-surface cursor-pointer'
+                    : 'text-on-surface-muted cursor-not-allowed'}"
+              title="Select text to mark it as fully read, rather than highlighting it"
+            >
+              {sweepMode ? "Marking sections read - click to stop" : "Mark a section read"}
+            </button>
+            <p class="text-xs text-on-surface-muted mt-1.5 leading-relaxed">
+              {#if sweepMode}
+                Select a passage to mark it <strong>read in full</strong>. Inside a read
+                section, anything you did NOT highlight counts as "not worth
+                extracting" - which is what lets a model be scored for pulling out
+                junk. Outside these sections nothing is scored either way.
+              {:else}
+                Selecting text highlights it. Turn this on to instead mark a passage
+                as read in full.
+              {/if}
+            </p>
+
+            {#if completeRanges.length}
+              <div class="mt-2 space-y-1">
+                <p class="text-[11px] font-medium text-on-surface-secondary">
+                  {completeRanges.length} section{completeRanges.length === 1 ? "" : "s"} read
+                  <span class="font-normal text-on-surface-muted">({sweptPct}% of the record)</span>
+                </p>
+                {#each completeRanges as r, i (r.start)}
+                  <div class="flex items-center gap-1.5 text-[11px]">
+                    <span class="font-mono tabular-nums text-on-surface-muted">
+                      {r.start.toLocaleString()}-{r.end.toLocaleString()}
+                    </span>
+                    <span class="text-on-surface-muted/70">
+                      {(r.end - r.start).toLocaleString()} chars
+                    </span>
+                    <span class="flex-1"></span>
+                    <button
+                      onclick={() => removeRange(i)}
+                      disabled={!user}
+                      class="text-on-surface-muted hover:text-error cursor-pointer px-1"
+                      title="This section was not read in full after all"
+                      aria-label="Remove section"
+                    >&#x2715;</button>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </div>
 
           <!-- Reviewed in full: what makes precision measurable -->
           <label class="flex items-start gap-2.5 cursor-pointer select-none">
