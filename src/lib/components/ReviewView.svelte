@@ -113,18 +113,25 @@
 <div class="flex h-full min-h-0">
   <!-- Queue -->
   <aside class="w-80 flex-none border-r border-border flex flex-col min-h-0">
+    <!-- Inbox, holding sections. Proposals is the only kind of item today;
+         naming the section rather than the page keeps the door open for the
+         others (messages, and whatever else arrives) without inventing an
+         item-type abstraction against a single implementation. -->
     <div class="flex-none flex items-center justify-between px-4 py-3 border-b border-border">
-      <h2 class="text-sm font-ui font-semibold text-on-surface">
-        Proposals
-        {#if proposals.length}
-          <span class="ml-1 text-xs font-normal text-on-surface-muted tabular-nums">({proposals.length})</span>
-        {/if}
-      </h2>
+      <h2 class="text-sm font-ui font-semibold text-on-surface">Inbox</h2>
       <button
         onclick={load}
         class="text-xs font-ui text-primary cursor-pointer hover:underline"
-        title="Refresh the queue"
+        title="Refresh the inbox"
       >Refresh</button>
+    </div>
+    <div class="flex-none px-4 py-1.5 border-b border-border/60 bg-surface-alt/40 flex items-center gap-1.5">
+      <span class="text-[11px] font-ui font-semibold uppercase tracking-wide text-on-surface-secondary">
+        Proposals
+      </span>
+      {#if proposals.length}
+        <span class="text-[11px] font-ui text-on-surface-muted tabular-nums">({proposals.length})</span>
+      {/if}
     </div>
     <div class="flex-1 overflow-auto">
       {#if loading}
