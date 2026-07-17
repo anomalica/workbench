@@ -41,6 +41,7 @@ from backend import (
     tuning,
     waveform,
 )
+from backend import archive_flag
 from backend.auth import setup_auth
 from backend.sync import GIT_LOCK, SyncManager
 
@@ -536,7 +537,18 @@ class LocalIngestSource(IngestSource):
             )
 
     def archive_ingest(self, full_hash: str, user: dict) -> bool:
-        """Move a record from store/ to store/v1/ and remove its records/ symlink."""
+        """Move a record from store/ to store/v1/, stamp the decision into its
+        frontmatter, and remove its records/ symlink.
+
+        The stamp is not bookkeeping. `store/v1/` means "archived" here and
+        "intake queue" to the scheduler's ingest lane, so the folder Mark
+        archives INTO is the one the GPU lane shops FROM - archiving offered a
+        record straight back for re-transcription (22 of his 26 archived records
+        were sitting in that lane). The two states are identical on disk, so
+        without the flag the only trace of the decision is this commit's subject
+        line: a contract made of prose. The scheduler's skip already reads
+        `archived`; nothing ever wrote it.
+        """
         entry = self._scan().get(full_hash)
         if entry is None:
             return False
@@ -544,6 +556,11 @@ class LocalIngestSource(IngestSource):
         archive_dir = self.store / "v1"
         archive_dir.mkdir(parents=True, exist_ok=True)
         dest = archive_dir / md_path.name
+
+        stamped_at = datetime.now(dt_timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        md_path.write_text(
+            archive_flag.stamp_archived(md_path.read_text(), True, stamped_at)
+        )
         md_path.rename(dest)
 
         # Both sides of the move: staging only the destination leaves the
@@ -564,13 +581,20 @@ class LocalIngestSource(IngestSource):
         return True
 
     def unarchive_ingest(self, full_hash: str, user: dict) -> bool:
-        """Move a record from store/v1/ back to store/ and recreate its symlink."""
+        """Move a record from store/v1/ back to store/, clear the archive stamp,
+        and recreate its symlink.
+
+        Clearing matters as much as setting: a record back in the active corpus
+        still flagged archived would be skipped by the scheduler's lane forever -
+        restored for Mark, invisible to the pipeline.
+        """
         entry = self._scan_archived().get(full_hash)
         if entry is None:
             return False
         md_path, frontmatter = entry
 
         dest = self.store / md_path.name
+        md_path.write_text(archive_flag.stamp_archived(md_path.read_text(), False))
         md_path.rename(dest)
 
         paths: list[Path] = [dest, md_path]
