@@ -563,6 +563,10 @@
       <img src="/logo-darkmode.svg" alt="Anomalica" class="h-4" />
       <span class="text-bone/60 text-sm leading-none mt-auto">Workbench</span>
     </a>
+    <!-- Destinations run in PIPELINE ORDER: source material becomes an ingest,
+         a model digests it, the assimilator merges those digests into the graph.
+         The nav is the pipeline, so a reader can see where each surface sits in
+         it without being told. -->
     <nav class="flex items-center gap-1 ml-2">
       <button
         onclick={showRecords}
@@ -570,12 +574,6 @@
           {appMode === 'records' ? 'bg-bone/15 text-bone' : 'text-bone/50 hover:text-bone/80 hover:bg-bone/10'}"
         title="Review source material on its way to becoming an ingest"
       >Ingests</button>
-      <button
-        onclick={showGraph}
-        class="text-sm font-ui px-2.5 py-1 rounded cursor-pointer transition-colors
-          {appMode === 'graph' || appMode === 'curate' ? 'bg-bone/15 text-bone' : 'text-bone/50 hover:text-bone/80 hover:bg-bone/10'}"
-        title="Explore and curate the assimilator's merged knowledge graph"
-      >Knowledge Graph</button>
       {#if canReview}
         <button
           onclick={showDigests}
@@ -584,6 +582,12 @@
           title="See what each model made of a record, chunk by chunk, and choose between them"
         >Digests</button>
       {/if}
+      <button
+        onclick={showGraph}
+        class="text-sm font-ui px-2.5 py-1 rounded cursor-pointer transition-colors
+          {appMode === 'graph' || appMode === 'curate' ? 'bg-bone/15 text-bone' : 'text-bone/50 hover:text-bone/80 hover:bg-bone/10'}"
+        title="Explore and curate the assimilator's merged knowledge graph"
+      >Knowledge Graph</button>
     </nav>
     <div class="flex-1"></div>
     {#if syncStatus}
