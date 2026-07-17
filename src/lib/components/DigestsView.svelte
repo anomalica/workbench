@@ -1,27 +1,39 @@
 <script lang="ts">
-  // Digests: choose between the models that digested a record.
+  // Digests: what each model made of a record, judged against the record itself.
   //
-  // One surface, deliberately. This used to be two: a "Models" view holding the
-  // verdict, and a per-record "Audit" sub-tab holding the evidence the verdict
-  // should rest on - buried three levels down inside a record, where nobody
-  // found it. Both were doing the same job. So the evidence and the choice live
-  // together: pick a record on the left, read what each model made of the source
-  // chunk by chunk, and mark which one won without leaving the page.
+  // Two shapes, both deliberate.
+  //
+  // LIST FIRST, then drill in - the same rhythm as Ingests. A permanent rail
+  // stole width from the thing being read, and the reading is the work here.
+  //
+  // Inside, the INGEST sits on the left and the models' output on the right. The
+  // pipeline reads left to right across the app: Ingests shows source | ingest,
+  // Digests shows ingest | digest. Each view drops the stage behind it and adds
+  // the next.
+  //
+  // The ingest pane is not decoration - it is the control. The audit's passages
+  // are built FROM the claims, so source that produced no claim cannot appear
+  // there; without the ingest beside it, "what did the models miss?" is
+  // unanswerable, and that is the question this view exists to answer.
   import { onMount } from "svelte";
   import {
     fetchComparable,
     fetchComparison,
+    fetchIngest,
     saveJudgment,
     type ComparableIngest,
+    type IngestDetail,
     type ModelComparison,
     type ModelJudgment,
   } from "$lib/api";
+  import { plainLines, bodyWordCount } from "$lib/ingest-plain";
   import AuditView from "./AuditView.svelte";
 
   let comparable = $state<ComparableIngest[]>([]);
   let selected = $state<string | null>(null);
   let comparison = $state<ModelComparison | null>(null);
   let judgment = $state<ModelJudgment | null>(null);
+  let record = $state<IngestDetail | null>(null);
   let loading = $state(false);
   let error = $state<string | null>(null);
 
@@ -30,31 +42,45 @@
   let saving = $state(false);
   let saveNote = $state<string | null>(null);
 
+  let lines = $derived(record ? plainLines(record.body) : []);
+  let words = $derived(record ? bodyWordCount(record.body) : 0);
+  let title = $derived(comparable.find((c) => c.content_hash === selected)?.title ?? "");
+
   function syncUrl() {
     history.replaceState(null, "", "/digests" + (selected ? `?h=${selected}` : ""));
   }
 
-  async function select(hash: string) {
+  async function open(hash: string) {
     selected = hash;
     loading = true;
     error = null;
     comparison = null;
     judgment = null;
+    record = null;
     saveNote = null;
     chosen = null;
     notes = "";
     syncUrl();
     try {
-      const r = await fetchComparison(hash);
+      const [r, rec] = await Promise.all([fetchComparison(hash), fetchIngest(hash)]);
       comparison = r.comparison;
       judgment = r.judgment;
       chosen = r.judgment?.chosen_model ?? null;
       notes = r.judgment?.notes ?? "";
+      record = rec;
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
       loading = false;
     }
+  }
+
+  function backToList() {
+    selected = null;
+    comparison = null;
+    record = null;
+    error = null;
+    history.replaceState(null, "", "/digests");
   }
 
   async function save() {
@@ -72,8 +98,6 @@
     }
   }
 
-  let title = $derived(comparable.find((c) => c.content_hash === selected)?.title ?? "");
-
   onMount(async () => {
     try {
       comparable = await fetchComparable();
@@ -81,96 +105,138 @@
       error = e instanceof Error ? e.message : String(e);
     }
     const h = new URLSearchParams(window.location.search).get("h");
-    if (h) select(h);
-    else if (comparable.length === 1) select(comparable[0].content_hash);
+    if (h) open(h);
   });
 </script>
 
-<div class="flex-1 flex min-h-0 font-ui">
-  <!-- Records that have more than one model's digest to choose between. -->
-  <div class="w-72 flex-none border-r border-border flex flex-col min-h-0 bg-surface">
-    <div class="px-4 py-2 border-b border-border flex-none text-xs text-on-surface-secondary">
-      {comparable.length} ingest{comparable.length === 1 ? "" : "s"} with multiple models
+{#if !selected}
+  <!-- The list. -->
+  <div class="flex-1 flex flex-col min-h-0 font-ui bg-surface">
+    <div class="flex-none px-6 py-3 border-b border-border">
+      <h1 class="text-sm font-semibold text-on-surface">Digests</h1>
+      <p class="text-xs text-on-surface-muted mt-0.5">
+        {comparable.length} record{comparable.length === 1 ? "" : "s"} digested by more than one model.
+        Open one to read the ingest against what each model pulled out of it.
+      </p>
     </div>
+    {#if error}<p class="px-6 py-3 text-sm text-error">{error}</p>{/if}
     <div class="flex-1 overflow-auto">
       {#if comparable.length === 0}
-        <p class="text-sm text-on-surface-muted p-4 leading-relaxed">
-          No multi-model ingests yet. They appear once a record has been digested by
+        <p class="text-sm text-on-surface-muted p-6 max-w-prose leading-relaxed">
+          No multi-model records yet. They appear once a record has been digested by
           more than one model (the digester writes them under
           <code class="font-mono text-xs">digests/variants/</code>).
         </p>
       {:else}
         {#each comparable as c (c.content_hash)}
           <button
-            onclick={() => select(c.content_hash)}
-            class="w-full text-left px-4 py-2.5 border-b border-border/40 cursor-pointer transition-colors
-              {selected === c.content_hash ? 'bg-primary/10' : 'hover:bg-surface-alt'}"
+            onclick={() => open(c.content_hash)}
+            class="w-full text-left px-6 py-3 border-b border-border/50 cursor-pointer transition-colors hover:bg-surface-alt flex items-center gap-4"
           >
-            <div class="text-sm text-on-surface leading-snug">{c.title}</div>
-            <div class="mt-0.5 text-[11px] text-on-surface-muted">{c.models.join(" vs ")}</div>
+            <span class="min-w-0 flex-1">
+              <span class="block text-sm text-on-surface leading-snug">{c.title}</span>
+              <span class="block mt-0.5 text-[11px] text-on-surface-muted">
+                {c.models.join(" · ")}
+              </span>
+            </span>
+            <span class="flex-none text-[11px] text-on-surface-muted tabular-nums">
+              {c.variant_count} model{c.variant_count === 1 ? "" : "s"}
+            </span>
           </button>
         {/each}
       {/if}
     </div>
   </div>
-
-  <div class="flex-1 flex flex-col min-h-0">
-    {#if error}
-      <p class="px-6 py-3 text-sm text-error flex-none">{error}</p>
-    {/if}
-
-    {#if !selected}
-      <p class="px-6 py-6 text-sm text-on-surface-muted">
-        Select an ingest to see what each model made of it.
-      </p>
-    {:else}
-      <!-- The verdict sits ABOVE the evidence, on the same surface: the whole
-           point is to choose while looking at what each model produced. -->
-      <header class="flex-none px-4 py-2.5 border-b border-border bg-surface-alt/60 flex flex-wrap items-center gap-x-3 gap-y-2">
-        <span class="text-sm font-medium text-on-surface truncate max-w-md" {title}>{title}</span>
-        <span class="flex-1"></span>
-        {#if loading}
-          <span class="text-xs text-on-surface-muted">Loading…</span>
-        {:else if comparison}
-          <span class="text-xs text-on-surface-secondary">Which model did better?</span>
-          {#each comparison.models as m (m)}
-            <button
-              onclick={() => { chosen = m; }}
-              class="text-xs font-medium rounded px-2 py-1 cursor-pointer transition-colors
-                {chosen === m
-                  ? 'bg-success text-on-success'
-                  : 'text-on-surface-secondary hover:bg-surface-alt border border-border'}"
-            >
-              {m}
-            </button>
-          {/each}
-          <input
-            bind:value={notes}
-            placeholder="Why? (optional)"
-            class="text-xs px-2 py-1 rounded border border-border bg-surface text-on-surface w-48"
-          />
+{:else}
+  <!-- Drilled in: ingest on the left, what the models made of it on the right. -->
+  <div class="flex-1 flex flex-col min-h-0 font-ui">
+    <header class="flex-none px-4 py-2.5 border-b border-border bg-surface-alt/60 flex flex-wrap items-center gap-x-3 gap-y-2">
+      <button
+        onclick={backToList}
+        class="flex-none text-xs text-on-surface-secondary hover:text-on-surface cursor-pointer transition-colors flex items-center gap-1"
+        title="Back to the digest list"
+      >
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />
+        </svg>
+        Digests
+      </button>
+      <span class="text-sm font-medium text-on-surface truncate max-w-sm">{title}</span>
+      <span class="flex-1"></span>
+      {#if loading}
+        <span class="text-xs text-on-surface-muted">Loading…</span>
+      {:else if comparison}
+        <span class="text-xs text-on-surface-secondary">Which model did better?</span>
+        {#each comparison.models as m (m)}
           <button
-            onclick={save}
-            disabled={!chosen || saving}
-            class="text-xs font-medium rounded px-2.5 py-1 transition-colors
-              {chosen && !saving
-                ? 'bg-primary text-on-primary cursor-pointer hover:opacity-90'
-                : 'bg-surface-alt text-on-surface-muted cursor-not-allowed'}"
+            onclick={() => { chosen = m; }}
+            class="text-xs font-medium rounded px-2 py-1 cursor-pointer transition-colors
+              {chosen === m
+                ? 'bg-success text-on-success'
+                : 'text-on-surface-secondary hover:bg-surface-alt border border-border'}"
           >
-            {saving ? "Saving…" : judgment ? "Update" : "Save"}
+            {m}
           </button>
-          {#if saveNote}
-            <span class="text-xs text-success">{saveNote}</span>
-          {:else if judgment?.chosen_model}
-            <span class="text-xs text-on-surface-muted">was: {judgment.chosen_model}</span>
-          {/if}
+        {/each}
+        <input
+          bind:value={notes}
+          placeholder="Why? (optional)"
+          class="text-xs px-2 py-1 rounded border border-border bg-surface text-on-surface w-40"
+        />
+        <button
+          onclick={save}
+          disabled={!chosen || saving}
+          class="text-xs font-medium rounded px-2.5 py-1 transition-colors
+            {chosen && !saving
+              ? 'bg-primary text-on-primary cursor-pointer hover:opacity-90'
+              : 'bg-surface-alt text-on-surface-muted cursor-not-allowed'}"
+        >
+          {saving ? "Saving…" : judgment ? "Update" : "Save"}
+        </button>
+        {#if saveNote}
+          <span class="text-xs text-success">{saveNote}</span>
+        {:else if judgment?.chosen_model}
+          <span class="text-xs text-on-surface-muted">was: {judgment.chosen_model}</span>
         {/if}
-      </header>
+      {/if}
+    </header>
 
-      <!-- The evidence: source chunk by chunk, a column per model. -->
-      {#key selected}
-        <AuditView hash={selected} />
-      {/key}
-    {/if}
+    {#if error}<p class="flex-none px-6 py-2 text-sm text-error">{error}</p>{/if}
+
+    <div class="flex-1 flex min-h-0">
+      <!-- THE INGEST. The control for "what got missed?" - read it and see. -->
+      <div class="w-1/2 flex-none border-r border-border flex flex-col min-h-0 bg-surface">
+        <div class="flex-none px-4 py-1.5 border-b border-border bg-surface-alt/40 flex items-center gap-2">
+          <span class="text-[10px] font-semibold uppercase tracking-wide text-on-surface-muted">Ingest</span>
+          {#if words}
+            <span class="text-[11px] text-on-surface-muted tabular-nums">{words} words</span>
+          {/if}
+        </div>
+        <div class="flex-1 overflow-auto px-4 py-3">
+          {#if loading}
+            <p class="text-sm text-on-surface-muted">Loading ingest…</p>
+          {:else if lines.length === 0}
+            <p class="text-sm text-on-surface-muted italic">This record has no readable body.</p>
+          {:else}
+            <div class="space-y-2 max-w-prose">
+              {#each lines as l, i (i)}
+                <p class="text-sm text-on-surface leading-relaxed">
+                  {#if l.speaker}
+                    <span class="text-[11px] font-medium text-on-surface-muted mr-1.5">{l.speaker}</span>
+                  {/if}{l.text}
+                </p>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      </div>
+
+      <!-- WHAT THE MODELS MADE OF IT. -->
+      <div class="flex-1 flex flex-col min-h-0 border-l border-border">
+        {#key selected}
+          <AuditView hash={selected} />
+        {/key}
+      </div>
+    </div>
   </div>
-</div>
+{/if}

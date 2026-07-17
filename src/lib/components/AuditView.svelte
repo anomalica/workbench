@@ -2,13 +2,18 @@
   // Auditing a record's extraction variants: walk the source chunk by chunk and,
   // for each chunk, see what EVERY model made of it side by side.
   //
-  // The shape is deliberate. Source on the left, one COLUMN PER MODEL on the
-  // right, one row per distinct fact, and a cell for every model in every row -
-  // including an explicit "nothing" where a model found nothing. The previous
-  // clustered shape rendered a fact once with an "only haiku" badge, which made
-  // every judgement relative: to read one row you had to hold the other models
-  // in your head and infer their silence from an absence. Here a row is
-  // standalone - what each model said, and who said nothing, is on its face.
+  // The shape is deliberate, twice over.
+  //
+  // Per fact, EVERY model gets a line - including an explicit "nothing" where it
+  // found nothing. The original rendered a fact once with an "only haiku" badge,
+  // which made every judgement relative: to read it you had to hold the other
+  // models in your head and infer their silence from an absence. Here what each
+  // model said, and who said nothing, is on the fact's face.
+  //
+  // And the models stack VERTICALLY, not as columns. Columns encode an assumption
+  // that there are two or three models; there will be twenty. A column per model
+  // dies at that width, a stack just gets taller - and the eye compares adjacent
+  // lines more easily than adjacent columns anyway.
   import {
     fetchAudit,
     putAuditVerdict,
@@ -42,8 +47,9 @@
   });
 
   let variants = $derived(payload?.variants ?? []);
-  // The grid's column template: the source chunk, then one equal column per model.
-  let columns = $derived(`minmax(0,1fr) ${variants.map(() => "minmax(0,1fr)").join(" ")}`);
+  /** Longest model name, so the per-line labels form a readable gutter without a
+   *  fixed width that truncates at 20 models with long names. */
+  let labelCh = $derived(Math.min(14, Math.max(6, ...variants.map((v) => v.model.length), 6)));
 
   $effect(() => {
     const h = hash;
@@ -196,58 +202,31 @@
             {/each}
           </header>
 
-          <!-- Column headers: SOURCE, then one per model. -->
-          <div class="grid gap-px bg-border/40 border-b border-border" style="grid-template-columns: {columns}">
-            <div class="bg-surface-alt/40 px-3 py-1">
-              <span class="text-[10px] font-semibold uppercase tracking-wide text-on-surface-muted">Source</span>
-            </div>
-            {#each variants as v (v.id)}
-              <div class="bg-surface-alt/40 px-3 py-1 flex items-center gap-1.5">
-                <span class="w-2 h-2 rounded-full flex-none" style="background:{colourOf.get(v.id)}"></span>
-                <span class="text-[10px] font-semibold uppercase tracking-wide text-on-surface-secondary">{v.model}</span>
-              </div>
-            {/each}
-          </div>
-
           {#if rows.length === 0}
-            <div class="grid gap-px bg-border/40" style="grid-template-columns: {columns}">
-              <div class="bg-surface px-3 py-3 text-sm text-on-surface-secondary space-y-1.5">
-                {#each passageQuotes(p.clusters) as q}
-                  <p class="border-l-2 border-border pl-2 leading-snug">{q}</p>
-                {:else}
-                  <p class="text-on-surface-muted/60 italic text-xs">no source quote</p>
-                {/each}
-              </div>
-              {#each variants as v (v.id)}
-                <div class="bg-surface px-3 py-3">
-                  <p class="text-xs italic text-on-surface-muted/60">nothing</p>
-                </div>
-              {/each}
+            <div class="px-4 py-3">
+              <p class="text-xs italic text-on-surface-muted/60">
+                No model produced a claim from this chunk.
+              </p>
             </div>
           {/if}
 
-          <!-- One row per fact. Every model has a cell; an empty one SAYS so. -->
+          <!-- One block per fact. Inside it, EVERY model gets a line - including
+               an explicit "nothing". Stacked, not columned: twenty models make a
+               taller list, where twenty columns make an unreadable one. -->
           {#each rows as row (row.cluster.id)}
-            <div
-              class="grid gap-px bg-border/40 {row.singleton ? 'ring-1 ring-inset ring-warning/40' : ''}"
-              style="grid-template-columns: {columns}"
-            >
-              <!-- Source: the span this fact was drawn from. -->
-              <div class="bg-surface px-3 py-2.5 min-w-0">
-                {#if row.cluster.members.length}
-                  {@const quotes = passageQuotes([row.cluster])}
+            {@const quotes = passageQuotes([row.cluster])}
+            <article class="px-4 py-3 border-b border-border/50 {row.singleton ? 'bg-warning-container/10' : ''}">
+              <!-- The source span this fact was drawn from, and the verdict on
+                   the FACT (not on any one model's wording of it). -->
+              <div class="flex flex-wrap items-start gap-x-3 gap-y-1.5">
+                <div class="min-w-0 flex-1">
                   {#each quotes as q}
-                    <p class="text-sm text-on-surface-secondary border-l-2 border-border pl-2 leading-snug">{q}</p>
+                    <p class="text-sm text-on-surface-secondary border-l-2 border-primary/40 pl-2 leading-snug">{q}</p>
                   {:else}
                     <p class="text-xs italic text-on-surface-muted/60">no source quote</p>
                   {/each}
-                {:else}
-                  <p class="text-xs italic text-on-surface-muted/60">no source quote</p>
-                {/if}
-
-                <!-- Adjudication sits with the source, since it judges the FACT,
-                     not any one model's wording of it. -->
-                <div class="mt-2 flex flex-wrap items-center gap-1">
+                </div>
+                <div class="flex flex-none items-center gap-1">
                   {#each CLUSTER_VERDICTS as v}
                     <button
                       onclick={() => saveGold(row.cluster, p, v)}
@@ -265,53 +244,57 @@
                 </div>
               </div>
 
-              <!-- One cell per model: its rendering, or an explicit nothing. -->
-              {#each row.cells as cell (cell.variant)}
-                <div class="bg-surface px-3 py-2.5 min-w-0">
-                  {#if !cell.present}
-                    <p
-                      class="text-xs italic text-on-surface-muted/60"
-                      title="{cell.model} produced no claim for this fact"
+              <!-- Each model's rendering of this fact, one line each. -->
+              <div class="mt-2 space-y-1">
+                {#each row.cells as cell (cell.variant)}
+                  <div class="flex items-start gap-2">
+                    <span
+                      class="flex-none flex items-center gap-1.5 pt-0.5"
+                      style="width: {labelCh + 2}ch"
+                      title={cell.present ? cell.model : `${cell.model} produced no claim for this fact`}
                     >
-                      nothing
-                    </p>
-                  {:else}
-                    <div class="space-y-1.5">
-                      {#each memberLines(cell.members) as line}
-                        {@const label = frameLabel(line)}
-                        <div>
-                          <p class="text-sm text-on-surface leading-snug">{line.text}</p>
-                          {#if label}
-                            <p class="text-[10px] font-mono text-on-surface-muted/80 leading-tight">{label}</p>
-                          {/if}
-                        </div>
-                      {/each}
-
-                      <!-- When the fact is real, grade THIS model's rendering. -->
-                      {#if row.cluster.gold?.verdict === "real"}
-                        {#each cell.members as m (m.claim_id)}
-                          <div class="flex flex-wrap items-center gap-1 pt-0.5">
-                            {#each MEMBER_VERDICTS as mv}
-                              <button
-                                onclick={() => saveGold(row.cluster, p, "real", { member: m, verdict: mv })}
-                                class="text-[10px] rounded px-1 py-0.5 cursor-pointer transition-colors
-                                  {memberVerdictOf(row.cluster, m) === mv
-                                    ? mv === 'correct'
-                                      ? 'bg-success/80 text-on-success'
-                                      : 'bg-warning text-on-warning'
-                                    : 'text-on-surface-muted/70 hover:bg-surface-alt'}"
-                              >
-                                {MEMBER_LABEL[mv]}
-                              </button>
-                            {/each}
+                      <span class="w-1.5 h-1.5 rounded-full flex-none" style="background:{colourOf.get(cell.variant)}"></span>
+                      <span class="text-[11px] tabular-nums truncate
+                        {cell.present ? 'text-on-surface-secondary' : 'text-on-surface-muted/50'}">{cell.model}</span>
+                    </span>
+                    {#if !cell.present}
+                      <span class="text-xs italic text-on-surface-muted/50 pt-0.5">nothing</span>
+                    {:else}
+                      <div class="min-w-0 flex-1 space-y-1">
+                        {#each memberLines(cell.members) as line}
+                          {@const label = frameLabel(line)}
+                          <div>
+                            <p class="text-sm text-on-surface leading-snug">{line.text}</p>
+                            {#if label}
+                              <p class="text-[10px] font-mono text-on-surface-muted/70 leading-tight">{label}</p>
+                            {/if}
                           </div>
                         {/each}
-                      {/if}
-                    </div>
-                  {/if}
-                </div>
-              {/each}
-            </div>
+                        {#if row.cluster.gold?.verdict === "real"}
+                          {#each cell.members as m (m.claim_id)}
+                            <div class="flex flex-wrap items-center gap-1">
+                              {#each MEMBER_VERDICTS as mv}
+                                <button
+                                  onclick={() => saveGold(row.cluster, p, "real", { member: m, verdict: mv })}
+                                  class="text-[10px] rounded px-1 py-0.5 cursor-pointer transition-colors
+                                    {memberVerdictOf(row.cluster, m) === mv
+                                      ? mv === 'correct'
+                                        ? 'bg-success/80 text-on-success'
+                                        : 'bg-warning text-on-warning'
+                                      : 'text-on-surface-muted/70 hover:bg-surface-alt'}"
+                                >
+                                  {MEMBER_LABEL[mv]}
+                                </button>
+                              {/each}
+                            </div>
+                          {/each}
+                        {/if}
+                      </div>
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+            </article>
           {/each}
         </section>
       {/each}
