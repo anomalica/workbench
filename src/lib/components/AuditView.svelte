@@ -60,6 +60,14 @@
     hidden = next;
   }
 
+  // When the passage axis is confounded the singleton flag is an artefact of
+  // location formatting, not a fact about the models - so the view says so and
+  // adjudication is DISABLED. Reading a degraded view is fine; recording gold
+  // against it is not, because nothing downstream will remember the clusters
+  // were manufactured when a grader later scores against them.
+  let confounded = $derived(payload?.axis?.confounded === true);
+  let confoundReason = $derived(payload?.axis?.reason ?? "");
+
   let allVariants = $derived(payload?.variants ?? []);
   let variants = $derived(allVariants.filter((v) => !hidden.has(v.id)));
   // Is this a like-for-like comparison? Only if every variant ran the SAME
@@ -184,6 +192,14 @@
       <span class="text-xs font-medium text-on-surface-secondary">
         {variants.length}{hidden.size ? `/${allVariants.length}` : ""} models · {payload.passages.length} chunks
       </span>
+      {#if confounded}
+        <span
+          class="inline-flex items-center gap-1 text-[11px] font-medium text-on-error bg-error/80 rounded px-2 py-0.5"
+          title={confoundReason}
+        >
+          Cannot compare these models - grading disabled
+        </span>
+      {/if}
       {#if mixedPrompts}
         <span
           class="inline-flex items-center gap-1 text-[11px] font-medium text-on-error bg-error/80 rounded px-2 py-0.5"
@@ -220,6 +236,18 @@
         </button>
       {/each}
     </div>
+
+    {#if confounded}
+      <div class="flex-none px-4 py-2.5 bg-error/10 border-b border-error/30">
+        <p class="text-xs text-on-surface max-w-4xl leading-relaxed">
+          <span class="font-semibold">These models were never actually compared.</span>
+          {confoundReason} Every claim below will look unique to one model - that is
+          an artefact of how each model writes its locations, not a difference between
+          them. Grading is disabled here: a verdict recorded against these clusters
+          would be a verdict on a formatting accident.
+        </p>
+      </div>
+    {/if}
 
     <div class="flex-1 overflow-auto min-h-0">
       {#each payload.passages as p (p.index)}
@@ -278,13 +306,18 @@
                   {#each CLUSTER_VERDICTS as v}
                     <button
                       onclick={() => saveGold(row.cluster, p, v)}
-                      class="text-[11px] font-medium rounded px-1.5 py-0.5 cursor-pointer transition-colors
-                        {row.cluster.gold?.verdict === v
-                          ? v === 'real'
-                            ? 'bg-success text-on-success'
-                            : 'bg-error text-on-error'
-                          : 'text-on-surface-muted hover:bg-surface-alt'}"
-                      title="Mark this claim {CLUSTER_LABEL[v]}"
+                      disabled={confounded}
+                      class="text-[11px] font-medium rounded px-1.5 py-0.5 transition-colors
+                        {confounded
+                          ? 'text-on-surface-muted/40 cursor-not-allowed'
+                          : row.cluster.gold?.verdict === v
+                            ? v === 'real'
+                              ? 'bg-success text-on-success cursor-pointer'
+                              : 'bg-error text-on-error cursor-pointer'
+                            : 'text-on-surface-muted hover:bg-surface-alt cursor-pointer'}"
+                      title={confounded
+                        ? "Grading is disabled: these models were never compared, so this cluster is an artefact"
+                        : `Mark this claim ${CLUSTER_LABEL[v]}`}
                     >
                       {CLUSTER_LABEL[v]}
                     </button>

@@ -21,7 +21,14 @@ from pathlib import Path
 
 import yaml
 
-from backend.audit import Claim, Similar, Variant, build_passages, claims_of
+from backend.audit import (
+    Claim,
+    Similar,
+    Variant,
+    axis_confounded,
+    build_passages,
+    claims_of,
+)
 
 _CLAIM_SECTIONS = ("domain_claims", "infrastructure_claims")
 
@@ -154,7 +161,13 @@ def audit_payload(variants: list[Variant], similar: Similar) -> dict:
     source passages, each carrying its meaning-clusters, member phrasings, and
     the singleton flag. Clustering runs over every variant's claims together."""
     passages = build_passages(claims_of(variants), similar)
+    confounded = axis_confounded(passages, len(variants))
     return {
+        # Whether the singleton signal means anything at all for this record. When
+        # confounded, every cluster is a singleton because the models' claims were
+        # never compared - the UI must say so and refuse adjudication rather than
+        # let a reviewer grade an artefact.
+        "axis": {"confounded": bool(confounded), "reason": confounded},
         "variants": [
             {
                 "id": v.id,

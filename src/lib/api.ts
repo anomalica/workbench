@@ -300,7 +300,16 @@ export interface AuditVariant {
   claim_count: number;
 }
 
+/** Whether the singleton signal means anything for this record. Confounded =
+ *  no passage ever compared two models, so every cluster is a singleton by
+ *  construction and the UI must not let it be graded. */
+export interface AuditAxis {
+  confounded: boolean;
+  reason: string;
+}
+
 export interface AuditPayload {
+  axis?: AuditAxis;
   record: { hash: string; friendly_name: string };
   variants: AuditVariant[];
   passages: AuditPassage[];

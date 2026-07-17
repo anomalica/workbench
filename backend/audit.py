@@ -288,5 +288,42 @@ class Variant:
     prompt_fingerprint: str = ""
 
 
+def axis_confounded(passages: list[Passage], variant_count: int) -> str:
+    """Is the singleton signal an ARTEFACT of the passage axis rather than a fact
+    about the models? Returns a reason, or "" when the axis is sound.
+
+    The audit's whole signal is the singleton: "only one model produced this
+    fact". That is only meaningful if the models' claims were ever COMPARED - and
+    they are compared only within a passage. Passages group by location, so when
+    models phrase locations differently they land in disjoint passages and every
+    cluster is a singleton BY CONSTRUCTION, with no model ever having disagreed.
+
+    This is live, not hypothetical. On the Pajarito PDF haiku emits `11` while
+    sonnet emits `line 11` - the same line - so parse_location reads haiku's as
+    ELEVEN SECONDS (timed) and sonnet's as an untimed string, they never share a
+    passage, and the view reports 17/17 singletons: the strongest possible
+    unique-recall/hallucination signal, entirely manufactured by string
+    formatting. A reviewer cannot tell that from a real result, which is why this
+    must be detected rather than left to be noticed.
+
+    The check is deliberately structural, not a location-format heuristic:
+    canonical locations are the digester's to define, and guessing at their
+    semantics here would trade a visible bug for an invisible one."""
+    if variant_count < 2 or not passages:
+        # Nothing to compare, or nothing extracted at all: there is no signal
+        # here to be false. Flagging an empty record would raise an alarm about
+        # clusters that do not exist.
+        return ""
+    for p in passages:
+        models = {c.model for cl in p.clusters for c in cl.members}
+        if len(models) > 1:
+            return ""  # at least one passage compared models - the axis works
+    return (
+        "No passage contains claims from more than one model, so no two models' "
+        "claims were ever compared. Every cluster is a singleton by construction, "
+        "not by disagreement - the models' locations do not line up."
+    )
+
+
 def claims_of(variants: list[Variant]) -> list[Claim]:
     return [c for v in variants for c in v.claims]
