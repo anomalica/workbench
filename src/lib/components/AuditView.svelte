@@ -46,7 +46,22 @@
     return m;
   });
 
-  let variants = $derived(payload?.variants ?? []);
+  /** Models the reviewer has switched off. With twenty models you narrow to the
+   *  few you're weighing; the default shows all, because a model hidden by
+   *  default is a model silently excluded from a comparison. */
+  let hidden = $state<Set<string>>(new Set());
+  function toggleModel(id: string) {
+    const next = new Set(hidden);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    // Never allow the last model to be switched off - an empty grid isn't a
+    // filter, it's a broken page.
+    if (next.size >= allVariants.length) return;
+    hidden = next;
+  }
+
+  let allVariants = $derived(payload?.variants ?? []);
+  let variants = $derived(allVariants.filter((v) => !hidden.has(v.id)));
   // Is this a like-for-like comparison? Only if every variant ran the SAME
   // prompt. An unknown ("") fingerprint counts as not-verified, never as a
   // match: a prompt difference read as a model difference is the one wrong
@@ -167,7 +182,7 @@
     <!-- Variant summary: model, claim count, cost - colour-keyed to the columns. -->
     <div class="flex-none px-4 py-3 border-b border-border bg-surface-alt flex flex-wrap items-center gap-x-4 gap-y-2">
       <span class="text-xs font-medium text-on-surface-secondary">
-        {payload.variants.length} models · {payload.passages.length} chunks
+        {variants.length}{hidden.size ? `/${allVariants.length}` : ""} models · {payload.passages.length} chunks
       </span>
       {#if mixedPrompts}
         <span
@@ -179,10 +194,19 @@
           NOT like-for-like: prompts differ
         </span>
       {/if}
-      {#each payload.variants as v (v.id)}
-        <span class="inline-flex items-center gap-1.5 text-xs">
-          <span class="w-2.5 h-2.5 rounded-full flex-none" style="background:{colourOf.get(v.id)}"></span>
-          <span class="font-medium text-on-surface">{v.model}</span>
+      {#each allVariants as v (v.id)}
+        {@const off = hidden.has(v.id)}
+        <button
+          onclick={() => toggleModel(v.id)}
+          class="inline-flex items-center gap-1.5 text-xs rounded px-1.5 py-0.5 cursor-pointer transition-colors
+            {off ? 'opacity-40 hover:opacity-70' : 'hover:bg-surface'}"
+          title={off ? `Show ${v.model}` : `Hide ${v.model}`}
+        >
+          <span
+            class="w-2.5 h-2.5 rounded-full flex-none {off ? 'ring-1 ring-inset ring-on-surface-muted' : ''}"
+            style={off ? "" : `background:${colourOf.get(v.id)}`}
+          ></span>
+          <span class="font-medium {off ? 'text-on-surface-muted line-through' : 'text-on-surface'}">{v.model}</span>
           <span class="text-on-surface-muted tabular-nums">{v.claim_count} claims</span>
           {#if v.cost_usd != null}
             <span class="text-on-surface-muted tabular-nums">${v.cost_usd.toFixed(2)}</span>
@@ -193,7 +217,7 @@
               title="Prompt fingerprint - the prompts this variant actually ran"
             >{v.prompt_fingerprint || "prompt unknown"}</span>
           {/if}
-        </span>
+        </button>
       {/each}
     </div>
 

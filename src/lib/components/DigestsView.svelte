@@ -42,9 +42,6 @@
   // the ingest viewer's annotation pipeline. (ADR 0042; computed by the same
   // materialise() the digester runs, so preview == digest input byte-for-byte.)
   let predigest = $state<Predigest | null>(null);
-  /** Models to show. Empty = all: with twenty models the reviewer narrows to the
-   *  few being compared, but the default must never hide a model silently. */
-  let hidden = $state<Set<string>>(new Set());
   let loading = $state(false);
   let error = $state<string | null>(null);
 
@@ -68,7 +65,6 @@
     comparison = null;
     judgment = null;
     predigest = null;
-    hidden = new Set();
     saveNote = null;
     chosen = null;
     notes = "";
