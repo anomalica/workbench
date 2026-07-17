@@ -42,7 +42,22 @@ def _variant(model, prompt, claims, nodes):
     }
 
 
-def _variants_repo(tmp_path, monkeypatch):
+def _variants_repo(tmp_path, monkeypatch, active=True):
+    """Variant digests plus, by default, the record they describe.
+
+    The record matters: the comparable list only offers records in the ACTIVE
+    corpus, resolved by content hash against store/. Archiving moves a record to
+    store/v1/ and deletes its records/ symlink, so a variants directory can
+    outlive the record it is named for - and offering it produces a list entry
+    that 404s when opened. `active=False` models that archived state.
+    """
+    store = tmp_path / "ingests" / "store"
+    (store / "v1").mkdir(parents=True)
+    (store / f"{'a' * 64}.md").write_text("x") if active else (
+        store / "v1" / f"{'a' * 64}.md"
+    ).write_text("x")
+    monkeypatch.setenv("INGESTS_PATH", str(tmp_path / "ingests"))
+
     vdir = tmp_path / "variants" / "example-slug"
     vdir.mkdir(parents=True)
     (vdir / "claude-opus-4-8-default.yaml").write_text(
@@ -63,6 +78,13 @@ def test_list_comparable_and_compare(tmp_path, monkeypatch):
     assert len(comp) == 1
     assert comp[0]["variant_count"] == 2
     assert set(comp[0]["models"]) == {"claude-opus-4-8", "claude-haiku-4-5"}
+
+
+def test_list_comparable_omits_an_archived_record(tmp_path, monkeypatch):
+    """Mark archived pantex while its variants stayed on disk; the list kept
+    offering it and opening it 404'd. A record only in store/v1/ is not on offer."""
+    _variants_repo(tmp_path, monkeypatch, active=False)
+    assert models.list_comparable() == []
 
     cmp = models.load_comparison("a" * 64)
     by_model = {m["model"]: m for m in cmp["per_model"]}

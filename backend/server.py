@@ -2649,9 +2649,13 @@ def put_highlights(full_hash: str, body: dict, request: Request) -> JSONResponse
     """Replace the highlights sidecar and commit it to the ingests repo.
 
     Expects {"complete": bool, "spans": [{start,end,text,note?}],
-    "rejected": [{start,end,text}]}. Offsets are validated against the
-    current body (code points, text must match exactly); highlight spans
-    must be non-overlapping. Requires reviewer role.
+    "rejected": [{start,end,text}], "complete_ranges": [{start,end,note?}]}.
+    Offsets are validated against the current body (code points, text must match
+    exactly); highlight spans must be non-overlapping. `complete_ranges` records
+    which PARTS were swept, so precision is measurable on a record too long to
+    treat wall-to-wall - within a range an unhighlighted sentence means "judged
+    not claim-worthy", outside every range it means "not looked at". Requires
+    reviewer role.
     """
     user = _require_role(request, "reviewer")
     if not FULL_HASH_PATTERN.match(full_hash):
@@ -2666,7 +2670,10 @@ def put_highlights(full_hash: str, body: dict, request: Request) -> JSONResponse
         rejected = tuning.validate_spans(
             body.get("rejected"), record_body, field="rejected", allow_overlap=True
         )
-    except tuning.SpanError as e:
+        complete_ranges = tuning.validate_ranges(
+            record_body, body.get("complete_ranges")
+        )
+    except (tuning.SpanError, ValueError) as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
     sidecar = tuning.build_sidecar(
@@ -2677,6 +2684,7 @@ def put_highlights(full_hash: str, body: dict, request: Request) -> JSONResponse
         rejected=rejected,
         reviewed_by=user["email"],
         reviewed_at=datetime.now(dt_timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        complete_ranges=complete_ranges,
     )
     if not source.save_highlights(
         full_hash, sidecar, author_name=user["name"], author_email=user["email"]
