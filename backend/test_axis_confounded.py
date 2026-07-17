@@ -13,7 +13,7 @@ Live case it was written for: the Pajarito PDF. haiku emits `11`, sonnet emits
 sonnet's as an untimed string. 17/17 singletons, entirely manufactured.
 """
 
-from backend.audit import Claim, Cluster, Passage, axis_confounded
+from backend.audit import Claim, Cluster, Passage, axis_confounded, passage_compared
 
 
 def _claim(model: str, text: str, location: str = "1") -> Claim:
@@ -91,3 +91,44 @@ def test_three_models_all_disjoint_is_confounded():
         _passage(2, _claim("opus", "a", "page 1")),
     ]
     assert axis_confounded(passages, variant_count=3)
+
+
+# --- passage_compared: confounding is PER-PASSAGE ---------------------------
+#
+# The record-level guard passes a record where SOME passage compared models. That
+# is not enough: a passage holding one model emits singletons by construction
+# whatever its neighbours did. The DoD record is the live case - passage 0 holds
+# both models, passage 1 holds only haiku, and passage 1's two "only haiku found
+# this" flags are both false (the same facts exist in sonnet's claims under a
+# different location label, cosine 0.943 and 0.863).
+
+
+def test_a_passage_with_two_models_compared():
+    p = _passage(0, _claim("haiku", "a"), _claim("sonnet", "b"))
+    assert passage_compared(p) is True
+
+
+def test_a_single_model_passage_did_not_compare():
+    p = _passage(1, _claim("haiku", "a"), _claim("haiku", "b"))
+    assert passage_compared(p) is False
+
+
+def test_an_empty_passage_did_not_compare():
+    assert (
+        passage_compared(
+            Passage(index=0, start=0.0, end=0.0, raw_locations=[], clusters=[])
+        )
+        is False
+    )
+
+
+def test_the_dod_shape_record_passes_but_its_lone_passage_does_not():
+    """The gap this closes: the record-level check says fine, while one passage
+    inside it is still manufacturing singletons."""
+    shared = _passage(0, _claim("haiku", "a", "1"), _claim("sonnet", "a2", "1"))
+    lone = _passage(1, _claim("haiku", "b", "2"), _claim("haiku", "c", "2"))
+    assert (
+        axis_confounded([shared, lone], variant_count=2) == ""
+    )  # record: not wholly broken
+    assert passage_compared(shared) is True
+    assert passage_compared(lone) is False  # ...but this passage must not be graded

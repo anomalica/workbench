@@ -284,6 +284,10 @@ export interface AuditPassage {
   start: number;
   end: number;
   raw_locations: string[];
+  /** Did this passage actually compare models? False = it holds claims from one
+   *  model only, so its clusters are singletons BY CONSTRUCTION and must not be
+   *  graded - regardless of whether other passages compared fine. */
+  compared?: boolean;
   clusters: AuditCluster[];
 }
 

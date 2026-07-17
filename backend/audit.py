@@ -24,6 +24,8 @@ of clustering.
 
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -103,16 +105,47 @@ def _clock_to_seconds(clock: str) -> float | None:
     return secs
 
 
-def parse_location(raw: str) -> TimeSpan:
+_LINE_REF = re.compile(r"^line\s+(\d+)", re.IGNORECASE)
+_BARE_INT = re.compile(r"^(\d+)$")
+
+
+def line_addressed(claims: list["Claim"]) -> bool:
+    """Does this record address its source by LINE rather than by clock?
+
+    Decided from the record's own evidence: if any claim writes `line N`, the
+    record is line-addressed, and a bare `N` elsewhere in it means line N - not N
+    seconds. This is not a guess about the digester's semantics; it is reading
+    what the record itself says, within the record.
+
+    It exists because the models do not agree on the format. On the DoD record
+    haiku writes `line 1` while sonnet writes `1`, and on Pajarito haiku writes
+    `11` while sonnet writes `line 11` - the same lines, both times. Without
+    this, `1` parses as ONE SECOND on a web page, lands in a timed passage, and
+    can never meet `line 1` - so the models are never compared and every cluster
+    is a false singleton."""
+    return any(_LINE_REF.match(c.location.split("(", 1)[0].strip()) for c in claims)
+
+
+def parse_location(raw: str, lines_regime: bool = False) -> TimeSpan:
     """Parse a source location. A leading `HH:MM:SS[-HH:MM:SS]` (or bare-second)
     clock becomes a timed range; a `lines N-N` / non-clock location stays untimed
-    and groups by exact string. A trailing `(lines ...)` annotation is ignored in
-    favour of the leading clock."""
+    and groups by its CANONICAL string. A trailing `(lines ...)` annotation is
+    ignored in favour of the leading clock.
+
+    `lines_regime` says the record addresses source by line (see line_addressed),
+    which makes a bare integer a line number rather than a timecode."""
     head = raw.split("(", 1)[0].strip()
 
-    # A line reference is never a timecode - keep it untimed, grouped by string.
-    if head.lower().startswith("line"):
-        return TimeSpan(0.0, 0.0, raw, timed=False)
+    # A line reference is never a timecode. Canonicalise it so `line 11` and a
+    # bare `11` in the same record group together instead of splitting the models
+    # apart on formatting.
+    m = _LINE_REF.match(head)
+    if m:
+        return TimeSpan(0.0, 0.0, f"line {int(m.group(1))}", timed=False)
+    if lines_regime:
+        b = _BARE_INT.match(head)
+        if b:
+            return TimeSpan(0.0, 0.0, f"line {int(b.group(1))}", timed=False)
 
     if "-" in head:
         lo_str, hi_str = head.split("-", 1)
@@ -228,7 +261,8 @@ def build_passages(claims: list[Claim], similar: Similar) -> list[Passage]:
     if not claims:
         return []
 
-    spans = {c: parse_location(c.location) for c in claims}
+    lines_regime = line_addressed(claims)
+    spans = {c: parse_location(c.location, lines_regime) for c in claims}
     # Timed claims group into passages by overlapping second-range; untimed ones
     # (line refs, unparseable) group by their exact raw location, ordered after
     # the timed passages so a mixed record still walks time-first.
@@ -288,6 +322,29 @@ class Variant:
     prompt_fingerprint: str = ""
 
 
+def passage_compared(passage: Passage) -> bool:
+    """Did this passage actually compare models? True only if it holds claims
+    from more than one.
+
+    CONFOUNDING IS PER-PASSAGE, not per-record. Clustering only ever runs WITHIN
+    a passage, so a passage holding one model produces singletons by
+    construction - regardless of whether other passages in the record compared
+    fine. A record-level check cannot see it: on the DoD record passage 0 holds
+    both models and passage 1 holds only haiku, so the record reads clean while
+    passage 1 quietly emits two "only haiku found this" flags.
+
+    Those two are demonstrably false: the assimilator matched both against sonnet
+    claims filed under a different location at cosine 0.943 and 0.863 - the same
+    facts, labelled '2' by haiku and '1' by sonnet. build_passages never compares
+    them because they are in different passages.
+
+    Polarity is deliberate: a suppressed-but-real singleton costs one missed
+    observation; a live false singleton puts a fabricated hallucination signal
+    into the gold. Wrong-but-visible beats wrong-and-invisible."""
+    models = {c.model for cl in passage.clusters for c in cl.members}
+    return len(models) > 1
+
+
 def axis_confounded(passages: list[Passage], variant_count: int) -> str:
     """Is the singleton signal an ARTEFACT of the passage axis rather than a fact
     about the models? Returns a reason, or "" when the axis is sound.
@@ -314,10 +371,12 @@ def axis_confounded(passages: list[Passage], variant_count: int) -> str:
         # here to be false. Flagging an empty record would raise an alarm about
         # clusters that do not exist.
         return ""
-    for p in passages:
-        models = {c.model for cl in p.clusters for c in cl.members}
-        if len(models) > 1:
-            return ""  # at least one passage compared models - the axis works
+    if any(passage_compared(p) for p in passages):
+        # At least one passage compared models, so the axis is not wholly broken.
+        # Passages that did NOT compare are still suppressed individually - see
+        # passage_compared - so a partial failure is caught there rather than
+        # here.
+        return ""
     return (
         "No passage contains claims from more than one model, so no two models' "
         "claims were ever compared. Every cluster is a singleton by construction, "

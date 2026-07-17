@@ -174,6 +174,16 @@
   function rowsOf(p: AuditPassage): AuditGridRow[] {
     return auditGrid(p, variants);
   }
+
+  /** Can this passage's clusters be graded? Only if the models were actually
+   *  compared here. A passage holding ONE model emits singletons by
+   *  construction, so its "only X found this" flags are artefacts even when the
+   *  record as a whole passes - the DoD record has exactly that shape, and both
+   *  of its lone-passage singletons were shown to be false (the same facts exist
+   *  in the other model's claims under a different location label). */
+  function gradable(p: AuditPassage): boolean {
+    return !confounded && p.compared !== false;
+  }
 </script>
 
 <div class="flex-1 flex flex-col min-h-0 font-ui bg-surface">
@@ -289,9 +299,20 @@
           <!-- One block per fact. Inside it, EVERY model gets a line - including
                an explicit "nothing". Stacked, not columned: twenty models make a
                taller list, where twenty columns make an unreadable one. -->
+          {#if p.compared === false && !confounded}
+            <div class="px-4 py-1.5 bg-warning-container/20 border-b border-warning/30">
+              <p class="text-[11px] text-on-surface leading-relaxed max-w-4xl">
+                Only one model filed claims at this location, so nothing here was
+                compared. These are not unique findings - another model may have
+                reported the same facts under a different location label. Grading is
+                off for this chunk.
+              </p>
+            </div>
+          {/if}
           {#each rows as row (row.cluster.id)}
             {@const quotes = passageQuotes([row.cluster])}
-            <article class="px-4 py-3 border-b border-border/50 {row.singleton ? 'bg-warning-container/10' : ''}">
+            {@const canGrade = gradable(p)}
+            <article class="px-4 py-3 border-b border-border/50 {row.singleton && canGrade ? 'bg-warning-container/10' : ''}">
               <!-- The source span this fact was drawn from, and the verdict on
                    the FACT (not on any one model's wording of it). -->
               <div class="flex flex-wrap items-start gap-x-3 gap-y-1.5">
@@ -306,17 +327,17 @@
                   {#each CLUSTER_VERDICTS as v}
                     <button
                       onclick={() => saveGold(row.cluster, p, v)}
-                      disabled={confounded}
+                      disabled={!canGrade}
                       class="text-[11px] font-medium rounded px-1.5 py-0.5 transition-colors
-                        {confounded
+                        {!canGrade
                           ? 'text-on-surface-muted/40 cursor-not-allowed'
                           : row.cluster.gold?.verdict === v
                             ? v === 'real'
                               ? 'bg-success text-on-success cursor-pointer'
                               : 'bg-error text-on-error cursor-pointer'
                             : 'text-on-surface-muted hover:bg-surface-alt cursor-pointer'}"
-                      title={confounded
-                        ? "Grading is disabled: these models were never compared, so this cluster is an artefact"
+                      title={!canGrade
+                        ? "Grading is off here: the models were not compared at this location, so this cluster is an artefact"
                         : `Mark this claim ${CLUSTER_LABEL[v]}`}
                     >
                       {CLUSTER_LABEL[v]}
@@ -351,7 +372,7 @@
                             {/if}
                           </div>
                         {/each}
-                        {#if row.cluster.gold?.verdict === "real"}
+                        {#if row.cluster.gold?.verdict === "real" && canGrade}
                           {#each cell.members as m (m.claim_id)}
                             <div class="flex flex-wrap items-center gap-1">
                               {#each MEMBER_VERDICTS as mv}

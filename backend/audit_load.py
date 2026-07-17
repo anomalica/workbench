@@ -28,6 +28,7 @@ from backend.audit import (
     axis_confounded,
     build_passages,
     claims_of,
+    passage_compared,
 )
 
 _CLAIM_SECTIONS = ("domain_claims", "infrastructure_claims")
@@ -185,6 +186,9 @@ def audit_payload(variants: list[Variant], similar: Similar) -> dict:
                 "start": p.start,
                 "end": p.end,
                 "raw_locations": p.raw_locations,
+                # Did this passage actually compare models? False => its clusters
+                # are singletons by construction and must not be graded.
+                "compared": passage_compared(p),
                 "clusters": [
                     {
                         "id": cl.id,
