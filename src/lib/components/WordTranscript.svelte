@@ -1,5 +1,11 @@
 <script lang="ts">
-  import { untrack } from "svelte";
+  import { untrack, onMount } from "svelte";
+  import {
+    saveScrollAnchor,
+    loadScrollAnchor,
+    resolveAnchorTarget,
+    shouldPersistScroll,
+  } from "$lib/scroll-anchor";
   import { parseWords, wordsInTimeRange, wordActiveAt } from "$lib/transcript-words";
   import type { SpeakerRun } from "$lib/transcript-words";
   import { EVENT_NOTE_PRESETS } from "$lib/transcript";
@@ -56,6 +62,7 @@
     mode = "edit",
     focusWords = null,
     sourceHash = "",
+    recordHash = "",
     mediaDuration = null,
     copyrightStatus = null,
     namedSpeakers = [],
@@ -96,6 +103,9 @@
     /** Source SHA-256 (== content hash for a/v records), so the word editor can
      *  fetch a waveform window for the audio around a timestamp. */
     sourceHash?: string;
+    /** Stable per-record key for the scroll anchor - SAME across the Ingest and
+     *  Markup tabs, so switching between them returns to the same word. */
+    recordHash?: string;
     /** Media length in seconds, to clamp the waveform window. */
     mediaDuration?: number | null;
     /** Record copyright status - decides whether the peaks sidecar is openly
@@ -177,6 +187,17 @@
 
   let parsed = $derived(parseWords(body));
   let words = $derived(parsed.words);
+
+  // Restore the scroll anchor once the words are on screen. rAF-retries because
+  // on a fresh mount the word DOM is not painted on the first frame.
+  onMount(() => {
+    let frames = 0;
+    const tryRestore = () => {
+      restoreScrollAnchor();
+      if (!anchorRestored && frames++ < 30) requestAnimationFrame(tryRestore);
+    };
+    requestAnimationFrame(tryRestore);
+  });
   let runs = $derived(parsed.runs);
 
   // Reviewer highlights, rendered as stacked underline bands so overlapping
@@ -406,6 +427,66 @@
   // Floating selection bar: positioned just above (or below) the first
   // selected word, in the offsetParent's coordinate space.
   let scrollEl = $state<HTMLElement>();
+  // Where in the transcript you were, so an Ingest <-> Markup switch returns you
+  // there instead of the top. Keyed per record (shared by both tabs) and anchored
+  // on a WORD INDEX, because the two tabs render different word subsets and a
+  // pixel offset would mean different places in each.
+  let lastPersistedAnchor = -1;
+  let anchorRestored = false;
+  // Last currentTime the playback-follow acted on, to tell a forward tick (follow)
+  // from a seek or pause (don't).
+  let lastFollowTime = -1;
+
+  /** The index of the topmost word currently visible - the thing worth
+   *  remembering. Reads the DOM, so it lives in the component. */
+  function topVisibleWord(): number | null {
+    if (!scrollEl) return null;
+    const top = scrollEl.getBoundingClientRect().top;
+    let best: number | null = null;
+    let bestDelta = Infinity;
+    for (const el of scrollEl.querySelectorAll<HTMLElement>("[data-word-index]")) {
+      const delta = el.getBoundingClientRect().top - top;
+      if (delta >= -4 && delta < bestDelta) {
+        bestDelta = delta;
+        best = Number(el.dataset.wordIndex);
+        if (delta >= 0 && delta < 40) break; // close enough to the top edge
+      }
+    }
+    return best;
+  }
+
+  function persistScrollAnchor() {
+    if (!recordHash) return;
+    const w = topVisibleWord();
+    if (w === null || !shouldPersistScroll(lastPersistedAnchor, w)) return;
+    if (saveScrollAnchor(recordHash, w)) lastPersistedAnchor = w;
+  }
+
+  /** Jump to the saved word INSTANTLY - the whole point is to kill the ~10s
+   *  smooth animation the karaoke follow would otherwise run from the top. Falls
+   *  back to the nearest word this tab actually renders. */
+  function restoreScrollAnchor() {
+    if (anchorRestored || !recordHash || !scrollEl) return;
+    const saved = loadScrollAnchor(recordHash);
+    if (saved === null) {
+      anchorRestored = true;
+      return;
+    }
+    const rendered: number[] = [];
+    for (const el of scrollEl.querySelectorAll<HTMLElement>("[data-word-index]")) {
+      rendered.push(Number(el.dataset.wordIndex));
+    }
+    rendered.sort((a, b) => a - b);
+    const target = resolveAnchorTarget(saved, rendered);
+    if (target === null) return; // words not painted yet - try again next tick
+    const el = scrollEl.querySelector<HTMLElement>(`[data-word-index="${target}"]`);
+    if (!el) return;
+    const view = scrollEl.getBoundingClientRect();
+    const word = el.getBoundingClientRect();
+    scrollEl.scrollTop = scrollEl.scrollTop + (word.top - view.top) - view.height * 0.3;
+    lastPersistedAnchor = target;
+    anchorRestored = true;
+  }
   let barEl = $state<HTMLElement>();
   let barStyle = $state("");
 
@@ -528,6 +609,15 @@
     const g = activeWord;
     untrack(() => {
       if (g < 0 || !scrollEl) return;
+      // Only follow ACTUAL PLAYBACK - currentTime ticking forward in small steps.
+      // A big jump is a seek (the playhead restore lands the audio at the resume
+      // point, which would otherwise yank the transcript away from the scroll
+      // position the reviewer switched tabs to keep); a static time is paused.
+      // Following either would fight the reviewer's own place.
+      const t = currentTime;
+      const delta = t - lastFollowTime;
+      lastFollowTime = t;
+      if (!(delta > 0 && delta < 1.5)) return;
       requestAnimationFrame(() => {
         const el = scrollEl?.querySelector<HTMLElement>(`[data-word-index="${g}"]`);
         if (!el || !scrollEl) return;
@@ -1630,7 +1720,10 @@
 
 <div
   bind:this={scrollEl}
-  onscroll={() => range && schedulePositionBar()}
+  onscroll={() => {
+    if (range) schedulePositionBar();
+    if (anchorRestored) persistScrollAnchor();
+  }}
   class="flex-1 overflow-auto"
   data-scroll-sync
 >
