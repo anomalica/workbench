@@ -3956,6 +3956,7 @@
           <WordTranscript
             mode="markup"
             recordHash={ingest.content_hash}
+            storedCoverage={storedVerdict?.observed_coverage ?? null}
             body={currentBody()}
             namedSpeakers={namedSpeakersOrdered}
             {currentTime}
@@ -3996,6 +3997,7 @@
         <div class="relative flex-1 flex flex-col min-h-0">
           <WordTranscript
             recordHash={ingest.content_hash}
+            storedCoverage={storedVerdict?.observed_coverage ?? null}
             body={currentBody()}
             namedSpeakers={namedSpeakersOrdered}
             {currentTime}

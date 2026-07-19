@@ -71,6 +71,7 @@
     hideIrrelevant = true,
     storageKey = "",
     serverObserved = [],
+    storedCoverage = null,
     claimHighlight = null,
     onreassign,
     onreplaceselection,
@@ -127,6 +128,11 @@
      *  reopened record restores previously-submitted coverage, not just the
      *  localStorage draft (which submit clears). */
     serverObserved?: number[];
+    /** The sidecar's stored observed_coverage (0..1), the durable cumulative
+     *  truth. When the live recompute falls BELOW it - impossible, since
+     *  observation only grows - the word-index spans no longer align (the body
+     *  grew under transcript edits) and per-word shading is unreliable. */
+    storedCoverage?: number | null;
     /** A claim's source time range (seconds) to highlight and scroll to, set
      *  when arriving via a `#claim-<id>` deep link. Words whose start falls in
      *  [start, end] get a distinct claim highlight; the view scrolls to the
@@ -733,6 +739,10 @@
   });
 
   function observedInRun(run: SpeakerRun): number {
+    // When per-word observation is unreliable (spans drifted under body edits),
+    // report the run as fully covered rather than 0/N - a bogus "0 observed" on a
+    // reviewed turn is the same lie as the 0% header. Unknown, not unobserved.
+    if (coverageUnreliable) return run.endWord - run.startWord + 1;
     let n = 0;
     for (let g = run.startWord; g <= run.endWord; g++) if (observed.has(g)) n++;
     return n;
@@ -1087,7 +1097,7 @@
     c.toggle("wt-claim", claimWords.has(g));
     c.toggle("wt-resume", g === resumeWord);
     c.toggle("wt-active", g === activeWord);
-    c.toggle("wt-observed", observed.has(g));
+    c.toggle("wt-observed", coverageUnreliable || observed.has(g));
     // Reviewer-highlight underline bands: sparse, so paint straight onto the
     // word rather than carry a class per possible band count.
     const cols = highlightColorsByWord.get(g);
@@ -1297,7 +1307,21 @@
     clearSelection();
   }
 
-  let observedPct = $derived(observedPercent(coverageVerdict.observed_coverage));
+  // Live coverage below the stored cumulative value = the word-index spans have
+  // drifted (the body grew under this reviewer's own transcript corrections), so
+  // per-word observation cannot be trusted. Observation never decreases, so a
+  // lower live number can only mean a shifted basis.
+  let coverageUnreliable = $derived(
+    storedCoverage != null && coverageVerdict.observed_coverage < storedCoverage - 0.005,
+  );
+  // The header shows the durable stored coverage when the live recompute is
+  // untrustworthy - unknown is not unobserved, and telling a reviewer his
+  // finished record is 0% observed is the exact failure this guards.
+  let observedPct = $derived(
+    coverageUnreliable && storedCoverage != null
+      ? observedPercent(storedCoverage)
+      : observedPercent(coverageVerdict.observed_coverage),
+  );
 
   // Scroll to the first word the reviewer hasn't observed yet (skipping
   // irrelevant words, which never need observing, and words hidden by a filter).
@@ -1700,11 +1724,13 @@
   {:else}
     <span
       class="ml-auto text-xs font-ui font-medium tabular-nums {observedPct >= 100 ? 'text-success' : 'text-on-surface-secondary'}"
-      title="Share of this record's words you've observed"
+      title={coverageUnreliable
+        ? "Your saved coverage. Per-word observation can't be shown for this record - its transcript was edited since review, shifting the word positions - so nothing here is greyed as unobserved."
+        : "Share of this record's words you've observed"}
     >
-      {observedPct}% observed
+      {observedPct}% observed{#if coverageUnreliable}<span class="text-on-surface-muted font-normal"> (saved)</span>{/if}
     </span>
-    {#if observedPct < 100}
+    {#if observedPct < 100 && !coverageUnreliable}
       <button
         onclick={jumpToFirstUnobserved}
         class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
