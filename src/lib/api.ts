@@ -87,6 +87,11 @@ export interface IngestDetail {
   frontmatter: Record<string, string>;
   raw_frontmatter: string;
   body: string;
+  /** The reviewer's last-submitted verdict, from the sidecar. The display shows
+   *  this, never a live recompute (a recompute skews when the body is edited).
+   *  Absent on the static/edge read path. */
+  observed_coverage?: number;
+  digestible?: boolean;
 }
 
 // --- Static-read mode (serverless deploy) -----------------------------------

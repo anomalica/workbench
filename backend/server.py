@@ -713,6 +713,16 @@ class LocalIngestSource(IngestSource):
         )
         if not isinstance(creators, list):
             creators = []
+        # The reviewer's LAST-SUBMITTED verdict, read straight from the sidecar
+        # (recomputed from the body only when no verdict is stored). The frontend
+        # shows this rather than a live recompute, because a recompute divides the
+        # observed spans by the CURRENT word count - which shifts when the body is
+        # edited (e.g. highlight markers), silently changing coverage under a
+        # review that never moved.
+        sidecar = self.load_coverage(full_hash)
+        verdict = digestibility(
+            content if _needs_body_for_digestibility(sidecar) else None, sidecar
+        )
         return {
             "content_hash": full_hash,
             "public_hash": full_hash[:PUBLIC_HASH_LENGTH],
@@ -721,6 +731,8 @@ class LocalIngestSource(IngestSource):
             "frontmatter": frontmatter,
             "raw_frontmatter": raw_frontmatter,
             "body": body,
+            "observed_coverage": verdict.observed_coverage,
+            "digestible": verdict.digestible,
         }
 
     def save_ingest(self, full_hash: str, content: str) -> bool:

@@ -232,6 +232,29 @@
     total_units: number;
   } | null>(null);
 
+  // The verdict Mark LAST SUBMITTED, read straight from the sidecar. This is the
+  // source of truth for coverage, NOT a live recompute - a recompute divides
+  // observed spans by the CURRENT parse's word count, and that count changes when
+  // the body is edited (adding 78 highlight markers to jon-stewart grew it
+  // 33657 -> 34331, so 100%-observed recomputed to 98% and the digestible badge
+  // silently flipped). Trust the submitted state.
+  let storedVerdict = $derived(
+    isWordRecord
+      ? { observed_coverage: ingest.observed_coverage ?? 0, digestible: ingest.digestible ?? false }
+      : null,
+  );
+
+  // The live recompute disagrees with what was submitted: the observation basis
+  // has shifted under the stored spans. When true the recompute cannot be
+  // trusted, the display must show the stored state, and Submit must be held -
+  // re-submitting would overwrite a good sidecar with the skewed number.
+  let basisSkew = $derived(
+    isWordRecord &&
+      wordVerdict != null &&
+      storedVerdict != null &&
+      Math.abs(wordVerdict.observed_coverage - storedVerdict.observed_coverage) > 0.005,
+  );
+
   // Same verdict shape reported by the readable-text coverage view (web/ebook
   // records), which has no playback signal so coverage is marked explicitly.
   let textVerdict = $state<{
@@ -2147,6 +2170,16 @@
 
   async function handleSubmit() {
     if (!user) return;
+    // Refuse to submit while the recompute disagrees with the saved verdict: the
+    // observation basis has shifted (e.g. highlight markers changed the word
+    // count), so a submit would divide the same observed spans by a different
+    // total and overwrite a good sidecar with a worse number. The reviewer's real
+    // state is already saved; there is nothing to save.
+    if (basisSkew) {
+      submitError =
+        "Not saved: this record's word count changed since your review (highlights were added), so recomputing coverage would overwrite your saved 100% with a wrong lower value. Your review is already saved and safe.";
+      return;
+    }
     submitting = true;
     submitError = null;
     // Word records submit their word-index observation + a verdict the
@@ -3077,17 +3110,21 @@
               <span class="text-[10px] font-ui text-success">fully read</span>
             {/if}
           </div>
-        {:else if isWordRecord && wordVerdict}
-          <div class="mt-3 flex items-center gap-2">
+        {:else if isWordRecord && (storedVerdict || wordVerdict)}
+          {@const shown = basisSkew && storedVerdict ? storedVerdict : (wordVerdict ?? storedVerdict)}
+          <div class="mt-3 flex items-center gap-2 flex-wrap">
             <span class="text-xs font-ui text-on-surface-secondary">Observed</span>
             <span class="text-xs font-ui font-medium text-on-surface tabular-nums">
-              {observedPercent(wordVerdict.observed_coverage)}%
+              {observedPercent(shown?.observed_coverage ?? 0)}%
             </span>
-            <span class="text-[10px] font-ui text-on-surface-muted">
-              of {wordVerdict.total_units} words
-            </span>
-            {#if wordVerdict.digestible}
+            {#if shown?.digestible}
               <span class="text-[10px] font-ui text-success">fully observed</span>
+            {/if}
+            {#if basisSkew}
+              <span
+                class="text-[10px] font-ui text-on-warning-container bg-warning-container/60 rounded px-1.5 py-0.5"
+                title="This record's body was edited since your review (e.g. highlights added), shifting the word count your observation was measured against. Showing your SAVED review, not a recomputation. Saving is held so it can't overwrite your saved state."
+              >showing saved review - recompute skewed, saving held</span>
             {/if}
           </div>
         {/if}
@@ -3918,6 +3955,7 @@
         <div class="relative flex-1 flex flex-col min-h-0">
           <WordTranscript
             mode="markup"
+            recordHash={ingest.content_hash}
             body={currentBody()}
             namedSpeakers={namedSpeakersOrdered}
             {currentTime}
@@ -3957,6 +3995,7 @@
         {/if}
         <div class="relative flex-1 flex flex-col min-h-0">
           <WordTranscript
+            recordHash={ingest.content_hash}
             body={currentBody()}
             namedSpeakers={namedSpeakersOrdered}
             {currentTime}
