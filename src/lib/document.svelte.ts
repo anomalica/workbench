@@ -170,6 +170,7 @@ export class DocumentStore {
       parsed.preamble,
       parsed.highlights,
       parsed.spanNotes,
+      parsed.highlightContexts,
     );
     // Reconcile the frontmatter speakers: KEEP real names the reviewer curated,
     // even when they have no body occurrences (a name added before assigning,
@@ -272,6 +273,7 @@ export class DocumentStore {
       next.preamble,
       next.highlights,
       next.spanNotes,
+      next.highlightContexts,
     );
     const result = fm + newBody;
     if (result !== this.current) this.pushEdit(result);
@@ -296,6 +298,7 @@ export class DocumentStore {
       parsed.preamble,
       parsed.highlights,
       parsed.spanNotes,
+      parsed.highlightContexts,
     );
     const result = fm + newBody;
     if (result !== this.current) this.pushEdit(result);
@@ -317,6 +320,7 @@ export class DocumentStore {
       next.preamble,
       next.highlights,
       next.spanNotes,
+      next.highlightContexts,
     );
     // Reconcile frontmatter speakers to those still present (mirrors
     // serialiseWithReconcile): keep curated named speakers, drop default
@@ -355,6 +359,7 @@ export class DocumentStore {
         parsed.preamble,
         parsed.highlights,
         parsed.spanNotes,
+        parsed.highlightContexts,
       ),
     );
   }
@@ -382,6 +387,7 @@ export class DocumentStore {
         parsed.preamble,
         parsed.highlights,
         parsed.spanNotes,
+        parsed.highlightContexts,
       ),
     );
   }
@@ -413,6 +419,7 @@ export class DocumentStore {
         parsed.preamble,
         highlights,
         parsed.spanNotes,
+        parsed.highlightContexts,
       );
     if (result !== this.current) this.pushEdit(result);
   }
@@ -432,6 +439,7 @@ export class DocumentStore {
         parsed.preamble,
         highlights,
         parsed.spanNotes,
+        parsed.highlightContexts,
       );
     if (result !== this.current) this.pushEdit(result);
   }
@@ -454,6 +462,7 @@ export class DocumentStore {
         parsed.preamble,
         highlights,
         parsed.spanNotes,
+        parsed.highlightContexts,
       );
     if (result !== this.current) this.pushEdit(result);
   }
@@ -485,6 +494,7 @@ export class DocumentStore {
         parsed.preamble,
         parsed.highlights,
         spanNotes,
+        parsed.highlightContexts,
       );
     if (result !== this.current) this.pushEdit(result);
   }
@@ -508,6 +518,7 @@ export class DocumentStore {
         parsed.preamble,
         parsed.highlights,
         spanNotes,
+        parsed.highlightContexts,
       );
     if (result !== this.current) this.pushEdit(result);
   }
@@ -537,6 +548,7 @@ export class DocumentStore {
         parsed.preamble,
         parsed.highlights,
         spanNotes,
+        parsed.highlightContexts,
       );
     if (result !== this.current) this.pushEdit(result);
   }

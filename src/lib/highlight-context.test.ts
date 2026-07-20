@@ -88,3 +88,62 @@ describe("highlight-context: round trip", () => {
     expect(p.highlightContexts).toEqual([{ of: "11", needs: ["10"] }]);
   });
 });
+
+// Edits must not destroy chains. Every serializeWords call site had to be
+// threaded: a single missed one would silently delete every context edge the next
+// time a reviewer renamed a speaker or split a word - invisible data loss, found
+// only when a chain went missing. DocumentStore is $state-based and can't be
+// driven under Vitest (see document.test.ts), so this covers the same ground two
+// ways: the pure round trip an edit performs, and a structural guard on the call
+// sites themselves.
+describe("highlight-context survives edits", () => {
+  const src =
+    `<!-- speaker: Alice -->\n` +
+    `{{highlight-start: 10}}{{t:0.0}}Doctor {{t:0.5}}Green{{highlight-end: 10}} {{t:1.0}}spoke\n` +
+    `<!-- speaker: Bob -->\n` +
+    `{{t:2.0}}He {{t:2.5}}said\n` +
+    `{{highlight-context: [11, 10]}}\n`;
+
+  it("survives a speaker rename (the operation, run through the pure path)", () => {
+    const p = parseWords(src);
+    const renamed = p.runs.map((r) => (r.speaker === "Alice" ? { ...r, speaker: "Dr Alice" } : r));
+    const out = serializeWords(
+      p.words,
+      renamed,
+      p.lineEndWords,
+      p.preamble,
+      p.highlights,
+      p.spanNotes,
+      p.highlightContexts,
+    );
+    expect(out).toContain("Dr Alice");
+    expect(parseWords(out).highlightContexts).toEqual([{ of: "11", needs: ["10"] }]);
+  });
+
+  it("survives removing the highlight it depends on, left dangling", () => {
+    const p = parseWords(src);
+    const out = serializeWords(
+      p.words,
+      p.runs,
+      p.lineEndWords,
+      p.preamble,
+      p.highlights.filter((h) => h.id !== "10"), // reviewer deletes highlight 10
+      p.spanNotes,
+      p.highlightContexts,
+    );
+    const after = parseWords(out);
+    expect(after.highlights).toEqual([]);
+    expect(after.highlightContexts).toEqual([{ of: "11", needs: ["10"] }]);
+  });
+
+  it("GUARD: every serializeWords call in document.svelte.ts passes the edges", async () => {
+    // Structural, because the failure is silent: a call that omits the argument
+    // drops every chain in the record and nothing errors.
+    const fs = await import("node:fs");
+    const srcFile = fs.readFileSync("src/lib/document.svelte.ts", "utf8");
+    const calls = srcFile.match(/serializeWords\((?:[^;]*?)\);/gs) ?? [];
+    expect(calls.length).toBeGreaterThan(0);
+    const missing = calls.filter((c) => !c.includes("highlightContexts"));
+    expect(missing).toEqual([]);
+  });
+});
