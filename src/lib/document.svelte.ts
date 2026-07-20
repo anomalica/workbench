@@ -405,18 +405,23 @@ export class DocumentStore {
     const lo = Math.min(from, to);
     const hi = Math.max(from, to);
     if (lo < 0 || hi >= parsed.words.length) return;
-    const id = makeHighlightId([
-      ...parsed.highlights.map((h) => h.id),
-      ...parsed.spanNotes.map((n) => n.id),
-      // Ids NAMED BY CONTEXT EDGES count as taken even when their highlight is
-      // gone. A dangling edge is retained, so reissuing the id it names would
-      // silently re-resolve that edge onto an unrelated new highlight - the very
-      // corruption non-reuse exists to prevent.
-      ...parsed.highlightContexts.flatMap((c) => [c.of, ...c.needs]),
-    ]);
+    // Mint from the record's PERSISTED counter so a deleted id is never reissued -
+    // an in-memory mark resets on reload, and deriving it from extant ids drops
+    // when the highest is deleted. `existing` still covers every id the record
+    // MENTIONS, including ones only a retained dangling edge names, because the
+    // counter must not collide with ids that never came from it.
+    const { id, nextId } = mintOverlayId(
+      [
+        ...parsed.highlights.map((h) => h.id),
+        ...parsed.spanNotes.map((n) => n.id),
+        ...parsed.highlightContexts.flatMap((c) => [c.of, ...c.needs]),
+      ],
+      readOverlayNextId(fm),
+    );
+    const fmOut = rewriteFrontmatterFields(fm, { overlay_next_id: nextId });
     const highlights = [...parsed.highlights, { id, fromWord: lo, toWord: hi }];
     const result =
-      fm +
+      fmOut +
       serializeWords(
         parsed.words,
         parsed.runs,
@@ -538,18 +543,23 @@ export class DocumentStore {
     const lo = Math.min(from, to);
     const hi = Math.max(from, to);
     if (lo < 0 || hi >= parsed.words.length) return;
-    const id = makeHighlightId([
-      ...parsed.highlights.map((h) => h.id),
-      ...parsed.spanNotes.map((n) => n.id),
-      // Ids NAMED BY CONTEXT EDGES count as taken even when their highlight is
-      // gone. A dangling edge is retained, so reissuing the id it names would
-      // silently re-resolve that edge onto an unrelated new highlight - the very
-      // corruption non-reuse exists to prevent.
-      ...parsed.highlightContexts.flatMap((c) => [c.of, ...c.needs]),
-    ]);
+    // Mint from the record's PERSISTED counter so a deleted id is never reissued -
+    // an in-memory mark resets on reload, and deriving it from extant ids drops
+    // when the highest is deleted. `existing` still covers every id the record
+    // MENTIONS, including ones only a retained dangling edge names, because the
+    // counter must not collide with ids that never came from it.
+    const { id, nextId } = mintOverlayId(
+      [
+        ...parsed.highlights.map((h) => h.id),
+        ...parsed.spanNotes.map((n) => n.id),
+        ...parsed.highlightContexts.flatMap((c) => [c.of, ...c.needs]),
+      ],
+      readOverlayNextId(fm),
+    );
+    const fmOut = rewriteFrontmatterFields(fm, { overlay_next_id: nextId });
     const spanNotes = [...parsed.spanNotes, { id, fromWord: lo, toWord: hi, text: clean }];
     const result =
-      fm +
+      fmOut +
       serializeWords(
         parsed.words,
         parsed.runs,
@@ -813,7 +823,7 @@ import {
   replaceWordRange,
   eventNoteAnchorIndex,
 } from "$lib/transcript-words";
-import { makeHighlightId } from "$lib/highlight-markers";
+import { mintOverlayId, makeHighlightId } from "$lib/highlight-markers";
 
 /** The bare inner text of an event note: brackets are the on-disk notation, not
  *  content, so any the caller passed are stripped (and stray brackets can never
@@ -847,14 +857,33 @@ function rewriteFrontmatterSpeakers(rawFm: string, speakers: string[]): string {
 /** Set top-level frontmatter keys via js-yaml, leaving every other key (and
  *  nested blocks like `copyright:`) untouched. A value of "" or [] drops the
  *  key entirely. Trims string values and list items, dropping empty items. */
+/** Read the record's persisted overlay id counter, or null when absent (a record
+ *  that predates the field - the mint then derives the mark from extant ids, which
+ *  is correct for anything that never deleted its highest). */
+function readOverlayNextId(rawFm: string): number | null {
+  if (!rawFm) return null;
+  try {
+    const doc = yaml.load(rawFm.replace(/^---\n/, "").replace(/---\n$/, "")) as Record<
+      string,
+      unknown
+    > | null;
+    const v = doc?.overlay_next_id;
+    return typeof v === "number" && Number.isFinite(v) ? v : null;
+  } catch {
+    return null; // unparseable frontmatter: fall back to deriving from ids
+  }
+}
+
 function rewriteFrontmatterFields(
   rawFm: string,
-  fields: Record<string, string | string[]>,
+  fields: Record<string, string | string[] | number>,
 ): string {
   const fmContent = rawFm.replace(/^---\n/, "").replace(/---\n$/, "");
   const doc = (yaml.load(fmContent) as Record<string, unknown>) ?? {};
   for (const [key, value] of Object.entries(fields)) {
-    if (Array.isArray(value)) {
+    if (typeof value === "number") {
+      doc[key] = value;
+    } else if (Array.isArray(value)) {
       const items = value.map((v) => v.trim()).filter((v) => v !== "");
       doc[key] = items.length > 0 ? items : undefined;
     } else {

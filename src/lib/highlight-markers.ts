@@ -197,6 +197,49 @@ export function decompose(
  *  record cannot know which URLs exist, so a shared URL to a deleted-then-reminted
  *  id resolves confidently wrong with no writer able to repair it. See
  *  highlight-id.test.ts, which pins the gap until the field lands. */
+/** The smallest counter value an overlay id renders from. Base-36 "10": ids are
+ *  never single-character, so they can't be mistaken for a reserved token. A
+ *  fresh record's `overlay_next_id` starts here, not at zero. */
+export const MIN_OVERLAY_ID = 36;
+
+/** Mint the next overlay id, honouring the record's PERSISTED counter.
+ *
+ *  The counter is what makes non-reuse survive a reload and a deletion: an
+ *  in-memory high-water resets, and deriving the mark from ids still in the body
+ *  LOWERS it whenever the highest one is deleted - which reissues that id. A
+ *  shared URL addressing (record-hash, id) would then resolve confidently wrong,
+ *  and no writer anywhere could repair it. So the record carries the mark.
+ *
+ *  `existing` must still be every id the record MENTIONS - markers and references
+ *  alike, including ids only a retained dangling edge names - because the counter
+ *  refuses to collide with hand-written or legacy ids that never came from it.
+ *  Returns the id plus the value to persist back. */
+export function mintOverlayId(
+  existing: Iterable<string>,
+  persistedNext?: number | null,
+): { id: string; nextId: number } {
+  const taken = new Set(existing);
+  let n = Math.max(
+    Number.isFinite(persistedNext as number) ? (persistedNext as number) : 0,
+    highWaterOf(taken) + 1,
+    MIN_OVERLAY_ID,
+  );
+  while (taken.has(n.toString(36))) n++;
+  return { id: n.toString(36), nextId: n + 1 };
+}
+
+/** Largest base-36 counter value among `ids`. Ids that aren't counter renderings
+ *  (legacy, hand-written) can't raise it - they only block collision. */
+function highWaterOf(ids: Iterable<string>): number {
+  let high = -1;
+  for (const id of ids) {
+    if (!/^[0-9a-z]+$/.test(id)) continue;
+    const n = Number.parseInt(id, 36);
+    if (Number.isFinite(n) && n > high) high = n;
+  }
+  return high;
+}
+
 export function makeHighlightId(existing: Iterable<string>): string {
   const taken = new Set(existing);
   // The high-water mark: the largest base-36 value in use. Ids that aren't

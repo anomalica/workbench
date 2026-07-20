@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { makeHighlightId } from "./highlight-markers";
+import { makeHighlightId, mintOverlayId, MIN_OVERLAY_ID } from "./highlight-markers";
 
 // Ids became permanent handles the moment a {{highlight-context: [...]}} edge
 // could name one. The old "lowest unused" rule reissued a freed id, so deleting
@@ -35,23 +35,52 @@ describe("makeHighlightId: never reissues", () => {
     }
   });
 
-  // KNOWN GAP - NOT harmless, and asserted so it can't drift unnoticed. Deleting
-  // the CURRENT-HIGHEST id lowers the high-water mark, so that id can be minted
-  // again.
-  //
-  // I originally reasoned this was safe because no IN-RECORD reference to it
-  // survives. That reasoning is wrong (master's correction): shareable URLs
-  // address (record-hash, link-id) from OUTSIDE the record, and a record cannot
-  // know what URLs exist in the wild. Share a URL to the highest highlight, delete
-  // it, mint again, and that URL resolves CONFIDENTLY WRONG - no writer anywhere
-  // can repair it, which is the case non-reuse exists to prevent.
-  //
-  // The real fix is a persisted high-water-mark field on the record (routed to
-  // anomalica). This test pins the CURRENT behaviour so the gap stays visible;
-  // when the field lands, tighten it to assert full non-reuse.
-  it("GAP: reuse still possible for the highest id (pending persisted counter)", () => {
-    expect(makeHighlightId(["10", "11"])).toBe("12");
-    expect(makeHighlightId(["10"])).toBe("11"); // 11 deleted and unreferenced
+  // THE GAP IS CLOSED. Minting now reads the record's persisted counter
+  // (`overlay_next_id`), so a deleted id is never reissued even when it was the
+  // highest and nothing in the record still names it. That case was never
+  // harmless: a shareable URL addresses (record-hash, id) from OUTSIDE the record,
+  // the record cannot know which URLs exist, and a reissued id makes such a URL
+  // resolve confidently wrong with no writer able to repair it.
+  it("never reissues the highest id once the counter has passed it", () => {
+    // Counter says 20 (base-36) was already handed out; only 10 survives in the
+    // body. Deriving from extant ids alone would hand out 11 again.
+    const { id } = mintOverlayId(["10"], Number.parseInt("20", 36));
+    expect(Number.parseInt(id, 36)).toBeGreaterThanOrEqual(Number.parseInt("20", 36));
+  });
+
+  it("advances the counter it returns, so the next mint cannot repeat it", () => {
+    const first = mintOverlayId([], null);
+    const second = mintOverlayId([first.id], first.nextId);
+    expect(second.id).not.toBe(first.id);
+    expect(second.nextId).toBeGreaterThan(first.nextId);
+  });
+
+  it("survives create/delete/reload without ever repeating an id", () => {
+    // The full hazard: highlights created and deleted across reloads, where the
+    // in-memory mark is lost each time and only the counter carries the truth.
+    let counter: number | null = null;
+    let idsInBody: string[] = [];
+    const everMinted = new Set<string>();
+    for (let i = 0; i < 30; i++) {
+      const { id, nextId } = mintOverlayId(idsInBody, counter);
+      expect(everMinted.has(id)).toBe(false); // never, across the whole run
+      everMinted.add(id);
+      counter = nextId; // persisted in frontmatter; survives the "reload"
+      idsInBody = [...idsInBody, id];
+      if (i % 2 === 0) idsInBody.pop(); // reviewer deletes the newest (the old trap)
+    }
+  });
+
+  it("falls back to deriving the mark when the record predates the counter", () => {
+    // Lazy migration: absent field -> derive from the largest id mentioned.
+    const { id } = mintOverlayId(["10", "1z"], null);
+    expect(Number.parseInt(id, 36)).toBeGreaterThan(Number.parseInt("1z", 36));
+  });
+
+  it("a fresh record starts at the minimum id, not zero", () => {
+    const { id } = mintOverlayId([], null);
+    expect(Number.parseInt(id, 36)).toBe(MIN_OVERLAY_ID);
+    expect(id.length).toBeGreaterThanOrEqual(2);
   });
 
   it("counts ids named ONLY by a dangling context edge as taken", () => {
