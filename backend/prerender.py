@@ -16,6 +16,7 @@ mirror the live API and the SPA can point at either):
   api/ingests/<hash>.json               - record detail; body ONLY for public records
   api/ingests/<hash>/digest.json        - digest (claims + entities + short quotes), public for all
   api/ingests/<hash>/coverage.json      - review coverage (spans/notes)
+  api/ingests/<hash>/media/<file>       - extracted images; PUBLIC RECORDS ONLY
 
 COPYRIGHT: short attributed quotes (the digest + its quotes) are PUBLIC for all
 records (lawful quotation, Japan Art 32; the site shows them too). The full record
@@ -24,6 +25,11 @@ publicly_accessible (see serves_verbatim - an allow-list, fail-safe); only the
 licensed/restricted records are gated (body emptied, frontmatter whitelisted),
 served by the edge after the possession gate. Verification sidecars (answers) are
 NEVER rendered.
+
+Extracted IMAGES follow the body's gate exactly (_copy_record_media). They are
+page scans and figures taken from the source, so for a licensed book they are the
+verbatim content - publishing them would walk around the gate the snapshot just
+applied to that same book's text.
 
 Reuses backend.graph / backend.curation, so the JSON is byte-for-byte what the
 live API returns - no drift.
@@ -34,6 +40,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 from pathlib import Path
 
 from backend import curation, graph
@@ -207,7 +214,7 @@ def _prerender_records(base: Path, only: set[str] | None = None) -> dict:
     _write(base / "ingests.json", summaries)  # the list = metadata only, no bodies
 
     digest_map = _build_digest_map(server)
-    counts = {"records": 0, "record_public": 0, "digests": 0, "coverage": 0}
+    counts = {"records": 0, "record_public": 0, "digests": 0, "coverage": 0, "media": 0}
     for s in summaries:
         h = s["content_hash"]
         public = serves_verbatim(s.get("copyright_status"))
@@ -236,7 +243,45 @@ def _prerender_records(base: Path, only: set[str] | None = None) -> dict:
         if coverage is not None:
             _write(base / "ingests" / h / "coverage.json", coverage)
             counts["coverage"] += 1
+
+        counts["media"] += _copy_record_media(base, h, public)
     return counts
+
+
+def _copy_record_media(base: Path, content_hash: str, public: bool) -> int:
+    """Copy a record's extracted images into the snapshot. Returns how many.
+
+    THE SAME GATE AS THE BODY, for the same reason. These are page scans and
+    figures lifted from the source, so for a licensed book they ARE the verbatim
+    content - the snapshot blanks that book's text, and shipping its 33 scanned
+    pages instead would walk straight around the gate it just applied. `public`
+    is `serves_verbatim(status)`, so the allow-list decides both in one place and
+    a status can never be public for images and gated for text.
+
+    Without this the images 404 in production for EVERY record - nothing ever
+    copied them - while working locally, where FastAPI reads the ingests
+    directory directly. The path mirrors the endpoint the SPA already requests,
+    `/api/ingests/{hash}/media/{file}`, so the CDN serves it with no edge route.
+    """
+    if not public:
+        return 0
+    from backend import server
+
+    src_dir = server.ingests_path / "media" / content_hash
+    if not src_dir.is_dir():
+        return 0
+    dest_dir = base / "ingests" / content_hash / "media"
+    copied = 0
+    for src in sorted(src_dir.iterdir()):
+        # The endpoint's OWN pattern, not a copy of it: a restated one drifted
+        # wider on first writing, which would let the snapshot publish a file the
+        # live endpoint refuses to serve.
+        if not src.is_file() or not server.MEDIA_FILENAME_PATTERN.match(src.name):
+            continue
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dest_dir / src.name)
+        copied += 1
+    return copied
 
 
 def prerender_records_only(

@@ -74,6 +74,7 @@ def test_prerender_writes_graph_and_curation_json(graph_db, tmp_path):
         "nodes": 1,
         "node_detail": 1,
         "ego": 1,
+        "media": 0,
         "articles": 0,
         "records": 0,
         "record_public": 0,
@@ -193,6 +194,14 @@ def records_repo(tmp_path, monkeypatch):
         def load_coverage(self, _h):
             return None
 
+    # Images on BOTH records, so the media gate is exercised through the real
+    # prerender path and not just its unit test: the public one must publish,
+    # the gated one must not. These stand in for a licensed book's page scans.
+    for h in (H_PUB, H_GATED):
+        d = ing / "media" / h
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "0123456789ab.jpg").write_bytes(b"\xff\xd8\xff" + h[:4].encode())
+
     from backend import server
 
     monkeypatch.setattr(server, "source", FakeSource())
@@ -204,7 +213,19 @@ def records_repo(tmp_path, monkeypatch):
 def test_records_prerender_gates_body_keeps_short_quotes(records_repo, tmp_path):
     base = tmp_path / "out" / "api"
     counts = prerender._prerender_records(base)
-    assert counts == {"records": 2, "record_public": 1, "digests": 2, "coverage": 0}
+    # media == 1: the public record's image copied, the gated record's withheld.
+    assert counts == {
+        "records": 2,
+        "record_public": 1,
+        "digests": 2,
+        "coverage": 0,
+        "media": 1,
+    }
+
+    # The gate, stated as a property of the output tree: the gated record's image
+    # is nowhere in the snapshot, and the public one's is.
+    assert (base / "ingests" / H_PUB / "media" / "0123456789ab.jpg").is_file()
+    assert not (base / "ingests" / H_GATED / "media").exists()
 
     # The list ships both records as metadata.
     listed = json.loads((base / "ingests.json").read_text())
