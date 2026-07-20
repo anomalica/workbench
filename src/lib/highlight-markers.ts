@@ -189,7 +189,14 @@ export function decompose(
  *
  *  `existing` must therefore include every id the body mentions ANYWHERE -
  *  highlights, span notes, and the ids named by context edges (which are RETAINED
- *  when dangling, so they keep their id claimed). */
+ *  when dangling, so they keep their id claimed).
+ *
+ *  KNOWN GAP pending a persisted high-water-mark field: deleting the CURRENT
+ *  HIGHEST id lowers the mark, so it can be reissued. That is NOT harmless -
+ *  shareable URLs address (record-hash, link-id) from OUTSIDE the record, and a
+ *  record cannot know which URLs exist, so a shared URL to a deleted-then-reminted
+ *  id resolves confidently wrong with no writer able to repair it. See
+ *  highlight-id.test.ts, which pins the gap until the field lands. */
 export function makeHighlightId(existing: Iterable<string>): string {
   const taken = new Set(existing);
   // The high-water mark: the largest base-36 value in use. Ids that aren't

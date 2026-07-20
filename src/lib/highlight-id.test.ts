@@ -35,13 +35,21 @@ describe("makeHighlightId: never reissues", () => {
     }
   });
 
-  // KNOWN RESIDUAL, deliberately asserted so it can't drift unnoticed: deleting
-  // the CURRENT-HIGHEST id with nothing referencing it lowers the high-water mark,
-  // so that id can be minted again. Reuse is harmless in exactly that case - no
-  // reference to it exists to be re-pointed, and cross-record refs use
-  // content_hash + quote, never a bare id. Closing it fully needs a persisted
-  // counter (a record-format field), which is anomalica's call - raised with them.
-  it("documents the one case reuse can still happen (highest id, unreferenced)", () => {
+  // KNOWN GAP - NOT harmless, and asserted so it can't drift unnoticed. Deleting
+  // the CURRENT-HIGHEST id lowers the high-water mark, so that id can be minted
+  // again.
+  //
+  // I originally reasoned this was safe because no IN-RECORD reference to it
+  // survives. That reasoning is wrong (master's correction): shareable URLs
+  // address (record-hash, link-id) from OUTSIDE the record, and a record cannot
+  // know what URLs exist in the wild. Share a URL to the highest highlight, delete
+  // it, mint again, and that URL resolves CONFIDENTLY WRONG - no writer anywhere
+  // can repair it, which is the case non-reuse exists to prevent.
+  //
+  // The real fix is a persisted high-water-mark field on the record (routed to
+  // anomalica). This test pins the CURRENT behaviour so the gap stays visible;
+  // when the field lands, tighten it to assert full non-reuse.
+  it("GAP: reuse still possible for the highest id (pending persisted counter)", () => {
     expect(makeHighlightId(["10", "11"])).toBe("12");
     expect(makeHighlightId(["10"])).toBe("11"); // 11 deleted and unreferenced
   });
