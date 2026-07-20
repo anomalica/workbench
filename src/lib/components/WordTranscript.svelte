@@ -216,6 +216,13 @@
   const HL_PALETTE = ["#f59e0b", "#14b8a6", "#8b5cf6", "#ec4899", "#3b82f6", "#84cc16"];
   const BAND_H = 2; // px, band thickness
   const BAND_PITCH = 3; // px, band + 1px transparent gap
+  // INGEST reads for content: a highlight there only needs to register as
+  // PRESENT. Six palette colours stacked one band per overlap is noise when
+  // you're trying to read - so Ingest gets a single hairline in the text's own
+  // colour at low alpha, and MARKUP keeps the colour coding, which is where
+  // telling one highlight from another is the job.
+  const SUBTLE_BAND_H = 1; // px
+  const SUBTLE_HL = "color-mix(in srgb, currentColor 30%, transparent)";
   // gIndex -> the highlight colours covering that word, innermost (nearest the
   // text) first.
   let highlightColorsByWord = $derived.by(() => {
@@ -235,7 +242,7 @@
   // its padding strip: each a `BAND_H`px line, `BAND_PITCH`px apart, stacking
   // downward from just below the glyphs so overlaps are separate lines. Uses
   // backgrounds (not box-shadow) so the gaps are genuinely transparent.
-  function applyWordHighlight(el: HTMLElement, cols: string[] | undefined) {
+  function applyWordHighlight(el: HTMLElement, cols: string[] | undefined, subtle = false) {
     const s = el.style;
     if (!cols || cols.length === 0) {
       s.backgroundImage = "";
@@ -246,15 +253,16 @@
       return;
     }
     const n = cols.length;
+    const h = subtle ? SUBTLE_BAND_H : BAND_H;
     s.backgroundImage = cols.map((c) => `linear-gradient(${c}, ${c})`).join(",");
     s.backgroundRepeat = "no-repeat";
-    s.backgroundSize = cols.map(() => `100% ${BAND_H}px`).join(",");
+    s.backgroundSize = cols.map(() => `100% ${h}px`).join(",");
     // Band i (i=0 innermost) sits `(n-1-i)*PITCH`px up from the padding bottom,
     // so band 0 hugs the text and the rest step downward.
     s.backgroundPosition = cols
       .map((_, i) => `left 0 bottom ${(n - 1 - i) * BAND_PITCH}px`)
       .join(",");
-    s.paddingBottom = `${(n - 1) * BAND_PITCH + BAND_H}px`;
+    s.paddingBottom = `${(n - 1) * BAND_PITCH + h}px`;
   }
 
   // Reviewer span notes: free text attached to a word RANGE ("what was on screen
@@ -738,6 +746,14 @@
     return { lower: "abc", title: "Abc", upper: "ABC", mixed: "Aa" }[c];
   });
 
+  // Live coverage below the stored cumulative value = the word-index spans have
+  // drifted (the body grew under this reviewer's own transcript corrections), so
+  // per-word observation cannot be trusted. Observation never decreases, so a
+  // lower live number can only mean a shifted basis.
+  let coverageUnreliable = $derived(
+    storedCoverage != null && coverageVerdict.observed_coverage < storedCoverage - 0.005,
+  );
+
   function observedInRun(run: SpeakerRun): number {
     // When per-word observation is unreliable (spans drifted under body edits),
     // report the run as fully covered rather than 0/N - a bogus "0 observed" on a
@@ -950,6 +966,10 @@
     }
     if (e.key !== "v" || e.ctrlKey || e.metaKey || e.altKey) return;
     if (inEditableTarget(e.target)) return;
+    // Note authoring is Markup's job. Leaving the shortcut live in Ingest would
+    // reintroduce, invisibly, exactly the affordance just removed from its
+    // toolbar - a hidden key that still writes notes from the reading view.
+    if (mode !== "markup") return;
     e.preventDefault();
     addNoteAtCurrentTime();
   }
@@ -1101,7 +1121,10 @@
     // Reviewer-highlight underline bands: sparse, so paint straight onto the
     // word rather than carry a class per possible band count.
     const cols = highlightColorsByWord.get(g);
-    applyWordHighlight(el, cols);
+    // Ingest collapses any number of overlapping highlights to ONE faint band:
+    // the signal there is "this is highlighted", not which one it is.
+    const subtle = mode !== "markup";
+    applyWordHighlight(el, subtle && cols?.length ? [SUBTLE_HL] : cols, subtle);
     c.toggle("wt-highlight", cols !== undefined);
     c.toggle("wt-spannote", spanNoteWordSet.has(g));
     c.toggle("wt-markup-focus", focusWordSet.has(g));
@@ -1307,13 +1330,6 @@
     clearSelection();
   }
 
-  // Live coverage below the stored cumulative value = the word-index spans have
-  // drifted (the body grew under this reviewer's own transcript corrections), so
-  // per-word observation cannot be trusted. Observation never decreases, so a
-  // lower live number can only mean a shifted basis.
-  let coverageUnreliable = $derived(
-    storedCoverage != null && coverageVerdict.observed_coverage < storedCoverage - 0.005,
-  );
   // The header shows the durable stored coverage when the live recompute is
   // untrustworthy - unknown is not unobserved, and telling a reviewer his
   // finished record is 0% observed is the exact failure this guards.
@@ -1683,21 +1699,10 @@
      controls. Hidden in markup, which is read-only and annotation-only. -->
 {#if mode !== "markup"}
 <div class="flex-none flex items-center gap-2 px-4 py-1.5 border-b border-border bg-surface-alt">
-  <button
-    onclick={() => addNoteAtCurrentTime()}
-    class="flex items-center gap-1.5 text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
-    title="Add a note at the current playback time - what's on screen, an action, a sound (v)"
-  >
-    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-      <path
-        stroke-linecap="round"
-        stroke-linejoin="round"
-        d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"
-      />
-    </svg>
-    Add note
-  </button>
-  <span class="text-xs font-ui text-on-surface-muted tabular-nums">at {secondsToClock(currentTime)}</span>
+  <!-- Note AUTHORING lives in Markup; Ingest is for reading and observing, so the
+       two tabs stop offering the same job in two places. Existing notes still
+       RENDER here - only the authoring affordance moved. -->
+  <span class="text-xs font-ui text-on-surface-muted tabular-nums">Playing {secondsToClock(currentTime)}</span>
   {#if range}
     {@const selN = range.to - range.from + 1}
     <span class="ml-auto text-xs font-ui text-on-surface-muted tabular-nums">
