@@ -3969,6 +3969,8 @@
             onhighlight={(from, to) => doc.addWordHighlight(from, to)}
             onclearhighlight={(from, to) => doc.clearWordHighlights(from, to)}
             onspannote={(from, to, text) => doc.addWordSpanNote(from, to, text)}
+            onhighlightcontext={(of, needs) => doc.addHighlightContext(of, needs)}
+            onhighlightcontextremove={(of, needs) => doc.removeHighlightContext(of, needs)}
             onspannoteedit={(id, text) => doc.editWordSpanNote(id, text)}
             onspannoteremove={(id) => doc.removeWordSpanNote(id)}
             onselectiontext={(t) => (wordSelectionText = t)}
@@ -4017,6 +4019,8 @@
             onhighlight={(from, to) => doc.addWordHighlight(from, to)}
             onclearhighlight={(from, to) => doc.clearWordHighlights(from, to)}
             onspannote={(from, to, text) => doc.addWordSpanNote(from, to, text)}
+            onhighlightcontext={(of, needs) => doc.addHighlightContext(of, needs)}
+            onhighlightcontextremove={(of, needs) => doc.removeHighlightContext(of, needs)}
             onspannoteedit={(id, text) => doc.editWordSpanNote(id, text)}
             onspannoteremove={(id) => doc.removeWordSpanNote(id)}
             onselectiontext={(t) => (wordSelectionText = t)}

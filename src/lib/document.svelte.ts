@@ -444,6 +444,59 @@ export class DocumentStore {
     if (result !== this.current) this.pushEdit(result);
   }
 
+  /** Record that highlight `of` needs earlier highlight `needs` to be understood
+   *  ("he said" -> who). Merges into the existing edge for `of` rather than
+   *  adding a second one, so a highlight has ONE dependency list however many
+   *  times the reviewer adds to it.
+   *
+   *  Self-reference and duplicates are refused rather than stored: an edge to
+   *  itself says nothing, and a repeated add is the reviewer clicking twice. */
+  addHighlightContext(of: string, needs: string) {
+    if (!of || !needs || of === needs) return;
+    const [fm, body] = splitFrontmatter(this.current);
+    const parsed = parseWords(body);
+    const edges = parsed.highlightContexts.map((c) => ({ ...c, needs: [...c.needs] }));
+    const existing = edges.find((c) => c.of === of);
+    if (existing) {
+      if (existing.needs.includes(needs)) return;
+      existing.needs.push(needs);
+    } else {
+      edges.push({ of, needs: [needs] });
+    }
+    this.writeWords(fm, parsed, edges);
+  }
+
+  /** Drop one dependency from a highlight's context, or the whole edge when it
+   *  was the last one - an edge with no dependencies means nothing. */
+  removeHighlightContext(of: string, needs: string) {
+    const [fm, body] = splitFrontmatter(this.current);
+    const parsed = parseWords(body);
+    const edges = parsed.highlightContexts
+      .map((c) => (c.of === of ? { ...c, needs: c.needs.filter((n) => n !== needs) } : c))
+      .filter((c) => c.needs.length > 0);
+    this.writeWords(fm, parsed, edges);
+  }
+
+  /** Re-serialise a parse with replacement context edges, everything else as-is. */
+  private writeWords(
+    fm: string,
+    parsed: ReturnType<typeof parseWords>,
+    highlightContexts: ReturnType<typeof parseWords>["highlightContexts"],
+  ) {
+    const result =
+      fm +
+      serializeWords(
+        parsed.words,
+        parsed.runs,
+        parsed.lineEndWords,
+        parsed.preamble,
+        parsed.highlights,
+        parsed.spanNotes,
+        highlightContexts,
+      );
+    if (result !== this.current) this.pushEdit(result);
+  }
+
   /** Remove every highlight that overlaps the inclusive word range [from, to] -
    *  the "clear highlight" over a selection. */
   clearWordHighlights(from: number, to: number) {

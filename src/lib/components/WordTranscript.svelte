@@ -83,6 +83,8 @@
     onspannote,
     onspannoteedit,
     onspannoteremove,
+    onhighlightcontext,
+    onhighlightcontextremove,
     onselectiontext,
     onseek,
     onplayceiling,
@@ -161,6 +163,9 @@
     onclearhighlight?: (from: number, to: number) => void;
     /** Attach a span note (free text) over the selected word range [from, to]. */
     onspannote?: (from: number, to: number, text: string) => void;
+    /** Record that highlight `of` needs earlier highlight `needs` for context. */
+    onhighlightcontext?: (of: string, needs: string) => void;
+    onhighlightcontextremove?: (of: string, needs: string) => void;
     /** Edit an existing span note's text by id (empty text removes it). */
     onspannoteedit?: (id: string, text: string) => void;
     /** Remove a span note by id. */
@@ -223,6 +228,42 @@
   // telling one highlight from another is the job.
   const SUBTLE_BAND_H = 1; // px
   const SUBTLE_HL = "color-mix(in srgb, currentColor 30%, transparent)";
+  // Which highlight ids cover a word, so a click can say WHICH highlight was hit.
+  let highlightIdsByWord = $derived.by(() => {
+    const m = new Map<number, string[]>();
+    for (const h of parsed.highlights) {
+      for (let g = h.fromWord; g <= h.toWord; g++) {
+        const list = m.get(g) ?? [];
+        list.push(h.id);
+        m.set(g, list);
+      }
+    }
+    return m;
+  });
+
+  let highlightById = $derived(new Map(parsed.highlights.map((h) => [h.id, h])));
+
+  /** The ids this highlight needs for context, and whether each still exists.
+   *  A missing one is DANGLING: kept and shown unresolved, never dropped - the
+   *  reviewer decides, because a silent removal loses their intent. */
+  function contextOf(id: string): { id: string; missing: boolean }[] {
+    const edge = parsed.highlightContexts.find((c) => c.of === id);
+    return (edge?.needs ?? []).map((n) => ({ id: n, missing: !highlightById.has(n) }));
+  }
+
+  /** Highlights that name THIS one as context - the other direction of the chain,
+   *  so a reviewer can follow it both ways. */
+  function contextDependents(id: string): string[] {
+    return parsed.highlightContexts.filter((c) => c.needs.includes(id)).map((c) => c.of);
+  }
+
+  /** The highlight under a word, for the click that completes the gesture. When
+   *  several overlap, the innermost (last opened) is the one meant. */
+  function highlightAtWord(g: number): string | null {
+    const ids = highlightIdsByWord.get(g);
+    return ids && ids.length ? ids[ids.length - 1] : null;
+  }
+
   // gIndex -> the highlight colours covering that word, innermost (nearest the
   // text) first.
   let highlightColorsByWord = $derived.by(() => {
@@ -446,6 +487,12 @@
   // on a WORD INDEX, because the two tabs render different word subsets and a
   // pixel offset would mean different places in each.
   let lastPersistedAnchor = -1;
+  // Context-link authoring: the reviewer picks a highlight, then clicks an
+  // EARLIER one to say "this needs that". Two clicks, no form - the gesture has
+  // to be cheap or reviewers write big sloppy highlights instead of small chained
+  // ones, which is the behaviour the feature exists to encourage.
+  let contextFor = $state<string | null>(null);
+
   let anchorRestored = false;
   // Last currentTime the playback-follow acted on, to tell a forward tick (follow)
   // from a seek or pause (don't).
@@ -520,7 +567,12 @@
     const s = new Set<number>();
     if (mode !== "markup") return s;
     for (let g = 0; g < words.length; g++) {
-      if (observed.has(g) && !irrelevantWords.has(g)) s.add(g);
+      // When per-word observation is unreliable (the spans drifted under the
+      // reviewer's own transcript edits), showing nothing is the same lie as
+      // greying everything: it tells a reviewer his finished record has no
+      // reviewed content to mark up. Unknown is not unobserved - show it all and
+      // let him work.
+      if ((coverageUnreliable || observed.has(g)) && !irrelevantWords.has(g)) s.add(g);
     }
     return s;
   });
@@ -1284,6 +1336,22 @@
 
   function selectWord(g: number, extend: boolean) {
     headerPicker = null;
+    // Second half of the context gesture: while picking, a click on a word inside
+    // an EARLIER highlight completes the link instead of moving the selection.
+    if (contextFor !== null) {
+      const target = highlightAtWord(g);
+      if (target && target !== contextFor) {
+        onhighlightcontext?.(contextFor, target);
+        contextFor = null;
+        return;
+      }
+      // A click on empty text cancels rather than silently doing nothing, so the
+      // reviewer is never left in a mode they can't see.
+      if (!target) {
+        contextFor = null;
+        return;
+      }
+    }
     if (extend && anchor !== null) {
       range = clampToRun(anchor, g);
     } else {
@@ -1624,6 +1692,17 @@
         >
           Highlight
         </button>
+        {#if range && highlightAtWord(range.from)}
+          {@const hit = highlightAtWord(range.from)}
+          <div class="w-px h-4 bg-border" aria-hidden="true"></div>
+          <button
+            onclick={() => { contextFor = hit; clearSelection(); }}
+            class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
+            title="This highlight needs an earlier one to make sense (e.g. it says 'he' - link the highlight that names him). Click it next."
+          >
+            Needs context
+          </button>
+        {/if}
         <div class="w-px h-4 bg-border" aria-hidden="true"></div>
         <button
           onclick={startSpanNote}
@@ -1747,6 +1826,60 @@
   {/if}
   <span class="text-xs font-ui text-on-surface-muted/60">{notes.length} note{notes.length === 1 ? "" : "s"}</span>
 </div>
+{/if}
+
+{#if mode === "markup" && contextFor !== null}
+  <div class="flex-none flex items-center gap-2 px-4 py-1.5 bg-primary/10 border-b border-primary/30">
+    <span class="text-xs font-ui text-on-surface">
+      Click the earlier highlight that <strong>{contextFor}</strong> needs for context.
+    </span>
+    <button
+      onclick={() => (contextFor = null)}
+      class="ml-auto text-xs font-ui text-on-surface-muted hover:text-on-surface cursor-pointer"
+    >Cancel</button>
+  </div>
+{/if}
+
+{#if mode === "markup" && range && highlightAtWord(range.from)}
+  {@const hit = highlightAtWord(range.from)!}
+  {@const needs = contextOf(hit)}
+  {@const dependents = contextDependents(hit)}
+  {#if needs.length || dependents.length}
+    <!-- The chain, both directions, so it can be followed either way in one hop. -->
+    <div class="flex-none flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-1.5 bg-surface-alt border-b border-border">
+      {#if needs.length}
+        <span class="text-[11px] font-ui text-on-surface-secondary">Needs:</span>
+        {#each needs as n (n.id)}
+          <button
+            onclick={() => { if (!n.missing) { const t = highlightById.get(n.id); if (t) selectWord(t.fromWord, false); } }}
+            class="text-[11px] font-ui rounded px-1.5 py-0.5 cursor-pointer transition-colors
+              {n.missing
+                ? 'bg-error/15 text-error line-through'
+                : 'bg-primary/15 text-primary hover:bg-primary/25'}"
+            title={n.missing
+              ? "That highlight was deleted. The link is kept, not silently dropped - remove it or re-highlight the passage."
+              : "Jump to the highlight this one depends on"}
+          >{n.id}{#if n.missing} (missing){/if}</button>
+          <button
+            onclick={() => onhighlightcontextremove?.(hit, n.id)}
+            class="text-[11px] font-ui text-on-surface-muted hover:text-error cursor-pointer -ml-2"
+            title="Remove this context link"
+            aria-label="Remove context link"
+          >&#x2715;</button>
+        {/each}
+      {/if}
+      {#if dependents.length}
+        <span class="text-[11px] font-ui text-on-surface-secondary">Needed by:</span>
+        {#each dependents as d (d)}
+          <button
+            onclick={() => { const t = highlightById.get(d); if (t) selectWord(t.fromWord, false); }}
+            class="text-[11px] font-ui rounded px-1.5 py-0.5 bg-surface text-on-surface-secondary hover:bg-surface-alt cursor-pointer"
+            title="Jump to the later highlight that depends on this one"
+          >{d}</button>
+        {/each}
+      {/if}
+    </div>
+  {/if}
 {/if}
 
 <div
