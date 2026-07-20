@@ -3,8 +3,14 @@
 
   // The list of every mark on a word record - highlights, span notes and point
   // beats - for the collapsible "Markup" section in the left panel. Parses the
-  // same body the transcript renders. Clicking a row scrolls the transcript to
-  // it; hovering reveals a remove.
+  // same body the transcript renders.
+  //
+  // Clicking a row scrolls the transcript to it and emphasises it; clicking it
+  // again, or pressing anywhere in the transcript, drops that emphasis. It is a
+  // pointer, not a selection - nothing is "held", so there is nothing to
+  // dismiss. Hovering reveals a DELETE, drawn as a bin: it wore a ✕ while the
+  // emphasis was stuck, and a ✕ on a tinted row reads as "clear this selection"
+  // when it actually destroys the mark.
   let {
     body,
     onfocus,
@@ -119,10 +125,12 @@
             <button
               onclick={(e) => { e.stopPropagation(); remove(m); }}
               class="opacity-0 group-hover:opacity-100 text-on-surface-muted/70 hover:text-error cursor-pointer"
-              title="Remove" aria-label="Remove mark"
+              title="Delete this {KIND_LABEL[m.kind].toLowerCase()}"
+              aria-label="Delete this {KIND_LABEL[m.kind].toLowerCase()}"
             >
               <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                <path stroke-linecap="round" d="M6 18L18 6M6 6l12 12" />
+                <path stroke-linecap="round" stroke-linejoin="round"
+                  d="M4 7h16M10 11v6M14 11v6M5 7l1 12a2 2 0 002 2h8a2 2 0 002-2l1-12M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2" />
               </svg>
             </button>
           </div>

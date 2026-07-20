@@ -305,10 +305,31 @@
   let focusedMarkId = $state<string | null>(null);
   let markupFocusSeq = 0;
   function focusMark(from: number, to: number, id: string) {
+    // Clicking the row already showing is a toggle-off: the second click is the
+    // reviewer saying "done looking", and having to guess at where to click to
+    // clear is what made this feel stuck.
+    if (focusedMarkId === id) {
+      clearMarkFocus();
+      return;
+    }
     markupFocusSeq += 1;
     markupFocus = { from, to, seq: markupFocusSeq };
     focusedMarkId = id;
   }
+
+  function clearMarkFocus() {
+    markupFocus = null;
+    focusedMarkId = null;
+  }
+
+  // The emphasis is scoped to one mark on one record in one view: switching
+  // either drops it, so it can never reappear pointing at a range the reviewer
+  // is no longer looking at. `void` reads track without using the values.
+  $effect(() => {
+    void ingest.content_hash;
+    void view;
+    untrack(() => clearMarkFocus());
+  });
   // The pre-digest (ADR 0042), computed LIVE from the working body so the
   // reviewer can mark a section irrelevant and re-preview before submitting.
   // Recomputes (debounced) while the tab is open and the body changes. The
@@ -3965,6 +3986,7 @@
             storageKey={`workbench:observed:${ingest.content_hash}`}
             serverObserved={serverObservedWords}
             focusWords={markupFocus}
+            onclearfocus={clearMarkFocus}
             onreassign={() => {}}
             onhighlight={(from, to) => doc.addWordHighlight(from, to)}
             onclearhighlight={(from, to) => doc.clearWordHighlights(from, to)}

@@ -61,6 +61,7 @@
     body,
     mode = "edit",
     focusWords = null,
+    onclearfocus,
     sourceHash = "",
     recordHash = "",
     mediaDuration = null,
@@ -103,6 +104,10 @@
      *  mark). `seq` is bumped per navigation so re-clicking the same mark
      *  re-triggers. */
     focusWords?: { from: number; to: number; seq: number } | null;
+    /** Ask the owner to drop `focusWords`. Raised on any press in the transcript
+     *  so the emphasis never becomes a stuck selection the reviewer has to hunt
+     *  for a way to clear. */
+    onclearfocus?: () => void;
     /** Source SHA-256 (== content hash for a/v records), so the word editor can
      *  fetch a waveform window for the audio around a timestamp. */
     sourceHash?: string;
@@ -1226,6 +1231,11 @@
   // event target instead.
   function onContainerPointerDown(e: PointerEvent) {
     if (e.button !== 0) return;
+    // Any press in the transcript drops the side-list's focus emphasis - that
+    // emphasis is a "here it is" pointer, not a selection to be dismissed, so
+    // it must not outlive the next thing the reviewer does. Fires before the
+    // word check so pressing the gaps between words clears it too.
+    if (focusWords) onclearfocus?.();
     const el = (e.target as HTMLElement | null)?.closest?.("[data-word-index]") as HTMLElement | null;
     if (!el) return;
     onWordPointerDown(e, Number(el.dataset.wordIndex));
