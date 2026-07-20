@@ -139,11 +139,10 @@ describe("highlight-context survives edits", () => {
   it("GUARD: every serializeWords call in document.svelte.ts passes the edges", async () => {
     // Structural, because the failure is silent: a call that omits the argument
     // drops every chain in the record and nothing errors.
-    const fs = await import("node:fs");
-    const srcFile = fs.readFileSync("src/lib/document.svelte.ts", "utf8");
+    const srcFile = (await import("./document.svelte.ts?raw")).default as string;
     const calls = srcFile.match(/serializeWords\((?:[^;]*?)\);/gs) ?? [];
     expect(calls.length).toBeGreaterThan(0);
-    const missing = calls.filter((c) => !c.includes("highlightContexts"));
+    const missing = calls.filter((c: string) => !c.includes("highlightContexts"));
     expect(missing).toEqual([]);
   });
 });
