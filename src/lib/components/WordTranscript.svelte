@@ -8,6 +8,8 @@
   } from "$lib/scroll-anchor";
   import { parseWords, wordsInTimeRange, wordActiveAt } from "$lib/transcript-words";
   import type { SpeakerRun } from "$lib/transcript-words";
+  import { buildContextIndex } from "$lib/highlight-context";
+  import { pointerMoved } from "$lib/drag-intent";
   import { EVENT_NOTE_PRESETS } from "$lib/transcript";
   import {
     orderedNamedSpeakers,
@@ -248,19 +250,21 @@
 
   let highlightById = $derived(new Map(parsed.highlights.map((h) => [h.id, h])));
 
+  let contextIndex = $derived(buildContextIndex(parsed.highlightContexts));
+
   /** The ids this highlight needs for context, and whether each still exists.
    *  A missing one is DANGLING: kept and shown unresolved, never dropped - the
    *  reviewer decides, because a silent removal loses their intent. */
   function contextOf(id: string): { id: string; missing: boolean }[] {
-    const edge = parsed.highlightContexts.find((c) => c.of === id);
-    return (edge?.needs ?? []).map((n) => ({ id: n, missing: !highlightById.has(n) }));
+    return contextIndex.needs(id).map((n) => ({ id: n, missing: !highlightById.has(n) }));
   }
 
   /** Highlights that name THIS one as context - the other direction of the chain,
    *  so a reviewer can follow it both ways. */
   function contextDependents(id: string): string[] {
-    return parsed.highlightContexts.filter((c) => c.needs.includes(id)).map((c) => c.of);
+    return contextIndex.dependents(id);
   }
+
 
   /** The highlight under a word, for the click that completes the gesture. When
    *  several overlap, the innermost (last opened) is the one meant. */
@@ -1243,9 +1247,26 @@
 
   function onContainerPointerOver(e: PointerEvent) {
     if (!dragging) return;
+    // A pointerover does NOT mean the reviewer moved. Clicking a word seeks the
+    // audio, which scrolls the transcript, which slides a different word under a
+    // perfectly still cursor - and the browser reports that as entering a new
+    // word. Extending on it turned single clicks into selections spanning
+    // everything back to wherever the scroll landed.
+    //
+    // The pointer's own coordinates tell the two apart: a real drag changes them,
+    // content moving underneath does not.
+    if (!pointerMovedSincePress(e)) return;
     const el = (e.target as HTMLElement | null)?.closest?.("[data-word-index]") as HTMLElement | null;
     if (!el) return;
     onWordPointerEnter(Number(el.dataset.wordIndex));
+  }
+
+  /** Where the pointer went down, so a later pointerover can be judged as a real
+   *  drag or as the page having moved under a stationary cursor. */
+  let pressOrigin: { x: number; y: number } | null = null;
+
+  function pointerMovedSincePress(e: PointerEvent): boolean {
+    return pointerMoved(pressOrigin, { x: e.clientX, y: e.clientY });
   }
 
   // Double-click a word to jump straight into the editor on that single word.
@@ -1383,6 +1404,7 @@
     const selectOnly = e.ctrlKey || e.altKey || e.metaKey;
     selectWord(g, false);
     dragging = true;
+    pressOrigin = { x: e.clientX, y: e.clientY };
     if (!selectOnly && onseek && words[g]) onseek(words[g].start);
   }
 
@@ -1394,6 +1416,7 @@
 
   function stopDrag() {
     dragging = false;
+    pressOrigin = null;
   }
 
   function clearSelection() {
