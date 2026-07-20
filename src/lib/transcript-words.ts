@@ -49,6 +49,15 @@ export interface WordSpanNote {
   text: string;
 }
 
+/** A context edge: `of` needs the earlier highlights in `needs` to be understood
+ *  ("he said" -> who). One-directional and backwards by construction. An id in
+ *  `needs` with no matching highlight is DANGLING and is kept, not dropped - the
+ *  reviewer decides what to do with it (spec: retained + rendered unresolved). */
+export interface HighlightContext {
+  of: string;
+  needs: string[];
+}
+
 export interface ParsedWords {
   words: Word[];
   runs: SpeakerRun[];
@@ -59,6 +68,8 @@ export interface ParsedWords {
   highlights: WordHighlight[];
   /** Reviewer span notes as inclusive word ranges + text, in start order. */
   spanNotes: WordSpanNote[];
+  /** Context edges between highlights, in document order. */
+  highlightContexts: HighlightContext[];
   /** Everything in the body before the first `<!-- speaker -->` comment (the
    *  title heading, published line, blank separators). Re-emitted verbatim so a
    *  reassign doesn't destroy the record's `# PWTS ...` title. */
@@ -94,6 +105,14 @@ const HL_MARKER = /\{\{highlight-(start|end):\s*([A-Za-z0-9_-]+)\s*\}\}/g;
 const NOTE_START_MARKER =
   /\{\{note-start:\s*\[\s*([A-Za-z0-9_-]+)\s*,\s*"((?:[^"\\]|\\.)*)"\s*\]\s*\}\}/g;
 const NOTE_END_MARKER = /\{\{note-end:\s*([A-Za-z0-9_-]+)\s*\}\}/g;
+// {{highlight-context: [later, earlier, ...]}} - a STANDALONE annotation, not a
+// payload on highlight-start (which stays a bare scalar id). First id is the
+// highlight that NEEDS context; the rest are the earlier highlights it depends
+// on. Position-independent: it references ids, so it survives body edits that
+// move every word - the drift that broke word-index coverage spans cannot touch
+// it. Strips with the highlights.
+const HL_CONTEXT_MARKER =
+  /\{\{highlight-context:\s*\[\s*([A-Za-z0-9_-]+(?:\s*,\s*[A-Za-z0-9_-]+)*)\s*\]\s*\}\}/g;
 
 /** A pulled paired-marker. `family` selects which resolver (highlight vs span
  *  note) it feeds; `text` is present only on a span-note start. */
@@ -174,6 +193,21 @@ export function parseWords(body: string): ParsedWords {
   const words: Word[] = [];
   const runs: SpeakerRun[] = [];
   const lineEndWords = new Set<number>();
+
+  // Context edges reference IDS, not positions, so they are collected from the
+  // whole body and stripped before the line scan - wherever the UI wrote them,
+  // they mean the same thing, and the word tokeniser must never see them.
+  const highlightContexts: HighlightContext[] = [];
+  body = body.replace(HL_CONTEXT_MARKER, (_m, ids: string) => {
+    const parts = ids
+      .split(",")
+      .map((x) => x.trim())
+      .filter(Boolean);
+    // A lone id names a dependent with no dependencies - meaningless, so drop it
+    // rather than store an edge that says nothing.
+    if (parts.length >= 2) highlightContexts.push({ of: parts[0], needs: parts.slice(1) });
+    return "";
+  });
 
   const rawLines = body.split("\n");
   const firstSpeakerLine = rawLines.findIndex((raw) => INLINE_SPEAKER.test(raw.trim()));
@@ -331,7 +365,7 @@ export function parseWords(body: string): ParsedWords {
   const spanNotes: WordSpanNote[] = noteR.out
     .sort(bySpan)
     .map(({ id, fromWord, toWord, text }) => ({ id, fromWord, toWord, text: text ?? "" }));
-  return { words, runs, lineEndWords, highlights, spanNotes, preamble };
+  return { words, runs, lineEndWords, highlights, spanNotes, highlightContexts, preamble };
 }
 
 /** The gIndex of the word a inline event note anchors ONTO for time `at`:
@@ -362,6 +396,7 @@ export function serializeWords(
   preamble = "",
   highlights: WordHighlight[] = [],
   spanNotes: WordSpanNote[] = [],
+  highlightContexts: HighlightContext[] = [],
 ): string {
   const speakerByWord = new Array<string>(words.length);
   for (const run of runs) {
@@ -431,7 +466,14 @@ export function serializeWords(
   flushLine();
 
   const transcript = out.join("\n") + (out.length ? "\n" : "");
-  return preamble + transcript;
+  // Context edges are position-independent (they name ids), so they are written
+  // as one block after the transcript rather than chased to a word. Parse strips
+  // them from anywhere, so this round-trips whatever the UI wrote.
+  const contexts = highlightContexts
+    .filter((c) => c.of && c.needs.length > 0)
+    .map((c) => `{{highlight-context: [${[c.of, ...c.needs].join(", ")}]}}`)
+    .join("\n");
+  return preamble + transcript + (contexts ? contexts + "\n" : "");
 }
 
 /** Remap paired-span word ranges (highlights or span notes) under an index
@@ -466,7 +508,7 @@ export function splitWord(
   pieces: string[],
   mediaDuration?: number,
 ): ParsedWords {
-  const { words, runs, lineEndWords, highlights, spanNotes, preamble } = parsed;
+  const { words, runs, lineEndWords, highlights, spanNotes, highlightContexts, preamble } = parsed;
   if (gIndex < 0 || gIndex >= words.length) return parsed;
   if (pieces.length <= 1) {
     if (pieces.length === 1 && words[gIndex].text !== pieces[0]) {
@@ -526,6 +568,9 @@ export function splitWord(
     lineEndWords: newLineEndWords,
     highlights: newHighlights,
     spanNotes: newSpanNotes,
+    // Unchanged by design: a context edge names ids, so moving words cannot
+    // invalidate it - the property that makes ids the right anchor.
+    highlightContexts,
     preamble,
   };
 }
@@ -545,7 +590,7 @@ export function replaceWordRange(
   to: number,
   newWords: { text: string; start: number }[],
 ): ParsedWords {
-  const { words, runs, lineEndWords, highlights, spanNotes, preamble } = parsed;
+  const { words, runs, lineEndWords, highlights, spanNotes, highlightContexts, preamble } = parsed;
   if (from < 0 || to >= words.length || from > to) return parsed;
   const clean = newWords
     .map((w) => ({ text: w.text.trim(), start: w.start }))
@@ -610,6 +655,9 @@ export function replaceWordRange(
     lineEndWords: newLineEndWords,
     highlights: newHighlights,
     spanNotes: newSpanNotes,
+    // Unchanged by design: a context edge names ids, so moving words cannot
+    // invalidate it - the property that makes ids the right anchor.
+    highlightContexts,
     preamble,
   };
 }

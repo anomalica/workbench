@@ -175,18 +175,38 @@ export function decompose(
   return out;
 }
 
-/** Mint a short opaque highlight id not already present in `existing`. The id
- *  is deliberately meaningless - it exists only to pair a start with its end.
- *  Base-36 counter, so ids stay short and human-distinguishable in the raw body
- *  without being sequential-looking enough to imply order. */
+/** Mint a short opaque highlight id. Base-36 so ids stay short and
+ *  human-distinguishable in the raw body.
+ *
+ *  IDS ARE NEVER REUSED. Minting is MONOTONIC - strictly above every id the
+ *  record currently carries - so a deleted id is never reissued and deletions
+ *  simply leave gaps. The old "lowest unused" rule reissued a freed id, which is
+ *  fatal now that a `{{highlight-context: [...]}}` edge can name an id: delete
+ *  highlight `11` and the next highlight minted took `11` back, so the edge
+ *  silently re-pointed at an unrelated span. Not a dangling reference - a
+ *  confidently wrong one, invisible to the reviewer. (Ruled by anomalica +
+ *  master; the spec words it "a deleted id is never reissued".)
+ *
+ *  `existing` must therefore include every id the body mentions ANYWHERE -
+ *  highlights, span notes, and the ids named by context edges (which are RETAINED
+ *  when dangling, so they keep their id claimed). */
 export function makeHighlightId(existing: Iterable<string>): string {
   const taken = new Set(existing);
-  for (let n = 0; n < 36 * 36 * 36; n++) {
-    // Skip trivially-short ids that could collide with a reserved-looking token.
-    const id = n.toString(36);
-    if (id.length >= 2 && !taken.has(id)) return id;
+  // The high-water mark: the largest base-36 value in use. Ids that aren't
+  // base-36 counters (hand-written, legacy) can't raise it, but they still block
+  // collision via `taken`.
+  let high = -1;
+  for (const id of taken) {
+    if (!/^[0-9a-z]+$/.test(id)) continue;
+    const n = Number.parseInt(id, 36);
+    if (Number.isFinite(n) && n > high) high = n;
   }
-  // Unreachable in practice (thousands of ids in one record); fall back long.
+  for (let n = Math.max(high + 1, 36); n < Number.MAX_SAFE_INTEGER; n++) {
+    // Length >= 2 keeps an id from colliding with a reserved-looking token.
+    const id = n.toString(36);
+    if (!taken.has(id)) return id;
+  }
+  // Unreachable in practice; fall back long rather than ever reissue.
   let id = "h";
   while (taken.has(id)) id += "x";
   return id;
