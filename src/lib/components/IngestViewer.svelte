@@ -3273,6 +3273,7 @@
           onremovehighlight={(id) => doc.removeWordHighlight(id)}
           onremovenote={(id) => doc.removeWordSpanNote(id)}
           onremovepointnote={(g, ordinal) => doc.removeWordNote(g, ordinal)}
+          onremovecontext={(of, needs) => doc.removeHighlightContext(of, needs)}
         />
       </div>
     </details>
