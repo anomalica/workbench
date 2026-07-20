@@ -408,6 +408,11 @@ export class DocumentStore {
     const id = makeHighlightId([
       ...parsed.highlights.map((h) => h.id),
       ...parsed.spanNotes.map((n) => n.id),
+      // Ids NAMED BY CONTEXT EDGES count as taken even when their highlight is
+      // gone. A dangling edge is retained, so reissuing the id it names would
+      // silently re-resolve that edge onto an unrelated new highlight - the very
+      // corruption non-reuse exists to prevent.
+      ...parsed.highlightContexts.flatMap((c) => [c.of, ...c.needs]),
     ]);
     const highlights = [...parsed.highlights, { id, fromWord: lo, toWord: hi }];
     const result =
@@ -536,6 +541,11 @@ export class DocumentStore {
     const id = makeHighlightId([
       ...parsed.highlights.map((h) => h.id),
       ...parsed.spanNotes.map((n) => n.id),
+      // Ids NAMED BY CONTEXT EDGES count as taken even when their highlight is
+      // gone. A dangling edge is retained, so reissuing the id it names would
+      // silently re-resolve that edge onto an unrelated new highlight - the very
+      // corruption non-reuse exists to prevent.
+      ...parsed.highlightContexts.flatMap((c) => [c.of, ...c.needs]),
     ]);
     const spanNotes = [...parsed.spanNotes, { id, fromWord: lo, toWord: hi, text: clean }];
     const result =

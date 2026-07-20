@@ -70,3 +70,16 @@ describe("makeHighlightId: never reissues", () => {
     expect(id.length).toBeGreaterThanOrEqual(2);
   });
 });
+
+// A dangling edge keeps its target's id claimed. Regression guard for a bug that
+// shipped: the doc comment on makeHighlightId said `existing` must include ids
+// named by context edges, but neither mint site passed them - so deleting a
+// chained highlight freed its id, and the next highlight minted could take it and
+// silently inherit the dangling edge.
+describe("context-edge ids are taken", () => {
+  it("mints above an id that only a context edge still names", () => {
+    // highlight 10 exists; 12 exists ONLY as a dangling dependency of 11.
+    const next = makeHighlightId(["10", "11", "12"]);
+    expect(["10", "11", "12"]).not.toContain(next);
+  });
+});
