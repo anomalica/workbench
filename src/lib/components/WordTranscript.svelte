@@ -1806,60 +1806,61 @@
   </div>
 {/if}
 
-<!-- Top toolbar: drop a time-anchored note at the current playback moment
-     (also bound to the `v` key, handled in IngestViewer) plus observation
-     controls. Hidden in markup, which is read-only and annotation-only. -->
-{#if mode !== "markup"}
+<!-- Top toolbar: playback clock and selection state on the left, coverage on the
+     right. Shown in BOTH modes.
+
+     COVERAGE IS NEVER HIDDEN. It used to be the {:else} of "is anything
+     selected", and the whole bar was dropped in markup - so the number vanished
+     for the entire act of marking up, which is exactly when it is being watched:
+     the reviewer steers by it, submitting at around 75-80%. Selection state
+     therefore sits on the LEFT and coverage stays anchored right, so the figure
+     never moves or disappears as a selection comes and goes. -->
 <div class="flex-none flex items-center gap-2 px-4 py-1.5 border-b border-border bg-surface-alt">
-  <!-- Note AUTHORING lives in Markup; Ingest is for reading and observing, so the
-       two tabs stop offering the same job in two places. Existing notes still
-       RENDER here - only the authoring affordance moved. -->
   <span class="text-xs font-ui text-on-surface-muted tabular-nums">Playing {secondsToClock(currentTime)}</span>
   {#if range}
     {@const selN = range.to - range.from + 1}
-    <span class="ml-auto text-xs font-ui text-on-surface-muted tabular-nums">
-      {selN} selected
-    </span>
-    <button
-      onclick={() => setSelectionObserved(true)}
-      disabled={rangeAllObserved()}
-      class="text-xs font-ui font-medium hover:underline
-        {rangeAllObserved() ? 'text-on-surface-muted/50 cursor-default' : 'text-primary cursor-pointer'}"
-      title="Mark the selected words as observed"
-    >
-      Set observed
-    </button>
-    <button
-      onclick={() => setSelectionObserved(false)}
-      disabled={rangeNoneObserved()}
-      class="text-xs font-ui font-medium hover:underline
-        {rangeNoneObserved() ? 'text-on-surface-muted/50 cursor-default' : 'text-primary cursor-pointer'}"
-      title="Mark the selected words as not observed"
-    >
-      Set not observed
-    </button>
-  {:else}
-    <span
-      class="ml-auto text-xs font-ui font-medium tabular-nums {observedPct >= 100 ? 'text-success' : 'text-on-surface-secondary'}"
-      title={coverageUnreliable
-        ? "Your saved coverage. Per-word observation can't be shown for this record - its transcript was edited since review, shifting the word positions - so nothing here is greyed as unobserved."
-        : "Share of this record's words you've observed"}
-    >
-      {observedPct}% observed{#if coverageUnreliable}<span class="text-on-surface-muted font-normal"> (saved)</span>{/if}
-    </span>
-    {#if observedPct < 100 && !coverageUnreliable}
+    <span class="text-xs font-ui text-on-surface-muted tabular-nums">{selN} selected</span>
+    <!-- Observation is an Ingest job; markup is annotation-only. -->
+    {#if mode !== "markup"}
       <button
-        onclick={jumpToFirstUnobserved}
-        class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
-        title="Scroll to the first word you haven't observed yet"
+        onclick={() => setSelectionObserved(true)}
+        disabled={rangeAllObserved()}
+        class="text-xs font-ui font-medium hover:underline
+          {rangeAllObserved() ? 'text-on-surface-muted/50 cursor-default' : 'text-primary cursor-pointer'}"
+        title="Mark the selected words as observed"
       >
-        Jump to unobserved
+        Set observed
+      </button>
+      <button
+        onclick={() => setSelectionObserved(false)}
+        disabled={rangeNoneObserved()}
+        class="text-xs font-ui font-medium hover:underline
+          {rangeNoneObserved() ? 'text-on-surface-muted/50 cursor-default' : 'text-primary cursor-pointer'}"
+        title="Mark the selected words as not observed"
+      >
+        Set not observed
       </button>
     {/if}
   {/if}
+  <span
+    class="ml-auto text-xs font-ui font-medium tabular-nums {observedPct >= 100 ? 'text-success' : 'text-on-surface-secondary'}"
+    title={coverageUnreliable
+      ? "Your saved coverage. Per-word observation can't be shown for this record - its transcript was edited since review, shifting the word positions - so nothing here is greyed as unobserved."
+      : "Share of this record's words you've observed"}
+  >
+    {observedPct}% observed{#if coverageUnreliable}<span class="text-on-surface-muted font-normal"> (saved)</span>{/if}
+  </span>
+  {#if observedPct < 100 && !coverageUnreliable && !range}
+    <button
+      onclick={jumpToFirstUnobserved}
+      class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
+      title="Scroll to the first word you haven't observed yet"
+    >
+      Jump to unobserved
+    </button>
+  {/if}
   <span class="text-xs font-ui text-on-surface-muted/60">{notes.length} note{notes.length === 1 ? "" : "s"}</span>
 </div>
-{/if}
 
 {#if mode === "markup" && contextFor !== null}
   <div class="flex-none flex items-center gap-2 px-4 py-1.5 bg-primary/10 border-b border-primary/30">
