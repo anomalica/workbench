@@ -4070,6 +4070,12 @@
               // following words and stops at the selection's end.
               armCeilingFrom(t);
             }}
+            onpause={() => {
+              // A markup drag pauses playback in place - no seek, just stop, so
+              // the reviewer can line up a highlight without audio running on.
+              cancelCeilingTimer();
+              mediaPause();
+            }}
             onplayceiling={setPlayCeiling}
             onmarkresume={(seconds) => {
               // Park the playhead at the marked word (paused) so the reviewer's

@@ -110,6 +110,14 @@ body {
   background-color: color-mix(in srgb, var(--color-primary) 30%, transparent);
   box-shadow: none;
 }
+/* Chain hover (markup): hovering a highlight that needs - or is needed by -
+   another lights up both ends of the link, so the context connection is visible
+   without clicking. Sits over each highlight's own colour band, so the shared
+   ring is what says "these belong together". */
+.wt-word.wt-chain {
+  background-color: color-mix(in srgb, var(--color-primary) 12%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-primary) 50%, transparent);
+}
 .wt-word:not(.wt-sel):not(.wt-claim):not(.wt-resume):not(.wt-active):hover {
   background-color: color-mix(in srgb, var(--color-primary-container) 30%, transparent);
 }

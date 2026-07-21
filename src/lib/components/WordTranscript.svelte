@@ -93,6 +93,7 @@
     onhighlightcontextremove,
     onselectiontext,
     onseek,
+    onpause,
     onplayceiling,
     onmarkresume,
     onverdict,
@@ -198,6 +199,10 @@
     onselectiontext?: (text: string) => void;
     /** Seek the media to `seconds` (optional). */
     onseek?: (seconds: number) => void;
+    /** Pause playback in place (no seek). Raised when a press in markup mode
+     *  becomes a DRAG: dragging is the reviewer lining up a highlight, and
+     *  playback running on under the selection fights the gesture. */
+    onpause?: () => void;
     /** While the selection editor is open, playback must not run past the
      *  selection. Reports the ceiling in seconds - the start of the word AFTER
      *  the selection, the one timestamp the editor refuses to move - or null
@@ -1204,6 +1209,7 @@
     c.toggle("wt-highlight", cols !== undefined);
     c.toggle("wt-spannote", spanNoteWordSet.has(g));
     c.toggle("wt-markup-focus", focusWordSet.has(g));
+    c.toggle("wt-chain", hoverChainWords.has(g));
   }
 
   function reapplyAll() {
@@ -1261,7 +1267,15 @@
   }
 
   function onContainerPointerOver(e: PointerEvent) {
-    if (!dragging) return;
+    const el = (e.target as HTMLElement | null)?.closest?.("[data-word-index]") as HTMLElement | null;
+    if (!dragging) {
+      // Not dragging: this is a plain hover. Track the chain-hover emphasis.
+      if (mode === "markup") {
+        const id = el ? highlightAtWord(Number(el.dataset.wordIndex)) : null;
+        hoverChainId = id && contextIndex.isChained(id) ? id : null;
+      }
+      return;
+    }
     // A pointerover does NOT mean the reviewer moved. Clicking a word seeks the
     // audio, which scrolls the transcript, which slides a different word under a
     // perfectly still cursor - and the browser reports that as entering a new
@@ -1271,7 +1285,6 @@
     // The pointer's own coordinates tell the two apart: a real drag changes them,
     // content moving underneath does not.
     if (!pointerMovedSincePress(e)) return;
-    const el = (e.target as HTMLElement | null)?.closest?.("[data-word-index]") as HTMLElement | null;
     if (!el) return;
     onWordPointerEnter(Number(el.dataset.wordIndex));
   }
@@ -1279,6 +1292,34 @@
   /** Where the pointer went down, so a later pointerover can be judged as a real
    *  drag or as the page having moved under a stationary cursor. */
   let pressOrigin: { x: number; y: number } | null = null;
+
+  /** The word a markup-mode press wants to play. Held until pointerup: a bare
+   *  click plays it then, but a real drag cancels it and pauses instead -
+   *  dragging is annotation, and playback jumping to the drag's first word
+   *  fought the gesture. Only ever set in markup mode. */
+  let pendingSeek: number | null = null;
+
+  // Hovering a chained highlight lights its whole chain - itself plus every
+  // highlight it needs or is needed by - so the connection is visible without
+  // clicking anything. Markup-only: Ingest keeps highlights deliberately subtle.
+  // `hoverChainId` changes only when the hover crosses a highlight boundary, so
+  // sweeping the cursor across plain words costs one Map lookup per word.
+  let hoverChainId = $state<string | null>(null);
+  let hoverChainWords = $derived.by(() => {
+    const s = new Set<number>();
+    if (!hoverChainId) return s;
+    const ids = [
+      hoverChainId,
+      ...contextIndex.needs(hoverChainId),
+      ...contextIndex.dependents(hoverChainId),
+    ];
+    for (const id of ids) {
+      const h = highlightById.get(id);
+      if (!h) continue; // dangling reference: nothing on screen to light
+      for (let g = h.fromWord; g <= h.toWord; g++) s.add(g);
+    }
+    return s;
+  });
 
   function pointerMovedSincePress(e: PointerEvent): boolean {
     return pointerMoved(pressOrigin, { x: e.clientX, y: e.clientY });
@@ -1300,6 +1341,7 @@
   let appliedActive = -1;
   let appliedResume: number | null = null;
   let appliedClaim = new Set<number>();
+  let appliedChain = new Set<number>();
 
   // Full restyle when the rendered word set changes (load/filter/edit) or after
   // an observed change with no DOM delta (epoch bump). Deliberately tracks only
@@ -1320,6 +1362,7 @@
       appliedActive = activeWord;
       appliedResume = resumeWord;
       appliedClaim = new Set(claimWords);
+      appliedChain = new Set(hoverChainWords);
     });
   });
 
@@ -1360,6 +1403,15 @@
       for (const g of appliedClaim) if (!cw.has(g)) applyWord(g);
       for (const g of cw) if (!appliedClaim.has(g)) applyWord(g);
       appliedClaim = new Set(cw);
+    });
+  });
+
+  $effect(() => {
+    const hw = hoverChainWords;
+    untrack(() => {
+      for (const g of appliedChain) if (!hw.has(g)) applyWord(g);
+      for (const g of hw) if (!appliedChain.has(g)) applyWord(g);
+      appliedChain = new Set(hw);
     });
   });
 
@@ -1409,6 +1461,7 @@
 
   function onWordPointerDown(e: PointerEvent, g: number) {
     if (e.button !== 0) return;
+    hoverChainId = null;
     if (e.shiftKey) {
       selectWord(g, true);
       return;
@@ -1417,19 +1470,39 @@
     // grab words to copy or edit while the audio keeps its place. A plain click
     // still seeks there.
     const selectOnly = e.ctrlKey || e.altKey || e.metaKey;
+    // A click while picking context is CONSUMED by the gesture (it completes or
+    // cancels the link) - it must not also move playback. The reviewer is
+    // pointing at the earlier highlight, not asking to hear it.
+    const pickingContext = contextFor !== null;
     selectWord(g, false);
     dragging = true;
     pressOrigin = { x: e.clientX, y: e.clientY };
-    if (!selectOnly && onseek && words[g]) onseek(words[g].start);
+    if (!selectOnly && !pickingContext && onseek && words[g]) {
+      // Markup defers playback to pointerup so a drag can cancel it: a bare
+      // click plays the word, a drag pauses instead. Edit keeps the immediate
+      // seek - there, clicking IS the listen-here gesture.
+      if (mode === "markup") pendingSeek = words[g].start;
+      else onseek(words[g].start);
+    }
   }
 
   function onWordPointerEnter(g: number) {
     if (dragging && anchor !== null) {
+      // The press has become a drag - the reviewer is selecting to annotate,
+      // so the pending click-to-play is off and playback pauses out of the way.
+      if (g !== anchor && pendingSeek !== null) {
+        pendingSeek = null;
+        onpause?.();
+      }
       range = clampToRun(anchor, g);
     }
   }
 
   function stopDrag() {
+    if (pendingSeek !== null) {
+      onseek?.(pendingSeek);
+      pendingSeek = null;
+    }
     dragging = false;
     pressOrigin = null;
   }
@@ -1981,6 +2054,7 @@
     class="select-none pt-12"
     onpointerdown={onContainerPointerDown}
     onpointerover={onContainerPointerOver}
+    onpointerleave={() => (hoverChainId = null)}
     ondblclick={onContainerDblClick}
   >
     {#if observedEmpty}
