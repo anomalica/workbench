@@ -62,14 +62,16 @@ describe("markup focus: the emphasis is always escapable", () => {
     expect(focus).toContain("clearMarkFocus()");
   });
 
-  it("changing record or pane drops it", () => {
-    // Scoped to one mark on one record in one view - otherwise the emphasis can
-    // reappear pointing at a range the reviewer is no longer looking at.
+  it("changing record, pane, or leaving markup mode drops it", () => {
+    // Scoped to one mark on one record in one view/mode - otherwise the emphasis
+    // can reappear pointing at a range the reviewer is no longer looking at, or
+    // outlive the mark list (leaving markup mode) that was its only way to clear.
     const effect = ingestViewer.slice(
       ingestViewer.indexOf("void ingest.content_hash;"),
-      ingestViewer.indexOf("void ingest.content_hash;") + 160,
+      ingestViewer.indexOf("void ingest.content_hash;") + 260,
     );
     expect(effect).toContain("void view;");
+    expect(effect).toContain("void markupMode;");
     expect(effect).toContain("clearMarkFocus()");
   });
 });
