@@ -35,15 +35,57 @@ def candidates_path() -> Path:
     )
 
 
-def read_candidates() -> list[dict]:
-    """The AI-proposed, pre-vetted merge candidates (a JSON list, scheduler-style).
-    Each: {node_ids, suggested_canonical, score, node_type, reason}. Absent or
-    unreadable file -> [] (the assimilator may not have emitted it yet)."""
+def manual_candidates_path() -> Path:
+    """Human/manually-decomposed candidates, SEPARATE from propose_merges'
+    output because that file is REGENERATED - anything appended to it is
+    clobbered on the next run. This one is only ever written deliberately
+    (e.g. the assimilator's referenced-source consolidation proposals), so it
+    survives regeneration. Same directory as the main file by default."""
+    return _path(
+        "ANOMALICA_MERGE_CANDIDATES_MANUAL",
+        candidates_path().with_name("merge-candidates-manual.json"),
+    )
+
+
+def _read_candidate_file(path: Path) -> list[dict]:
     try:
-        data = json.loads(candidates_path().read_text())
+        data = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError):
         return []
-    return data if isinstance(data, list) else []
+    if not isinstance(data, list):
+        return []
+    # A candidate needs at least two nodes to be a merge at all.
+    return [
+        c
+        for c in data
+        if isinstance(c, dict)
+        and isinstance(c.get("node_ids"), list)
+        and len(c["node_ids"]) >= 2
+    ]
+
+
+def read_candidates() -> list[dict]:
+    """The pre-vetted merge candidates (JSON lists, scheduler-style). Each:
+    {node_ids, suggested_canonical, score, node_type, reason}. Absent or
+    unreadable files -> [] (the assimilator may not have emitted them yet).
+
+    Manual candidates come FIRST (a reviewer-authored proposal outranks the
+    machine's duplicate of it - its reason carries the human verification) and
+    dedup by cluster key, so propose_merges later re-proposing the same cluster
+    doesn't queue it twice. EVERY candidate from either file is review-only:
+    score is display data, and the sole apply path is a reviewer's explicit
+    merge click (apply_merge). Nothing here auto-applies at any score."""
+    manual = [
+        {**c, "source": "manual"}
+        for c in _read_candidate_file(manual_candidates_path())
+    ]
+    seen = {candidate_key(c["node_ids"]) for c in manual}
+    auto = [
+        c
+        for c in _read_candidate_file(candidates_path())
+        if candidate_key(c["node_ids"]) not in seen
+    ]
+    return manual + auto
 
 
 def _run(module: str, args: list[str]) -> dict:

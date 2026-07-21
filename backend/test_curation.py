@@ -45,6 +45,76 @@ def test_read_candidates_garbage(monkeypatch, tmp_path):
     assert curation.read_candidates() == []
 
 
+def _cand(ids, reason="r"):
+    return {
+        "node_ids": ids,
+        "suggested_canonical": ids[0],
+        "score": 0.9,
+        "node_type": "document",
+        "reason": reason,
+    }
+
+
+def test_manual_candidates_merge_in_and_are_tagged(monkeypatch, tmp_path):
+    (tmp_path / "merge-candidates.json").write_text(json.dumps([_cand(["a", "b"])]))
+    (tmp_path / "merge-candidates-manual.json").write_text(
+        json.dumps([_cand(["c", "d"])])
+    )
+    monkeypatch.setenv(
+        "ANOMALICA_MERGE_CANDIDATES", str(tmp_path / "merge-candidates.json")
+    )
+    c = curation.read_candidates()
+    assert [x["node_ids"] for x in c] == [["c", "d"], ["a", "b"]]  # manual first
+    assert c[0]["source"] == "manual" and "source" not in c[1]
+
+
+def test_manual_candidate_outranks_the_machines_duplicate(monkeypatch, tmp_path):
+    # Same cluster in both files (propose_merges re-proposing a manually-staged
+    # one): the manual entry wins - its reason carries the human verification -
+    # and the cluster appears ONCE.
+    (tmp_path / "merge-candidates.json").write_text(
+        json.dumps([_cand(["b", "a"], reason="embedding")])
+    )
+    (tmp_path / "merge-candidates-manual.json").write_text(
+        json.dumps([_cand(["a", "b"], reason="manual: verified via claims")])
+    )
+    monkeypatch.setenv(
+        "ANOMALICA_MERGE_CANDIDATES", str(tmp_path / "merge-candidates.json")
+    )
+    c = curation.read_candidates()
+    assert len(c) == 1
+    assert c[0]["reason"] == "manual: verified via claims"
+
+
+def test_manual_file_absent_changes_nothing(monkeypatch, tmp_path):
+    (tmp_path / "merge-candidates.json").write_text(json.dumps([_cand(["a", "b"])]))
+    monkeypatch.setenv(
+        "ANOMALICA_MERGE_CANDIDATES", str(tmp_path / "merge-candidates.json")
+    )
+    assert [x["node_ids"] for x in curation.read_candidates()] == [["a", "b"]]
+
+
+def test_malformed_manual_entries_are_dropped_not_queued(monkeypatch, tmp_path):
+    # A one-node "merge", a non-dict, and a missing node_ids must never reach
+    # the review queue - only the well-formed candidate does.
+    (tmp_path / "merge-candidates.json").write_text("[]")
+    (tmp_path / "merge-candidates-manual.json").write_text(
+        json.dumps(
+            [
+                {"node_ids": ["only-one"]},
+                "junk",
+                {"reason": "no ids"},
+                _cand(["a", "b"]),
+            ]
+        )
+    )
+    monkeypatch.setenv(
+        "ANOMALICA_MERGE_CANDIDATES", str(tmp_path / "merge-candidates.json")
+    )
+    c = curation.read_candidates()
+    assert [x["node_ids"] for x in c] == [["a", "b"]]
+
+
 def test_apply_merge_validates_before_shelling():
     # Missing fields / survivor-as-victim must fail WITHOUT invoking the command.
     assert curation.apply_merge("", ["v"], "Name")["ok"] is False
