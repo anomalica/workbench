@@ -206,9 +206,11 @@
   // Prose records keep Edit and have no Markup surface yet.
   let recordTabs = $derived.by<[string, string, string][]>(() => {
     const tabs: [string, string, string][] = [["ingest", "Ingest", "Rendered view"]];
-    if (isWordRecord) {
-      tabs.push(["markup", "Markup", "Highlights and notes over the transcript"]);
-    } else {
+    // Word records: no Markup TAB - marking up is a mode inside the Ingest view
+    // now (a sub-toolbar toggle), not a separate tab that remounts the
+    // transcript. They also drop Edit: the rich markdown editor mangles a
+    // `{{t:}}`-laden transcript, so Raw is the honest editable view.
+    if (!isWordRecord) {
       tabs.push(["edit", "Edit", "Rich markdown editor"]);
     }
     tabs.push(
@@ -267,7 +269,7 @@
   // View mode for the ingest column's sub-tabs (rendered/edit/raw/diff/find).
   // Digest is no longer a sub-tab; it lives in its own column.
   let view = $state<
-    "ingest" | "markup" | "edit" | "diff" | "raw" | "predigest" | "find" | "audit"
+    "ingest" | "edit" | "diff" | "raw" | "predigest" | "find" | "audit"
   >("ingest");
   // Fall back to Ingest when the active tab isn't offered for this record (e.g.
   // Edit on a word record, or Markup after switching to a prose record).
@@ -328,6 +330,9 @@
   $effect(() => {
     void ingest.content_hash;
     void view;
+    // Leaving markup mode hides the mark list, so a focus set from it would
+    // otherwise leave the transcript emphasis stuck with no list to clear it.
+    void markupMode;
     untrack(() => clearMarkFocus());
   });
   // The pre-digest (ADR 0042), computed LIVE from the working body so the
@@ -1252,6 +1257,42 @@
   $effect(() => {
     try {
       localStorage.setItem(COLUMN_STORAGE_KEY, JSON.stringify(cols));
+    } catch {
+      // storage full or disabled; the user just loses persistence
+    }
+  });
+
+  // Reading vs marking up is a MODE over one transcript, not a separate tab -
+  // switching tabs remounted the word view and reparsed the whole body (seconds
+  // on a 34k-word record), losing scroll and playhead. It is now a toggle in the
+  // sub-toolbar; the DOM stays put across a mode change. Persisted globally so
+  // the mode a reviewer is working in carries from record to record.
+  const MARKUP_MODE_KEY = "workbench:markupMode";
+  const OBSERVED_ONLY_KEY = "workbench:observedOnly";
+
+  function _loadFlag(key: string): boolean {
+    try {
+      return localStorage.getItem(key) === "1";
+    } catch {
+      return false;
+    }
+  }
+
+  let markupMode = $state(_loadFlag(MARKUP_MODE_KEY));
+  // markupMode persists globally, but only word records have a markup surface.
+  // `inMarkup` is the effective flag: a prose record opened with the pref left on
+  // must behave exactly as read mode, never hide its own controls.
+  let inMarkup = $derived(isWordRecord && markupMode);
+  // "Show only observed" is now INDEPENDENT of the mode. It used to be welded to
+  // markup (markup showed only reviewed words), which meant switching mode also
+  // changed what was on screen - the opposite of seamless. Default off, so a
+  // mode switch never moves or hides a single word; turn it on to focus.
+  let observedOnly = $state(_loadFlag(OBSERVED_ONLY_KEY));
+
+  $effect(() => {
+    try {
+      localStorage.setItem(MARKUP_MODE_KEY, markupMode ? "1" : "0");
+      localStorage.setItem(OBSERVED_ONLY_KEY, observedOnly ? "1" : "0");
     } catch {
       // storage full or disabled; the user just loses persistence
     }
@@ -2665,10 +2706,10 @@
       selected = new Set();
       selectedSpeakers = new Set();
       filteredSpeakers = new Set();
-    } else if ((e.ctrlKey || e.metaKey) && e.key === "a" && view === "ingest" && hasTranscript) {
+    } else if ((e.ctrlKey || e.metaKey) && e.key === "a" && view === "ingest" && !inMarkup && hasTranscript) {
       e.preventDefault();
       selected = new Set(visibleSegments.map((s) => s.index));
-    } else if ((e.key === "ArrowDown" || e.key === "ArrowUp") && view === "ingest" && isWordRecord) {
+    } else if ((e.key === "ArrowDown" || e.key === "ArrowUp") && view === "ingest" && !inMarkup && isWordRecord) {
       // Word editor has no segment nav, so Up/Down step playback speed
       // (up = faster). One step per press; ignore OS key-repeat.
       e.preventDefault();
@@ -2679,7 +2720,7 @@
           ? Math.min(cur + 1, playbackRates.length - 1)
           : Math.max(cur - 1, 0);
       setPlaybackRate(playbackRates[next]);
-    } else if ((e.key === "ArrowDown" || e.key === "ArrowUp") && view === "ingest" && hasTranscript) {
+    } else if ((e.key === "ArrowDown" || e.key === "ArrowUp") && view === "ingest" && !inMarkup && hasTranscript) {
       // Up/Down = jump to the previous/next sentence. Ignore the OS
       // key-repeat that fires while a key is held, and throttle rapid
       // double-fires, so one press moves exactly one segment.
@@ -2691,7 +2732,7 @@
       navigateSegment(e.key === "ArrowDown" ? 1 : -1, e.shiftKey);
     } else if (
       (e.key === "ArrowLeft" || e.key === "ArrowRight") &&
-      view === "ingest" &&
+      view === "ingest" && !inMarkup &&
       hasTranscript &&
       ytId && ytPlayer && playerReady
     ) {
@@ -3205,7 +3246,7 @@
         <span class="text-xs text-on-surface-muted ml-auto">{visibleSpeakerIds.size}</span>
       </summary>
       <div class="px-3 py-2">
-        {#if view === "markup"}
+        {#if inMarkup}
           <!-- Markup filters by speaker but never edits them. -->
           <SpeakerFilter
             rows={wordSpeakerRows}
@@ -3519,7 +3560,7 @@
         {#if hasTranscript && !theatreActive}
           <div class="flex-1 overflow-auto border-t border-border min-h-0">
             {@render speakersPanel()}
-            {#if view === "markup"}
+            {#if inMarkup}
               {@render markupPanel()}
             {/if}
           </div>
@@ -3531,7 +3572,7 @@
       <!-- Speakers as its own column beneath the video in theatre mode. -->
       <div style="grid-area: spk" class="flex flex-col min-h-0 overflow-auto border-r border-border">
         {@render speakersPanel()}
-        {#if view === "markup"}
+        {#if inMarkup}
           {@render markupPanel()}
         {/if}
       </div>
@@ -3588,7 +3629,7 @@
         <div class="ml-auto flex items-center gap-1">
           <!-- Follow in source: block clicks jump the source pane to the
                block's page. Off by default. -->
-          {#if view === "ingest" && isTextRecord && canFollowSource}
+          {#if view === "ingest" && !inMarkup && isTextRecord && canFollowSource}
             <button
               onclick={() => (followSource = !followSource)}
               class="flex items-center gap-1 cursor-pointer px-1.5 py-0.5 rounded-full transition-colors text-xs font-ui font-medium
@@ -3606,7 +3647,7 @@
             </button>
           {/if}
           <!-- Playback mode toggle -->
-          {#if view === "ingest" && hasTranscript && ytId}
+          {#if view === "ingest" && !inMarkup && hasTranscript && ytId}
             <button
               onclick={togglePlaybackMode}
               class="flex items-center gap-1 cursor-pointer px-1.5 py-0.5 rounded-full transition-colors text-xs font-ui font-medium
@@ -3632,7 +3673,7 @@
           {/if}
 
           <!-- Skip-irrelevant-during-playback toggle -->
-          {#if view === "ingest" && hasTranscript && ytId && irrelevantCount > 0}
+          {#if view === "ingest" && !inMarkup && hasTranscript && ytId && irrelevantCount > 0}
             <button
               onclick={() => { skipIrrelevant = !skipIrrelevant; }}
               class="flex items-center gap-1 cursor-pointer px-1.5 py-0.5 rounded-full transition-colors text-xs font-ui font-medium
@@ -3651,7 +3692,7 @@
           {/if}
 
           <!-- Global show/hide irrelevant toggle -->
-          {#if view === "ingest" && hasTranscript}
+          {#if view === "ingest" && !inMarkup && hasTranscript}
             {#if irrelevantCount > 0}
               <button
                 onclick={() => { hideIrrelevant = !hideIrrelevant; }}
@@ -3970,37 +4011,6 @@
       {:else if view === "audit"}
         <AuditView hash={ingest.content_hash} />
 
-      {:else if view === "markup"}
-        <!-- Markup: read-only transcript with cross-speaker selection for
-             highlights + notes. The mark list lives in the left panel's Markup
-             section. Editing lives in the Ingest tab. -->
-        <div class="relative flex-1 flex flex-col min-h-0">
-          <WordTranscript
-            mode="markup"
-            recordHash={ingest.content_hash}
-            storedCoverage={storedVerdict?.observed_coverage ?? null}
-            body={currentBody()}
-            namedSpeakers={namedSpeakersOrdered}
-            {currentTime}
-            {filteredSpeakers}
-            {hideIrrelevant}
-            storageKey={`workbench:observed:${ingest.content_hash}`}
-            serverObserved={serverObservedWords}
-            focusWords={markupFocus}
-            onclearfocus={clearMarkFocus}
-            onreassign={() => {}}
-            onhighlight={(from, to) => doc.addWordHighlight(from, to)}
-            onclearhighlight={(from, to) => doc.clearWordHighlights(from, to)}
-            onspannote={(from, to, text) => doc.addWordSpanNote(from, to, text)}
-            onhighlightcontext={(of, needs) => doc.addHighlightContext(of, needs)}
-            onhighlightcontextremove={(of, needs) => doc.removeHighlightContext(of, needs)}
-            onspannoteedit={(id, text) => doc.editWordSpanNote(id, text)}
-            onspannoteremove={(id) => doc.removeWordSpanNote(id)}
-            onselectiontext={(t) => (wordSelectionText = t)}
-            onseek={(seconds) => mediaSeek(Math.max(0, seconds), true)}
-          />
-        </div>
-
       {:else if isWordRecord}
         <!-- Per-word-timestamp record: isolated word-level editor. No
              coverage gutter or mark-observed wiring in this view by design. -->
@@ -4021,6 +4031,10 @@
         {/if}
         <div class="relative flex-1 flex flex-col min-h-0">
           <WordTranscript
+            mode={inMarkup ? "markup" : "edit"}
+            onmodechange={(m) => (markupMode = m === "markup")}
+            showObservedOnly={observedOnly}
+            onobservedonlychange={(v) => (observedOnly = v)}
             recordHash={ingest.content_hash}
             storedCoverage={storedVerdict?.observed_coverage ?? null}
             body={currentBody()}
@@ -4034,6 +4048,8 @@
             storageKey={`workbench:observed:${ingest.content_hash}`}
             serverObserved={serverObservedWords}
             {claimHighlight}
+            focusWords={markupFocus}
+            onclearfocus={clearMarkFocus}
             onreassign={(from, to, speaker) => doc.reassignWords(from, to, speaker)}
             onreplaceselection={(from, to, w) => doc.replaceSelection(from, to, w)}
             oneventnote={(at, text) => doc.insertEventNote(at, text)}

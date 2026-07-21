@@ -62,6 +62,9 @@
   let {
     body,
     mode = "edit",
+    onmodechange,
+    showObservedOnly = false,
+    onobservedonlychange,
     focusWords = null,
     onclearfocus,
     sourceHash = "",
@@ -102,6 +105,17 @@
      *  hidden, selection spans speakers freely, and the floating bar offers
      *  Highlight/Note/Clear instead of the edit actions. */
     mode?: "edit" | "markup";
+    /** Raised by the sub-toolbar mode switch. The owner holds the mode (and
+     *  persists it), so this component stays controlled - the same body renders
+     *  across a mode change with no remount, which is the whole point of folding
+     *  Markup back in from a separate tab. */
+    onmodechange?: (mode: "edit" | "markup") => void;
+    /** Filter the transcript to observed, relevant words only. INDEPENDENT of
+     *  mode: it used to be welded to markup, so switching mode also changed what
+     *  was on screen. Now a mode switch never moves a word, and this is a
+     *  separate toolbar toggle the owner persists. */
+    showObservedOnly?: boolean;
+    onobservedonlychange?: (value: boolean) => void;
     /** Scroll to + flash an inclusive word range (the markup side list clicking a
      *  mark). `seq` is bumped per navigation so re-clicking the same mark
      *  re-triggers. */
@@ -567,34 +581,35 @@
   let observed = $state(new Set<number>());
   let lastPlayTime = -1;
 
-  // Markup shows only observed, relevant content: you can't mark up what you
-  // haven't reviewed. `markupVisible` is the gIndex set (observed AND not
-  // irrelevant); `renderRuns` are the turns with any such word (all turns in
-  // edit mode). The word loop hides the rest. `[irrelevant]` turns never show in
-  // markup regardless of the eye toggle.
-  let markupVisible = $derived.by(() => {
+  // "Show only observed" filters the transcript to observed, relevant words -
+  // INDEPENDENT of edit/markup mode, so switching mode never changes what is on
+  // screen. `observedVisible` is the gIndex set (observed AND not irrelevant);
+  // `renderRuns` are the turns with any such word (all turns when the filter is
+  // off). The word loop hides the rest. `[irrelevant]` turns never show while
+  // the filter is on, regardless of the eye toggle.
+  let observedVisible = $derived.by(() => {
     const s = new Set<number>();
-    if (mode !== "markup") return s;
+    if (!showObservedOnly) return s;
     for (let g = 0; g < words.length; g++) {
       // When per-word observation is unreliable (the spans drifted under the
       // reviewer's own transcript edits), showing nothing is the same lie as
       // greying everything: it tells a reviewer his finished record has no
-      // reviewed content to mark up. Unknown is not unobserved - show it all and
-      // let him work.
+      // reviewed content. Unknown is not unobserved - show it all and let him
+      // work.
       if ((coverageUnreliable || observed.has(g)) && !irrelevantWords.has(g)) s.add(g);
     }
     return s;
   });
   let renderRuns = $derived.by(() => {
-    if (mode !== "markup") return visibleRuns;
+    if (!showObservedOnly) return visibleRuns;
     return runs.filter((r) => {
       if (r.speaker === SPEAKER_IRRELEVANT) return false;
       if (filteredSpeakers.size > 0 && !filteredSpeakers.has(r.speaker)) return false;
-      for (let g = r.startWord; g <= r.endWord; g++) if (markupVisible.has(g)) return true;
+      for (let g = r.startWord; g <= r.endWord; g++) if (observedVisible.has(g)) return true;
       return false;
     });
   });
-  let markupEmpty = $derived(mode === "markup" && markupVisible.size === 0);
+  let observedEmpty = $derived(showObservedOnly && observedVisible.size === 0);
   // "Resume here" marker: the last observed word before the first unobserved
   // gap, dropped by Jump to unobserved. A persistent position indicator (and
   // play-resume point), distinct from the amber cursor and from a selection.
@@ -1291,7 +1306,7 @@
   // those signals - NOT range/active/etc - so a selection never triggers it.
   $effect(() => {
     void renderRuns;
-    void markupVisible; // markup hides unobserved words; restyle when that set moves
+    void observedVisible; // the observed-only filter hides words; restyle when that set moves
     void styleEpoch;
     void highlightColorsByWord; // re-apply bands when a highlight is added/cleared
     void spanNoteWordSet; // re-apply tint when a span note is added/cleared/re-ranged
@@ -1816,6 +1831,26 @@
      therefore sits on the LEFT and coverage stays anchored right, so the figure
      never moves or disappears as a selection comes and goes. -->
 <div class="flex-none flex items-center gap-2 px-4 py-1.5 border-b border-border bg-surface-alt">
+  {#if onmodechange}
+    <!-- The mode switch. Reading/observing and marking up are two modes over the
+         SAME rendered transcript, not two tabs - switching used to remount the
+         word view and reparse the body. Here the DOM stays put. -->
+    <div class="inline-flex rounded overflow-hidden border border-border text-xs font-ui font-medium">
+      <button
+        onclick={() => onmodechange?.("edit")}
+        class="px-2 py-0.5 transition-colors
+          {mode !== 'markup' ? 'bg-primary text-on-primary' : 'text-on-surface-secondary hover:bg-surface cursor-pointer'}"
+        title="Read, observe and correct the transcript. Selecting stays within one speaker turn."
+      >Read</button>
+      <button
+        onclick={() => onmodechange?.("markup")}
+        class="px-2 py-0.5 transition-colors border-l border-border
+          {mode === 'markup' ? 'bg-primary text-on-primary' : 'text-on-surface-secondary hover:bg-surface cursor-pointer'}"
+        title="Highlight and note. Selections can span speakers."
+      >Mark up</button>
+    </div>
+    <div class="w-px h-4 bg-border" aria-hidden="true"></div>
+  {/if}
   <span class="text-xs font-ui text-on-surface-muted tabular-nums">Playing {secondsToClock(currentTime)}</span>
   {#if range}
     {@const selN = range.to - range.from + 1}
@@ -1858,6 +1893,20 @@
     >
       Jump to unobserved
     </button>
+  {/if}
+  {#if onobservedonlychange}
+    <label
+      class="flex items-center gap-1 text-xs font-ui text-on-surface-secondary cursor-pointer select-none"
+      title="Hide everything you haven't observed - focuses the view on reviewed content. Independent of the mode."
+    >
+      <input
+        type="checkbox"
+        checked={showObservedOnly}
+        onchange={(e) => onobservedonlychange?.(e.currentTarget.checked)}
+        class="cursor-pointer"
+      />
+      Observed only
+    </label>
   {/if}
   <span class="text-xs font-ui text-on-surface-muted/60">{notes.length} note{notes.length === 1 ? "" : "s"}</span>
 </div>
@@ -1934,18 +1983,18 @@
     onpointerover={onContainerPointerOver}
     ondblclick={onContainerDblClick}
   >
-    {#if markupEmpty}
+    {#if observedEmpty}
       <p class="px-6 py-8 text-sm text-on-surface-muted max-w-prose">
-        Nothing to mark up yet. Only content you've observed (and that isn't marked
-        irrelevant) shows here - observe the transcript in the Ingest tab first,
-        then come back to highlight and note it.
+        "Show only observed" is on, but nothing here is observed yet - so there is
+        nothing to show. Turn the filter off to see the whole transcript, or
+        observe some of it first.
       </p>
     {/if}
     {#each renderRuns as run (run.startWord)}
       {@const obs = observedInRun(run)}
       {@const total = run.endWord - run.startWord + 1}
       {@const runGs = Array.from({ length: total }, (_, k) => run.startWord + k).filter(
-        (g) => mode !== "markup" || markupVisible.has(g),
+        (g) => !showObservedOnly || observedVisible.has(g),
       )}
       <!-- content-visibility:auto lets the browser skip layout/paint for runs
            off-screen while keeping their words in the DOM (so jump-to-word,
