@@ -92,6 +92,7 @@
     onhighlightcontext,
     onhighlightcontextremove,
     onselectiontext,
+    onlinksource,
     onseek,
     onpause,
     onplayceiling,
@@ -203,6 +204,10 @@
      *  becomes a DRAG: dragging is the reviewer lining up a highlight, and
      *  playback running on under the selection fights the gesture. */
     onpause?: () => void;
+    /** Start the cross-record link flow for the selected range: the owner opens
+     *  its record picker (this component has no record list) and calls
+     *  doc.addWordLink on confirm. Markup-mode action. */
+    onlinksource?: (from: number, to: number) => void;
     /** While the selection editor is open, playback must not run past the
      *  selection. Reports the ceiling in seconds - the start of the word AFTER
      *  the selection, the one timestamp the editor refuses to move - or null
@@ -270,6 +275,15 @@
   let highlightById = $derived(new Map(parsed.highlights.map((h) => [h.id, h])));
 
   let contextIndex = $derived(buildContextIndex(parsed.highlightContexts));
+
+  // Words inside a cross-record link span, for the dotted "this references
+  // another record" underline. Rendered in BOTH modes - a link is navigation,
+  // not markup colour - and deliberately fainter than any highlight band.
+  let linkWordSet = $derived.by(() => {
+    const s = new Set<number>();
+    for (const l of parsed.links) for (let g = l.fromWord; g <= l.toWord; g++) s.add(g);
+    return s;
+  });
 
   /** The ids this highlight needs for context, and whether each still exists.
    *  A missing one is DANGLING: kept and shown unresolved, never dropped - the
@@ -1210,6 +1224,7 @@
     c.toggle("wt-spannote", spanNoteWordSet.has(g));
     c.toggle("wt-markup-focus", focusWordSet.has(g));
     c.toggle("wt-chain", hoverChainWords.has(g));
+    c.toggle("wt-linkspan", linkWordSet.has(g));
   }
 
   function reapplyAll() {
@@ -1353,6 +1368,7 @@
     void highlightColorsByWord; // re-apply bands when a highlight is added/cleared
     void spanNoteWordSet; // re-apply tint when a span note is added/cleared/re-ranged
     void focusWordSet; // re-apply markup focus flash
+    void linkWordSet; // re-apply the link underline when a link is added/removed
     const el = scrollEl;
     untrack(() => {
       if (!el) return;
@@ -1832,6 +1848,15 @@
         >
           Note
         </button>
+        {#if onlinksource}
+          <button
+            onclick={() => { if (range) { onlinksource?.(range.from, range.to); clearSelection(); } }}
+            class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
+            title="These words refer to another ingested source - link them to it (optionally to an exact passage in it)"
+          >
+            Refer to source
+          </button>
+        {/if}
         {#if selectionHasMarkup}
           <div class="w-px h-4 bg-border" aria-hidden="true"></div>
           <button

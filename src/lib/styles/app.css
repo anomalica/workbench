@@ -110,6 +110,14 @@ body {
   background-color: color-mix(in srgb, var(--color-primary) 30%, transparent);
   box-shadow: none;
 }
+/* Cross-record link span: these words reference another ingested record. A
+   faint dotted underline in both modes - navigation, not markup colour - kept
+   visually below every highlight band so it never competes. */
+.wt-word.wt-linkspan {
+  text-decoration: underline dotted color-mix(in srgb, var(--color-primary) 55%, transparent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
 /* Chain hover (markup): hovering a highlight that needs - or is needed by -
    another lights up both ends of the link, so the context connection is visible
    without clicking. Sits over each highlight's own colour band, so the shared

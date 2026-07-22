@@ -1,6 +1,7 @@
 <script lang="ts">
-  import type { IngestDetail, DigestDocument, User } from "$lib/api";
+  import type { IngestDetail, DigestDocument, IngestSummary, User } from "$lib/api";
   import {
+    fetchIngests,
     submitReview,
     pushOrigin,
     fetchPredigest,
@@ -297,7 +298,12 @@
   let markCount = $derived.by(() => {
     if (!parsedWords) return 0;
     const points = parsedWords.words.reduce((n, w) => n + (w.notes?.length ?? 0), 0);
-    return parsedWords.highlights.length + parsedWords.spanNotes.length + points;
+    return (
+      parsedWords.highlights.length +
+      parsedWords.spanNotes.length +
+      parsedWords.links.length +
+      points
+    );
   });
 
   // Markup list navigation: clicking a mark scrolls the transcript to its word
@@ -1279,6 +1285,51 @@
   }
 
   let markupMode = $state(_loadFlag(MARKUP_MODE_KEY));
+
+  // Cross-record link picker: "Refer to source" over a markup selection opens
+  // it; confirming writes the {{link-start/end}} pair via doc.addWordLink. The
+  // record list loads lazily on first open and is kept for the session - it
+  // also names link targets in the side list (linkTitles).
+  let linkPicker = $state<{ from: number; to: number } | null>(null);
+  let linkSearch = $state("");
+  let linkQuote = $state("");
+  let linkTargetHash = $state<string | null>(null);
+  let allRecords = $state<IngestSummary[] | null>(null);
+  async function openLinkPicker(from: number, to: number) {
+    linkPicker = { from, to };
+    linkSearch = "";
+    linkQuote = "";
+    linkTargetHash = null;
+    if (allRecords === null) {
+      try {
+        allRecords = await fetchIngests();
+      } catch {
+        allRecords = [];
+      }
+    }
+  }
+  // Candidate targets: every OTHER record, filtered by the search text over
+  // title and creators. A record never links to itself.
+  let linkChoices = $derived.by(() => {
+    const q = linkSearch.trim().toLowerCase();
+    return (allRecords ?? [])
+      .filter((r) => r.content_hash !== ingest.content_hash)
+      .filter(
+        (r) =>
+          !q ||
+          r.title.toLowerCase().includes(q) ||
+          (r.creators ?? []).some((c) => c.toLowerCase().includes(q)),
+      )
+      .slice(0, 30);
+  });
+  let linkTitles = $derived(
+    new Map((allRecords ?? []).map((r) => [r.content_hash, r.title])),
+  );
+  function confirmLink() {
+    if (!linkPicker || !linkTargetHash) return;
+    doc.addWordLink(linkPicker.from, linkPicker.to, linkTargetHash, linkQuote);
+    linkPicker = null;
+  }
   // markupMode persists globally, but only word records have a markup surface.
   // `inMarkup` is the effective flag: a prose record opened with the pref left on
   // must behave exactly as read mode, never hide its own controls.
@@ -3093,6 +3144,80 @@
     {/if}
   </div>
 
+  <!-- Cross-record link picker: select the record these words refer to,
+       optionally anchor to an exact passage in it (a verbatim quote - the
+       location is re-derived from it, so it survives the target's
+       re-extraction; spec record-format.md, Cross-record links). -->
+  {#if linkPicker}
+    <div
+      class="fixed inset-0 bg-ink/50 z-50 flex items-center justify-center p-4"
+      onclick={(e) => { if (e.target === e.currentTarget) linkPicker = null; }}
+      onkeydown={(e) => { if (e.key === 'Escape') linkPicker = null; }}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Refer to another source"
+      tabindex="-1"
+    >
+      <div class="bg-surface rounded-lg shadow-lg max-w-lg w-full p-6 flex flex-col max-h-[80vh]">
+        <h3 class="font-ui font-semibold text-on-surface mb-1">Refer to another source</h3>
+        <p class="text-xs text-on-surface-muted mb-3">
+          Link the selected words to the record they refer to. The link pins that
+          record permanently; the quote (optional) points at the exact passage.
+        </p>
+        <input
+          type="text"
+          bind:value={linkSearch}
+          placeholder="Search records by title or creator..."
+          class="w-full px-3 py-1.5 mb-2 text-sm bg-surface-alt border border-border rounded outline-none focus:border-primary"
+        />
+        <div class="flex-1 min-h-0 overflow-y-auto border border-border rounded mb-3">
+          {#if allRecords === null}
+            <p class="p-3 text-xs text-on-surface-muted">Loading records...</p>
+          {:else if linkChoices.length === 0}
+            <p class="p-3 text-xs text-on-surface-muted">No records match.</p>
+          {:else}
+            {#each linkChoices as r (r.content_hash)}
+              <button
+                onclick={() => (linkTargetHash = r.content_hash)}
+                class="w-full text-left px-3 py-2 border-b border-border last:border-b-0 cursor-pointer
+                  {linkTargetHash === r.content_hash ? 'bg-primary-container/30' : 'hover:bg-surface-alt'}"
+              >
+                <span class="block text-sm text-on-surface truncate">{r.title}</span>
+                <span class="block text-xs text-on-surface-muted">
+                  {r.source_type}{r.date ? ` - ${r.date}` : ""}
+                </span>
+              </button>
+            {/each}
+          {/if}
+        </div>
+        <label class="block text-xs font-ui text-on-surface-secondary mb-1" for="link-quote">
+          Passage in that record (optional) - paste the exact words
+        </label>
+        <textarea
+          id="link-quote"
+          bind:value={linkQuote}
+          rows="2"
+          placeholder={'e.g. "unidentified anomalous phenomena remain unexplained"'}
+          class="w-full px-3 py-1.5 mb-4 text-sm bg-surface-alt border border-border rounded outline-none focus:border-primary resize-none"
+        ></textarea>
+        <div class="flex justify-end gap-2">
+          <button
+            onclick={() => (linkPicker = null)}
+            class="px-3 py-1.5 text-sm font-ui text-on-surface-secondary hover:text-on-surface cursor-pointer"
+          >Cancel</button>
+          <button
+            onclick={confirmLink}
+            disabled={!linkTargetHash}
+            class="px-3 py-1.5 text-sm font-ui font-medium rounded
+              {linkTargetHash
+                ? 'bg-primary text-on-primary cursor-pointer hover:opacity-90'
+                : 'bg-surface-alt text-on-surface-muted/50 cursor-default'}"
+          >Link</button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
   <!-- Submit review modal -->
   {#if showSubmitForm}
     <div
@@ -3315,6 +3440,8 @@
           onremovenote={(id) => doc.removeWordSpanNote(id)}
           onremovepointnote={(g, ordinal) => doc.removeWordNote(g, ordinal)}
           onremovecontext={(of, needs) => doc.removeHighlightContext(of, needs)}
+          onremovelink={(id) => doc.removeWordLink(id)}
+          {linkTitles}
         />
       </div>
     </details>
@@ -4070,6 +4197,7 @@
               // following words and stops at the selection's end.
               armCeilingFrom(t);
             }}
+            onlinksource={openLinkPicker}
             onpause={() => {
               // A markup drag pauses playback in place - no seek, just stop, so
               // the reviewer can line up a highlight without audio running on.

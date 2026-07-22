@@ -171,6 +171,7 @@ export class DocumentStore {
       parsed.highlights,
       parsed.spanNotes,
       parsed.highlightContexts,
+      parsed.links,
     );
     // Reconcile the frontmatter speakers: KEEP real names the reviewer curated,
     // even when they have no body occurrences (a name added before assigning,
@@ -274,6 +275,7 @@ export class DocumentStore {
       next.highlights,
       next.spanNotes,
       next.highlightContexts,
+      next.links,
     );
     const result = fm + newBody;
     if (result !== this.current) this.pushEdit(result);
@@ -299,6 +301,7 @@ export class DocumentStore {
       parsed.highlights,
       parsed.spanNotes,
       parsed.highlightContexts,
+      parsed.links,
     );
     const result = fm + newBody;
     if (result !== this.current) this.pushEdit(result);
@@ -321,6 +324,7 @@ export class DocumentStore {
       next.highlights,
       next.spanNotes,
       next.highlightContexts,
+      next.links,
     );
     // Reconcile frontmatter speakers to those still present (mirrors
     // serialiseWithReconcile): keep curated named speakers, drop default
@@ -360,6 +364,7 @@ export class DocumentStore {
         parsed.highlights,
         parsed.spanNotes,
         parsed.highlightContexts,
+        parsed.links,
       ),
     );
   }
@@ -388,6 +393,7 @@ export class DocumentStore {
         parsed.highlights,
         parsed.spanNotes,
         parsed.highlightContexts,
+        parsed.links,
       ),
     );
   }
@@ -410,14 +416,7 @@ export class DocumentStore {
     // when the highest is deleted. `existing` still covers every id the record
     // MENTIONS, including ones only a retained dangling edge names, because the
     // counter must not collide with ids that never came from it.
-    const { id, nextId } = mintOverlayId(
-      [
-        ...parsed.highlights.map((h) => h.id),
-        ...parsed.spanNotes.map((n) => n.id),
-        ...parsed.highlightContexts.flatMap((c) => [c.of, ...c.needs]),
-      ],
-      readOverlayNextId(fm),
-    );
+    const { id, nextId } = mintOverlayId(overlayIdsOf(parsed), readOverlayNextId(fm));
     const fmOut = rewriteFrontmatterFields(fm, { overlay_next_id: nextId });
     const highlights = [...parsed.highlights, { id, fromWord: lo, toWord: hi }];
     const result =
@@ -430,6 +429,7 @@ export class DocumentStore {
         highlights,
         parsed.spanNotes,
         parsed.highlightContexts,
+        parsed.links,
       );
     if (result !== this.current) this.pushEdit(result);
   }
@@ -450,6 +450,7 @@ export class DocumentStore {
         highlights,
         parsed.spanNotes,
         parsed.highlightContexts,
+        parsed.links,
       );
     if (result !== this.current) this.pushEdit(result);
   }
@@ -503,6 +504,7 @@ export class DocumentStore {
         parsed.highlights,
         parsed.spanNotes,
         highlightContexts,
+        parsed.links,
       );
     if (result !== this.current) this.pushEdit(result);
   }
@@ -526,6 +528,7 @@ export class DocumentStore {
         highlights,
         parsed.spanNotes,
         parsed.highlightContexts,
+        parsed.links,
       );
     if (result !== this.current) this.pushEdit(result);
   }
@@ -548,14 +551,7 @@ export class DocumentStore {
     // when the highest is deleted. `existing` still covers every id the record
     // MENTIONS, including ones only a retained dangling edge names, because the
     // counter must not collide with ids that never came from it.
-    const { id, nextId } = mintOverlayId(
-      [
-        ...parsed.highlights.map((h) => h.id),
-        ...parsed.spanNotes.map((n) => n.id),
-        ...parsed.highlightContexts.flatMap((c) => [c.of, ...c.needs]),
-      ],
-      readOverlayNextId(fm),
-    );
+    const { id, nextId } = mintOverlayId(overlayIdsOf(parsed), readOverlayNextId(fm));
     const fmOut = rewriteFrontmatterFields(fm, { overlay_next_id: nextId });
     const spanNotes = [...parsed.spanNotes, { id, fromWord: lo, toWord: hi, text: clean }];
     const result =
@@ -568,6 +564,7 @@ export class DocumentStore {
         parsed.highlights,
         spanNotes,
         parsed.highlightContexts,
+        parsed.links,
       );
     if (result !== this.current) this.pushEdit(result);
   }
@@ -592,12 +589,74 @@ export class DocumentStore {
         parsed.highlights,
         spanNotes,
         parsed.highlightContexts,
+        parsed.links,
       );
     if (result !== this.current) this.pushEdit(result);
   }
 
   removeWordSpanNote(id: string) {
     this.editWordSpanNote(id, "");
+  }
+
+  /** Add a cross-record link over the inclusive word range [from, to], pinning
+   *  the target record's content_hash, optionally anchored by a verbatim quote
+   *  from the target (the location is re-derived from the quote at render time -
+   *  the spec's durability rule; never an offset). Same paired-marker machinery
+   *  and the same single overlay-id space as highlights and span notes. */
+  addWordLink(from: number, to: number, targetHash: string, quote = "") {
+    const target = targetHash.trim();
+    if (!target) return;
+    const cleanQuote = sanitiseNoteText(quote);
+    const [fm, body] = splitFrontmatter(this.current);
+    const parsed = parseWords(body);
+    const lo = Math.min(from, to);
+    const hi = Math.max(from, to);
+    if (lo < 0 || hi >= parsed.words.length) return;
+    const { id, nextId } = mintOverlayId(overlayIdsOf(parsed), readOverlayNextId(fm));
+    const fmOut = rewriteFrontmatterFields(fm, { overlay_next_id: nextId });
+    const links = [
+      ...parsed.links,
+      {
+        id,
+        fromWord: lo,
+        toWord: hi,
+        target: `sha256:${target.replace(/^sha256:/, "")}`,
+        ...(cleanQuote ? { quote: cleanQuote } : {}),
+      },
+    ];
+    const result =
+      fmOut +
+      serializeWords(
+        parsed.words,
+        parsed.runs,
+        parsed.lineEndWords,
+        parsed.preamble,
+        parsed.highlights,
+        parsed.spanNotes,
+        parsed.highlightContexts,
+        links,
+      );
+    if (result !== this.current) this.pushEdit(result);
+  }
+
+  removeWordLink(id: string) {
+    const [fm, body] = splitFrontmatter(this.current);
+    const parsed = parseWords(body);
+    if (!parsed.links.some((l) => l.id === id)) return;
+    const links = parsed.links.filter((l) => l.id !== id);
+    const result =
+      fm +
+      serializeWords(
+        parsed.words,
+        parsed.runs,
+        parsed.lineEndWords,
+        parsed.preamble,
+        parsed.highlights,
+        parsed.spanNotes,
+        parsed.highlightContexts,
+        links,
+      );
+    if (result !== this.current) this.pushEdit(result);
   }
 
   /** Re-range an existing span note to the inclusive word range [from, to] -
@@ -622,6 +681,7 @@ export class DocumentStore {
         parsed.highlights,
         spanNotes,
         parsed.highlightContexts,
+        parsed.links,
       );
     if (result !== this.current) this.pushEdit(result);
   }
@@ -860,6 +920,20 @@ function rewriteFrontmatterSpeakers(rawFm: string, speakers: string[]): string {
 /** Read the record's persisted overlay id counter, or null when absent (a record
  *  that predates the field - the mint then derives the mark from extant ids, which
  *  is correct for anything that never deleted its highest). */
+/** Every overlay id the record MENTIONS, across all three paired-marker
+ *  constructs and the id-referencing edges. This feeds mintOverlayId's collision
+ *  guard, and the spec's non-reuse rule quantifies over "any overlay construct
+ *  (a marker, a context edge, or a link payload)" - so a new construct's ids
+ *  get added HERE, once, not at each mint site. */
+function overlayIdsOf(parsed: ReturnType<typeof parseWords>): string[] {
+  return [
+    ...parsed.highlights.map((h) => h.id),
+    ...parsed.spanNotes.map((n) => n.id),
+    ...parsed.links.map((l) => l.id),
+    ...parsed.highlightContexts.flatMap((c) => [c.of, ...c.needs]),
+  ];
+}
+
 function readOverlayNextId(rawFm: string): number | null {
   if (!rawFm) return null;
   try {

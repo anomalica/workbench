@@ -19,6 +19,8 @@
     onremovenote,
     onremovepointnote,
     onremovecontext,
+    onremovelink,
+    linkTitles = new Map(),
     focusedId = null,
   }: {
     body: string;
@@ -30,18 +32,24 @@
      *  so that is the only end offering removal - the same rule the transcript's
      *  chain strip follows, so the two views never disagree about who owns it. */
     onremovecontext?: (of: string, needs: string) => void;
+    onremovelink?: (id: string) => void;
+    /** content_hash -> title, for naming a link's target record. A target not
+     *  in the map (list still loading) falls back to its short hash. */
+    linkTitles?: Map<string, string>;
     focusedId?: string | null;
   } = $props();
 
   interface Mark {
     id: string;
-    kind: "highlight" | "note" | "point";
+    kind: "highlight" | "note" | "point" | "link";
     from: number;
     to: number;
     excerpt: string;
     text: string;
     gIndex?: number;
     ordinal?: number;
+    target?: string;
+    quote?: string;
   }
 
   let parsed = $derived(parseWords(body));
@@ -64,6 +72,18 @@
         to: h.toWord,
         excerpt: excerptOf(h.fromWord, h.toWord),
         text: "",
+      });
+    }
+    for (const l of parsed.links) {
+      out.push({
+        id: `l:${l.id}`,
+        kind: "link",
+        from: l.fromWord,
+        to: l.toWord,
+        excerpt: excerptOf(l.fromWord, l.toWord),
+        text: "",
+        target: l.target,
+        ...(l.quote !== undefined ? { quote: l.quote } : {}),
       });
     }
     for (const n of parsed.spanNotes) {
@@ -111,8 +131,15 @@
     if (t) onfocus(t.fromWord, t.toWord, `h:${id}`);
   }
 
+  /** The target record's title, or its short hash while the list loads. */
+  function linkTargetLabel(target?: string): string {
+    const hash = (target ?? "").replace(/^sha256:/, "");
+    return linkTitles.get(hash) ?? `${hash.slice(0, 12)}...`;
+  }
+
   function remove(m: Mark) {
     if (m.kind === "highlight") onremovehighlight(m.id.slice(2));
+    else if (m.kind === "link") onremovelink?.(m.id.slice(2));
     else if (m.kind === "note") onremovenote(m.id.slice(2));
     else if (m.gIndex !== undefined && m.ordinal !== undefined)
       onremovepointnote(m.gIndex, m.ordinal);
@@ -122,6 +149,7 @@
     highlight: "Highlight",
     note: "Note",
     point: "Beat",
+    link: "Link",
   };
 </script>
 
@@ -147,7 +175,7 @@
           <div class="flex items-center justify-between gap-2">
             <span
               class="text-[10px] font-ui uppercase tracking-wide
-                {m.kind === 'highlight' ? 'text-warning/80' : m.kind === 'note' ? 'text-primary/80' : 'text-on-surface-muted'}"
+                {m.kind === 'highlight' ? 'text-warning/80' : m.kind === 'note' || m.kind === 'link' ? 'text-primary/80' : 'text-on-surface-muted'}"
             >{KIND_LABEL[m.kind]}</span>
             <button
               onclick={(e) => { e.stopPropagation(); remove(m); }}
@@ -161,6 +189,14 @@
               </svg>
             </button>
           </div>
+          {#if m.kind === "link"}
+            <p class="text-xs text-on-surface mt-0.5 truncate" title={m.target}>
+              &rarr; {linkTargetLabel(m.target)}
+            </p>
+            {#if m.quote}
+              <p class="text-xs text-on-surface-muted mt-0.5 italic truncate" title={m.quote}>at: "{m.quote}"</p>
+            {/if}
+          {/if}
           {#if m.text}
             <p class="text-xs text-on-surface mt-0.5 whitespace-pre-wrap">{m.text}</p>
           {/if}

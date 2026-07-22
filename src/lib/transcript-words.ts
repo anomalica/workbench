@@ -49,6 +49,21 @@ export interface WordSpanNote {
   text: string;
 }
 
+/** A cross-record link: a reviewer-authored reference from an inclusive word
+ *  range in THIS record to another record, pinned by the target's content_hash
+ *  ("sha256:..."), optionally anchored to a verbatim quote from the target (the
+ *  location is re-derived from the quote at render time, like a claim's - never
+ *  authored as an offset). Third paired-marker type, same machinery as
+ *  highlights and span notes: `{{link-start: [id, "sha256:...", "quote"?]}}` ...
+ *  `{{link-end: id}}`. Ids share the record's single overlay id space. */
+export interface WordLink {
+  id: string;
+  fromWord: number;
+  toWord: number;
+  target: string;
+  quote?: string;
+}
+
 /** A context edge: `of` needs the earlier highlights in `needs` to be understood
  *  ("he said" -> who). One-directional and backwards by construction. An id in
  *  `needs` with no matching highlight is DANGLING and is kept, not dropped - the
@@ -68,6 +83,8 @@ export interface ParsedWords {
   highlights: WordHighlight[];
   /** Reviewer span notes as inclusive word ranges + text, in start order. */
   spanNotes: WordSpanNote[];
+  /** Cross-record links as inclusive word ranges + target, in start order. */
+  links: WordLink[];
   /** Context edges between highlights, in document order. */
   highlightContexts: HighlightContext[];
   /** Everything in the body before the first `<!-- speaker -->` comment (the
@@ -105,6 +122,12 @@ const HL_MARKER = /\{\{highlight-(start|end):\s*([A-Za-z0-9_-]+)\s*\}\}/g;
 const NOTE_START_MARKER =
   /\{\{note-start:\s*\[\s*([A-Za-z0-9_-]+)\s*,\s*"((?:[^"\\]|\\.)*)"\s*\]\s*\}\}/g;
 const NOTE_END_MARKER = /\{\{note-end:\s*([A-Za-z0-9_-]+)\s*\}\}/g;
+// Cross-record links: start carries [id, "target"] or [id, "target", "quote"],
+// both strings double-quoted with the same escaping as note text (flat list, no
+// nested braces). link-end carries the id only.
+const LINK_START_MARKER =
+  /\{\{link-start:\s*\[\s*([A-Za-z0-9_-]+)\s*,\s*"((?:[^"\\]|\\.)*)"\s*(?:,\s*"((?:[^"\\]|\\.)*)"\s*)?\]\s*\}\}/g;
+const LINK_END_MARKER = /\{\{link-end:\s*([A-Za-z0-9_-]+)\s*\}\}/g;
 // {{highlight-context: [later, earlier, ...]}} - a STANDALONE annotation, not a
 // payload on highlight-start (which stays a bare scalar id). First id is the
 // highlight that NEEDS context; the rest are the earlier highlights it depends
@@ -117,10 +140,12 @@ const HL_CONTEXT_MARKER =
 /** A pulled paired-marker. `family` selects which resolver (highlight vs span
  *  note) it feeds; `text` is present only on a span-note start. */
 interface SpanMarker {
-  family: "hl" | "note";
+  family: "hl" | "note" | "link";
   dir: "start" | "end";
   id: string;
   text?: string;
+  target?: string;
+  quote?: string;
 }
 
 /** Reverse the escaping escapeNoteText applies (\" -> ", \\ -> \). */
@@ -151,6 +176,20 @@ function extractSpanMarkers(s: string): { rest: string; markers: SpanMarker[] } 
   });
   rest = rest.replace(NOTE_END_MARKER, (_m, id) => {
     markers.push({ family: "note", dir: "end", id });
+    return "";
+  });
+  rest = rest.replace(LINK_START_MARKER, (_m, id, target, quote) => {
+    markers.push({
+      family: "link",
+      dir: "start",
+      id,
+      target: unescapeNoteText(target),
+      ...(quote !== undefined ? { quote: unescapeNoteText(quote) } : {}),
+    });
+    return "";
+  });
+  rest = rest.replace(LINK_END_MARKER, (_m, id) => {
+    markers.push({ family: "link", dir: "end", id });
     return "";
   });
   return { rest, markers };
@@ -229,61 +268,73 @@ export function parseWords(body: string): ParsedWords {
   // `pending` until the next word is emitted (it opens THERE); an end closes the
   // current/last word. Anything still open at a speaker change or end of body
   // auto-closes on the run's last word.
-  interface ResolvedSpan {
+  interface SpanPayload {
+    text?: string;
+    target?: string;
+    quote?: string;
+  }
+  interface ResolvedSpan extends SpanPayload {
     id: string;
     fromWord: number;
     toWord: number;
-    text?: string;
   }
   interface SpanResolver {
     out: ResolvedSpan[];
-    open: Map<string, { from: number; text?: string }>;
-    pending: { id: string; text?: string }[];
+    open: Map<string, { from: number } & SpanPayload>;
+    pending: ({ id: string } & SpanPayload)[];
   }
   const mkResolver = (): SpanResolver => ({ out: [], open: new Map(), pending: [] });
   const hlR = mkResolver();
   const noteR = mkResolver();
+  const linkR = mkResolver();
   let lastEmitted = -1;
 
-  const openAt = (r: SpanResolver, id: string, g: number, text?: string) => {
+  const payloadOf = ({ text, target, quote }: SpanPayload): SpanPayload => ({
+    ...(text !== undefined ? { text } : {}),
+    ...(target !== undefined ? { target } : {}),
+    ...(quote !== undefined ? { quote } : {}),
+  });
+  const openAt = (r: SpanResolver, id: string, g: number, payload: SpanPayload) => {
     const prev = r.open.get(id);
     if (prev && g - 1 >= prev.from)
-      r.out.push({ id, fromWord: prev.from, toWord: g - 1, text: prev.text });
-    r.open.set(id, { from: g, text });
+      r.out.push({ id, fromWord: prev.from, toWord: g - 1, ...payloadOf(prev) });
+    r.open.set(id, { from: g, ...payloadOf(payload) });
   };
   const closeAt = (r: SpanResolver, id: string, g: number) => {
     const o = r.open.get(id);
     if (!o) return; // orphan end - dropped
-    if (g >= o.from) r.out.push({ id, fromWord: o.from, toWord: g, text: o.text });
+    if (g >= o.from) r.out.push({ id, fromWord: o.from, toWord: g, ...payloadOf(o) });
     r.open.delete(id);
   };
   const flushPending = (r: SpanResolver, g: number) => {
-    for (const p of r.pending) openAt(r, p.id, g, p.text);
+    for (const p of r.pending) openAt(r, p.id, g, p);
     r.pending = [];
   };
   const applyMarkers = (r: SpanResolver, markers: SpanMarker[], closeTarget: number) => {
     for (const mk of markers) {
-      if (mk.dir === "start") r.pending.push({ id: mk.id, text: mk.text });
+      if (mk.dir === "start") r.pending.push({ id: mk.id, ...payloadOf(mk) });
       else if (closeTarget >= 0) closeAt(r, mk.id, closeTarget);
     }
   };
+  const resolvers: [SpanResolver, SpanMarker["family"]][] = [
+    [hlR, "hl"],
+    [noteR, "note"],
+    [linkR, "link"],
+  ];
   const applyBoth = (markers: SpanMarker[], closeTarget: number) => {
-    applyMarkers(
-      hlR,
-      markers.filter((mk) => mk.family === "hl"),
-      closeTarget,
-    );
-    applyMarkers(
-      noteR,
-      markers.filter((mk) => mk.family === "note"),
-      closeTarget,
-    );
+    for (const [r, family] of resolvers) {
+      applyMarkers(
+        r,
+        markers.filter((mk) => mk.family === family),
+        closeTarget,
+      );
+    }
   };
   const endRun = () => {
-    for (const r of [hlR, noteR]) {
+    for (const r of [hlR, noteR, linkR]) {
       for (const [id, o] of r.open)
         if (lastEmitted >= o.from)
-          r.out.push({ id, fromWord: o.from, toWord: lastEmitted, text: o.text });
+          r.out.push({ id, fromWord: o.from, toWord: lastEmitted, ...payloadOf(o) });
       r.open.clear();
       r.pending = [];
     }
@@ -335,6 +386,7 @@ export function parseWords(body: string): ParsedWords {
         // own markers open the next word / close this one.
         flushPending(hlR, gIndex);
         flushPending(noteR, gIndex);
+        flushPending(linkR, gIndex);
         applyBoth(markers, gIndex);
 
         lastEmitted = gIndex;
@@ -365,7 +417,16 @@ export function parseWords(body: string): ParsedWords {
   const spanNotes: WordSpanNote[] = noteR.out
     .sort(bySpan)
     .map(({ id, fromWord, toWord, text }) => ({ id, fromWord, toWord, text: text ?? "" }));
-  return { words, runs, lineEndWords, highlights, spanNotes, highlightContexts, preamble };
+  const links: WordLink[] = linkR.out
+    .sort(bySpan)
+    .map(({ id, fromWord, toWord, target, quote }) => ({
+      id,
+      fromWord,
+      toWord,
+      target: target ?? "",
+      ...(quote !== undefined ? { quote } : {}),
+    }));
+  return { words, runs, lineEndWords, highlights, spanNotes, links, highlightContexts, preamble };
 }
 
 /** The gIndex of the word a inline event note anchors ONTO for time `at`:
@@ -397,6 +458,7 @@ export function serializeWords(
   highlights: WordHighlight[] = [],
   spanNotes: WordSpanNote[] = [],
   highlightContexts: HighlightContext[] = [],
+  links: WordLink[] = [],
 ): string {
   const speakerByWord = new Array<string>(words.length);
   for (const run of runs) {
@@ -419,6 +481,12 @@ export function serializeWords(
     (noteStartsAt.get(n.fromWord) ?? noteStartsAt.set(n.fromWord, []).get(n.fromWord)!).push(n);
     (noteEndsAt.get(n.toWord) ?? noteEndsAt.set(n.toWord, []).get(n.toWord)!).push(n.id);
   }
+  const linkStartsAt = new Map<number, WordLink[]>();
+  const linkEndsAt = new Map<number, string[]>();
+  for (const l of links) {
+    (linkStartsAt.get(l.fromWord) ?? linkStartsAt.set(l.fromWord, []).get(l.fromWord)!).push(l);
+    (linkEndsAt.get(l.toWord) ?? linkEndsAt.set(l.toWord, []).get(l.toWord)!).push(l.id);
+  }
   // Highlight starts before note starts; note ends before highlight ends. Order
   // within a slot is cosmetic (parse is order-agnostic there); this keeps a
   // highlight-only body byte-identical to before span notes existed.
@@ -426,8 +494,17 @@ export function serializeWords(
     (hlStartsAt.get(i) ?? []).map((id) => `{{highlight-start: ${id}}}`).join("") +
     (noteStartsAt.get(i) ?? [])
       .map((n) => `{{note-start: [${n.id}, "${escapeNoteText(n.text)}"]}}`)
+      .join("") +
+    (linkStartsAt.get(i) ?? [])
+      .map(
+        (l) =>
+          `{{link-start: [${l.id}, "${escapeNoteText(l.target)}"${
+            l.quote !== undefined ? `, "${escapeNoteText(l.quote)}"` : ""
+          }]}}`,
+      )
       .join("");
   const endMarkers = (i: number) =>
+    (linkEndsAt.get(i) ?? []).map((id) => `{{link-end: ${id}}}`).join("") +
     (noteEndsAt.get(i) ?? []).map((id) => `{{note-end: ${id}}}`).join("") +
     (hlEndsAt.get(i) ?? []).map((id) => `{{highlight-end: ${id}}}`).join("");
 
@@ -508,7 +585,8 @@ export function splitWord(
   pieces: string[],
   mediaDuration?: number,
 ): ParsedWords {
-  const { words, runs, lineEndWords, highlights, spanNotes, highlightContexts, preamble } = parsed;
+  const { words, runs, lineEndWords, highlights, spanNotes, links, highlightContexts, preamble } =
+    parsed;
   if (gIndex < 0 || gIndex >= words.length) return parsed;
   if (pieces.length <= 1) {
     if (pieces.length === 1 && words[gIndex].text !== pieces[0]) {
@@ -561,6 +639,7 @@ export function splitWord(
   const mapTo = (i: number) => (i >= gIndex ? i + (k - 1) : i);
   const newHighlights = remapSpans(highlights, mapFrom, mapTo);
   const newSpanNotes = remapSpans(spanNotes, mapFrom, mapTo);
+  const newLinks = remapSpans(links, mapFrom, mapTo);
 
   return {
     words: newWords,
@@ -568,6 +647,7 @@ export function splitWord(
     lineEndWords: newLineEndWords,
     highlights: newHighlights,
     spanNotes: newSpanNotes,
+    links: newLinks,
     // Unchanged by design: a context edge names ids, so moving words cannot
     // invalidate it - the property that makes ids the right anchor.
     highlightContexts,
@@ -590,7 +670,8 @@ export function replaceWordRange(
   to: number,
   newWords: { text: string; start: number }[],
 ): ParsedWords {
-  const { words, runs, lineEndWords, highlights, spanNotes, highlightContexts, preamble } = parsed;
+  const { words, runs, lineEndWords, highlights, spanNotes, links, highlightContexts, preamble } =
+    parsed;
   if (from < 0 || to >= words.length || from > to) return parsed;
   const clean = newWords
     .map((w) => ({ text: w.text.trim(), start: w.start }))
@@ -648,6 +729,7 @@ export function replaceWordRange(
   const mapTo = (i: number) => (i < from ? i : i <= to ? from + replLen - 1 : i + delta);
   const newHighlights = remapSpans(highlights, mapFrom, mapTo);
   const newSpanNotes = remapSpans(spanNotes, mapFrom, mapTo);
+  const newLinks = remapSpans(links, mapFrom, mapTo);
 
   return {
     words: out,
@@ -655,6 +737,7 @@ export function replaceWordRange(
     lineEndWords: newLineEndWords,
     highlights: newHighlights,
     spanNotes: newSpanNotes,
+    links: newLinks,
     // Unchanged by design: a context edge names ids, so moving words cannot
     // invalidate it - the property that makes ids the right anchor.
     highlightContexts,
