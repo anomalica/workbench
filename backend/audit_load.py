@@ -78,20 +78,56 @@ def _ref_names(refs) -> tuple[str, ...]:
     return tuple(out)
 
 
+# List prices per MILLION tokens (input, output), for deriving display cost from
+# the tokens in ai_usage. Dollars are DERIVED here at display time, never read
+# from the artefact: stored notional_cost_usd is being stripped from digests
+# (anomalica ruling 2026-07-23 - the canonical spec forbids it; tokens are the
+# permanent basis). Update these when list prices move; unknown models price as
+# None and the variant shows no cost rather than a wrong one.
+LIST_PRICES_PER_MTOK = {
+    "claude-haiku-4-5": (1.00, 5.00),
+    "claude-sonnet-4-6": (3.00, 15.00),
+    "claude-opus-4-8": (5.00, 25.00),
+}
+
+
+def _price_for(model: str) -> tuple[float, float] | None:
+    """Match on the longest known prefix, so dated ids
+    (claude-haiku-4-5-20251001) price as their family."""
+    best = None
+    for key, prices in LIST_PRICES_PER_MTOK.items():
+        if model.startswith(key) and (best is None or len(key) > len(best[0])):
+            best = (key, prices)
+    return best[1] if best else None
+
+
 def _variant_cost(doc: dict) -> float | None:
-    """Sum the per-stage `notional_cost_usd` recorded in the digest frontmatter.
-    None when no usage was recorded."""
+    """Derive the variant's notional cost from ai_usage TOKENS x current list
+    price. None when no usage was recorded or a stage's model is unpriced -
+    a partial figure would understate silently, which is worse than none."""
     usage = doc.get("ai_usage")
     if not isinstance(usage, list):
         return None
     total = 0.0
     seen = False
     for stage in usage:
-        cost = stage.get("notional_cost_usd") if isinstance(stage, dict) else None
-        if isinstance(cost, (int, float)):
-            total += float(cost)
-            seen = True
-    return total if seen else None
+        if not isinstance(stage, dict):
+            continue
+        tokens = stage.get("tokens")
+        model = stage.get("model")
+        if not isinstance(tokens, dict) or not isinstance(model, str):
+            continue
+        tin, tout = tokens.get("input"), tokens.get("output")
+        prices = _price_for(model)
+        if (
+            prices is None
+            or not isinstance(tin, (int, float))
+            or not isinstance(tout, (int, float))
+        ):
+            return None
+        total += (float(tin) * prices[0] + float(tout) * prices[1]) / 1_000_000
+        seen = True
+    return round(total, 4) if seen else None
 
 
 def prompt_fingerprint(doc: dict) -> str:

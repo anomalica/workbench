@@ -17,7 +17,13 @@ def _digest(model, claims):
     return {
         "schema": "anomalica/digest/1",
         "model": model,
-        "ai_usage": [{"stage": "digest", "notional_cost_usd": 1.25}],
+        "ai_usage": [
+            {
+                "stage": "digest",
+                "model": "claude-opus-4-8",
+                "tokens": {"input": 200_000, "output": 10_000},
+            }
+        ],
         "prompts": [{"pass": "claims", "id": "claims", "version": "v3"}],
         "domain_claims": claims,
         "infrastructure_claims": [],
@@ -91,7 +97,7 @@ def test_returns_variants_with_cost(audit_client):
     assert body["record"]["friendly_name"] == NAME
     models = {v["model"]: v for v in body["variants"]}
     assert set(models) == {"opus", "haiku"}
-    assert models["opus"]["cost_usd"] == 1.25
+    assert models["opus"]["cost_usd"] == 1.25  # (200k x $5 + 10k x $25) / 1M
     assert models["opus"]["claim_count"] == 2
 
 

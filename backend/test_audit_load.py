@@ -16,8 +16,19 @@ DIGEST = {
     "schema": "anomalica/digest/1",
     "model": "opus",
     "ai_usage": [
-        {"stage": "digest", "model": "claude-opus-4-8", "notional_cost_usd": 6.5},
-        {"stage": "extra", "notional_cost_usd": 0.19},
+        # Tokens only - stored dollars were stripped from digests (2026-07-23
+        # ruling): cost is DERIVED at display time from tokens x current list
+        # price. opus-4-8: $5/MTok in, $25/MTok out.
+        {
+            "stage": "digest",
+            "model": "claude-opus-4-8",
+            "tokens": {"input": 1_000_000, "output": 100_000},
+        },
+        {
+            "stage": "extra",
+            "model": "claude-opus-4-8",
+            "tokens": {"input": 30_000, "output": 1_000},
+        },
     ],
     "prompts": [
         {"pass": "nodes", "id": "nodes", "version": "v3"},
@@ -100,7 +111,8 @@ class TestLoadVariant:
         v = load_variant(DIGEST, "opus-v3")
         assert v.id == "opus-v3"
         assert v.model == "opus"
-        assert v.cost_usd == 6.69  # 6.5 + 0.19
+        # (1M x $5 + 100k x $25)/1M + (30k x $5 + 1k x $25)/1M = 7.5 + 0.175
+        assert v.cost_usd == 7.675
         assert v.prompt_ids == ["nodes:v3", "claims:v3"]
         assert len(v.claims) == 2
 
