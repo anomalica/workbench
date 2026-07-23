@@ -136,3 +136,71 @@ def test_record_without_variants_404(audit_client, tmp_path, monkeypatch):
         f"---\nschema: anomalica/record/1\ncontent_hash: {other}\ntitle: T\n---\nB\n"
     )
     assert audit_client.get(f"/api/ingests/{other}/audit").status_code == 404
+
+
+def test_put_claim_verdict_writes_v2_gold(audit_client, tmp_path, monkeypatch):
+    # The chips' save path end to end: validate, stamp reviewer + models set,
+    # compute the fingerprint from the raw digest-shaped claim, upsert, save.
+    # save_audit is faked - the REAL one commits to the ingests repo.
+    store = tmp_path / "store"
+    store.mkdir()
+    written = {}
+    monkeypatch.setattr(server.source, "audit_store_dir", lambda h: store)
+    monkeypatch.setattr(
+        server.source,
+        "save_audit",
+        lambda h, gold, name, email: written.update(gold=gold) or True,
+    )
+    entry = {
+        "variant": "haiku.d161b1ed",
+        "model": "haiku",
+        "prompt_sha": "d161b1ed",
+        "claim_id": "h1",
+        "location": "00:00:00-00:00:30",
+        "text": "Jon ran for governor",
+        "quote": "Q",
+        "claim_type": "domain",
+        "quality": "good",
+        "claim": {
+            "text": "Jon ran for governor",
+            "type": "domain",
+            "quote": "Q",
+            "location": "00:00:00-00:00:30",
+        },
+    }
+    res = audit_client.put(f"/api/ingests/{HASH}/audit/claim", json=entry)
+    assert res.status_code == 200, res.text
+    gold = written["gold"]
+    assert gold["schema"] == "anomalica/audit/2"
+    [claim] = gold["claims"]
+    assert claim["quality"] == "good"
+    assert claim["reviewed_by"] == "rev@x.invalid"
+    assert claim["gold_id"]
+    # The raw claim is hashed then POPPED - never stored (anchors carry the text).
+    assert "claim" not in claim
+    assert len(claim.get("claim_fingerprint", "")) == 64
+    # Spec-required models set, stamped from the variants on disk.
+    assert {m["variant"] for m in gold["models"]} == {"opus", "haiku"}
+
+    # Re-judging the same claim updates ONE entry (the press-3-then-2 path).
+    entry["quality"] = "okay"
+    res = audit_client.put(f"/api/ingests/{HASH}/audit/claim", json=entry)
+    assert res.status_code == 200
+    [claim] = written["gold"]["claims"]
+    assert claim["quality"] == "okay"
+
+
+def test_put_claim_rejects_bad_quality(audit_client, tmp_path, monkeypatch):
+    monkeypatch.setattr(server.source, "audit_store_dir", lambda h: tmp_path)
+    res = audit_client.put(
+        f"/api/ingests/{HASH}/audit/claim",
+        json={
+            "variant": "v",
+            "model": "m",
+            "prompt_sha": "s",
+            "claim_id": "c",
+            "text": "t",
+            "quality": "great",
+        },
+    )
+    assert res.status_code == 400

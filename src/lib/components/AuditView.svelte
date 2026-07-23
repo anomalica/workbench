@@ -16,12 +16,12 @@
   // lines more easily than adjacent columns anyway.
   import {
     fetchAudit,
-    putAuditVerdict,
+    putAuditClaim,
     type AuditPayload,
     type AuditPassage,
     type AuditCluster,
     type AuditMember,
-    type AuditGold,
+    type AuditClaimGold,
   } from "$lib/api";
   import {
     auditGrid,
@@ -114,101 +114,103 @@
     return raws[0] ?? "—";
   }
 
-  // --- adjudication (the gold): mark each fact real/hallucinated/not-asserted;
-  // for a `real` fact, mark each model's rendering correct or how it went wrong.
-  // Persisted to {hash}.audit.json; the digester's grader scores variants on it.
-  // THREE QUESTIONS, asked at three different things - which was the whole
-  // problem. Mark: "what am I actually clicking real/hallucinated on, because
-  // below that you list all the models - are we saying it for the extract, or
-  // are we rating a model? It's unusably confusing." He was right: the verdict
-  // judges the FACT, the worth judges the FACT, the wording judges ONE MODEL's
-  // rendering of it, and nothing on screen said so. Each control now carries its
-  // question in the UI, next to the thing it is about.
-  const CLUSTER_VERDICTS = ["real", "hallucinated", "not_asserted"] as const;
-  const CLUSTER_LABEL: Record<string, string> = {
-    real: "Real",
-    hallucinated: "Hallucinated",
-    not_asserted: "Not asserted",
-  };
-  const CLUSTER_HELP: Record<string, string> = {
-    real: "The source asserts this, and the models read it correctly",
-    hallucinated: "The source does not assert this - the model invented it",
-    not_asserted: "The source mentions it but does not assert it as fact",
-  };
-
-  // WORTH - orthogonal to the verdict, and the axis Mark actually cares about:
-  // "haiku is pulling out a lot of low value facts that are quite unrelated to
-  // anything of value". A claim can be perfectly real and still junk, so this is
-  // a separate question, not a fourth verdict.
-  const WORTHS = ["carries", "incidental", "noise"] as const;
-  const WORTH_LABEL: Record<string, string> = {
-    carries: "Carries",
-    incidental: "Incidental",
-    noise: "Noise",
-  };
-  const WORTH_HELP: Record<string, string> = {
-    carries: "The record would be poorer without this claim",
-    incidental: "True and harmless - fine to keep, nobody would miss it",
-    noise: "Correctly extracted and not worth a row (boilerplate, restated framing)",
-  };
-  const MEMBER_VERDICTS = ["correct", "flattened", "misattributed", "overhedged"] as const;
-  const MEMBER_LABEL: Record<string, string> = {
-    correct: "correct",
-    flattened: "flattened",
-    misattributed: "mis-attributed",
-    overhedged: "over-hedged",
-  };
-  const MEMBER_HELP: Record<string, string> = {
-    correct: "This model worded the fact faithfully",
-    flattened: "Lost the framing - dropped an attestation or a source ref",
-    misattributed: "Attributed the fact to the wrong person or source",
-    overhedged: "Hedged a fact the source states plainly",
+  // --- adjudication, anomalica/audit/2: ONE question per model claim -
+  // quality (bad/okay/good) - plus the orthogonal irrelevant mark. The eval
+  // catches fabrication and quote-mining deterministically, so clicks buy only
+  // what a machine can't judge: "bad" INCLUDES unsupported-or-misrepresents-
+  // the-source (the semantic axis), and irrelevant is the noise metric, kept
+  // separate so a perfectly-written claim about nothing stays visible as such.
+  // Keyboard-first: hover a claim, press 1/2/3 for bad/okay/good, x for
+  // irrelevant. Adjudication is per model AND prompt - the models word the same
+  // fact differently every time, so grading one credits nothing to another.
+  const QUALITY = ["bad", "okay", "good"] as const;
+  const QUALITY_HELP: Record<string, string> = {
+    bad: "Unsupported by, or misrepresents, the source - or badly made (key 1)",
+    okay: "Serviceable extraction (key 2)",
+    good: "Faithful and well made (key 3)",
   };
 
   let recordHash = $derived(payload?.record.hash ?? "");
 
-  function memberVerdictOf(c: AuditCluster, m: AuditMember): string {
-    return (
-      c.gold?.members?.find((g) => g.variant === m.variant && g.claim_id === m.claim_id)?.verdict ??
-      "correct"
-    );
+  /** The stored verdict for a variant claim, keyed (variant, claim_id). Local
+   *  saves update this map so chips reflect immediately. */
+  let goldByKey = $derived.by(() => {
+    const m = new Map<string, AuditClaimGold>();
+    for (const g of payload?.gold?.claims ?? []) m.set(`${g.variant}\u0000${g.claim_id}`, g);
+    return m;
+  });
+  function goldOf(m: AuditMember): AuditClaimGold | undefined {
+    return goldByKey.get(`${m.variant}\u0000${m.claim_id}`);
   }
 
-  async function saveGold(
-    c: AuditCluster,
+  async function saveClaim(
+    m: AuditMember,
     p: AuditPassage,
-    verdict: string,
-    memberOverride?: { member: AuditMember; verdict: string },
-    worth?: string | null,
+    change: { quality?: "bad" | "okay" | "good"; irrelevant?: boolean },
   ) {
-    const members = c.members.map((m) => ({
+    const prev = goldOf(m);
+    const entry: AuditClaimGold = {
+      ...(prev?.gold_id ? { gold_id: prev.gold_id } : {}),
       variant: m.variant,
+      model: m.model,
+      prompt_sha: m.variant.includes(".") ? m.variant.split(".")[1] : "",
       claim_id: m.claim_id,
-      verdict:
-        memberOverride && memberOverride.member.variant === m.variant &&
-        memberOverride.member.claim_id === m.claim_id
-          ? memberOverride.verdict
-          : memberVerdictOf(c, m),
-    }));
-    // Worth judges a fact that exists, so it only rides along on `real`. Moving
-    // off `real` drops it rather than leaving a worth attached to a claim we have
-    // just said isn't there.
-    const keptWorth = verdict === "real" ? (worth === undefined ? c.gold?.worth : worth) : undefined;
-    const gold: AuditGold = {
-      gold_id: c.gold?.gold_id,
-      verdict,
-      location: p.raw_locations[0] ?? "",
-      text: c.members[0]?.text ?? "",
-      members,
-      ...(keptWorth ? { worth: keptWorth } : {}),
+      location: m.location || (p.raw_locations[0] ?? ""),
+      text: m.text,
+      quote: m.quote ?? "",
+      claim_type: m.claim_type ?? "",
+      ...(change.quality !== undefined
+        ? { quality: change.quality }
+        : prev?.quality
+          ? { quality: prev.quality }
+          : {}),
+      ...(change.irrelevant !== undefined
+        ? { irrelevant: change.irrelevant }
+        : prev?.irrelevant
+          ? { irrelevant: true }
+          : {}),
+      // The digest-shaped claim, for the server-side fingerprint (the digester's
+      // fingerprint_of_claim maps these keys itself). audit_load renamed
+      // type -> claim_type on the way in; this undoes exactly that one rename.
+      claim: {
+        text: m.text,
+        type: m.claim_type,
+        quote: m.quote,
+        location: m.location,
+      },
     };
     try {
-      const { gold_id } = await putAuditVerdict(recordHash, gold);
-      c.gold = { ...gold, gold_id };
-      payload = payload; // nested mutation -> reassign to refresh
+      const { gold_id } = await putAuditClaim(recordHash, entry);
+      const stored = { ...entry, gold_id };
+      delete stored.claim;
+      payload?.gold?.claims &&
+        (payload.gold.claims = [
+          ...payload.gold.claims.filter(
+            (g) => !(g.variant === m.variant && g.claim_id === m.claim_id),
+          ),
+          stored,
+        ]);
+      payload = payload;
     } catch {
       /* leave the UI unchanged on failure */
     }
+  }
+
+  // Keyboard grading: the claim under the cursor takes 1/2/3/x.
+  let hoveredMember: { m: AuditMember; p: AuditPassage } | null = null;
+  function onKeydown(e: KeyboardEvent) {
+    if (!hoveredMember || e.ctrlKey || e.metaKey || e.altKey) return;
+    const t = e.target as HTMLElement | null;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
+    const { m, p } = hoveredMember;
+    if (!gradable(p)) return;
+    if (e.key === "1") saveClaim(m, p, { quality: "bad" });
+    else if (e.key === "2") saveClaim(m, p, { quality: "okay" });
+    else if (e.key === "3") saveClaim(m, p, { quality: "good" });
+    else if (e.key === "x" || e.key === "X")
+      saveClaim(m, p, { irrelevant: !goldOf(m)?.irrelevant });
+    else return;
+    e.preventDefault();
   }
 
   function rowsOf(p: AuditPassage): AuditGridRow[] {
@@ -225,6 +227,8 @@
     return !confounded && p.compared !== false;
   }
 </script>
+
+<svelte:window onkeydown={onKeydown} />
 
 <div class="flex-1 flex flex-col min-h-0 font-ui bg-surface">
   {#if status === "loading"}
@@ -363,54 +367,6 @@
                     <p class="text-xs italic text-on-surface-muted/60">no source quote</p>
                   {/each}
                 </div>
-                <div class="flex flex-none flex-col items-end gap-1">
-                  <!-- QUESTION 1, about the FACT: does the source assert it? -->
-                  <div class="flex items-center gap-1">
-                    <span class="text-[10px] text-on-surface-muted/80 mr-0.5">Does the source say this?</span>
-                    {#each CLUSTER_VERDICTS as v}
-                      <button
-                        onclick={() => saveGold(row.cluster, p, v)}
-                        disabled={!canGrade}
-                        class="text-[11px] font-medium rounded px-1.5 py-0.5 transition-colors
-                          {!canGrade
-                            ? 'text-on-surface-muted/40 cursor-not-allowed'
-                            : row.cluster.gold?.verdict === v
-                              ? v === 'real'
-                                ? 'bg-success text-on-success cursor-pointer'
-                                : 'bg-error text-on-error cursor-pointer'
-                              : 'text-on-surface-muted hover:bg-surface-alt cursor-pointer'}"
-                        title={!canGrade
-                          ? "Grading is off here: the models were not compared at this location, so this cluster is an artefact"
-                          : CLUSTER_HELP[v]}
-                      >
-                        {CLUSTER_LABEL[v]}
-                      </button>
-                    {/each}
-                  </div>
-
-                  <!-- QUESTION 2, also about the FACT, and the one that picks a
-                       model: was it worth extracting? Only meaningful once the
-                       fact is real - there is nothing to value in a hallucination. -->
-                  {#if canGrade && row.cluster.gold?.verdict === "real"}
-                    <div class="flex items-center gap-1">
-                      <span class="text-[10px] text-on-surface-muted/80 mr-0.5">Worth extracting?</span>
-                      {#each WORTHS as w}
-                        <button
-                          onclick={() => saveGold(row.cluster, p, "real", undefined, w)}
-                          class="text-[11px] font-medium rounded px-1.5 py-0.5 cursor-pointer transition-colors
-                            {row.cluster.gold?.worth === w
-                              ? w === 'noise'
-                                ? 'bg-warning text-on-warning'
-                                : 'bg-primary text-on-primary'
-                              : 'text-on-surface-muted hover:bg-surface-alt'}"
-                          title={WORTH_HELP[w]}
-                        >
-                          {WORTH_LABEL[w]}
-                        </button>
-                      {/each}
-                    </div>
-                  {/if}
-                </div>
               </div>
 
               <!-- Each model's rendering of this fact, one line each. -->
@@ -439,26 +395,48 @@
                             {/if}
                           </div>
                         {/each}
-                        {#if row.cluster.gold?.verdict === "real" && canGrade}
+                        {#if canGrade}
                           {#each cell.members as m (m.claim_id)}
-                            <!-- QUESTION 3, about THIS MODEL only: did it word
-                                 the fact faithfully? Not about the fact. -->
-                            <div class="flex flex-wrap items-center gap-1">
-                              <span class="text-[10px] text-on-surface-muted/70 mr-0.5">{cell.model}'s wording:</span>
-                              {#each MEMBER_VERDICTS as mv}
+                            {@const g = goldOf(m)}
+                            <!-- ONE question, about THIS model's claim: quality.
+                                 Hover + 1/2/3/x grades without clicking. -->
+                            <div
+                              class="flex flex-wrap items-center gap-1"
+                              role="group"
+                              onmouseenter={() => (hoveredMember = { m, p })}
+                              onmouseleave={() => (hoveredMember = null)}
+                            >
+                              {#each QUALITY as q, qi}
                                 <button
-                                  onclick={() => saveGold(row.cluster, p, "real", { member: m, verdict: mv })}
-                                  class="text-[10px] rounded px-1 py-0.5 cursor-pointer transition-colors
-                                    {memberVerdictOf(row.cluster, m) === mv
-                                      ? mv === 'correct'
-                                        ? 'bg-success/80 text-on-success'
-                                        : 'bg-warning text-on-warning'
-                                      : 'text-on-surface-muted/70 hover:bg-surface-alt'}"
-                                  title={MEMBER_HELP[mv]}
+                                  onclick={() => saveClaim(m, p, { quality: q })}
+                                  class="text-[11px] font-medium rounded px-1.5 py-0.5 cursor-pointer transition-colors
+                                    {g?.quality === q
+                                      ? q === 'bad'
+                                        ? 'bg-error text-on-error'
+                                        : q === 'okay'
+                                          ? 'bg-warning text-on-warning'
+                                          : 'bg-success text-on-success'
+                                      : 'text-on-surface-muted hover:bg-surface-alt'}"
+                                  title={QUALITY_HELP[q]}
                                 >
-                                  {MEMBER_LABEL[mv]}
+                                  {qi + 1} {q}
                                 </button>
                               {/each}
+                              <button
+                                onclick={() => saveClaim(m, p, { irrelevant: !g?.irrelevant })}
+                                class="text-[11px] font-medium rounded px-1.5 py-0.5 cursor-pointer transition-colors ml-1
+                                  {g?.irrelevant
+                                    ? 'bg-on-surface-muted text-surface'
+                                    : 'text-on-surface-muted hover:bg-surface-alt'}"
+                                title="Not worth recording, however well made - the noise metric, separate from quality (key x)"
+                              >
+                                x irrelevant
+                              </button>
+                              {#if g}
+                                <span class="text-[10px] text-on-surface-muted/60 ml-1" title="Adjudication is per model AND prompt; this verdict belongs to this prompt generation">
+                                  under {g.prompt_sha}
+                                </span>
+                              {/if}
                             </div>
                           {/each}
                         {/if}

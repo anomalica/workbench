@@ -326,6 +326,9 @@ export interface AuditPayload {
   variants: AuditVariant[];
   passages: AuditPassage[];
   missed?: AuditGold[];
+  /** anomalica/audit/2 gold as stored: raw claim verdicts + cluster best-ofs.
+   *  Matching onto the displayed run is the client's job, by (variant, claim_id). */
+  gold?: { claims: AuditClaimGold[]; clusters: Record<string, unknown>[] };
 }
 
 /** Fetch the model/digest audit comparison for a record. Null when no extraction
@@ -337,16 +340,34 @@ export async function fetchAudit(hash: string): Promise<AuditPayload | null> {
   return res.json();
 }
 
-/** Record an adjudication (the reviewer's gold) on a cluster or missed claim.
- *  Returns the assigned gold_id. */
-export async function putAuditVerdict(
+/** One claim verdict in the anomalica/audit/2 gold: quality (bad|okay|good,
+ *  "bad" includes misrepresents-the-source) and/or the orthogonal irrelevant
+ *  mark. Keyed to a variant's claim; carries the anchors and the raw digest
+ *  claim so the server computes the digester's fingerprint with zero mapping. */
+export interface AuditClaimGold {
+  gold_id?: string;
+  variant: string;
+  model: string;
+  prompt_sha: string;
+  claim_id: string;
+  location: string;
+  text: string;
+  quote: string;
+  claim_type: string;
+  quality?: "bad" | "okay" | "good";
+  irrelevant?: boolean;
+  claim?: Record<string, unknown>;
+}
+
+/** Record one claim verdict (anomalica/audit/2). Returns the assigned gold_id. */
+export async function putAuditClaim(
   hash: string,
-  adjudication: AuditGold,
+  entry: AuditClaimGold,
 ): Promise<{ gold_id: string }> {
-  const res = await fetch(`/api/ingests/${hash}/audit/verdict`, {
+  const res = await fetch(`/api/ingests/${hash}/audit/claim`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(adjudication),
+    body: JSON.stringify(entry),
   });
   if (!res.ok) throw new Error(`Failed to save verdict: ${res.status}`);
   return res.json();
