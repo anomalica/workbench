@@ -247,15 +247,25 @@
       : null,
   );
 
-  // The live recompute disagrees with what was submitted: the observation basis
-  // has shifted under the stored spans. When true the recompute cannot be
-  // trusted, the display must show the stored state, and Submit must be held -
-  // re-submitting would overwrite a good sidecar with the skewed number.
+  // The live recompute has fallen BELOW what was submitted: the observation
+  // basis shifted under the stored spans (markers grew the word count), so the
+  // recompute cannot be trusted, the display must show the stored state, and
+  // Submit must be held - re-submitting would overwrite a good sidecar with the
+  // skewed number.
+  //
+  // DIRECTIONAL, deliberately - the same rule as WordTranscript's
+  // coverageUnreliable, so the toolbar and the submit dialog can never disagree.
+  // It was Math.abs(), which read UPWARD movement as skew too. But live above
+  // stored is just reviewing: the backend emits observed_coverage 0.0 for a
+  // never-reviewed record, so a FIRST review always sat at live 100% vs "saved"
+  // 0% - the dialog showed 0% as his saved state and Submit refused with "your
+  // review is already saved", which was false: nothing was saved, and nothing
+  // ever could be.
   let basisSkew = $derived(
     isWordRecord &&
       wordVerdict != null &&
       storedVerdict != null &&
-      Math.abs(wordVerdict.observed_coverage - storedVerdict.observed_coverage) > 0.005,
+      wordVerdict.observed_coverage < storedVerdict.observed_coverage - 0.005,
   );
 
   // Same verdict shape reported by the readable-text coverage view (web/ebook
