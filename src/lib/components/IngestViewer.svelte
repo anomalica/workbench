@@ -157,6 +157,14 @@
   let livePublisher = $derived(
     typeof currentFrontmatterObj.publisher === "string" ? currentFrontmatterObj.publisher : "",
   );
+  // The WORKING title, so a retitle shows in the header immediately, not after
+  // submit + reload. Falls back to the server detail for a record whose draft
+  // hasn't touched the frontmatter.
+  let liveTitle = $derived(
+    typeof currentFrontmatterObj.title === "string" && currentFrontmatterObj.title.trim()
+      ? currentFrontmatterObj.title
+      : (ingest.frontmatter.title ?? "Untitled"),
+  );
   let liveProvenance = $derived(
     provenanceOf({
       source_url:
@@ -2998,7 +3006,7 @@
     <div class="w-px h-8 bg-border flex-none"></div>
     <div class="flex-1 min-w-0">
       <h2 class="font-ui font-semibold text-on-surface truncate">
-        {ingest.frontmatter.title ?? "Untitled"}
+        {liveTitle}
       </h2>
       {#if liveCreators.length > 0}
         <p class="text-xs text-on-surface-muted truncate">
@@ -3928,11 +3936,12 @@
       {#if showMetadata}
         <div class="border-b border-border bg-surface-alt/50 px-4 py-3 flex-none flex flex-col gap-3">
           <EditableMetadata
+            title={liveTitle}
             publisher={livePublisher}
             creators={liveCreators}
             canEdit={!!user}
-            onsave={({ publisher, creators }) =>
-              doc.updateFrontmatter({ publisher, creators })}
+            onsave={({ title, publisher, creators }) =>
+              doc.updateFrontmatter({ title, publisher, creators })}
           />
           <!-- Acquisition provenance: where this record came from. -->
           <div class="flex items-baseline gap-2 text-xs font-ui">

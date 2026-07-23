@@ -1,22 +1,28 @@
 <script lang="ts">
   let {
+    title,
     publisher,
     creators,
     canEdit = false,
     onsave,
   }: {
+    title: string;
     publisher: string;
     creators: string[];
     canEdit?: boolean;
-    /** Persist both fields in one edit. "" / [] clear the respective key. */
-    onsave: (data: { publisher: string; creators: string[] }) => void;
+    /** Persist all fields in one edit. "" / [] clear the respective key -
+     *  except title, which never clears: a record must stay findable in the
+     *  list, so an emptied title keeps the current one. */
+    onsave: (data: { title: string; publisher: string; creators: string[] }) => void;
   } = $props();
 
   let editing = $state(false);
+  let draftTitle = $state("");
   let draftPublisher = $state("");
   let draftCreators = $state<string[]>([]);
 
   function startEdit() {
+    draftTitle = title;
     draftPublisher = publisher;
     draftCreators = creators.length > 0 ? [...creators] : [""];
     editing = true;
@@ -28,6 +34,7 @@
 
   function save() {
     onsave({
+      title: draftTitle.trim() || title,
       publisher: draftPublisher,
       creators: draftCreators.map((c) => c.trim()).filter((c) => c !== ""),
     });
@@ -58,6 +65,10 @@
   {#if !editing}
     <div class="flex flex-col gap-1">
       <div class="flex items-baseline gap-2">
+        <span class="text-on-surface-muted w-32 flex-none">Title</span>
+        <span class="text-on-surface">{title}</span>
+      </div>
+      <div class="flex items-baseline gap-2">
         <span class="text-on-surface-muted w-32 flex-none">Publisher</span>
         <span class="text-on-surface">{publisher || "—"}</span>
       </div>
@@ -78,6 +89,16 @@
     </div>
   {:else}
     <div class="flex flex-col gap-3 max-w-md">
+      <label class="flex flex-col gap-1">
+        <span class="text-on-surface-muted">Title</span>
+        <input
+          type="text"
+          bind:value={draftTitle}
+          placeholder="What this record actually is"
+          class="bg-surface border border-border rounded px-2 py-1 text-on-surface
+            outline-none focus:border-primary placeholder:text-on-surface-muted/50"
+        />
+      </label>
       <label class="flex flex-col gap-1">
         <span class="text-on-surface-muted">Publisher</span>
         <div class="flex items-center gap-2">
