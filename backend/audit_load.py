@@ -101,6 +101,36 @@ def _price_for(model: str) -> tuple[float, float] | None:
     return best[1] if best else None
 
 
+def _stage_tokens(stage: dict) -> tuple[float, float] | None:
+    """(tokens_in, tokens_out) for one ai_usage stage.
+
+    The CLOSED shape (digest-format.md#ai_usage, anomalica-common 4e5f512) is
+    flat tokens_in/tokens_out. The nested tokens.{input,output} fallback is
+    TRANSITIONAL: the 59 pre-ruling digests still carry it until the digester's
+    one-shot migration lands - delete the fallback (and its test) then, so
+    neither side carries dual-shape support beyond the migration window."""
+    tin, tout = stage.get("tokens_in"), stage.get("tokens_out")
+    if isinstance(tin, (int, float)) and isinstance(tout, (int, float)):
+        return float(tin), float(tout)
+    tokens = stage.get("tokens")
+    if isinstance(tokens, dict):
+        tin, tout = tokens.get("input"), tokens.get("output")
+        if isinstance(tin, (int, float)) and isinstance(tout, (int, float)):
+            return float(tin), float(tout)
+    return None
+
+
+def _stage_model(stage: dict) -> str | None:
+    """The VERSIONED model id for pricing. Closed shape: model_version (model
+    holds the bare alias "opus", which must never key a price). Transitional
+    fallback: old-shape model, which held the versioned id."""
+    mv = stage.get("model_version")
+    if isinstance(mv, str) and mv:
+        return mv
+    m = stage.get("model")
+    return m if isinstance(m, str) and m else None
+
+
 def _variant_cost(doc: dict) -> float | None:
     """Derive the variant's notional cost from ai_usage TOKENS x current list
     price. None when no usage was recorded or a stage's model is unpriced -
@@ -113,19 +143,14 @@ def _variant_cost(doc: dict) -> float | None:
     for stage in usage:
         if not isinstance(stage, dict):
             continue
-        tokens = stage.get("tokens")
-        model = stage.get("model")
-        if not isinstance(tokens, dict) or not isinstance(model, str):
+        parsed = _stage_tokens(stage)
+        model = _stage_model(stage)
+        if parsed is None or model is None:
             continue
-        tin, tout = tokens.get("input"), tokens.get("output")
         prices = _price_for(model)
-        if (
-            prices is None
-            or not isinstance(tin, (int, float))
-            or not isinstance(tout, (int, float))
-        ):
+        if prices is None:
             return None
-        total += (float(tin) * prices[0] + float(tout) * prices[1]) / 1_000_000
+        total += (parsed[0] * prices[0] + parsed[1] * prices[1]) / 1_000_000
         seen = True
     return round(total, 4) if seen else None
 
