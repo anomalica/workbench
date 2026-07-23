@@ -2310,16 +2310,19 @@ def _audit_write(
         # so the two sides cannot drift on what "the same claim" means. Only
         # possible when the client supplied claim_type; anchors remain the
         # fallback for entries without it.
+        # The client sends the claim EXACTLY as the digest YAML serves it, and
+        # fingerprint_of_claim (anomalica-common 698299a) does the field mapping
+        # internally - so the mapping is shared, not just the hash. Hand-mapping
+        # here was the drift surface the digester caught: one mismatched field
+        # and every fingerprint diverges silently, no verdict ever matches. The
+        # raw claim is popped, not stored - text/quote/location already carry
+        # the human-readable anchors.
+        raw_claim = body.pop("claim", None)
         try:
-            from anomalica_common.digest import claim_fingerprint
+            from anomalica_common.digest import fingerprint_of_claim
 
-            if body.get("claim_type"):
-                body["claim_fingerprint"] = claim_fingerprint(
-                    content=body.get("text"),
-                    claim_type=body.get("claim_type"),
-                    original_excerpt=body.get("quote"),
-                    location_in_record=body.get("location"),
-                )
+            if isinstance(raw_claim, dict):
+                body["claim_fingerprint"] = fingerprint_of_claim(raw_claim)
         except ImportError:
             pass
         audit_gold.upsert_claim(gold, body)
