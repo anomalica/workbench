@@ -2249,58 +2249,101 @@ def get_audit(full_hash: str, request: Request) -> JSONResponse:
 
 
 def _attach_audit_gold(full_hash: str, payload: dict) -> None:
-    """Stamp each cluster with its adjudication (matched by member provenance)
-    and collect `missed` entries (a source claim no variant captured) into
-    payload['missed']. Leaves clusters unadjudicated where no gold exists."""
+    """Attach the v2 gold: the raw claim verdicts and cluster best-ofs, keyed
+    for the client by (variant, claim_id). Matching a verdict onto the DISPLAYED
+    run is the client's job (it has the claims in hand); re-match across
+    re-digests anchors on quote/location/text. v2 has no stored `missed` - the
+    client derives missed-fact from cluster membership."""
     store_dir = source.audit_store_dir(full_hash)
-    if store_dir is None:
-        payload["missed"] = []
-        return
-    gold = audit_gold.read(store_dir, full_hash)
-    clusters = [c for p in payload["passages"] for c in p["clusters"]]
-    missed = []
-    for adj in gold.get("adjudications", []):
-        if adj.get("verdict") == "missed" or not adj.get("members"):
-            missed.append(adj)
-            continue
-        cluster = audit_gold.match_adjudication(adj, clusters)
-        if cluster is not None:
-            cluster["gold"] = adj
-    payload["missed"] = missed
+    gold = (
+        audit_gold.read(store_dir, full_hash)
+        if store_dir is not None
+        else audit_gold.empty(full_hash)
+    )
+    payload["gold"] = {
+        "claims": gold.get("claims", []),
+        "clusters": gold.get("clusters", []),
+    }
 
 
-@app.put("/api/ingests/{full_hash}/audit/verdict")
-def put_audit_verdict(full_hash: str, body: dict, request: Request) -> JSONResponse:
-    """Create or update one adjudication (the reviewer's gold on a claim
-    cluster). Body is the adjudication entry; an absent gold_id mints one. Writes
-    `{hash}.audit.json` and commits it. Reviewer-gated."""
+def _record_model_set(full_hash: str) -> list[dict]:
+    """The variant set on disk for a record: [{variant, model, prompt_sha}].
+    Variant stems are `{model}.{prompt_sha8}` - the sha IS the identity; a
+    model name alone is only comparable within one sha."""
+    name = _hash_to_friendly_name(full_hash)
+    if not name:
+        return []
+    out = []
+    for f in sorted((digests_path / "variants" / name).glob("*.yaml")):
+        model, _, sha = f.stem.partition(".")
+        out.append({"variant": f.stem, "model": model, "prompt_sha": sha})
+    return out
+
+
+def _audit_write(
+    full_hash: str, request: Request, kind: str, body: dict
+) -> JSONResponse:
+    """Shared v2 gold write: validate one claim/cluster entry, stamp the
+    reviewer, upsert, save + commit. Reviewer-gated - this is scored gold."""
     user = _require_role(request, "reviewer")
     if not FULL_HASH_PATTERN.match(full_hash):
         raise HTTPException(status_code=404, detail="Not found")
     store_dir = source.audit_store_dir(full_hash)
     if store_dir is None:
         raise HTTPException(status_code=404, detail="Unknown record")
-    verdict = body.get("verdict")
-    if verdict not in audit_gold.CLUSTER_VERDICTS:
-        raise HTTPException(status_code=400, detail="Invalid verdict")
-    # `worth` is optional (absent = not yet judged) but must be from the vocab if
-    # present: the body is stored as given, so an unvalidated value would be
-    # written into gold the digester's eval later scores on.
-    worth = body.get("worth")
-    if worth is not None and worth not in audit_gold.WORTH:
-        raise HTTPException(status_code=400, detail="Invalid worth")
-    # Worth judges a fact that EXISTS. On a hallucination there is nothing to be
-    # worth anything, so a worth there is a contradiction, not a preference.
-    if worth is not None and verdict != "real":
-        raise HTTPException(
-            status_code=400, detail="worth applies only to a `real` claim"
-        )
-
+    error = (
+        audit_gold.validate_claim(body)
+        if kind == "claim"
+        else audit_gold.validate_cluster(body)
+    )
+    if error:
+        raise HTTPException(status_code=400, detail=error)
+    body["reviewed_by"] = user.get("email", "")
+    body["reviewed_at"] = datetime.now(dt_timezone.utc).isoformat(timespec="seconds")
     gold = audit_gold.read(store_dir, full_hash)
-    audit_gold.upsert(gold, body)
+    # Stamp the record's variant set (spec-required `models`) from the variants
+    # actually on disk - authoritative, no client involvement. Refreshed on
+    # every write so a later variant run shows up.
+    gold["models"] = _record_model_set(full_hash)
+    if kind == "claim":
+        # The carry-forward identity, computed with the digester's OWN function
+        # so the two sides cannot drift on what "the same claim" means. Only
+        # possible when the client supplied claim_type; anchors remain the
+        # fallback for entries without it.
+        try:
+            from anomalica_common.digest import claim_fingerprint
+
+            if body.get("claim_type"):
+                body["claim_fingerprint"] = claim_fingerprint(
+                    content=body.get("text"),
+                    claim_type=body.get("claim_type"),
+                    original_excerpt=body.get("quote"),
+                    location_in_record=body.get("location"),
+                )
+        except ImportError:
+            pass
+        audit_gold.upsert_claim(gold, body)
+    else:
+        audit_gold.upsert_cluster(gold, body)
     if not source.save_audit(full_hash, gold, user["name"], user["email"]):
         raise HTTPException(status_code=404, detail="Not found")
     return JSONResponse({"saved": True, "gold_id": body["gold_id"]})
+
+
+@app.put("/api/ingests/{full_hash}/audit/claim")
+def put_audit_claim(full_hash: str, body: dict, request: Request) -> JSONResponse:
+    """Create or update one claim verdict (quality and/or irrelevant) -
+    anomalica/audit/2. Absent gold_id: identity falls back to (variant,
+    claim_id), so re-judging updates rather than duplicates."""
+    return _audit_write(full_hash, request, "claim", body)
+
+
+@app.put("/api/ingests/{full_hash}/audit/cluster")
+def put_audit_cluster(full_hash: str, body: dict, request: Request) -> JSONResponse:
+    """Create or update one cluster best-of choice - anomalica/audit/2. An
+    entry without best_variant records nothing worth scoring; clients should
+    simply not send a skip."""
+    return _audit_write(full_hash, request, "cluster", body)
 
 
 @app.delete("/api/ingests/{full_hash}/audit/verdict/{gold_id}")

@@ -1,212 +1,182 @@
 #!/usr/bin/env python3
-"""Adjudication gold: persistence, immutable gold_id, upsert/remove, and matching
-an entry back to its current cluster by member provenance."""
+"""audit_gold v2: claim quality/irrelevant verdicts + cluster best-of.
+
+The properties pinned are the contract ones (converged with anomalica/digester,
+bus 2026-07-23): identity by gold_id with (variant, claim_id) fallback so
+re-judging updates rather than duplicates; strict enums because the eval scores
+on what is stored; absent quality = unjudged, never fine; skipped best-of never
+stored as a loss; v1 documents read as empty (clean slate, zero existed)."""
+
+import json
 
 from backend import audit_gold
 
 
-def _adj(gold_id=None, verdict="real", members=None, text="a fact"):
-    return {
-        "gold_id": gold_id,
-        "verdict": verdict,
-        "location": "00:00:00-00:00:30",
-        "text": text,
-        "members": members
-        or [{"variant": "opus", "claim_id": "c1", "verdict": "correct"}],
+def _claim(**over):
+    base = {
+        "variant": "haiku.d161b1ed",
+        "model": "haiku",
+        "prompt_sha": "d161b1ed",
+        "claim_id": "c-1",
+        "location": "00:01:00.0-00:01:10.0",
+        "text": "the claim as written",
+        "quote": "verbatim source words",
+        "quality": "good",
     }
+    base.update(over)
+    return base
 
 
-class TestPersistence:
+class TestReadWrite:
     def test_read_empty_when_absent(self, tmp_path):
-        g = audit_gold.read(tmp_path, "a" * 64)
-        assert g["schema"] == audit_gold.SCHEMA
-        assert g["adjudications"] == []
+        gold = audit_gold.read(tmp_path, "a" * 64)
+        assert gold == {
+            "schema": "anomalica/audit/2",
+            "record_hash": "a" * 64,
+            "models": [],
+            "claims": [],
+            "clusters": [],
+        }
 
     def test_write_then_read_roundtrips(self, tmp_path):
-        g = audit_gold.empty("a" * 64)
-        audit_gold.upsert(g, _adj(text="round trips"))
-        audit_gold.write(tmp_path, "a" * 64, g)
-        back = audit_gold.read(tmp_path, "a" * 64)
-        assert back["adjudications"][0]["text"] == "round trips"
+        gold = audit_gold.empty("a" * 64)
+        audit_gold.upsert_claim(gold, _claim())
+        audit_gold.write(tmp_path, "a" * 64, gold)
+        assert audit_gold.read(tmp_path, "a" * 64) == gold
 
     def test_malformed_file_reads_empty(self, tmp_path):
         (tmp_path / f"{'a' * 64}.audit.json").write_text("{ not json")
-        assert audit_gold.read(tmp_path, "a" * 64)["adjudications"] == []
+        assert audit_gold.read(tmp_path, "a" * 64)["claims"] == []
+
+    def test_a_v1_document_reads_empty(self, tmp_path):
+        # Clean slate was CONFIRMED (zero v1 files on disk) - but if one ever
+        # appears, it must read as empty rather than crash or half-parse.
+        v1 = {
+            "schema": "anomalica/audit/1",
+            "record_hash": "a" * 64,
+            "adjudications": [{}],
+        }
+        (tmp_path / f"{'a' * 64}.audit.json").write_text(json.dumps(v1))
+        assert audit_gold.read(tmp_path, "a" * 64)["claims"] == []
 
 
-class TestUpsert:
-    def test_mints_a_gold_id_when_absent(self):
-        g = audit_gold.empty("a" * 64)
-        audit_gold.upsert(g, _adj())
-        gid = g["adjudications"][0]["gold_id"]
-        assert gid and len(gid) == 32
+class TestClaimUpsert:
+    def test_mints_a_gold_id(self):
+        gold = audit_gold.empty("a" * 64)
+        e = audit_gold.upsert_claim(gold, _claim())
+        assert e["gold_id"]
 
-    def test_gold_id_is_stable_across_a_text_edit(self):
-        # The whole point: editing the adjudicated text keeps the same identity.
-        g = audit_gold.empty("a" * 64)
-        audit_gold.upsert(g, _adj(text="original"))
-        gid = g["adjudications"][0]["gold_id"]
-        audit_gold.upsert(g, _adj(gold_id=gid, text="corrected typo"))
-        assert len(g["adjudications"]) == 1
-        assert g["adjudications"][0]["gold_id"] == gid
-        assert g["adjudications"][0]["text"] == "corrected typo"
+    def test_rejudging_the_same_claim_updates_one_entry(self):
+        # The bulk-grading path: press 3 then change your mind to 2. Identity
+        # falls back to (variant, claim_id), so no duplicate accumulates.
+        gold = audit_gold.empty("a" * 64)
+        audit_gold.upsert_claim(gold, _claim(quality="good"))
+        audit_gold.upsert_claim(gold, _claim(quality="okay"))
+        assert len(gold["claims"]) == 1
+        assert gold["claims"][0]["quality"] == "okay"
 
-    def test_distinct_entries_get_distinct_ids(self):
-        g = audit_gold.empty("a" * 64)
-        audit_gold.upsert(g, _adj(text="one"))
-        audit_gold.upsert(
-            g, _adj(text="two", members=[{"variant": "haiku", "claim_id": "h1"}])
-        )
-        ids = {e["gold_id"] for e in g["adjudications"]}
-        assert len(g["adjudications"]) == 2 and len(ids) == 2
+    def test_same_claim_id_under_another_variant_is_a_different_entry(self):
+        gold = audit_gold.empty("a" * 64)
+        audit_gold.upsert_claim(gold, _claim())
+        audit_gold.upsert_claim(gold, _claim(variant="opus.d161b1ed", model="opus"))
+        assert len(gold["claims"]) == 2
 
     def test_remove(self):
-        g = audit_gold.empty("a" * 64)
-        audit_gold.upsert(g, _adj())
-        gid = g["adjudications"][0]["gold_id"]
-        assert audit_gold.remove(g, gid) is True
-        assert g["adjudications"] == []
-        assert audit_gold.remove(g, gid) is False
+        gold = audit_gold.empty("a" * 64)
+        e = audit_gold.upsert_claim(gold, _claim())
+        assert audit_gold.remove(gold, e["gold_id"]) is True
+        assert gold["claims"] == []
+        assert audit_gold.remove(gold, "nope") is False
 
 
-class TestMatch:
-    clusters = [
-        {
-            "id": "c0",
+class TestClaimValidation:
+    def test_valid(self):
+        assert audit_gold.validate_claim(_claim()) is None
+
+    def test_quality_enum_is_strict(self):
+        # Stored as given and scored by the eval - "great" must never land.
+        assert audit_gold.validate_claim(_claim(quality="great")) is not None
+
+    def test_irrelevant_alone_is_a_verdict(self):
+        c = _claim()
+        del c["quality"]
+        c["irrelevant"] = True
+        assert audit_gold.validate_claim(c) is None
+
+    def test_neither_quality_nor_irrelevant_is_not_a_verdict(self):
+        c = _claim()
+        del c["quality"]
+        assert audit_gold.validate_claim(c) is not None
+
+    def test_variant_identity_fields_required(self):
+        for field in ("variant", "model", "prompt_sha", "claim_id"):
+            c = _claim()
+            del c[field]
+            assert audit_gold.validate_claim(c) is not None, field
+
+
+class TestClusters:
+    def _cluster(self, best="opus.d161b1ed"):
+        entry = {
             "members": [
-                {"variant": "opus", "claim_id": "c1"},
-                {"variant": "haiku", "claim_id": "h1"},
+                {"variant": "haiku.d161b1ed", "claim_id": "c-1"},
+                {"variant": "opus.d161b1ed", "claim_id": "c-9"},
             ],
-        },
-        {"id": "c1", "members": [{"variant": "opus", "claim_id": "c2"}]},
-    ]
-
-    def test_matches_by_shared_member(self):
-        adj = _adj(members=[{"variant": "haiku", "claim_id": "h1"}])
-        assert audit_gold.match_adjudication(adj, self.clusters)["id"] == "c0"
-
-    def test_prefers_the_higher_overlap_cluster(self):
-        adj = _adj(members=[{"variant": "opus", "claim_id": "c2"}])
-        assert audit_gold.match_adjudication(adj, self.clusters)["id"] == "c1"
-
-    def test_missed_has_no_members_so_matches_nothing(self):
-        missed = {
-            "gold_id": "x",
-            "verdict": "missed",
-            "location": "1:00-1:30",
-            "text": "the source said X",
-            "members": [],
         }
-        assert audit_gold.match_adjudication(missed, self.clusters) is None
+        if best is not None:
+            entry["best_variant"] = best
+        return entry
 
-    def test_no_match_when_no_member_overlap(self):
-        adj = _adj(members=[{"variant": "sonnet", "claim_id": "s9"}])
-        assert audit_gold.match_adjudication(adj, self.clusters) is None
+    def test_valid(self):
+        assert audit_gold.validate_cluster(self._cluster()) is None
 
+    def test_best_must_be_a_member(self):
+        assert (
+            audit_gold.validate_cluster(self._cluster(best="sonnet.d161b1ed"))
+            is not None
+        )
 
-# --- verdict endpoints (thin wrappers over the gold core) ---
+    def test_needs_two_members(self):
+        c = self._cluster()
+        c["members"] = c["members"][:1]
+        assert audit_gold.validate_cluster(c) is not None
 
-import pytest  # noqa: E402
-from fastapi.testclient import TestClient  # noqa: E402
-import backend.server as server  # noqa: E402
+    def test_rechoosing_updates_by_member_overlap(self):
+        # Clusterings drift between runs; sharing any member means the same
+        # underlying fact group, so the choice updates instead of duplicating.
+        gold = audit_gold.empty("a" * 64)
+        audit_gold.upsert_cluster(gold, self._cluster())
+        again = self._cluster(best="haiku.d161b1ed")
+        again["members"] = [
+            {"variant": "haiku.d161b1ed", "claim_id": "c-1"},
+            {"variant": "sonnet.aaaa1111", "claim_id": "c-5"},
+        ]
+        audit_gold.upsert_cluster(gold, again)
+        assert len(gold["clusters"]) == 1
+        assert gold["clusters"][0]["best_variant"] == "haiku.d161b1ed"
 
-HASH = "a" * 64
-
-
-class _StubSource:
-    def __init__(self, store):
-        self.store = store
-        self.saved = None
-
-    def audit_store_dir(self, full_hash):
-        return self.store
-
-    def save_audit(self, full_hash, gold, author_name, author_email):
-        self.saved = gold
-        audit_gold.write(self.store, full_hash, gold)
-        return True
-
-
-@pytest.fixture
-def verdict_client(tmp_path, monkeypatch):
-    (tmp_path / "roles.yaml").write_text("rev: reviewer\n")
-    monkeypatch.setattr(server, "ingests_path", tmp_path)
-    stub = _StubSource(tmp_path)
-    monkeypatch.setattr(server, "source", stub)
-    monkeypatch.setattr(
-        server,
-        "_require_user",
-        lambda request: {"login": "rev", "name": "Rev", "email": "rev@x.invalid"},
-    )
-    return TestClient(server.app), stub, tmp_path
+    def test_skip_is_representable_as_absence_only(self):
+        # A skipped cluster is simply not sent/stored - validate allows an entry
+        # without best_variant (members recorded, no winner), and nothing forces
+        # a client to write one.
+        assert audit_gold.validate_cluster(self._cluster(best=None)) is None
 
 
-def test_put_verdict_writes_gold_and_mints_id(verdict_client):
-    client, stub, store = verdict_client
-    res = client.put(
-        f"/api/ingests/{HASH}/audit/verdict",
-        json={
-            "verdict": "real",
-            "location": "0:00-0:30",
-            "text": "a fact",
-            "members": [{"variant": "opus", "claim_id": "c1", "verdict": "correct"}],
-        },
-    )
-    assert res.status_code == 200
-    gid = res.json()["gold_id"]
-    assert len(gid) == 32
-    saved = audit_gold.read(store, HASH)
-    assert saved["adjudications"][0]["gold_id"] == gid
-    assert saved["adjudications"][0]["verdict"] == "real"
+class TestSpecHardening:
+    def test_empty_carries_the_required_models_field(self):
+        # Without the model set, "absent from a cluster" cannot be told from
+        # "never run on this record" - missed-fact rate becomes uncomputable.
+        assert audit_gold.empty("a" * 64)["models"] == []
 
-
-def test_put_verdict_rejects_bad_verdict(verdict_client):
-    client, _, _ = verdict_client
-    res = client.put(f"/api/ingests/{HASH}/audit/verdict", json={"verdict": "maybe"})
-    assert res.status_code == 400
-
-
-def test_put_verdict_updates_by_gold_id(verdict_client):
-    client, _, store = verdict_client
-    r1 = client.put(
-        f"/api/ingests/{HASH}/audit/verdict",
-        json={
-            "verdict": "real",
-            "text": "v1",
-            "members": [{"variant": "o", "claim_id": "c1"}],
-        },
-    )
-    gid = r1.json()["gold_id"]
-    client.put(
-        f"/api/ingests/{HASH}/audit/verdict",
-        json={"gold_id": gid, "verdict": "hallucinated", "text": "v2", "members": []},
-    )
-    gold = audit_gold.read(store, HASH)
-    assert len(gold["adjudications"]) == 1
-    assert gold["adjudications"][0]["verdict"] == "hallucinated"
-
-
-def test_delete_verdict(verdict_client):
-    client, _, store = verdict_client
-    gid = client.put(
-        f"/api/ingests/{HASH}/audit/verdict",
-        json={"verdict": "missed", "text": "x", "members": []},
-    ).json()["gold_id"]
-    assert client.delete(f"/api/ingests/{HASH}/audit/verdict/{gid}").status_code == 200
-    assert audit_gold.read(store, HASH)["adjudications"] == []
-
-
-def test_verdict_endpoints_require_reviewer(verdict_client, monkeypatch):
-    client, _, _ = verdict_client
-    monkeypatch.setattr(
-        server,
-        "_require_user",
-        lambda request: {"login": "newbie", "name": "N", "email": "n@x.invalid"},
-    )
-    assert (
-        client.put(
-            f"/api/ingests/{HASH}/audit/verdict",
-            json={"verdict": "real", "members": []},
-        ).status_code
-        == 403
-    )
+    def test_tie_is_explicit_and_exclusive_with_best(self):
+        members = [
+            {"variant": "haiku.d161b1ed", "claim_id": "c-1"},
+            {"variant": "opus.d161b1ed", "claim_id": "c-9"},
+        ]
+        assert audit_gold.validate_cluster({"members": members, "tie": True}) is None
+        assert (
+            audit_gold.validate_cluster(
+                {"members": members, "tie": True, "best_variant": "opus.d161b1ed"}
+            )
+            is not None
+        )
