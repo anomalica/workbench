@@ -95,9 +95,42 @@ def _variant_dirs() -> list[Path]:
     return sorted(d for d in base.iterdir() if d.is_dir())
 
 
+# list_comparable parses EVERY variant YAML just to read a title and model name
+# - ~6s over 45 files, on every call, which held the Digests tab on its empty
+# state long enough to read as "no data". The parse only changes when a variant
+# file does, so the result is cached against a signature of (path, mtime, size)
+# for every yaml under variants/. Any add/remove/rewrite changes the signature
+# and recomputes; an archived record flips _is_active, which is why the records/
+# directory mtime joins the signature.
+_comparable_cache: tuple | None = None
+
+
+def _comparable_signature() -> tuple:
+    sig = []
+    for d in _variant_dirs():
+        for f in sorted(d.glob("*.yaml")):
+            try:
+                st = f.stat()
+                sig.append((str(f), st.st_mtime_ns, st.st_size))
+            except OSError:
+                continue
+    # _is_active resolves against store/, so that directory's mtime is the
+    # invalidation signal for archive/unarchive (a store file added or removed
+    # touches the dir).
+    try:
+        sig.append(("store", _store_dir().stat().st_mtime_ns))
+    except OSError:
+        pass
+    return tuple(sig)
+
+
 def list_comparable() -> list[dict]:
     """Ingests that have more than one model-variant digest, for the compare list.
     Each: {content_hash, title, slug, models:[...], variant_count}."""
+    global _comparable_cache
+    sig = _comparable_signature()
+    if _comparable_cache is not None and _comparable_cache[0] == sig:
+        return _comparable_cache[1]
     out = []
     for d in _variant_dirs():
         files = sorted(d.glob("*.yaml"))
@@ -125,6 +158,7 @@ def list_comparable() -> list[dict]:
             }
         )
     out.sort(key=lambda x: x["title"].lower())
+    _comparable_cache = (sig, out)
     return out
 
 

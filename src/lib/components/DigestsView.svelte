@@ -31,6 +31,10 @@
   import AuditView from "./AuditView.svelte";
 
   let comparable = $state<ComparableIngest[]>([]);
+  // Loading is its own state. comparable starts [] while the fetch runs, and
+  // rendering that as "0 records" + the empty-state hint told the reviewer the
+  // corpus had no comparisons when it had ten - a loading screen lying as fact.
+  let loadingList = $state(true);
   let selected = $state<string | null>(null);
   let comparison = $state<ModelComparison | null>(null);
   let judgment = $state<ModelJudgment | null>(null);
@@ -111,6 +115,8 @@
       comparable = await fetchComparable();
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
+    } finally {
+      loadingList = false;
     }
     const h = new URLSearchParams(window.location.search).get("h");
     if (h) open(h);
@@ -123,13 +129,19 @@
     <div class="flex-none px-6 py-3 border-b border-border">
       <h1 class="text-sm font-semibold text-on-surface">Digests</h1>
       <p class="text-xs text-on-surface-muted mt-0.5">
-        {comparable.length} record{comparable.length === 1 ? "" : "s"} digested by more than one model.
-        Open one to read the ingest against what each model pulled out of it.
+        {#if loadingList}
+          Finding records digested by more than one model...
+        {:else}
+          {comparable.length} record{comparable.length === 1 ? "" : "s"} digested by more than one model.
+          Open one to read the ingest against what each model pulled out of it.
+        {/if}
       </p>
     </div>
     {#if error}<p class="px-6 py-3 text-sm text-error">{error}</p>{/if}
     <div class="flex-1 overflow-auto">
-      {#if comparable.length === 0}
+      {#if loadingList}
+        <p class="text-sm text-on-surface-muted p-6">Loading...</p>
+      {:else if comparable.length === 0 && !error}
         <p class="text-sm text-on-surface-muted p-6 max-w-prose leading-relaxed">
           No multi-model records yet. They appear once a record has been digested by
           more than one model (the digester writes them under
