@@ -1082,7 +1082,25 @@
       [class*="dfp-ad"] {
         display: none !important;
       }
-    </style>
+
+  /* Email thread segments: an email is a conversation, so each message is
+     attributed and a quoted reply is visually set apart from the sender's own
+     words - otherwise the two blur into one block of prose. */
+  :global(.email-msg) {
+    display: flex; align-items: baseline; gap: 0.6rem;
+    margin: 1.4rem 0 0.4rem; padding-bottom: 0.3rem;
+    border-bottom: 1px solid var(--border, rgba(128,128,128,0.25));
+    font-size: 0.82rem;
+  }
+  :global(.email-from) { font-weight: 600; }
+  :global(.email-when) { opacity: 0.6; font-variant-numeric: tabular-nums; }
+  :global(.email-quoted) {
+    margin-left: auto; font-size: 0.72rem; text-transform: uppercase;
+    letter-spacing: 0.04em; opacity: 0.65;
+  }
+  :global(.email-msg-quoted) { opacity: 0.85; }
+  :global(.email-msg-quoted ~ p) { opacity: 0.9; }
+</style>
   `;
 
   function injectAdHideCss(html: string): string {
@@ -1496,6 +1514,27 @@
       /<!--\s*([\s\S]*?)-->/g,
       (_, content) => {
         const trimmed = content.trim();
+        // Email thread segment. An email is a CONVERSATION, not prose: without this
+        // each message runs into the next and a quoted reply reads as the sender's
+        // own words. Renders an attributed header per message, marking quoted ones.
+        const msgMatch = trimmed.match(/^message:\s*\{([\s\S]*)\}$/);
+        if (msgMatch) {
+          const inner = msgMatch[1];
+          const grab = (k: string) => {
+            const m = inner.match(new RegExp(k + ':\\s*"?([^",}]+)"?'));
+            return m ? m[1].trim() : "";
+          };
+          const from = grab("from");
+          const when = grab("date");
+          const quoted = /quoted:\s*true/.test(inner);
+          const who = from.replace(/\s*<[^>]*>/, "") || "Unknown sender";
+          return `\n\n<div class="email-msg${quoted ? " email-msg-quoted" : ""}">` +
+            `<span class="email-from">${who}</span>` +
+            (when ? `<span class="email-when">${when.slice(0, 10)}</span>` : "") +
+            (quoted ? `<span class="email-quoted">quoted reply</span>` : "") +
+            `</div>\n\n`;
+        }
+
         // Page marker (PDFs)
         const pageMatch = trimmed.match(/^file_page:\s*(\d+)/);
         if (pageMatch) {
