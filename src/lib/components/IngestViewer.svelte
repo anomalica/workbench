@@ -56,6 +56,7 @@
   import EditableMetadata from "./EditableMetadata.svelte";
   import ReviewHistory from "./ReviewHistory.svelte";
   import { hasWordTimestamps, parseWords, nextRelevantWordStartAfter, speakerWordCounts } from "$lib/transcript-words";
+  import { imageRefsInBody } from "$lib/image-captions";
   import { untrack } from "svelte";
   import { marked } from "marked";
   import yaml from "js-yaml";
@@ -1462,8 +1463,19 @@
     );
   }
 
-  function preprocessAnnotations(body: string, imageControls = false): string {
+  // `lineOffset` is the body line the passed text starts at - ReadableText
+  // renders block by block, so a block's annotations must be stamped with their
+  // line in the WHOLE body. That line is each figure's identity: the same media
+  // file can carry two annotations (media dedupes by content hash, so a repeated
+  // figure resolves to one file), and keying the controls by file made the
+  // second figure edit the first and then go dead.
+  function preprocessAnnotations(body: string, imageControls = false, lineOffset = 0): string {
     const recordHash = ingest.content_hash;
+    // Resolved against the ORIGINAL text: the rewrites below (caption pairing,
+    // page-marker collapse) renumber lines, so the annotation lines are read
+    // first and consumed in document order as the replacer reaches each image.
+    const imageRefs = imageRefsInBody(body);
+    let nextRef = 0;
     // Strip per-word timestamp markers ({{t:SECONDS}}) for prose display: they're
     // an inline annotation (record/2), not content. The word-level editor
     // consumes them; any markdown/prose render must hide them (word records use
@@ -1516,6 +1528,9 @@
             img = null;
           }
           if (img && typeof img.file === "string" && /^[0-9a-f]{12}\.[a-z]{3,4}$/.test(img.file)) {
+            while (nextRef < imageRefs.length && imageRefs[nextRef].file !== img.file) nextRef++;
+            const imageLine =
+              nextRef < imageRefs.length ? imageRefs[nextRef++].line + lineOffset : -1;
             const src = `/api/ingests/${recordHash}/media/${img.file}`;
             const alt = typeof img.alt === "string" ? img.alt : "";
             const caption = typeof img.caption === "string" ? img.caption.trim() : "";
@@ -1528,8 +1543,8 @@
             const description = typeof img.description === "string" ? img.description.trim() : "";
             const descActions = imageControls
               ? `<span class="image-description-actions">` +
-                `<button type="button" class="image-description-edit" data-image-file="${img.file}">Edit</button>` +
-                `<button type="button" class="image-description-remove" data-image-file="${img.file}" title="Remove this description" aria-label="Remove description">` +
+                `<button type="button" class="image-description-edit" data-image-line="${imageLine}">Edit</button>` +
+                `<button type="button" class="image-description-remove" data-image-line="${imageLine}" title="Remove this description" aria-label="Remove description">` +
                 `<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" d="M6 18L18 6M6 6l12 12"/></svg></button>` +
                 `</span>`
               : "";
@@ -1541,11 +1556,11 @@
                 descActions +
                 `</div>`;
             } else if (imageControls) {
-              descBlock = `<button type="button" class="image-description-edit image-description-add" data-image-file="${img.file}">+ Describe what's in this image</button>`;
+              descBlock = `<button type="button" class="image-description-edit image-description-add" data-image-line="${imageLine}">+ Describe what's in this image</button>`;
             }
             // Display-only relevance flag (record-format.md#image): `irrelevant:
             // true` drops the image from the rendered page. Never touches
-            // coverage or extraction. data-image-file lets the caption re-target
+            // coverage or extraction. data-image-line lets the caption re-target
             // picker and the relevance toggle identify which image a click hits.
             const irrelevant = img.irrelevant === true;
             const irrAttr = irrelevant ? ' data-image-irrelevant="true"' : "";
@@ -1556,7 +1571,7 @@
             // paths (predigest preview, read-only prose) show the dimmed state
             // without the control.
             const toggle = imageControls
-              ? `<button type="button" class="image-relevance-toggle" data-image-file="${img.file}" data-irrelevant="${irrelevant}" title="${
+              ? `<button type="button" class="image-relevance-toggle" data-image-line="${imageLine}" data-irrelevant="${irrelevant}" title="${
                   irrelevant
                     ? "Marked irrelevant - dropped from the rendered page. Click to keep."
                     : "Mark this image irrelevant - dropped from the rendered page. Does not affect review coverage or extraction."
@@ -1564,7 +1579,7 @@
               : "";
             // Order: image, then the DESCRIPTION (primary 'what is in it'
             // content), then the CAPTION (secondary source attribution).
-            return `<figure class="ingest-figure" data-image-file="${img.file}"${irrAttr}><img src="${src}" alt="${escapeHtml(alt)}" loading="lazy" />${descBlock}${cap}${tag}${toggle}</figure>`;
+            return `<figure class="ingest-figure" data-image-line="${imageLine}" data-image-file="${img.file}"${irrAttr}><img src="${src}" alt="${escapeHtml(alt)}" loading="lazy" />${descBlock}${cap}${tag}${toggle}</figure>`;
           }
         }
         // Image description (no extracted file)
@@ -4718,8 +4733,8 @@
         {#if isTextRecord}
           <ReadableText
             body={currentBody()}
-            renderBlock={(src) =>
-              renderRedactions(marked.parse(preprocessAnnotations(src, !!user)) as string)}
+            renderBlock={(src, lineFrom) =>
+              renderRedactions(marked.parse(preprocessAnnotations(src, !!user, lineFrom)) as string)}
             previousObserved={myObservedSpans}
             storageKey={`workbench:read:${ingest.content_hash}`}
             bind:containerEl={proseContainer}

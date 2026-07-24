@@ -67,6 +67,19 @@ export interface ImageAnnotation {
   data: { image: Record<string, unknown> };
 }
 
+/** An image annotation's identity, as the render path stamps it onto the
+ *  figure. The IDENTITY IS THE LINE, never the `file`: media dedupes by
+ *  content hash, so a figure repeated in the source (a chapter ornament, a
+ *  re-used plate) yields two annotations carrying the SAME `file`. A
+ *  file-keyed lookup resolves both to the first, which left the second
+ *  figure's controls editing the wrong annotation and then dead - the flag
+ *  was already set on the first, so the toggle no-op'd forever. */
+export interface ImageRef {
+  /** Line index of the annotation's opening `<!--`. */
+  line: number;
+  file: string;
+}
+
 /** The mapping-form image annotations (those with a `file`), by line. */
 function imageAnnotations(lines: string[]): ImageAnnotation[] {
   const out: ImageAnnotation[] = [];
@@ -90,6 +103,11 @@ function imageAnnotations(lines: string[]): ImageAnnotation[] {
     }
   }
   return out;
+}
+
+/** The image annotation whose opening fence sits on `line`. */
+function imageAt(lines: string[], line: number): ImageAnnotation | null {
+  return imageAnnotations(lines).find((a) => a.from === line) ?? null;
 }
 
 /** The image annotation whose closing fence precedes `line`, nearest first. */
@@ -147,7 +165,11 @@ export interface CaptionEdit {
   /** old-line-index -> new-line-index, or -1 for a removed line. Length is
    *  the OLD line count; inserted lines have no entry. Feed to remapSpans. */
   oldToNew: number[];
-  /** The `file` of the image the caption now sits on (the re-target key). */
+  /** The edited annotation's opening-fence line IN THE NEW BODY - the identity
+   *  a caller holds on to across the edit (see {@link ImageRef}). */
+  imageLine?: number;
+  /** The edited annotation's `file`. Informational (media lookups, tests):
+   *  never an identity, since a file can be annotated more than once. */
   imageFile?: string;
 }
 
@@ -220,28 +242,32 @@ export function markAsCaption(body: string, lineFrom: number, lineTo: number): C
     ok: true,
     body: newLines.join("\n"),
     oldToNew,
+    imageLine: oldToNew[img.from],
     imageFile: img.data.image.file as string,
   };
 }
 
-/** The `file` of every structured image annotation in the body, in order.
- *  For the re-target picker and for tests. */
-export function imageFilesInBody(body: string): string[] {
-  return imageAnnotations(body.split("\n")).map((a) => a.data.image.file as string);
+/** Every structured image annotation in the body, in order, as line+file
+ *  pairs. The render path stamps these onto the figures so a click resolves
+ *  back to the exact annotation. */
+export function imageRefsInBody(body: string): ImageRef[] {
+  return imageAnnotations(body.split("\n")).map((a) => ({
+    line: a.from,
+    file: a.data.image.file as string,
+  }));
 }
 
-/** Move an already-structured caption from the image with `fromFile` to the
- *  image with `toFile` (the reviewer's override when nearest-preceding
+/** Move an already-structured caption from the image annotated at `fromLine`
+ *  to the one at `toLine` (the reviewer's override when nearest-preceding
  *  guessed wrong). Clears the source image's caption and sets it on the
  *  target, replacing any caption the target already had. No-op (ok:false)
  *  when either image is missing, they are the same, or the source has no
  *  caption to move. */
-export function moveCaptionByFile(body: string, fromFile: string, toFile: string): CaptionEdit {
-  if (!fromFile || !toFile || fromFile === toFile) return { ok: false, body, oldToNew: [] };
+export function moveCaptionTo(body: string, fromLine: number, toLine: number): CaptionEdit {
+  if (fromLine === toLine) return { ok: false, body, oldToNew: [] };
   const lines = body.split("\n");
-  const imgs = imageAnnotations(lines);
-  const from = imgs.find((a) => a.data.image.file === fromFile);
-  const to = imgs.find((a) => a.data.image.file === toFile);
+  const from = imageAt(lines, fromLine);
+  const to = imageAt(lines, toLine);
   if (!from || !to) return { ok: false, body, oldToNew: [] };
   const caption = from.data.image.caption;
   if (typeof caption !== "string") return { ok: false, body, oldToNew: [] };
@@ -266,29 +292,30 @@ export function moveCaptionByFile(body: string, fromFile: string, toFile: string
       newLines.push(lines[i]);
     }
   }
-  return { ok: true, body: newLines.join("\n"), oldToNew, imageFile: toFile };
+  return {
+    ok: true,
+    body: newLines.join("\n"),
+    oldToNew,
+    imageLine: oldToNew[to.from],
+    imageFile: to.data.image.file as string,
+  };
 }
 
-/** True if the image annotation with `file` carries `irrelevant: true` (the
+/** True if the image annotated at `line` carries `irrelevant: true` (the
  *  display-only drop flag). Absent = keep/relevant. */
-export function imageIsIrrelevant(body: string, file: string): boolean {
-  const img = imageAnnotations(body.split("\n")).find((a) => a.data.image.file === file);
-  return img?.data.image.irrelevant === true;
+export function imageIsIrrelevantAt(body: string, line: number): boolean {
+  return imageAt(body.split("\n"), line)?.data.image.irrelevant === true;
 }
 
-/** Set or clear `irrelevant: true` on the image annotation with `file`. This is
+/** Set or clear `irrelevant: true` on the image annotated at `line`. This is
  *  DISPLAY-only metadata the assembler/site reads to drop the image from the
  *  rendered page (record-format.md#image); it never touches read-coverage
  *  (image annotations are structural, zero units) or extraction (the pre-digest
  *  strips every image annotation). Clearing removes the line, so absent = keep.
  *  No-op (ok:false) when the image is missing or already in the target state. */
-export function setImageRelevanceByFile(
-  body: string,
-  file: string,
-  irrelevant: boolean,
-): CaptionEdit {
+export function setImageRelevanceAt(body: string, line: number, irrelevant: boolean): CaptionEdit {
   const lines = body.split("\n");
-  const img = imageAnnotations(lines).find((a) => a.data.image.file === file);
+  const img = imageAt(lines, line);
   if (!img) return { ok: false, body, oldToNew: [] };
   const existing = findFieldLine(lines, img, "irrelevant");
   const already = img.data.image.irrelevant === true;
@@ -311,30 +338,35 @@ export function setImageRelevanceByFile(
       newLines.push(lines[i]);
     }
   }
-  return { ok: true, body: newLines.join("\n"), oldToNew, imageFile: file };
+  return {
+    ok: true,
+    body: newLines.join("\n"),
+    oldToNew,
+    imageLine: oldToNew[img.from],
+    imageFile: img.data.image.file as string,
+  };
 }
 
-/** The `description` of the image annotation with `file`, or "" if none. */
-export function imageDescription(body: string, file: string): string {
-  const img = imageAnnotations(body.split("\n")).find((a) => a.data.image.file === file);
-  const d = img?.data.image.description;
+/** The `description` of the image annotated at `line`, or "" if none. */
+export function imageDescriptionAt(body: string, line: number): string {
+  const d = imageAt(body.split("\n"), line)?.data.image.description;
   return typeof d === "string" ? d : "";
 }
 
 /** Set (or clear, when the value is empty) the `description:` field on the image
- *  annotation with `file`. Unlike caption/alt/irrelevant, the description is
+ *  annotated at `line`. Unlike caption/alt/irrelevant, the description is
  *  CONTENT (record-format.md#image): the pre-digest KEEPS it and renders it as
  *  prose to the model, so a claim can be drawn from what the image shows (a
  *  screenshotted tweet's text, a chart's figures). It still never affects read-
  *  coverage - the image annotation stays a zero-unit structural block. No-op
  *  (ok:false) when the image is missing or the value is unchanged. */
-export function setImageDescriptionByFile(
+export function setImageDescriptionAt(
   body: string,
-  file: string,
+  line: number,
   description: string,
 ): CaptionEdit {
   const lines = body.split("\n");
-  const img = imageAnnotations(lines).find((a) => a.data.image.file === file);
+  const img = imageAt(lines, line);
   if (!img) return { ok: false, body, oldToNew: [] };
   const value = description.trim();
   const current = typeof img.data.image.description === "string" ? img.data.image.description : "";
@@ -362,7 +394,13 @@ export function setImageDescriptionByFile(
       newLines.push(lines[i]);
     }
   }
-  return { ok: true, body: newLines.join("\n"), oldToNew, imageFile: file };
+  return {
+    ok: true,
+    body: newLines.join("\n"),
+    oldToNew,
+    imageLine: oldToNew[img.from],
+    imageFile: img.data.image.file as string,
+  };
 }
 
 /** Shift line-anchored coverage spans through an oldToNew line map: a span's

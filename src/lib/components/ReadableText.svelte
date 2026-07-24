@@ -16,10 +16,10 @@
   import {
     hasPrecedingImage,
     markAsCaption,
-    moveCaptionByFile,
-    setImageRelevanceByFile,
-    imageDescription,
-    setImageDescriptionByFile,
+    moveCaptionTo,
+    setImageRelevanceAt,
+    imageDescriptionAt,
+    setImageDescriptionAt,
     remapSpans,
   } from "$lib/image-captions";
   import { safeLocalSet } from "$lib/storage";
@@ -38,8 +38,10 @@
     /** Record body with the frontmatter already stripped. */
     body: string;
     /** Render one block's source markdown to trusted HTML (the parent reuses
-     *  its annotation + redaction + marked pipeline). */
-    renderBlock: (source: string) => string;
+     *  its annotation + redaction + marked pipeline). `lineFrom` is the block's
+     *  first body line, so per-image controls can be stamped with the
+     *  whole-body line that identifies their annotation. */
+    renderBlock: (source: string, lineFrom: number) => string;
     /** This reviewer's prior committed coverage (line spans), shown as read. */
     previousObserved?: CoverageSpan[];
     /** localStorage key for persisting this session's pending marks. */
@@ -69,7 +71,7 @@
   // The body renders faithfully - every block is shown, nothing suppressed.
   let renderedBlocks = $derived(
     blocks
-      .map((b) => ({ block: b, html: renderBlock(b.source) }))
+      .map((b) => ({ block: b, html: renderBlock(b.source, b.lineFrom) }))
       .filter((r) => r.html.trim() !== "" || r.block.irrelevant),
   );
   let displayedIndices = $derived(new Set(renderedBlocks.map((r) => r.block.index)));
@@ -140,6 +142,7 @@
     const lineTo = Math.max(...chosen.map((b) => b.lineTo));
     observedSpans = shiftSpansForMark(observedSpans, lineFrom, lineTo);
     livePrevObserved = shiftSpansForMark(livePrevObserved, lineFrom, lineTo);
+    shiftPending((spans) => shiftSpansForMark(spans, lineFrom, lineTo));
     onbodyedit(markIrrelevantLines(body, lineFrom, lineTo));
     clearSelection();
   }
@@ -150,6 +153,7 @@
     if (removed.length === 0) return;
     observedSpans = shiftSpansForRemoval(observedSpans, removed);
     livePrevObserved = shiftSpansForRemoval(livePrevObserved, removed);
+    shiftPending((spans) => shiftSpansForRemoval(spans, removed));
     onbodyedit(newBody);
   }
 
@@ -173,9 +177,25 @@
   });
 
   // After a caption is set, the reviewer can re-target it to a different image
-  // (nearest-preceding is only the default guess). `pendingCaption.file` is the
-  // image the caption currently sits on.
-  let pendingCaption = $state<{ file: string } | null>(null);
+  // (nearest-preceding is only the default guess). `pendingCaption.line` is the
+  // annotation the caption currently sits on. Images are identified by their
+  // annotation's body line, never by `file` - the same media file can be
+  // annotated twice (a repeated figure dedupes to one file), and a file-keyed
+  // lookup resolves both to the first one.
+  let pendingCaption = $state<{ line: number } | null>(null);
+
+  // Body edits renumber lines, so any held line identity is moved with them.
+  function shiftPending(shift: (spans: CoverageSpan[]) => CoverageSpan[]) {
+    if (pendingCaption) {
+      const [s] = shift([{ from: pendingCaption.line, to: pendingCaption.line }]);
+      pendingCaption = s ? { line: s.from } : null;
+    }
+    if (editingDescription) {
+      const [s] = shift([{ from: editingDescription.line, to: editingDescription.line }]);
+      if (s) editingDescription = { ...editingDescription, line: s.from };
+      else editingDescription = null;
+    }
+  }
 
   function markSelectionAsCaption() {
     if (!onbodyedit || !range) return;
@@ -189,20 +209,22 @@
     if (!edit.ok) return;
     observedSpans = remapSpans(observedSpans, edit.oldToNew);
     livePrevObserved = remapSpans(livePrevObserved, edit.oldToNew);
+    shiftPending((spans) => remapSpans(spans, edit.oldToNew));
     onbodyedit(edit.body);
-    pendingCaption = edit.imageFile ? { file: edit.imageFile } : null;
+    pendingCaption = edit.imageLine === undefined ? null : { line: edit.imageLine };
     clearSelection();
   }
 
   /** Re-point the pending caption to the clicked image. */
-  function retargetCaption(toFile: string) {
-    if (!onbodyedit || !pendingCaption || toFile === pendingCaption.file) return;
-    const edit = moveCaptionByFile(body, pendingCaption.file, toFile);
+  function retargetCaption(toLine: number) {
+    if (!onbodyedit || !pendingCaption || toLine === pendingCaption.line) return;
+    const edit = moveCaptionTo(body, pendingCaption.line, toLine);
     if (!edit.ok) return;
     observedSpans = remapSpans(observedSpans, edit.oldToNew);
     livePrevObserved = remapSpans(livePrevObserved, edit.oldToNew);
+    shiftPending((spans) => remapSpans(spans, edit.oldToNew));
     onbodyedit(edit.body);
-    pendingCaption = { file: edit.imageFile ?? toFile };
+    pendingCaption = { line: edit.imageLine ?? toLine };
   }
 
   // This session's pending marks, persisted as line spans (stable across the
@@ -312,34 +334,47 @@
   // Per-image relevance and caption re-target act on image figures, which sit
   // in structural blocks (zero units) that don't take a pointerdown selection
   // handler - so both are handled by delegation on the block-list container.
+  /** The annotation line a control carries, or null when it is absent or the
+   *  render could not resolve one (`-1`). */
+  function imageLineOf(el: HTMLElement | null): number | null {
+    const raw = el?.dataset.imageLine;
+    if (raw === undefined) return null;
+    const line = Number(raw);
+    return Number.isInteger(line) && line >= 0 ? line : null;
+  }
+
   function onImageControlClick(e: MouseEvent) {
     const target = e.target as HTMLElement;
     const toggle = target.closest(".image-relevance-toggle") as HTMLElement | null;
-    if (toggle?.dataset.imageFile) {
+    const toggleLine = imageLineOf(toggle);
+    if (toggleLine !== null) {
       e.preventDefault();
       e.stopPropagation();
-      toggleImageRelevance(toggle.dataset.imageFile, toggle.dataset.irrelevant === "true");
+      toggleImageRelevance(toggleLine, toggle?.dataset.irrelevant === "true");
       return;
     }
     const rmBtn = target.closest(".image-description-remove") as HTMLElement | null;
-    if (rmBtn?.dataset.imageFile) {
+    const rmLine = imageLineOf(rmBtn);
+    if (rmLine !== null) {
       e.preventDefault();
       e.stopPropagation();
-      removeImageDescription(rmBtn.dataset.imageFile);
+      removeImageDescription(rmLine);
       return;
     }
     const descBtn = target.closest(".image-description-edit") as HTMLElement | null;
-    if (descBtn?.dataset.imageFile) {
+    const descLine = imageLineOf(descBtn);
+    if (descLine !== null) {
       e.preventDefault();
       e.stopPropagation();
-      openDescriptionEditor(descBtn.dataset.imageFile);
+      openDescriptionEditor(descLine);
       return;
     }
     if (pendingCaption) {
-      const fig = target.closest("figure[data-image-file]") as HTMLElement | null;
-      if (fig?.dataset.imageFile) {
+      const fig = target.closest("figure[data-image-line]") as HTMLElement | null;
+      const figLine = imageLineOf(fig);
+      if (figLine !== null) {
         e.preventDefault();
-        retargetCaption(fig.dataset.imageFile);
+        retargetCaption(figLine);
       }
     }
   }
@@ -347,40 +382,43 @@
   // Flip the display-only `irrelevant` flag on the image annotation. Shifts the
   // session/prior spans past the one-line annotation edit, like the caption
   // edits. Never changes coverage totals (the image block stays zero-unit).
-  function toggleImageRelevance(file: string, currentlyIrrelevant: boolean) {
+  function toggleImageRelevance(line: number, currentlyIrrelevant: boolean) {
     if (!onbodyedit) return;
-    const edit = setImageRelevanceByFile(body, file, !currentlyIrrelevant);
+    const edit = setImageRelevanceAt(body, line, !currentlyIrrelevant);
     if (!edit.ok) return;
     observedSpans = remapSpans(observedSpans, edit.oldToNew);
     livePrevObserved = remapSpans(livePrevObserved, edit.oldToNew);
+    shiftPending((spans) => remapSpans(spans, edit.oldToNew));
     onbodyedit(edit.body);
   }
 
   // The image description editor: free-text the reviewer writes to transcribe or
   // describe what is IN the image. Distinct from the caption (which the source
   // printed) - the description is extractable content.
-  let editingDescription = $state<{ file: string; text: string } | null>(null);
-  function openDescriptionEditor(file: string) {
-    editingDescription = { file, text: imageDescription(body, file) };
+  let editingDescription = $state<{ line: number; text: string } | null>(null);
+  function openDescriptionEditor(line: number) {
+    editingDescription = { line, text: imageDescriptionAt(body, line) };
   }
   function saveDescription() {
     if (!onbodyedit || !editingDescription) return;
-    const { file, text } = editingDescription;
-    const edit = setImageDescriptionByFile(body, file, text);
+    const { line, text } = editingDescription;
+    const edit = setImageDescriptionAt(body, line, text);
     editingDescription = null;
     if (!edit.ok) return;
     observedSpans = remapSpans(observedSpans, edit.oldToNew);
     livePrevObserved = remapSpans(livePrevObserved, edit.oldToNew);
+    shiftPending((spans) => remapSpans(spans, edit.oldToNew));
     onbodyedit(edit.body);
   }
 
   // Clear the description field in one click (same commit path as an edit).
-  function removeImageDescription(file: string) {
+  function removeImageDescription(line: number) {
     if (!onbodyedit) return;
-    const edit = setImageDescriptionByFile(body, file, "");
+    const edit = setImageDescriptionAt(body, line, "");
     if (!edit.ok) return;
     observedSpans = remapSpans(observedSpans, edit.oldToNew);
     livePrevObserved = remapSpans(livePrevObserved, edit.oldToNew);
+    shiftPending((spans) => remapSpans(spans, edit.oldToNew));
     onbodyedit(edit.body);
   }
 
