@@ -2,14 +2,14 @@ import { describe, expect, it } from "vitest";
 import yaml from "js-yaml";
 import {
   hasPrecedingImage,
-  imageFilesInBody,
-  imageIsIrrelevant,
-  imageDescription,
+  imageRefsInBody,
+  imageIsIrrelevantAt,
+  imageDescriptionAt,
   markAsCaption,
-  moveCaptionByFile,
+  moveCaptionTo,
   remapSpans,
-  setImageRelevanceByFile,
-  setImageDescriptionByFile,
+  setImageRelevanceAt,
+  setImageDescriptionAt,
 } from "./image-captions";
 import { parseTextBlocks, totalUnits } from "./text-blocks";
 
@@ -38,6 +38,8 @@ const BODY = [
 
 const CAPTION_FROM = 9;
 const CAPTION_TO = 9;
+// The image annotation's opening fence - an image's identity, not its `file`.
+const IMAGE_LINE = 3;
 
 function parseAnnotation(body: string): Record<string, unknown> {
   const lines = body.split("\n");
@@ -226,21 +228,26 @@ describe("caption re-targeting", () => {
     "The caption paragraph.",
   ].join("\n");
 
-  it("markAsCaption reports the image file it attached to", () => {
+  it("markAsCaption reports the annotation it attached to", () => {
     const out = markAsCaption(TWO_IMAGES, 10, 10);
     expect(out.ok).toBe(true);
-    expect(out.imageFile).toBe("ccc333ddd444.jpg"); // nearest preceding
+    expect(out.imageLine).toBe(5); // nearest preceding
+    expect(out.imageFile).toBe("ccc333ddd444.jpg");
   });
 
-  it("imageFilesInBody lists every image in order", () => {
-    expect(imageFilesInBody(TWO_IMAGES)).toEqual(["aaa111bbb222.jpg", "ccc333ddd444.jpg"]);
+  it("imageRefsInBody lists every image in order, by line", () => {
+    expect(imageRefsInBody(TWO_IMAGES)).toEqual([
+      { line: 0, file: "aaa111bbb222.jpg" },
+      { line: 5, file: "ccc333ddd444.jpg" },
+    ]);
   });
 
   it("moves a caption from one image to another", () => {
-    // First attach to nearest (ccc333), then re-target to the earlier aaa111.
+    // First attach to nearest (ccc333 at line 5), then re-target to aaa111.
     const attached = markAsCaption(TWO_IMAGES, 10, 10);
-    const moved = moveCaptionByFile(attached.body, "ccc333ddd444.jpg", "aaa111bbb222.jpg");
+    const moved = moveCaptionTo(attached.body, 5, 0);
     expect(moved.ok).toBe(true);
+    expect(moved.imageLine).toBe(0);
     expect(moved.imageFile).toBe("aaa111bbb222.jpg");
     const lines = moved.body.split("\n");
     // The target (aaa111) now carries the caption; the source (ccc333) doesn't.
@@ -255,85 +262,142 @@ describe("caption re-targeting", () => {
 
   it("re-target is a no-op to the same image or a missing one", () => {
     const attached = markAsCaption(TWO_IMAGES, 10, 10);
-    expect(moveCaptionByFile(attached.body, "ccc333ddd444.jpg", "ccc333ddd444.jpg").ok).toBe(false);
-    expect(moveCaptionByFile(attached.body, "ccc333ddd444.jpg", "nope999zzz000.jpg").ok).toBe(
-      false,
-    );
+    expect(moveCaptionTo(attached.body, 5, 5).ok).toBe(false);
+    expect(moveCaptionTo(attached.body, 5, 99).ok).toBe(false);
+    expect(moveCaptionTo(attached.body, 5, 1).ok).toBe(false); // mid-annotation line
   });
 });
 
-describe("setImageRelevanceByFile / imageIsIrrelevant", () => {
-  const FILE = "abc123def456.jpg";
+// Media dedupes by content hash, so a figure that repeats in the source (a
+// chapter ornament, a re-used plate) is annotated twice with the SAME `file` -
+// American Cosmic opens with two of 6f27aaa3c75c.jpg. Identity is therefore the
+// annotation's line: keyed by file, both controls resolved to the first
+// annotation, so the second figure edited the wrong one and then went dead (the
+// flag was already set, so every further click no-op'd).
+describe("a file annotated twice is two independent images", () => {
+  const REPEATED = [
+    "<!--",
+    "image:",
+    "  file: 6f27aaa3c75c.jpg",
+    '  alt: "image"',
+    "-->",
+    "",
+    "<!--",
+    "image:",
+    "  file: 6f27aaa3c75c.jpg",
+    '  alt: "image"',
+    "-->",
+    "",
+    "Chapter one begins.",
+  ].join("\n");
+  const FIRST = 0;
+  const SECOND = 6;
 
+  it("lists both occurrences, distinguished by line", () => {
+    expect(imageRefsInBody(REPEATED)).toEqual([
+      { line: FIRST, file: "6f27aaa3c75c.jpg" },
+      { line: SECOND, file: "6f27aaa3c75c.jpg" },
+    ]);
+  });
+
+  it("marks the second one irrelevant without touching the first", () => {
+    const { ok, body } = setImageRelevanceAt(REPEATED, SECOND, true);
+    expect(ok).toBe(true);
+    expect(imageIsIrrelevantAt(body, SECOND)).toBe(true);
+    expect(imageIsIrrelevantAt(body, FIRST)).toBe(false);
+    expect(body.match(/irrelevant: true/g)?.length).toBe(1);
+  });
+
+  it("marks both, one click each, and clears them independently", () => {
+    const first = setImageRelevanceAt(REPEATED, FIRST, true);
+    expect(first.ok).toBe(true);
+    // The first annotation grew a line, so the second one moved down with it.
+    const secondLine = first.oldToNew[SECOND];
+    const both = setImageRelevanceAt(first.body, secondLine, true);
+    expect(both.ok).toBe(true);
+    expect(both.body.match(/irrelevant: true/g)?.length).toBe(2);
+    const cleared = setImageRelevanceAt(both.body, FIRST, false);
+    expect(cleared.ok).toBe(true);
+    expect(imageIsIrrelevantAt(cleared.body, FIRST)).toBe(false);
+    expect(imageIsIrrelevantAt(cleared.body, cleared.oldToNew[secondLine])).toBe(true);
+  });
+
+  it("describes each occurrence separately", () => {
+    const set = setImageDescriptionAt(REPEATED, SECOND, "The second plate.");
+    expect(set.ok).toBe(true);
+    expect(imageDescriptionAt(set.body, SECOND)).toBe("The second plate.");
+    expect(imageDescriptionAt(set.body, FIRST)).toBe("");
+  });
+});
+
+describe("setImageRelevanceAt / imageIsIrrelevantAt", () => {
   it("marks an image irrelevant by adding `irrelevant: true` under the mapping", () => {
-    const { ok, body } = setImageRelevanceByFile(BODY, FILE, true);
+    const { ok, body } = setImageRelevanceAt(BODY, IMAGE_LINE, true);
     expect(ok).toBe(true);
     expect(parseAnnotation(body).irrelevant).toBe(true);
-    expect(imageIsIrrelevant(body, FILE)).toBe(true);
+    expect(imageIsIrrelevantAt(body, IMAGE_LINE)).toBe(true);
     // Round-trips back to keep: clearing removes the line (absent = keep).
-    const cleared = setImageRelevanceByFile(body, FILE, false);
+    const cleared = setImageRelevanceAt(body, IMAGE_LINE, false);
     expect(cleared.ok).toBe(true);
     expect(cleared.body).toBe(BODY);
-    expect(imageIsIrrelevant(cleared.body, FILE)).toBe(false);
+    expect(imageIsIrrelevantAt(cleared.body, IMAGE_LINE)).toBe(false);
   });
 
   it("is a no-op when already in the requested state or the image is missing", () => {
-    expect(setImageRelevanceByFile(BODY, FILE, false).ok).toBe(false); // already keep
-    const marked = setImageRelevanceByFile(BODY, FILE, true).body;
-    expect(setImageRelevanceByFile(marked, FILE, true).ok).toBe(false); // already irrelevant
-    expect(setImageRelevanceByFile(BODY, "nope999zzz000.jpg", true).ok).toBe(false);
+    expect(setImageRelevanceAt(BODY, IMAGE_LINE, false).ok).toBe(false); // already keep
+    const marked = setImageRelevanceAt(BODY, IMAGE_LINE, true).body;
+    expect(setImageRelevanceAt(marked, IMAGE_LINE, true).ok).toBe(false); // already irrelevant
+    expect(setImageRelevanceAt(BODY, 99, true).ok).toBe(false);
   });
 
   it("does not change reviewable coverage - the image block stays zero-unit", () => {
     const before = totalUnits(parseTextBlocks(BODY));
-    const { body } = setImageRelevanceByFile(BODY, FILE, true);
+    const { body } = setImageRelevanceAt(BODY, IMAGE_LINE, true);
     expect(totalUnits(parseTextBlocks(body))).toBe(before);
   });
 
   it("shifts line-anchored spans past the inserted flag line", () => {
-    const { oldToNew } = setImageRelevanceByFile(BODY, FILE, true);
+    const { oldToNew } = setImageRelevanceAt(BODY, IMAGE_LINE, true);
     // The prose after the annotation ("Body continues here." at line 11) moves
     // down one, so a coverage span on it follows.
     expect(remapSpans([{ from: 11, to: 11 }], oldToNew)).toEqual([{ from: 12, to: 12 }]);
   });
 });
 
-describe("setImageDescriptionByFile / imageDescription", () => {
-  const FILE = "abc123def456.jpg";
-
+describe("setImageDescriptionAt / imageDescriptionAt", () => {
   it("writes the description into the annotation and reads it back", () => {
     const text = "Tweet by @user: the object remains unidentified.";
-    const { ok, body } = setImageDescriptionByFile(BODY, FILE, text);
+    const { ok, body } = setImageDescriptionAt(BODY, IMAGE_LINE, text);
     expect(ok).toBe(true);
     expect(parseAnnotation(body).description).toBe(text);
-    expect(imageDescription(body, FILE)).toBe(text);
+    expect(imageDescriptionAt(body, IMAGE_LINE)).toBe(text);
   });
 
   it("replaces an existing description rather than duplicating it", () => {
-    const first = setImageDescriptionByFile(BODY, FILE, "Old text.").body;
-    const second = setImageDescriptionByFile(first, FILE, "New text.");
+    const first = setImageDescriptionAt(BODY, IMAGE_LINE, "Old text.").body;
+    const second = setImageDescriptionAt(first, IMAGE_LINE, "New text.");
     expect(parseAnnotation(second.body).description).toBe("New text.");
     expect(second.body.match(/description:/g)?.length).toBe(1);
   });
 
   it("clears the description when set to empty, back to no field", () => {
-    const set = setImageDescriptionByFile(BODY, FILE, "Something.").body;
-    const cleared = setImageDescriptionByFile(set, FILE, "  ");
+    const set = setImageDescriptionAt(BODY, IMAGE_LINE, "Something.").body;
+    const cleared = setImageDescriptionAt(set, IMAGE_LINE, "  ");
     expect(cleared.ok).toBe(true);
     expect(cleared.body).toBe(BODY);
-    expect(imageDescription(cleared.body, FILE)).toBe("");
+    expect(imageDescriptionAt(cleared.body, IMAGE_LINE)).toBe("");
   });
 
   it("is a no-op when unchanged or the image is missing", () => {
-    expect(setImageDescriptionByFile(BODY, FILE, "").ok).toBe(false); // no description, still none
-    const set = setImageDescriptionByFile(BODY, FILE, "Same.").body;
-    expect(setImageDescriptionByFile(set, FILE, "Same.").ok).toBe(false);
-    expect(setImageDescriptionByFile(BODY, "nope999zzz000.jpg", "x").ok).toBe(false);
+    expect(setImageDescriptionAt(BODY, IMAGE_LINE, "").ok).toBe(false); // no description, still none
+    const set = setImageDescriptionAt(BODY, IMAGE_LINE, "Same.").body;
+    expect(setImageDescriptionAt(set, IMAGE_LINE, "Same.").ok).toBe(false);
+    expect(setImageDescriptionAt(BODY, 99, "x").ok).toBe(false);
   });
 
   it("quotes YAML-special and multi-line text so it round-trips", () => {
     const text = 'Line one: "quoted 40:1".\nLine two.';
-    const { body } = setImageDescriptionByFile(BODY, FILE, text);
+    const { body } = setImageDescriptionAt(BODY, IMAGE_LINE, text);
     expect(parseAnnotation(body).description).toBe(text);
     // Stays a single YAML line (newline escaped inside the quoted scalar).
     expect(body.match(/description:/g)?.length).toBe(1);
@@ -341,7 +405,7 @@ describe("setImageDescriptionByFile / imageDescription", () => {
 
   it("does not change reviewable coverage - the image block stays zero-unit", () => {
     const before = totalUnits(parseTextBlocks(BODY));
-    const { body } = setImageDescriptionByFile(BODY, FILE, "A description.");
+    const { body } = setImageDescriptionAt(BODY, IMAGE_LINE, "A description.");
     expect(totalUnits(parseTextBlocks(body))).toBe(before);
   });
 });
