@@ -223,7 +223,7 @@
   let filteredIngests = $derived(
     ingests
       .filter((i) => {
-        if (filterType !== "all" && i.source_type !== filterType) return false;
+        if (filterType !== "all" && (i.document_type || i.source_type) !== filterType) return false;
         if (filterCreator && !i.creators.includes(filterCreator)) return false;
         if (filterPublisher && i.publisher !== filterPublisher) return false;
         if (filterBlocksRedigest && !(i.digested && !i.digestible)) return false;
@@ -280,7 +280,7 @@
           vb = bd;
         }
         else if (sortBy === "title") { va = a.title.toLowerCase(); vb = b.title.toLowerCase(); }
-        else if (sortBy === "type") { va = a.source_type; vb = b.source_type; }
+        else if (sortBy === "type") { va = a.document_type || a.source_type; vb = b.document_type || b.source_type; }
         else if (sortBy === "version") {
           const cmp = a.schema_version - b.schema_version;
           return sortAsc ? cmp : -cmp;
@@ -297,7 +297,7 @@
   );
 
   let sourceTypes = $derived(
-    [...new Set(ingests.map((i) => i.source_type))].sort(),
+    [...new Set(ingests.map((i) => i.document_type || i.source_type))].sort(),
   );
 
   let blocksRedigestCount = $derived(

@@ -445,6 +445,9 @@ class LocalIngestSource(IngestSource):
                         "date_extracted", frontmatter.get("date_accessed", "")
                     ),
                     "source_type": frontmatter.get("source_type", ""),
+                    # What the thing IS (email, transcript...), distinct from how it
+                    # was acquired. The list shows this in preference.
+                    "document_type": frontmatter.get("document_type", ""),
                     "pipeline_version": None,
                     "pipeline_current": None,
                     "source_url": frontmatter.get("source_url", ""),
@@ -653,6 +656,9 @@ class LocalIngestSource(IngestSource):
                         "date_extracted", frontmatter.get("date_accessed", "")
                     ),
                     "source_type": frontmatter.get("source_type", ""),
+                    # What the thing IS (email, transcript...), distinct from how it
+                    # was acquired. The list shows this in preference.
+                    "document_type": frontmatter.get("document_type", ""),
                     # Extraction generation vs the current per-media-type version
                     # (decision 0040). The frontend badges "outdated" only when
                     # pipeline_version is present and below pipeline_current.

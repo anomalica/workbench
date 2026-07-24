@@ -20,6 +20,7 @@ export interface IngestSummary {
   /** date_extracted (falls back to date_accessed) - when ingestion ran. */
   date_ingested: string;
   source_type: string;
+  document_type?: string;
   source_url: string;
   /** Extraction generation that produced this record (anomalica decision 0040),
    *  or null when not declared. Below `pipeline_current` = stale (badged). */

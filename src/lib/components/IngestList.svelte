@@ -124,7 +124,7 @@
           {/if}
         </span>
         <span class="text-xs font-ui font-medium text-primary uppercase w-14 flex-none">
-          {typeLabels[ingest.source_type] ?? ingest.source_type}
+          {typeLabels[ingest.document_type || ingest.source_type] ?? (ingest.document_type || ingest.source_type)}
         </span>
         <span class="w-10 flex-none text-xs text-on-surface-muted tabular-nums">v{ingest.schema_version}</span>
         <span
