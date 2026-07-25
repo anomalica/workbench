@@ -80,6 +80,14 @@ def audit_client(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(server, "ingests_path", ingests)
     monkeypatch.setattr(server, "digests_path", digests)
+    # Hermetic clustering: point the embedding endpoint at a dead port so the
+    # suite never depends on whether the assimilator's service happens to be
+    # running on the developer's machine (connection-refused is immediate, so
+    # this costs nothing). The embedding path is exercised explicitly below with
+    # a stub. Also clear the process-wide payload cache so one test's build can
+    # never be served to another.
+    monkeypatch.setenv("ANOMALICA_EMBED_ENDPOINT", "http://127.0.0.1:1")
+    server._AUDIT_PAYLOAD_CACHE.clear()
     # The audit view is reviewer-gated; grant the test user that role.
     (ingests / "roles.yaml").write_text("rev: reviewer\n")
     monkeypatch.setattr(
@@ -204,3 +212,145 @@ def test_put_claim_rejects_bad_quality(audit_client, tmp_path, monkeypatch):
         },
     )
     assert res.status_code == 400
+
+
+def test_nodes_compared_across_models(audit_client, tmp_path):
+    # Pass A's entities are the other half of the two-pass output; comparing
+    # WHICH entities each model found was invisible until they were surfaced.
+    vdir = tmp_path / "digests" / "variants" / NAME
+    opus = yaml.safe_load((vdir / "opus.yaml").read_text())
+    opus["nodes"] = [
+        {"id": "n1", "type": "person", "name": "Jon Stewart"},
+        {"id": "n2", "type": "organisation", "name": "NASA"},
+    ]
+    (vdir / "opus.yaml").write_text(yaml.safe_dump(opus))
+    haiku = yaml.safe_load((vdir / "haiku.yaml").read_text())
+    haiku["nodes"] = [{"id": "h1", "type": "person", "name": "jon stewart"}]
+    (vdir / "haiku.yaml").write_text(yaml.safe_dump(haiku))
+
+    body = audit_client.get(f"/api/ingests/{HASH}/audit").json()
+    by_name = {n["name"].casefold(): n for n in body["nodes"]}
+    # Case differs between the models; the entity is still one row.
+    assert sorted(by_name["jon stewart"]["found_by"]) == ["haiku", "opus"]
+    assert by_name["jon stewart"]["singleton"] is False
+    # An entity only one model extracted stays visible as a singleton.
+    assert by_name["nasa"]["found_by"] == ["opus"]
+    assert by_name["nasa"]["singleton"] is True
+    counts = {v["model"]: v["node_count"] for v in body["variants"]}
+    assert counts == {"opus": 2, "haiku": 1}
+
+
+def test_reports_lexical_fallback_when_endpoint_is_down(audit_client):
+    # The endpoint is unreachable in tests, so the build degrades - and SAYS so.
+    # A reviewer must never be shown approximate clustering as if it were the
+    # embedding space's verdict.
+    body = audit_client.get(f"/api/ingests/{HASH}/audit").json()
+    assert body["similarity"]["method"] == "lexical"
+    assert body["similarity"]["degraded"] is True
+    assert body["similarity"]["model_id"] is None
+    # The threshold is reported even when it did not run, so the payload always
+    # says what "same fact" would have meant.
+    assert body["similarity"]["threshold"] > 0
+
+
+def test_uses_embeddings_and_stamps_the_space(audit_client, monkeypatch):
+    # With the endpoint reachable, clustering runs in the assimilator's vector
+    # space and the payload records WHICH space and WHICH cut produced it - a
+    # human verdict is not reproducible without both.
+    class StubCache:
+        model_id = "stub-embedder:v1"
+
+        def __init__(self, *a, **kw):
+            pass
+
+        def warm(self, texts):
+            list(texts)
+
+    monkeypatch.setattr("anomalica_common.embedding_client.EmbeddingCache", StubCache)
+    monkeypatch.setattr(
+        "anomalica_common.embedding_client.embedding_similar",
+        lambda threshold=None, cache=None: (
+            lambda a, b: a.text.strip().lower() == b.text.strip().lower()
+        ),
+    )
+    body = audit_client.get(f"/api/ingests/{HASH}/audit").json()
+    assert body["similarity"] == {
+        "method": "embedding",
+        "model_id": "stub-embedder:v1",
+        "threshold": 0.83,
+        "degraded": False,
+    }
+    # And it still clusters: the shared fact collapsed across both models.
+    shared = [c for c in body["passages"][0]["clusters"] if not c["singleton"]]
+    assert len(shared) == 1
+
+
+def test_repeat_open_is_served_from_cache(audit_client, monkeypatch):
+    # "Slow to load" was a full re-parse + re-cluster on every open. An unchanged
+    # record must not rebuild.
+    first = audit_client.get(f"/api/ingests/{HASH}/audit")
+    assert first.status_code == 200
+    calls = []
+    import backend.audit_load as audit_load
+
+    original = audit_load.load_record_variants
+    monkeypatch.setattr(
+        audit_load,
+        "load_record_variants",
+        lambda *a, **kw: calls.append(1) or original(*a, **kw),
+    )
+    second = audit_client.get(f"/api/ingests/{HASH}/audit")
+    assert second.status_code == 200
+    assert calls == []  # never re-read the variant files
+    assert second.json()["passages"] == first.json()["passages"]
+
+
+def test_cache_rebuilds_when_a_variant_changes(audit_client, tmp_path):
+    before = audit_client.get(f"/api/ingests/{HASH}/audit").json()
+    assert len(before["passages"][0]["clusters"]) == 2
+
+    vdir = tmp_path / "digests" / "variants" / NAME
+    doc = yaml.safe_load((vdir / "haiku.yaml").read_text())
+    doc["domain_claims"].append(
+        {
+            "id": "h2",
+            "location": "00:00:00-00:00:30",
+            "quote": "Q",
+            "text": "A brand new haiku claim",
+        }
+    )
+    (vdir / "haiku.yaml").write_text(yaml.safe_dump(doc))
+
+    after = audit_client.get(f"/api/ingests/{HASH}/audit").json()
+    assert len(after["passages"][0]["clusters"]) == 3
+
+
+def test_gold_is_attached_fresh_not_cached(audit_client, tmp_path, monkeypatch):
+    # The clustered payload caches; the reviewer's gold must NOT, or a verdict
+    # written between two opens would not show until the record changed.
+    store = tmp_path / "store"
+    store.mkdir()
+    monkeypatch.setattr(server.source, "audit_store_dir", lambda h: store)
+    assert audit_client.get(f"/api/ingests/{HASH}/audit").json()["gold"]["claims"] == []
+
+    # The real save_audit commits to the ingests repo; this one only persists to
+    # the tmp store, so the read-back path is exercised for real.
+    monkeypatch.setattr(
+        server.source,
+        "save_audit",
+        lambda h, gold, name, email: bool(server.audit_gold.write(store, h, gold)),
+    )
+    audit_client.put(
+        f"/api/ingests/{HASH}/audit/claim",
+        json={
+            "variant": "haiku",
+            "model": "haiku",
+            "prompt_sha": "s",
+            "claim_id": "h1",
+            "location": "00:00:00-00:00:30",
+            "text": "Jon ran for governor",
+            "quality": "good",
+        },
+    )
+    served = audit_client.get(f"/api/ingests/{HASH}/audit").json()
+    assert [c["claim_id"] for c in served["gold"]["claims"]] == ["h1"]

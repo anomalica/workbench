@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
-"""Loading extraction variants off disk: claim parsing, cost from frontmatter,
-and the variants/{name}/ vs canonical records/{name}.yaml resolution."""
+"""Loading extraction variants off disk: claim parsing, node parsing, cost from
+frontmatter, the variants/{name}/ vs canonical records/{name}.yaml resolution,
+and the stat signature the payload cache keys on."""
+
+import os
 
 import yaml
 
 from backend.audit_load import (
     parse_claims,
+    parse_nodes,
     load_variant,
     load_variant_file,
     variant_files,
+    variant_signature,
     load_record_variants,
 )
 
@@ -170,3 +175,54 @@ class TestVariantResolution:
         variants = load_record_variants(tmp_path, "rec")
         assert {v.model for v in variants} == {"opus", "haiku"}
         assert sum(len(v.claims) for v in variants) == 3
+
+
+class TestParseNodes:
+    def test_pulls_entities_tagged_with_variant(self):
+        doc = {
+            **DIGEST,
+            "nodes": [
+                {"id": "n1", "type": "person", "name": "Stewart, Jon"},
+                {"id": "n2", "type": "organisation", "name": "NASA"},
+            ],
+        }
+        nodes = parse_nodes(doc, "opus-v3", "opus")
+        assert [n.name for n in nodes] == ["Stewart, Jon", "NASA"]
+        assert all(n.variant == "opus-v3" and n.model == "opus" for n in nodes)
+
+    def test_drops_unnamed_entities(self):
+        # An unnamed node can never be matched to another model's, so it would
+        # only ever render as a phantom singleton.
+        doc = {**DIGEST, "nodes": [{"id": "n1", "type": "person", "name": "  "}]}
+        assert parse_nodes(doc, "v", "m") == []
+
+    def test_no_nodes_section_is_empty(self):
+        assert parse_nodes(DIGEST, "v", "m") == []
+
+    def test_load_variant_carries_nodes(self):
+        doc = {**DIGEST, "nodes": [{"id": "n1", "type": "person", "name": "Ada"}]}
+        assert [n.name for n in load_variant(doc, "v").nodes] == ["Ada"]
+
+
+class TestVariantSignature:
+    def test_changes_when_a_variant_file_changes(self, tmp_path):
+        vdir = tmp_path / "variants" / "rec"
+        vdir.mkdir(parents=True)
+        f = vdir / "opus.yaml"
+        f.write_text(yaml.safe_dump(DIGEST))
+        first = variant_signature(tmp_path, "rec")
+        assert first == variant_signature(tmp_path, "rec")  # stable while unchanged
+
+        os.utime(f, ns=(0, 0))  # a rewrite the cache must notice
+        assert variant_signature(tmp_path, "rec") != first
+
+    def test_changes_when_a_variant_is_added(self, tmp_path):
+        vdir = tmp_path / "variants" / "rec"
+        vdir.mkdir(parents=True)
+        (vdir / "opus.yaml").write_text(yaml.safe_dump(DIGEST))
+        before = variant_signature(tmp_path, "rec")
+        (vdir / "haiku.yaml").write_text(yaml.safe_dump(DIGEST))
+        assert variant_signature(tmp_path, "rec") != before
+
+    def test_empty_when_no_variants(self, tmp_path):
+        assert variant_signature(tmp_path, "nothing-here") == ()

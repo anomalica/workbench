@@ -4,7 +4,10 @@ them, singleton flagging. Pure - a stub similarity stands in for embeddings."""
 
 from backend.audit import (
     Claim,
+    Node,
     Variant,
+    node_key,
+    node_rows,
     parse_location,
     build_passages,
     claims_of,
@@ -225,3 +228,90 @@ class TestVariant:
         singles = [c for c in passages[0].clusters if c.singleton]
         assert len(shared) == 1 and shared[0].variants == {"opus", "haiku"}
         assert len(singles) == 1 and singles[0].variants == {"opus"}
+
+
+def node(variant, name, ntype="person", nid=None):
+    return Node(
+        variant=variant,
+        model=variant,
+        node_id=nid or f"{variant}:{name}",
+        type=ntype,
+        name=name,
+    )
+
+
+class TestNodeComparison:
+    def test_same_entity_across_models_is_one_row(self):
+        variants = [
+            Variant("opus", "opus", [], nodes=[node("opus", "Jon Stewart")]),
+            Variant("haiku", "haiku", [], nodes=[node("haiku", "Jon Stewart")]),
+        ]
+        rows = node_rows(variants)
+        assert len(rows) == 1
+        assert rows[0].found_by == 2 and not rows[0].singleton
+        assert set(rows[0].by_variant) == {"opus", "haiku"}
+
+    def test_entity_only_one_model_found_is_a_singleton(self):
+        variants = [
+            Variant("opus", "opus", [], nodes=[node("opus", "Ada Lovelace")]),
+            Variant("haiku", "haiku", [], nodes=[node("haiku", "Jon Stewart")]),
+        ]
+        rows = node_rows(variants)
+        assert len(rows) == 2
+        assert all(r.singleton for r in rows)
+
+    def test_matching_ignores_case_but_not_word_order(self):
+        # Case is noise; word order is a genuinely different surface form that
+        # only a fuzzy match could join - and a silent fuzzy merge would invent
+        # agreement between models. Two rows is wrong-but-visible.
+        assert node_key(node("a", "NASA")) == node_key(node("b", "nasa"))
+        assert node_key(node("a", "Stewart, Jon")) != node_key(node("b", "Jon Stewart"))
+
+    def test_same_name_different_type_stays_distinct(self):
+        variants = [
+            Variant(
+                "opus",
+                "opus",
+                [],
+                nodes=[
+                    node("opus", "Nimitz", ntype="person"),
+                    node("opus", "Nimitz", ntype="organisation"),
+                ],
+            ),
+        ]
+        assert len(node_rows(variants)) == 2
+
+    def test_a_model_repeating_an_entity_counts_once(self):
+        variants = [
+            Variant(
+                "opus",
+                "opus",
+                [],
+                nodes=[node("opus", "NASA", nid="n1"), node("opus", "NASA", nid="n2")],
+            ),
+        ]
+        rows = node_rows(variants)
+        assert len(rows) == 1 and rows[0].found_by == 1
+        assert rows[0].by_variant["opus"].node_id == "n1"  # first writer wins
+
+    def test_ordered_by_type_then_name(self):
+        variants = [
+            Variant(
+                "opus",
+                "opus",
+                [],
+                nodes=[
+                    node("opus", "Zeta", ntype="person"),
+                    node("opus", "Alpha", ntype="person"),
+                    node("opus", "Beta", ntype="document"),
+                ],
+            ),
+        ]
+        assert [(r.type, r.name) for r in node_rows(variants)] == [
+            ("document", "Beta"),
+            ("person", "Alpha"),
+            ("person", "Zeta"),
+        ]
+
+    def test_no_nodes_is_no_rows(self):
+        assert node_rows([Variant("opus", "opus", [])]) == []
