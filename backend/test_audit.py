@@ -12,6 +12,8 @@ from backend.audit import (
     build_passages,
     claims_of,
     _merge_spans,
+    passage_anchor,
+    MAX_CITED_SPAN_S,
     TimeSpan,
 )
 
@@ -315,3 +317,63 @@ class TestNodeComparison:
 
     def test_no_nodes_is_no_rows(self):
         assert node_rows([Variant("opus", "opus", [])]) == []
+
+
+class TestDegenerateLocations:
+    """A claim citing a huge range must not swallow the record.
+
+    Live data: on jon-stewart eight claims of 2078 cite 5+ minutes (one is
+    03:16:03 long, six share an identical start with unrelated ends - a model
+    emitting a malformed location). Merging by overlap chained the whole
+    transcript into ONE passage of 1864 claims.
+    """
+
+    def test_a_normal_range_is_untouched(self):
+        span = parse_location("00:00:10-00:00:40")
+        assert passage_anchor(span) is span
+
+    def test_a_degenerate_range_collapses_to_its_start(self):
+        span = parse_location("00:04:34.4-03:16:03.0")
+        anchored = passage_anchor(span)
+        assert anchored.start == span.start
+        assert anchored.end == anchored.start
+        # The location the model actually cited is preserved for display.
+        assert anchored.raw == span.raw
+
+    def test_an_untimed_location_is_never_anchored(self):
+        span = parse_location("line 11")
+        assert passage_anchor(span) is span
+
+    def test_the_boundary_is_inclusive(self):
+        exactly = parse_location(f"00:00:00-00:0{int(MAX_CITED_SPAN_S // 60)}:00")
+        assert passage_anchor(exactly) is exactly  # 300s itself is not degenerate
+
+    def test_one_huge_claim_no_longer_swallows_the_others(self):
+        # Without anchoring, the 0-3600s claim overlaps every other and merges
+        # them all into a single passage - the shape that made the real record
+        # unreadable.
+        claims = [
+            claim("opus", "spans everything", "00:00:00-01:00:00"),
+            claim("opus", "early fact", "00:00:05-00:00:20"),
+            claim("haiku", "early fact", "00:00:05-00:00:20"),
+            claim("opus", "much later fact", "00:50:00-00:50:30"),
+        ]
+        passages = build_passages(claims, same_text)
+        assert len(passages) > 1
+        # The distant claim is no longer compared against the early ones.
+        early = [p for p in passages if p.start < 60]
+        later = [p for p in passages if p.start > 2000]
+        assert early and later
+        texts = {c.text for cl in later[0].clusters for c in cl.members}
+        assert texts == {"much later fact"}
+
+    def test_the_two_models_still_meet_in_the_same_passage(self):
+        # The property the merge exists for: models phrasing a timecode slightly
+        # differently must still share a passage. Anchoring must not break it.
+        claims = [
+            claim("opus", "shared", "00:10:00.0-00:10:12.0"),
+            claim("haiku", "shared", "00:10:01.5-00:10:14.0"),
+        ]
+        passages = build_passages(claims, same_text)
+        assert len(passages) == 1
+        assert not passages[0].clusters[0].singleton

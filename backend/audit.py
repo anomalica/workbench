@@ -269,6 +269,40 @@ class Passage:
 Similar = Callable[[Claim, Claim], bool]
 
 
+# A cited range longer than this is not describing a passage - it is describing
+# the whole discussion, and merging by overlap lets it swallow the record.
+#
+# Measured, not guessed. On the jon-stewart record 99% of ranges are <= 40s
+# (median 6.4s), but EIGHT claims out of 2078 cite 5+ minutes, up to 03:16:03 -
+# and six of those start at the identical 00:04:34.4, which is a model emitting a
+# start time with an unrelated end. Because passages merge on overlap, those
+# eight chained the entire transcript into ONE passage holding 1864 claims - 85%
+# of the record, unreadable and O(n^2) to cluster.
+#
+# The threshold is deliberately far above normal: 300s is 7.5x the 99th
+# percentile, so it separates degenerate locations from dense ones rather than
+# tuning where a passage ends. It is not a sensitive knob - 60s, 120s and 300s
+# all yield the same shape (599-600 passages, largest 128) because only the
+# outliers are affected, and a record with no degenerate ranges is untouched:
+# ross-coulthart clamps ZERO claims and its passages are byte-identical at every
+# threshold. That property is what keeps this from re-introducing the
+# confounding the merge exists to prevent - normal ranges never move.
+MAX_CITED_SPAN_S = 300.0
+
+
+def passage_anchor(span: TimeSpan) -> TimeSpan:
+    """Where a claim sits on the passage timeline.
+
+    Normally its own range. A DEGENERATE range (see MAX_CITED_SPAN_S) collapses
+    to its start instead: the claim's evidence begins there, so it lands in the
+    passage where its citation opens rather than spanning - and being compared
+    against - everything after it. The raw location is preserved, so the reviewer
+    still sees the full range the model actually cited."""
+    if span.timed and (span.end - span.start) > MAX_CITED_SPAN_S:
+        return TimeSpan(span.start, span.start, span.raw, timed=True)
+    return span
+
+
 def _merge_spans(spans: list[TimeSpan]) -> list[tuple[float, float, list[str]]]:
     """Merge overlapping/adjacent location ranges into passages. Models rarely
     agree on the exact timecode of a passage, so exact-string grouping would
@@ -330,7 +364,9 @@ def build_passages(claims: list[Claim], similar: Similar) -> list[Passage]:
         return []
 
     lines_regime = line_addressed(claims)
-    spans = {c: parse_location(c.location, lines_regime) for c in claims}
+    spans = {
+        c: passage_anchor(parse_location(c.location, lines_regime)) for c in claims
+    }
     # Timed claims group into passages by overlapping second-range; untimed ones
     # (line refs, unparseable) group by their exact raw location, ordered after
     # the timed passages so a mixed record still walks time-first.
