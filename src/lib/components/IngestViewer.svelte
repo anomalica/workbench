@@ -57,6 +57,7 @@
   import ReviewHistory from "./ReviewHistory.svelte";
   import { hasWordTimestamps, parseWords, nextRelevantWordStartAfter, speakerWordCounts } from "$lib/transcript-words";
   import { imageRefsInBody } from "$lib/image-captions";
+  import { messageInner, parseMessage, messageHeaderHtml } from "$lib/email-thread";
   import { untrack } from "svelte";
   import { marked } from "marked";
   import yaml from "js-yaml";
@@ -1082,25 +1083,7 @@
       [class*="dfp-ad"] {
         display: none !important;
       }
-
-  /* Email thread segments: an email is a conversation, so each message is
-     attributed and a quoted reply is visually set apart from the sender's own
-     words - otherwise the two blur into one block of prose. */
-  :global(.email-msg) {
-    display: flex; align-items: baseline; gap: 0.6rem;
-    margin: 1.4rem 0 0.4rem; padding-bottom: 0.3rem;
-    border-bottom: 1px solid var(--border, rgba(128,128,128,0.25));
-    font-size: 0.82rem;
-  }
-  :global(.email-from) { font-weight: 600; }
-  :global(.email-when) { opacity: 0.6; font-variant-numeric: tabular-nums; }
-  :global(.email-quoted) {
-    margin-left: auto; font-size: 0.72rem; text-transform: uppercase;
-    letter-spacing: 0.04em; opacity: 0.65;
-  }
-  :global(.email-msg-quoted) { opacity: 0.85; }
-  :global(.email-msg-quoted ~ p) { opacity: 0.9; }
-</style>
+    </style>
   `;
 
   function injectAdHideCss(html: string): string {
@@ -1517,23 +1500,8 @@
         // Email thread segment. An email is a CONVERSATION, not prose: without this
         // each message runs into the next and a quoted reply reads as the sender's
         // own words. Renders an attributed header per message, marking quoted ones.
-        const msgMatch = trimmed.match(/^message:\s*\{([\s\S]*)\}$/);
-        if (msgMatch) {
-          const inner = msgMatch[1];
-          const grab = (k: string) => {
-            const m = inner.match(new RegExp(k + ':\\s*"?([^",}]+)"?'));
-            return m ? m[1].trim() : "";
-          };
-          const from = grab("from");
-          const when = grab("date");
-          const quoted = /quoted:\s*true/.test(inner);
-          const who = from.replace(/\s*<[^>]*>/, "") || "Unknown sender";
-          return `\n\n<div class="email-msg${quoted ? " email-msg-quoted" : ""}">` +
-            `<span class="email-from">${who}</span>` +
-            (when ? `<span class="email-when">${when.slice(0, 10)}</span>` : "") +
-            (quoted ? `<span class="email-quoted">quoted reply</span>` : "") +
-            `</div>\n\n`;
-        }
+        const inner = messageInner(trimmed);
+        if (inner !== null) return messageHeaderHtml(parseMessage(inner));
 
         // Page marker (PDFs)
         const pageMatch = trimmed.match(/^file_page:\s*(\d+)/);
@@ -5079,3 +5047,47 @@
     />
   {/if}
 {/if}
+
+<style>
+  /* Email thread segments: an email is a CONVERSATION, so each message is
+     attributed and a quoted reply is set apart from the sender's own words -
+     otherwise the two blur into one block of prose.
+
+     These must live HERE, in the component's own style block, not in the
+     AD_HIDE_CSS string: that string is injected into the archived-HTML iframe,
+     a different document from the prose pane these headers render in. They were
+     also `:global(...)`-wrapped inside that plain <style> string, which is
+     Svelte compiler syntax, not CSS - a browser drops the rule as an invalid
+     selector - so they styled nothing anywhere and the spans ran together
+     ("John Podesta2015-03-05"). :global is correct in THIS block, because the
+     markup comes from {@html} and carries no scoping class. */
+  :global(.email-msg) {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    margin: 1.4rem 0 0.4rem;
+    padding-bottom: 0.3rem;
+    border-bottom: 1px solid var(--border, rgba(128, 128, 128, 0.25));
+    font-size: 0.82rem;
+  }
+  :global(.email-from) {
+    font-weight: 600;
+  }
+  :global(.email-when) {
+    opacity: 0.6;
+    font-variant-numeric: tabular-nums;
+  }
+  :global(.email-quoted) {
+    margin-left: auto;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    opacity: 0.65;
+  }
+  :global(.email-msg-quoted) {
+    opacity: 0.85;
+  }
+  :global(.email-msg-quoted ~ p) {
+    opacity: 0.9;
+  }
+</style>
