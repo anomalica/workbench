@@ -19,6 +19,8 @@
  * in a component where no unit test could reach it.
  */
 
+import yaml from "js-yaml";
+
 export interface EmailMessage {
   /** Sender with the address stripped - the display name alone. */
   who: string;
@@ -35,56 +37,45 @@ export function messageInner(annotation: string): string | null {
   return m ? m[1] : null;
 }
 
-/** Every top-level `key: value` pair of the flow mapping.
+/** The annotation's flow mapping, parsed as the YAML it is.
  *
- *  Scanned rather than matched with a per-key regex, because a regex for one key
- *  cannot tell where a value ends. Two ways that bit:
+ *  Parsed with a real parser rather than read with a regex, because the grammar
+ *  is not ours to track by hand. Three faults came from hand-reading it, each
+ *  invisible rather than loud:
  *
- *  - A QUOTED value owns its commas. The ingester writes
- *    `date: "Mar 5, 2015 6:08 PM"` when it could not parse the source
- *    attribution into a timestamp, and a pattern excluding commas captured
- *    "Mar 5" - a date with no year.
- *  - An unanchored key matches INSIDE another token. `date:` occurs within a
- *    hypothetical `update:` or `sentdate:`, and within any quoted value that
- *    happens to contain the text - so the lookup could silently return another
- *    field's value, misattributing a date in an archive whose entire purpose is
- *    correct attribution.
+ *  - A QUOTED value owns its commas: `date: "Mar 5, 2015 6:08 PM"` was captured
+ *    as "Mar 5" by a pattern that merely excluded commas.
+ *  - An unanchored key matches inside another token, so a lookup could return a
+ *    different field's value - or a display name containing `quoted: true` could
+ *    forge the flag that says whose words these are.
+ *  - A quoted scalar can carry ESCAPES. The ingester emits `>` as `\x3e` so a
+ *    display name containing `-->` cannot close the HTML comment early; only a
+ *    real parser turns that back into the sender's actual name, and a reader
+ *    that does not would show `\x3e` to the reviewer.
  *
- *  Text inside quotes is never read as structure, so a key only counts when it
- *  is a key. Flow sequences (`refs: [a, b]`) are not part of this annotation's
- *  grammar and would split on their inner commas. */
-export function fields(inner: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  const n = inner.length;
-  let i = 0;
-  while (i < n) {
-    while (i < n && (inner[i] === "," || /\s/.test(inner[i]))) i++;
-    const keyStart = i;
-    while (i < n && inner[i] !== ":" && inner[i] !== ",") i++;
-    if (i >= n || inner[i] !== ":") break; // malformed - stop, keep what parsed
-    const key = inner.slice(keyStart, i).trim();
-    i++;
-    while (i < n && /\s/.test(inner[i])) i++;
-    let value: string;
-    if (inner[i] === '"') {
-      const start = ++i;
-      while (i < n && inner[i] !== '"') i++;
-      value = inner.slice(start, i);
-      i++; // past the closing quote
-      while (i < n && inner[i] !== ",") i++; // ignore trailing junk
-    } else {
-      const start = i;
-      while (i < n && inner[i] !== ",") i++;
-      value = inner.slice(start, i).trim();
-    }
-    if (key) out[key] = value;
+ *  CORE_SCHEMA, not the default: the default resolves an ISO timestamp to a JS
+ *  Date, which has no timezone and normalises to UTC - a message sent
+ *  2015-03-05T22:30-05:00 would then DISPLAY as 2015-03-06, moving a message to
+ *  the wrong day. Keeping it a string preserves the date as the sender saw it.
+ *  (Python's PyYAML keeps tzinfo and does not have this trap; this one is JS's.)
+ *
+ *  Returns {} for a malformed annotation - a bad mapping must not break the
+ *  whole record's render. */
+export function parseMapping(inner: string): Record<string, unknown> {
+  try {
+    const doc = yaml.load(`{${inner}}`, { schema: yaml.CORE_SCHEMA });
+    return doc && typeof doc === "object" && !Array.isArray(doc)
+      ? (doc as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
   }
-  return out;
 }
 
-/** One field out of the flow mapping, or "" when it carries none. */
+/** One field as text, or "" when the annotation does not carry it. */
 export function field(inner: string, key: string): string {
-  return fields(inner)[key] ?? "";
+  const v = parseMapping(inner)[key];
+  return v === undefined || v === null ? "" : String(v);
 }
 
 /** An ISO timestamp shows as its date; anything else shows verbatim.
@@ -102,15 +93,15 @@ export function senderName(from: string): string {
 }
 
 export function parseMessage(inner: string): EmailMessage {
-  const f = fields(inner);
+  const m = parseMapping(inner);
   return {
-    who: senderName(f.from ?? "") || "Unknown sender",
+    who: senderName(m.from == null ? "" : String(m.from)) || "Unknown sender",
     // Read as a FIELD, not as a substring search: `/quoted:\s*true/` over the
     // whole string is true for a sender called `quoted: true` as readily as for
     // the real flag, which would mark a first-hand message as someone else's
     // words.
-    quoted: (f.quoted ?? "").trim() === "true",
-    when: displayDate(f.date ?? ""),
+    quoted: m.quoted === true,
+    when: displayDate(m.date == null ? "" : String(m.date)),
   };
 }
 

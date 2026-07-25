@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   displayDate,
   field,
-  fields,
+  parseMapping,
   messageHeaderHtml,
   messageInner,
   parseMessage,
@@ -159,17 +159,54 @@ describe("a key only counts where it is a key", () => {
     expect(parseMessage(inner).quoted).toBe(false);
   });
 
-  it("splits every field of the real annotation", () => {
-    expect(fields(messageInner(FISH)!)).toEqual({
-      n: "2",
+  it("parses every field of the real annotation, typed", () => {
+    expect(parseMapping(messageInner(FISH)!)).toEqual({
+      n: 2,
       from: "Bob Fish <robertbfish@earthlink.net>",
       date: "Mar 5, 2015 6:08 PM",
-      quoted: "true",
+      quoted: true,
     });
   });
 
-  it("keeps what parsed when the mapping is malformed", () => {
-    expect(fields('from: "A", garbage')).toEqual({ from: "A" });
-    expect(fields("")).toEqual({});
+  it("returns an empty mapping for a malformed annotation, never throwing", () => {
+    // A bad annotation must not take the whole record's render down with it.
+    expect(parseMapping('from: "unterminated')).toEqual({});
+    expect(parseMapping("")).toEqual({});
+  });
+});
+
+describe("parsing as YAML, not by hand", () => {
+  it("decodes the \\x3e escape the ingester emits for `>`", () => {
+    // A display name containing `-->` would close the HTML comment early, so
+    // the ingester escapes `>`. Only a real YAML parser turns that back into
+    // the sender's actual name; a hand-rolled reader shows "\x3e" to the
+    // reviewer. Escaping is reversible and byte-exact - unlike sanitising,
+    // which would mutate the archive's record of what the sender was called.
+    const inner = 'from: "Bad --\\x3e guy <e@x.invalid>", quoted: false';
+    expect(parseMapping(inner).from).toBe("Bad --> guy <e@x.invalid>");
+    expect(parseMessage(inner).who).toBe("Bad --> guy");
+  });
+
+  it("keeps an ISO timestamp on the sender's own date, not UTC's", () => {
+    // js-yaml's DEFAULT schema resolves this to a JS Date, which carries no
+    // timezone and normalises to UTC: 22:30-05:00 becomes 03:30 the NEXT day,
+    // so the message would display on 2015-03-06. CORE_SCHEMA keeps the string.
+    const inner = "date: 2015-03-05T22:30:00-05:00";
+    expect(parseMapping(inner).date).toBe("2015-03-05T22:30:00-05:00");
+    expect(parseMessage(inner).when).toBe("2015-03-05");
+  });
+
+  it("reads the spec's unquoted example as well as the emitted quoted form", () => {
+    // record-format.md shows `from:` unquoted; the ingester quotes it. Both are
+    // valid YAML and both must read the same.
+    const spec = "n: 2, from: John Podesta <john.podesta@gmail.com>, quoted: true";
+    expect(parseMessage(spec).who).toBe("John Podesta");
+    expect(parseMessage(spec).quoted).toBe(true);
+  });
+
+  it("treats a non-boolean `quoted` as not quoted", () => {
+    // Only a real `true` marks someone else's words as theirs.
+    expect(parseMessage('quoted: "true"').quoted).toBe(false);
+    expect(parseMessage("quoted: yes").quoted).toBe(false);
   });
 });
