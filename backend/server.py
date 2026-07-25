@@ -21,6 +21,7 @@ import secrets
 import string
 import time
 from abc import ABC, abstractmethod
+from collections import OrderedDict
 from datetime import datetime
 from datetime import timezone as dt_timezone
 from pathlib import Path
@@ -2220,6 +2221,110 @@ def _hash_to_friendly_name(full_hash: str) -> str | None:
     return None
 
 
+# In-process cache of the CLUSTERED audit payload (pre-gold), keyed on the
+# variant files' stat signature plus the similarity identity. Re-opening an
+# unchanged record returns in ~ms instead of re-parsing every variant YAML and
+# re-clustering (the two costs Mark saw as "slow to load"). The gold sidecar is
+# attached fresh on every request, never cached, so a verdict written between
+# opens shows immediately. Bounded, FIFO-evicted; cleared on any --reload restart.
+_AUDIT_PAYLOAD_CACHE: "OrderedDict[tuple, dict]" = OrderedDict()
+_AUDIT_CACHE_MAX = 32
+# How long a single warm() (embed the whole claim-text set in one round trip) may
+# take before the audit degrades to lexical for that open. A record already warm
+# in the assimilator's persistent cache returns cached vectors well inside this;
+# a not-yet-warmed record hits it, raises, and we fall back rather than block the
+# request thread for the minutes a cold 2000-claim embed would take. The next
+# open, after the cache is warm, builds embedding and pins it.
+_AUDIT_EMBED_TIMEOUT_S = 30.0
+
+
+def _resolve_similarity_threshold() -> float:
+    """The cosine cut for "same fact", resolved once so the value we CLUSTER with
+    is the value we STAMP into the gold - a verdict is on clusters a specific
+    (space, threshold) produced. Env override for tuning without a redeploy."""
+    from anomalica_common.embedding_client import DEFAULT_THRESHOLD
+
+    raw = os.environ.get("ANOMALICA_SIMILARITY_THRESHOLD")
+    try:
+        return float(raw) if raw else DEFAULT_THRESHOLD
+    except ValueError:
+        return DEFAULT_THRESHOLD
+
+
+def _build_audit_payload(name: str) -> dict:
+    """The clustered audit payload for a record, embedding-clustered when the
+    assimilator's endpoint is reachable and lexically clustered when it is not.
+
+    Similarity is the assimilator's fastembed Qwen3 cosine, reached over HTTP
+    through anomalica_common.embedding_client - never by importing the model into
+    this process (a second vector space free to drift from theirs). The whole
+    claim-text set is embedded in ONE warm() so the per-pair path is in-process
+    dot products; if the endpoint is down or a cold record's warm exceeds the
+    budget, the build degrades to the lexical placeholder and says so in the
+    payload's `similarity` block, rather than failing the view.
+
+    Cached against (variant signature, method, threshold): the embedding payload,
+    once built, stays valid until a variant file changes, independent of the
+    endpoint's later state."""
+    from anomalica_common.embedding_client import (
+        EmbeddingCache,
+        EmbeddingUnavailable,
+        embedding_similar,
+    )
+
+    from backend.audit_load import (
+        audit_payload,
+        load_record_variants,
+        variant_signature,
+    )
+    from backend.audit_similarity import lexical_similar
+
+    threshold = _resolve_similarity_threshold()
+    sig = variant_signature(digests_path, name)
+
+    # Prefer a cached embedding payload - valid regardless of the endpoint's
+    # current state, since it was clustered from the same unchanged files.
+    embed_key = (sig, "embedding", threshold)
+    hit = _AUDIT_PAYLOAD_CACHE.get(embed_key)
+    if hit is None:
+        hit = _AUDIT_PAYLOAD_CACHE.get((sig, "lexical", None))
+    if hit is not None:
+        _AUDIT_PAYLOAD_CACHE.move_to_end(
+            embed_key if embed_key in _AUDIT_PAYLOAD_CACHE else (sig, "lexical", None)
+        )
+        return dict(hit)  # new top-level dict; nested passages shared read-only
+
+    variants = load_record_variants(digests_path, name)
+    cache = EmbeddingCache(timeout=_AUDIT_EMBED_TIMEOUT_S)
+    try:
+        # One round trip embeds every claim; a not-yet-warmed record trips the
+        # timeout and drops us to the lexical branch.
+        cache.warm(c.text for v in variants for c in v.claims)
+        similar = embedding_similar(threshold=threshold, cache=cache)
+        payload = audit_payload(variants, similar)
+        method, model_id = "embedding", cache.model_id
+    except EmbeddingUnavailable:
+        payload = audit_payload(variants, lexical_similar())
+        method, model_id = "lexical", None
+
+    payload["similarity"] = {
+        "method": method,
+        "model_id": model_id,
+        "threshold": threshold,
+        # A lexical build is an APPROXIMATION the reviewer must know about: the
+        # singleton/overlap structure is real but the meaning-merge is crude, so
+        # the view flags it and (downstream) gold recorded against it is not a
+        # verdict on the embedding space.
+        "degraded": method == "lexical",
+    }
+    key = embed_key if method == "embedding" else (sig, "lexical", None)
+    _AUDIT_PAYLOAD_CACHE[key] = payload
+    _AUDIT_PAYLOAD_CACHE.move_to_end(key)
+    while len(_AUDIT_PAYLOAD_CACHE) > _AUDIT_CACHE_MAX:
+        _AUDIT_PAYLOAD_CACHE.popitem(last=False)
+    return dict(payload)
+
+
 @app.get("/api/ingests/{full_hash}/audit")
 def get_audit(full_hash: str, request: Request) -> JSONResponse:
     """The model/digest audit view for a record: every extraction variant's
@@ -2227,9 +2332,9 @@ def get_audit(full_hash: str, request: Request) -> JSONResponse:
     flags, per-variant cost, and the reviewer's adjudication gold attached.
     Reviewer-gated (an internal quality tool). 404 when no variant exists.
 
-    Clustering uses a lexical PLACEHOLDER similarity while the assimilator's
-    embedding space is wired in - the singleton/overlap structure is real but the
-    meaning-merge is approximate until then.
+    Clustering is the assimilator's embedding-cosine similarity, with a lexical
+    fallback when the endpoint is unreachable - the payload's `similarity` block
+    says which ran.
     """
     _require_role(request, "reviewer")
     if not FULL_HASH_PATTERN.match(full_hash):
@@ -2238,11 +2343,8 @@ def get_audit(full_hash: str, request: Request) -> JSONResponse:
     if name is None:
         raise HTTPException(status_code=404, detail="Unknown record")
 
-    from backend.audit_load import build_audit
-    from backend.audit_similarity import lexical_similar
-
     try:
-        payload = build_audit(digests_path, name, lexical_similar())
+        payload = _build_audit_payload(name)
     except Exception as exc:
         raise HTTPException(
             status_code=500, detail=f"Failed to build audit: {exc}"

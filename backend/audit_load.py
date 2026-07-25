@@ -23,11 +23,13 @@ import yaml
 
 from backend.audit import (
     Claim,
+    Node,
     Similar,
     Variant,
     axis_confounded,
     build_passages,
     claims_of,
+    node_rows,
     passage_compared,
 )
 
@@ -56,6 +58,29 @@ def parse_claims(doc: dict, variant_id: str, model: str) -> list[Claim]:
                 )
             )
     return claims
+
+
+def parse_nodes(doc: dict, variant_id: str, model: str) -> list[Node]:
+    """Pull Pass A's entities out of a digest doc, tagged with the variant.
+    Nodes with no name are dropped - an unnamed entity cannot be matched against
+    another model's, so it would only ever show as a phantom singleton."""
+    nodes: list[Node] = []
+    for n in doc.get("nodes") or []:
+        if not isinstance(n, dict):
+            continue
+        name = str(n.get("name", "") or "").strip()
+        if not name:
+            continue
+        nodes.append(
+            Node(
+                variant=variant_id,
+                model=model,
+                node_id=str(n.get("id", "") or ""),
+                type=str(n.get("type", "") or ""),
+                name=name,
+            )
+        )
+    return nodes
 
 
 def _speaker_name(speaker) -> str:
@@ -160,6 +185,7 @@ def load_variant(doc: dict, variant_id: str) -> Variant:
         id=variant_id,
         model=model,
         claims=parse_claims(doc, variant_id, model),
+        nodes=parse_nodes(doc, variant_id, model),
         cost_usd=_variant_cost(doc),
         prompt_ids=prompt_ids,
         prompt_fingerprint=prompt_fingerprint(doc),
@@ -190,6 +216,24 @@ def load_record_variants(digests_path: Path, friendly_name: str) -> list[Variant
     return [load_variant_file(p) for p in variant_files(digests_path, friendly_name)]
 
 
+def variant_signature(digests_path: Path, friendly_name: str) -> tuple:
+    """A stat fingerprint of a record's variant files - (path, mtime_ns, size)
+    for each, in stable order. A cache keyed on this rebuilds only when a variant
+    file actually changes on disk, so re-opening an unchanged record is free
+    rather than a full re-parse-and-cluster (the audit's load cost is the YAML
+    parse plus the O(n^2) clustering, neither of which changes until a file
+    does). A missing file stats as (path, 0, 0) so it still keys deterministically
+    and reappears in the signature the moment it lands."""
+    sig = []
+    for p in variant_files(digests_path, friendly_name):
+        try:
+            st = p.stat()
+            sig.append((str(p), st.st_mtime_ns, st.st_size))
+        except OSError:
+            sig.append((str(p), 0, 0))
+    return tuple(sig)
+
+
 # --- serialisation to the audit-view payload --------------------------------
 
 
@@ -213,8 +257,22 @@ def audit_payload(variants: list[Variant], similar: Similar) -> dict:
                 "prompt_ids": v.prompt_ids,
                 "prompt_fingerprint": v.prompt_fingerprint,
                 "claim_count": len(v.claims),
+                "node_count": len(v.nodes),
             }
             for v in variants
+        ],
+        # Pass A's entities, compared across models. Outside the passage axis:
+        # nodes carry no source location, so which model found which entity is a
+        # whole-record comparison, not a per-chunk one.
+        "nodes": [
+            {
+                "type": r.type,
+                "name": r.name,
+                "found_by": sorted(r.by_variant),
+                "singleton": r.singleton,
+                "node_ids": {vid: n.node_id for vid, n in r.by_variant.items()},
+            }
+            for r in node_rows(variants)
         ],
         "passages": [
             {

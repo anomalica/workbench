@@ -61,6 +61,74 @@ class Claim:
     refs: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class Node:
+    """One entity a model extracted (Pass A's output): a person, organisation,
+    place. `node_id` is the model's own uuid, which is REGENERATED every run and
+    differs between models for the same entity - so it is provenance, never
+    identity. Matching across models keys on (type, name)."""
+
+    variant: str
+    model: str
+    node_id: str
+    type: str
+    name: str
+
+
+def node_key(node: "Node") -> tuple[str, str]:
+    """How the same entity is recognised across models: type + case-folded name.
+
+    Deliberately EXACT on the name, not fuzzy. The models do vary their surface
+    form ("Stewart, Jon" vs "Jon Stewart"), and matching those is the same
+    same-thing? problem the claim clustering solves with embeddings - but a
+    silent fuzzy merge here would invent agreement between models that a reviewer
+    would then read as a fact about recall. An unmatched pair shows as two rows,
+    which is wrong-but-visible; a wrongly-merged pair is wrong-and-invisible.
+    Embedding-matched node identity is a later lift, on the same wire as the
+    claim clustering."""
+    return (node.type.strip().casefold(), node.name.strip().casefold())
+
+
+@dataclass
+class NodeRow:
+    """One entity and which variants extracted it. `by_variant` maps a variant id
+    to the node it produced, absent when that model did not find this entity -
+    the explicit "nothing" the claims grid also renders."""
+
+    type: str
+    name: str
+    by_variant: dict[str, "Node"]
+
+    @property
+    def found_by(self) -> int:
+        return len(self.by_variant)
+
+    @property
+    def singleton(self) -> bool:
+        return self.found_by == 1
+
+
+def node_rows(variants: list["Variant"]) -> list[NodeRow]:
+    """Every distinct entity across the variants, with which models found it.
+
+    The other half of the two-pass output: comparing WHICH ENTITIES each model
+    extracted is as much a model-quality signal as comparing claims, and it was
+    invisible until now. Ordered by type then name so the list reads as a stable
+    index rather than shuffling per run."""
+    rows: dict[tuple[str, str], NodeRow] = {}
+    for v in variants:
+        for n in v.nodes:
+            key = node_key(n)
+            row = rows.get(key)
+            if row is None:
+                row = NodeRow(type=n.type, name=n.name, by_variant={})
+                rows[key] = row
+            # First writer wins the display casing; a model that repeats an
+            # entity within its own digest keeps its first node.
+            row.by_variant.setdefault(n.variant, n)
+    return sorted(rows.values(), key=lambda r: (r.type.casefold(), r.name.casefold()))
+
+
 # --- source passages --------------------------------------------------------
 
 
@@ -308,6 +376,9 @@ class Variant:
     id: str
     model: str
     claims: list[Claim]
+    # Pass A's entities. Compared across models by node_rows; they carry no
+    # source location, so they sit outside the passage axis entirely.
+    nodes: list[Node] = field(default_factory=list)
     cost_usd: float | None = None
     prompt_ids: list[str] = field(default_factory=list)
     # A digest of the prompt SHAs this variant ran. The identity of a comparison
