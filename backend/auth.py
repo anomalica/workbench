@@ -33,7 +33,7 @@ GITHUB_CLIENT_SECRET = os.environ.get("GITHUB_CLIENT_SECRET", "")
 # In development, the frontend runs on a different port from the backend.
 # The OAuth callback must go through the frontend's proxy so cookies are
 # set on the right origin.
-PUBLIC_URL = os.environ.get("PUBLIC_URL", "http://localhost:5273")
+PUBLIC_URL = os.environ.get("PUBLIC_URL", "http://localhost:1947")
 
 if GITHUB_CLIENT_ID:
     oauth.register(

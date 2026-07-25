@@ -17,10 +17,12 @@ export default defineConfig({
     ...(isVitest ? { conditions: ["browser"] } : {}),
   },
   server: {
-    // Workbench-specific ports so the dev server never silently collides with
-    // another app's Vite (they all default to 5173 and increment, which caused a
-    // churn where the loser got SIGTERM'd). strictPort fails loudly instead.
-    port: 5273,
+    // 1947 - Roswell, the obvious mnemonic for this archive. Deliberately NOT a
+    // near-miss of Vite's default 5173: the previous 5273 differed by one digit
+    // and was mistyped as 5173 (which serves a different project entirely), so
+    // the port has to be unmistakable, not merely unused. strictPort fails
+    // loudly rather than silently incrementing into another app's port.
+    port: 1947,
     strictPort: true,
     proxy: {
       "/api": "http://localhost:8073",

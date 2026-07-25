@@ -13,7 +13,7 @@ Plain Svelte 5 single-page application. No server-side rendering, no meta-framew
 - **Tailwind CSS v4** with shared design tokens from brand
 - **FastAPI** (Python) backend in `backend/`, serving git repository operations
 
-The backend lives in this repository under `backend/` and is started alongside the frontend during development. During development, Vite (port 5273) proxies `/api` requests to the FastAPI backend (port 8073). These ports are deliberately not Vite's default 5173: every Vite app defaults to it and silently increments on a clash, so two projects would fight over one port. `strictPort` now fails loudly instead.
+The backend lives in this repository under `backend/` and is started alongside the frontend during development. During development, Vite (port 1947) proxies `/api` requests to the FastAPI backend (port 8073). 1947 is Roswell - a mnemonic, and deliberately far from Vite's default 5173: every Vite app defaults to 5173 and silently increments on a clash, so two projects would fight over one port. An earlier 5273 was unused but differed from 5173 by a single digit and got mistyped; a port has to be unmistakable, not merely free. `strictPort` fails loudly instead of incrementing.
 
 In production the FastAPI backend is **not** deployed. The built SPA is served as static files from the CDN, and `/api` is answered by the Deno edge script in `edge/` (Bunny Edge Scripting), which reads prerendered JSON snapshots. A change to `backend/` therefore has no effect on production unless it is mirrored in `edge/`.
 
@@ -32,22 +32,22 @@ Requires `just`, Node.js, and Python with `uvicorn` + FastAPI available (see `ba
 
 ```bash
 npm install
-just dev          # Starts FastAPI on :8073 and Vite on :5273 together
+just dev          # Starts FastAPI on :8073 and Vite on :1947 together
 ```
 
 Individual services:
 
 ```bash
 just backend      # FastAPI only (uvicorn with --reload on :8073)
-just frontend     # Vite dev server only (:5273) - API calls will fail without backend
+just frontend     # Vite dev server only (:1947) - API calls will fail without backend
 ```
 
 `npm run dev` is the same as `just frontend` - frontend-only, backend must be started separately.
 
 GitHub login works locally: the OAuth callback goes to `PUBLIC_URL` (default
-`http://localhost:5273`) so it passes through the Vite proxy and the session cookie
+`http://localhost:1947`) so it passes through the Vite proxy and the session cookie
 lands on the same origin the app is served from. The dev OAuth app accepts any
-localhost port, so the 5273 port choice needs no OAuth change. Its credentials live
+localhost port, so the 1947 port choice needs no OAuth change. Its credentials live
 in a gitignored `.env` (`GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET`), which `just dev`
 sources; it is a different app from the production one.
 
