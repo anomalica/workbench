@@ -35,16 +35,56 @@ export function messageInner(annotation: string): string | null {
   return m ? m[1] : null;
 }
 
-/** One field out of the flow mapping.
+/** Every top-level `key: value` pair of the flow mapping.
  *
- *  A QUOTED value is taken whole, before the bare-scalar fallback. The ingester
- *  writes `date: "Mar 5, 2015 6:08 PM"` when the source attribution could not be
- *  parsed into a timestamp, and a pattern that merely excludes commas truncates
- *  that to "Mar 5". Only an UNQUOTED scalar ends at a comma or the closing
- *  brace. */
+ *  Scanned rather than matched with a per-key regex, because a regex for one key
+ *  cannot tell where a value ends. Two ways that bit:
+ *
+ *  - A QUOTED value owns its commas. The ingester writes
+ *    `date: "Mar 5, 2015 6:08 PM"` when it could not parse the source
+ *    attribution into a timestamp, and a pattern excluding commas captured
+ *    "Mar 5" - a date with no year.
+ *  - An unanchored key matches INSIDE another token. `date:` occurs within a
+ *    hypothetical `update:` or `sentdate:`, and within any quoted value that
+ *    happens to contain the text - so the lookup could silently return another
+ *    field's value, misattributing a date in an archive whose entire purpose is
+ *    correct attribution.
+ *
+ *  Text inside quotes is never read as structure, so a key only counts when it
+ *  is a key. Flow sequences (`refs: [a, b]`) are not part of this annotation's
+ *  grammar and would split on their inner commas. */
+export function fields(inner: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const n = inner.length;
+  let i = 0;
+  while (i < n) {
+    while (i < n && (inner[i] === "," || /\s/.test(inner[i]))) i++;
+    const keyStart = i;
+    while (i < n && inner[i] !== ":" && inner[i] !== ",") i++;
+    if (i >= n || inner[i] !== ":") break; // malformed - stop, keep what parsed
+    const key = inner.slice(keyStart, i).trim();
+    i++;
+    while (i < n && /\s/.test(inner[i])) i++;
+    let value: string;
+    if (inner[i] === '"') {
+      const start = ++i;
+      while (i < n && inner[i] !== '"') i++;
+      value = inner.slice(start, i);
+      i++; // past the closing quote
+      while (i < n && inner[i] !== ",") i++; // ignore trailing junk
+    } else {
+      const start = i;
+      while (i < n && inner[i] !== ",") i++;
+      value = inner.slice(start, i).trim();
+    }
+    if (key) out[key] = value;
+  }
+  return out;
+}
+
+/** One field out of the flow mapping, or "" when it carries none. */
 export function field(inner: string, key: string): string {
-  const m = inner.match(new RegExp(`${key}:\\s*(?:"([^"]*)"|([^,}]+))`));
-  return m ? (m[1] ?? m[2] ?? "").trim() : "";
+  return fields(inner)[key] ?? "";
 }
 
 /** An ISO timestamp shows as its date; anything else shows verbatim.
@@ -62,10 +102,15 @@ export function senderName(from: string): string {
 }
 
 export function parseMessage(inner: string): EmailMessage {
+  const f = fields(inner);
   return {
-    who: senderName(field(inner, "from")) || "Unknown sender",
-    when: displayDate(field(inner, "date")),
-    quoted: /quoted:\s*true/.test(inner),
+    who: senderName(f.from ?? "") || "Unknown sender",
+    // Read as a FIELD, not as a substring search: `/quoted:\s*true/` over the
+    // whole string is true for a sender called `quoted: true` as readily as for
+    // the real flag, which would mark a first-hand message as someone else's
+    // words.
+    quoted: (f.quoted ?? "").trim() === "true",
+    when: displayDate(f.date ?? ""),
   };
 }
 
