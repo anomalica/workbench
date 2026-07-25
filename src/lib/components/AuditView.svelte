@@ -15,6 +15,7 @@
   // dies at that width, a stack just gets taller - and the eye compares adjacent
   // lines more easily than adjacent columns anyway.
   import {
+    AuditAccessError,
     fetchAudit,
     putAuditClaim,
     type AuditPayload,
@@ -35,7 +36,9 @@
 
   let { hash }: { hash: string } = $props();
 
-  let status = $state<"loading" | "ready" | "empty" | "error">("loading");
+  let status = $state<"loading" | "ready" | "empty" | "error" | "forbidden">("loading");
+  /** Which refusal, so the message names the actual obstacle. */
+  let forbiddenReason = $state("");
   let payload = $state<AuditPayload | null>(null);
 
   // Colour per model, by its order in the record - the column header, the tally
@@ -97,8 +100,16 @@
           status = "ready";
         }
       })
-      .catch(() => {
-        if (h === hash) status = "error";
+      .catch((e) => {
+        if (h !== hash) return;
+        // A refusal is not a failure. Rendering "could not load" for a
+        // permission error sends the reader hunting a bug that isn't there.
+        if (e instanceof AuditAccessError) {
+          status = "forbidden";
+          forbiddenReason = e.status === 403 ? "reviewer" : "login";
+        } else {
+          status = "error";
+        }
       });
   });
 
@@ -264,6 +275,19 @@
       No extraction variants for this record yet. The audit compares several model
       digests of one record; it appears once more than one has been produced.
     </p>
+  {:else if status === "forbidden"}
+    <div class="p-6 max-w-2xl">
+      <p class="text-sm text-on-surface font-medium">
+        {forbiddenReason === "reviewer"
+          ? "You don't have reviewer access."
+          : "You need to be logged in."}
+      </p>
+      <p class="text-xs text-on-surface-secondary mt-1.5 leading-relaxed">
+        {forbiddenReason === "reviewer"
+          ? "The audit compares model extractions and records grading against them, so it's limited to reviewers. Your account has a lower role - ask an admin to grant reviewer in the roles file. Nothing is wrong with this record."
+          : "Sign in to open the audit for this record."}
+      </p>
+    </div>
   {:else if status === "error"}
     <p class="p-6 text-sm text-error">Could not load the audit for this record.</p>
   {:else if payload}

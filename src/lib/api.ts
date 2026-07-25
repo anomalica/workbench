@@ -361,9 +361,19 @@ export interface AuditPayload {
 
 /** Fetch the model/digest audit comparison for a record. Null when no extraction
  *  variant has been produced yet (404). */
+/** Thrown when the audit is refused rather than unavailable. A permission error
+ *  rendered as a load failure sends the reader looking for a bug that isn't
+ *  there - it cost an hour once already. `status` lets the view say which. */
+export class AuditAccessError extends Error {
+  constructor(readonly status: number) {
+    super(status === 403 ? "Requires reviewer access" : "Login required");
+  }
+}
+
 export async function fetchAudit(hash: string): Promise<AuditPayload | null> {
   const res = await fetch(readPath(`/api/ingests/${hash}/audit`));
   if (res.status === 404) return null;
+  if (res.status === 401 || res.status === 403) throw new AuditAccessError(res.status);
   if (!res.ok) throw new Error(`Failed to fetch audit: ${res.status}`);
   return res.json();
 }
