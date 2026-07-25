@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   displayDate,
   field,
+  fields,
   messageHeaderHtml,
   messageInner,
   parseMessage,
@@ -133,5 +134,42 @@ describe("messageHeaderHtml", () => {
   it("escapes the date too", () => {
     const html = messageHeaderHtml({ who: "A", when: "<script>x</script>", quoted: false });
     expect(html).not.toContain("<script>");
+  });
+});
+
+describe("a key only counts where it is a key", () => {
+  it("does not read `date` out of a longer key", () => {
+    // Unanchored matching found `date:` inside `update:`, so the lookup returned
+    // another field's value. Latent until the ingester adds such a field.
+    const inner = 'update: "2020-01-01", date: "Mar 5, 2015 6:08 PM"';
+    expect(field(inner, "date")).toBe("Mar 5, 2015 6:08 PM");
+  });
+
+  it("does not read a key out of quoted text", () => {
+    // A crafted display name must not be able to supply the date. Escaping
+    // makes it inert, but a wrong date is still a misattribution.
+    const inner =
+      'from: "Bob date: Jan 1 1999 Fish <b@x.invalid>", date: 2015-03-05T18:38:14-05:00';
+    expect(field(inner, "date")).toBe("2015-03-05T18:38:14-05:00");
+    expect(parseMessage(inner).when).toBe("2015-03-05");
+  });
+
+  it("does not let a crafted sender forge the quoted flag", () => {
+    const inner = 'from: "quoted: true <b@x.invalid>", quoted: false';
+    expect(parseMessage(inner).quoted).toBe(false);
+  });
+
+  it("splits every field of the real annotation", () => {
+    expect(fields(messageInner(FISH)!)).toEqual({
+      n: "2",
+      from: "Bob Fish <robertbfish@earthlink.net>",
+      date: "Mar 5, 2015 6:08 PM",
+      quoted: "true",
+    });
+  });
+
+  it("keeps what parsed when the mapping is malformed", () => {
+    expect(fields('from: "A", garbage')).toEqual({ from: "A" });
+    expect(fields("")).toEqual({});
   });
 });
