@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   auditGrid,
+  visibleRows,
+  passageHasContent,
   gridRow,
   passageQuotes,
   passageTally,
@@ -231,5 +233,54 @@ describe("memberLines / frameLabel", () => {
     expect(
       frameLabel({ text: "t", claim_type: "observation", attestation: "", refs: ["doc-1"] }),
     ).toBe("observation · refs: doc-1");
+  });
+});
+
+describe("hiding dead chunks without hiding the missed-fact signal", () => {
+  const passage: AuditPassage = {
+    index: 0,
+    start: 511,
+    end: 544,
+    raw_locations: ["8:31"],
+    clusters: [
+      cluster("c1", [member("v-haiku", "haiku found this")]),
+      cluster("c2", [member("v-sonnet", "sonnet found this")]),
+    ],
+  };
+
+  it("KEEPS a fact only some selected models found - that silence is the signal", () => {
+    // Both models selected, each found a different fact. Neither row may be
+    // hidden: "sonnet found this, haiku didn't" is precisely the missed-fact
+    // comparison the view exists to show.
+    const rows = visibleRows(passage, variants);
+    expect(rows).toHaveLength(2);
+    expect(rows.every((r) => r.producedBy === 1)).toBe(true);
+    expect(passageHasContent(passage, variants)).toBe(true);
+  });
+
+  it("HIDES a fact no selected model produced - it belongs to a model switched off", () => {
+    // Only sonnet is selected. haiku's fact is not a gap in sonnet's recall
+    // that the reviewer asked to see; it is a row about a model they hid.
+    const sonnetOnly = variants.filter((v) => v.id === "v-sonnet");
+    const rows = visibleRows(passage, sonnetOnly);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].cells[0].members[0].text).toBe("sonnet found this");
+  });
+
+  it("reports a chunk as empty only when NO selected model produced anything", () => {
+    const haikuOnlyPassage: AuditPassage = {
+      ...passage,
+      clusters: [cluster("c1", [member("v-haiku", "haiku found this")])],
+    };
+    const sonnetOnly = variants.filter((v) => v.id === "v-sonnet");
+    expect(passageHasContent(haikuOnlyPassage, sonnetOnly)).toBe(false);
+    // ... and it comes straight back when that model is selected again.
+    expect(passageHasContent(haikuOnlyPassage, variants)).toBe(true);
+  });
+
+  it("treats a memberless cluster as nothing to show", () => {
+    const empty: AuditPassage = { ...passage, clusters: [cluster("c0", [])] };
+    expect(visibleRows(empty, variants)).toEqual([]);
+    expect(passageHasContent(empty, variants)).toBe(false);
   });
 });

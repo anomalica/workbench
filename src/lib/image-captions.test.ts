@@ -331,7 +331,6 @@ describe("a file annotated twice is two independent images", () => {
 });
 
 describe("setImageRelevanceAt / imageIsIrrelevantAt", () => {
-
   it("marks an image irrelevant by adding `irrelevant: true` under the mapping", () => {
     const { ok, body } = setImageRelevanceAt(BODY, IMAGE_LINE, true);
     expect(ok).toBe(true);
@@ -366,7 +365,6 @@ describe("setImageRelevanceAt / imageIsIrrelevantAt", () => {
 });
 
 describe("setImageDescriptionAt / imageDescriptionAt", () => {
-
   it("writes the description into the annotation and reads it back", () => {
     const text = "Tweet by @user: the object remains unidentified.";
     const { ok, body } = setImageDescriptionAt(BODY, IMAGE_LINE, text);
