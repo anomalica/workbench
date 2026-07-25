@@ -311,6 +311,31 @@ export interface AuditVariant {
    *  = unknown, which must never be treated as a match. */
   prompt_fingerprint: string;
   claim_count: number;
+  node_count?: number;
+}
+
+/** One entity and which variants extracted it - Pass A's half of the two-pass
+ *  output. Outside the passage axis: nodes carry no source location, so this is
+ *  a whole-record comparison. Matched across models on (type, name), exactly -
+ *  a fuzzy merge would invent agreement a reviewer would read as recall. */
+export interface AuditNode {
+  type: string;
+  name: string;
+  /** Variant ids that extracted this entity. */
+  found_by: string[];
+  singleton: boolean;
+  node_ids: Record<string, string>;
+}
+
+/** Which similarity produced the clusters below. `degraded` = the embedding
+ *  endpoint was unreachable and a crude lexical placeholder ran instead: the
+ *  singleton/overlap structure is real but the meaning-merge is approximate,
+ *  which the reviewer must be told before grading against it. */
+export interface AuditSimilarity {
+  method: "embedding" | "lexical";
+  model_id: string | null;
+  threshold: number;
+  degraded: boolean;
 }
 
 /** Whether the singleton signal means anything for this record. Confounded =
@@ -323,8 +348,10 @@ export interface AuditAxis {
 
 export interface AuditPayload {
   axis?: AuditAxis;
+  similarity?: AuditSimilarity;
   record: { hash: string; friendly_name: string };
   variants: AuditVariant[];
+  nodes?: AuditNode[];
   passages: AuditPassage[];
   missed?: AuditGold[];
   /** anomalica/audit/2 gold as stored: raw claim verdicts + cluster best-ofs.

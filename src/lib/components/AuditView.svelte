@@ -24,7 +24,8 @@
     type AuditClaimGold,
   } from "$lib/api";
   import {
-    auditGrid,
+    visibleRows,
+    passageHasContent,
     passageQuotes,
     passageTally,
     memberLines,
@@ -214,8 +215,33 @@
   }
 
   function rowsOf(p: AuditPassage): AuditGridRow[] {
-    return auditGrid(p, variants);
+    return visibleRows(p, variants);
   }
+
+  // Chunks where NOT ONE selected model produced a claim are dead weight to
+  // scroll past - so they collapse to a single line by default. A chunk where
+  // only SOME models are silent is never hidden: that silence is the missed-fact
+  // signal (see visibleRows). The hidden ones stay reachable, and their count is
+  // always on screen, because a view that silently drops source is a view that
+  // can hide a model's total failure on a passage.
+  let shownPassages = $derived(
+    (payload?.passages ?? []).filter((p) => passageHasContent(p, variants)),
+  );
+  let emptyPassageCount = $derived((payload?.passages ?? []).length - shownPassages.length);
+  let showEmptyPassages = $state(false);
+  let listedPassages = $derived(showEmptyPassages ? (payload?.passages ?? []) : shownPassages);
+
+  // --- entities (Pass A) ------------------------------------------------------
+  // The other half of the two-pass output. Which entities a model found is a
+  // recall signal in its own right, and it was invisible until now.
+  let showNodes = $state(false);
+  let nodeRows = $derived(
+    (payload?.nodes ?? []).filter((n) => n.found_by.some((v) => !hidden.has(v))),
+  );
+  let nodeTypes = $derived([...new Set(nodeRows.map((n) => n.type))].sort());
+  let sharedNodeCount = $derived(
+    nodeRows.filter((n) => n.found_by.filter((v) => !hidden.has(v)).length > 1).length,
+  );
 
   /** Can this passage's clusters be graded? Only if the models were actually
    *  compared here. A passage holding ONE model emits singletons by
@@ -244,8 +270,34 @@
     <!-- Variant summary: model, claim count, cost - colour-keyed to the columns. -->
     <div class="flex-none px-4 py-3 border-b border-border bg-surface-alt flex flex-wrap items-center gap-x-4 gap-y-2">
       <span class="text-xs font-medium text-on-surface-secondary">
-        {variants.length}{hidden.size ? `/${allVariants.length}` : ""} models · {payload.passages.length} chunks
+        {variants.length}{hidden.size ? `/${allVariants.length}` : ""} models ·
+        {shownPassages.length}{emptyPassageCount ? `/${payload.passages.length}` : ""} chunks
       </span>
+      {#if payload.nodes?.length}
+        <button
+          onclick={() => (showNodes = !showNodes)}
+          class="text-xs rounded px-2 py-0.5 cursor-pointer transition-colors
+            {showNodes ? 'bg-primary/15 text-primary font-medium' : 'text-on-surface-secondary hover:bg-surface'}"
+          title="Which ENTITIES each model extracted - the other half of the two-pass output, compared the same way as the claims"
+        >
+          {showNodes ? "Hide" : "Show"} entities ({nodeRows.length})
+        </button>
+      {/if}
+      {#if payload.similarity?.degraded}
+        <span
+          class="inline-flex items-center gap-1 text-[11px] font-medium text-on-warning bg-warning/80 rounded px-2 py-0.5"
+          title="The embedding service was unreachable, so claims were grouped by a crude word-overlap placeholder. Facts worded differently by different models will NOT have merged - expect false 'only one model found this' flags."
+        >
+          Approximate grouping - embeddings unavailable
+        </span>
+      {:else if payload.similarity?.method === "embedding"}
+        <span
+          class="text-[10px] font-mono text-on-surface-muted/70"
+          title="Claims were grouped by meaning in this embedding space, at this cosine cut. A verdict is only reproducible against the space that produced its clusters."
+        >
+          {payload.similarity.model_id?.split(":")[0] ?? "embedding"} @ {payload.similarity.threshold}
+        </span>
+      {/if}
       {#if confounded}
         <span
           class="inline-flex items-center gap-1 text-[11px] font-medium text-on-error bg-error/80 rounded px-2 py-0.5"
@@ -303,8 +355,58 @@
       </div>
     {/if}
 
+    {#if showNodes}
+      <!-- Entities (Pass A). No source location, so this is a whole-record
+           comparison, not a per-chunk one - it sits above the passage walk. -->
+      <div class="flex-none max-h-64 overflow-auto border-b border-border bg-surface-alt/40 px-4 py-3">
+        <p class="text-[11px] text-on-surface-muted mb-2 max-w-4xl leading-relaxed">
+          Entities each model extracted. {sharedNodeCount} of {nodeRows.length} were found by
+          more than one selected model. Matched on name and type exactly - the same entity
+          written two ways ("Stewart, Jon" / "Jon Stewart") shows as two rows rather than being
+          silently merged into false agreement.
+        </p>
+        {#each nodeTypes as t (t)}
+          <div class="mb-2">
+            <p class="text-[10px] uppercase tracking-wide text-on-surface-muted/80 mb-1">{t || "untyped"}</p>
+            <div class="flex flex-wrap gap-1">
+              {#each nodeRows.filter((n) => n.type === t) as n (n.type + n.name)}
+                {@const finders = n.found_by.filter((v) => !hidden.has(v))}
+                <span
+                  class="inline-flex items-center gap-1 text-[11px] rounded px-1.5 py-0.5
+                    {finders.length > 1 ? 'bg-surface' : 'bg-warning-container/30'}"
+                  title={finders.length > 1
+                    ? `Found by ${finders.length} models`
+                    : `Only ${allVariants.find((v) => v.id === finders[0])?.model ?? finders[0]} extracted this entity`}
+                >
+                  {#each finders as f (f)}
+                    <span class="w-1.5 h-1.5 rounded-full flex-none" style="background:{colourOf.get(f)}"></span>
+                  {/each}
+                  <span class="text-on-surface">{n.name}</span>
+                </span>
+              {/each}
+            </div>
+          </div>
+        {/each}
+      </div>
+    {/if}
+
+    {#if emptyPassageCount > 0}
+      <div class="flex-none px-4 py-1.5 bg-surface-alt/40 border-b border-border flex items-center gap-2">
+        <span class="text-[11px] text-on-surface-muted">
+          {emptyPassageCount} chunk{emptyPassageCount === 1 ? "" : "s"} hidden - no selected model
+          produced a claim there.
+        </span>
+        <button
+          onclick={() => (showEmptyPassages = !showEmptyPassages)}
+          class="text-[11px] text-primary hover:underline cursor-pointer"
+        >
+          {showEmptyPassages ? "Hide them" : "Show them"}
+        </button>
+      </div>
+    {/if}
+
     <div class="flex-1 overflow-auto min-h-0">
-      {#each payload.passages as p (p.index)}
+      {#each listedPassages as p (p.index)}
         {@const rows = rowsOf(p)}
         {@const tally = passageTally(p, variants)}
         <section class="border-b-4 border-border/60">

@@ -73,6 +73,25 @@ export function auditGrid(passage: AuditPassage, variants: AuditVariant[]): Audi
   return passage.clusters.map((c) => gridRow(c, variants));
 }
 
+/** The rows worth showing for the SELECTED models: those at least one selected
+ *  model produced.
+ *
+ *  A row where every selected model is silent belongs entirely to models the
+ *  reviewer switched off - it is a dead row that says nothing about the
+ *  comparison in front of them. A row where SOME selected model is silent is the
+ *  opposite: that silence is the missed-fact signal (this model found the fact,
+ *  that one didn't), which is one of the few things this view computes for free,
+ *  so it always stays. Empty-for-all = hide, empty-for-some = keep. */
+export function visibleRows(passage: AuditPassage, variants: AuditVariant[]): AuditGridRow[] {
+  return auditGrid(passage, variants).filter((r) => r.producedBy > 0);
+}
+
+/** Does this passage have anything to show for the selected models? False only
+ *  when NO selected model produced a claim anywhere in it. */
+export function passageHasContent(passage: AuditPassage, variants: AuditVariant[]): boolean {
+  return visibleRows(passage, variants).length > 0;
+}
+
 /** Per-model claim counts for one passage, including an explicit zero - so the
  *  chunk header can say what each model did here without the reader counting
  *  cells. */
