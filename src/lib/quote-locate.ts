@@ -207,3 +207,76 @@ function popcount(n: number): number {
   }
   return c;
 }
+
+/** Reverse of {@link indexRenderedText}: the normalised index of a DOM
+ *  (node, offset), or -1.
+ *
+ *  Interaction must resolve a POINT to an OFFSET, not to a stored Range. Ranges
+ *  captured at paint time go stale the moment the pane re-renders - their
+ *  geometry then describes the old layout while the browser's caret reports the
+ *  new one, so a click lands "inside" nothing and the pane appears dead.
+ *  Offsets survive because they are recomputed from whatever is on screen now. */
+export function offsetOfPoint(indexed: RenderedText, node: Node, offset: number): number {
+  let lo = -1;
+  let exact = -1;
+  for (let i = 0; i < indexed.pos.length; i++) {
+    const p = indexed.pos[i];
+    if (p.node !== node) continue;
+    // A collapsed space and the character after it share a raw offset (the
+    // space is emitted at the following character's index), so the LAST entry
+    // for an offset is the character itself - the one the reader clicked.
+    if (p.offset === offset) exact = i;
+    else if (p.offset < offset) lo = i;
+    else break;
+  }
+  return exact >= 0 ? exact : lo;
+}
+
+/** The run covering a normalised offset, or null. */
+export function runAtOffset(runs: CoverageRun[], offset: number): CoverageRun | null {
+  let lo = 0;
+  let hi = runs.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const r = runs[mid];
+    if (offset < r.start) hi = mid - 1;
+    else if (offset >= r.end) lo = mid + 1;
+    else return r;
+  }
+  return null;
+}
+
+/** One piece of the source pane: a stretch of text, and the claims (if any)
+ *  drawn from it. */
+export interface SourceSegment {
+  text: string;
+  /** 0 when nothing extracted from this stretch. */
+  count: number;
+  claims: string[];
+}
+
+/** Cut the source into consecutive segments - covered and uncovered alternating
+ *  - so the pane can be rendered as REAL ELEMENTS rather than painted ranges.
+ *
+ *  Painting with the Highlight API looked elegant and could not carry
+ *  interaction: a highlight is not an element, so resolving a click meant
+ *  mapping a screen point back through the caret API to a stored Range, and
+ *  those ranges go stale on any re-render. Rendering a span per segment makes
+ *  hover and click ordinary DOM events on the exact text they belong to. */
+export function sourceSegments(haystackNorm: string, runs: CoverageRun[]): SourceSegment[] {
+  const out: SourceSegment[] = [];
+  let at = 0;
+  for (const r of runs) {
+    if (r.start > at) out.push({ text: haystackNorm.slice(at, r.start), count: 0, claims: [] });
+    out.push({
+      text: haystackNorm.slice(r.start, r.end),
+      count: r.count,
+      claims: r.claims,
+    });
+    at = r.end;
+  }
+  if (at < haystackNorm.length) {
+    out.push({ text: haystackNorm.slice(at), count: 0, claims: [] });
+  }
+  return out;
+}

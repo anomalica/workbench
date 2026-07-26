@@ -168,6 +168,16 @@
   };
 
   let recordHash = $derived(payload?.record.hash ?? "");
+
+  /** A variant's prompt identity: its fingerprint, else the stem's `.sha`
+   *  suffix, else the id. Always non-empty, because the write is rejected
+   *  without one. */
+  function promptShaOf(variantId: string): string {
+    const v = allVariants.find((x) => x.id === variantId);
+    if (v?.prompt_fingerprint) return v.prompt_fingerprint;
+    const parts = variantId.split(".");
+    return parts.length > 1 ? parts[1] : variantId;
+  }
   /** Surfaced when a grade fails to persist - never swallowed. */
   let saveError = $state<string | null>(null);
 
@@ -214,7 +224,13 @@
       ...(prev?.gold_id ? { gold_id: prev.gold_id } : {}),
       variant: m.variant,
       model: m.model,
-      prompt_sha: m.variant.includes(".") ? m.variant.split(".")[1] : "",
+      // The variant's PROMPT identity, taken from the payload - never parsed
+      // out of the filename. Stems are conventionally `{model}.{sha8}`, but
+      // `opus-v3.yaml` is not, so splitting on "." yielded an empty prompt_sha
+      // and the server rejected the write with 400. Every grade on that variant
+      // failed silently: the reviewer clicked, nothing changed, and nothing
+      // said why.
+      prompt_sha: promptShaOf(m.variant),
       claim_id: m.claim_id,
       location: m.location || (p.raw_locations[0] ?? ""),
       text: m.text,
@@ -258,7 +274,17 @@
   }
 
   // Keyboard grading: the claim under the cursor takes 1/2/3/x.
-  let hoveredMember: { m: AuditMember; p: AuditPassage } | null = null;
+  // $state, not a plain let: the hovered claim now DRIVES what is rendered (its
+  // key badges), not just what a keypress reads.
+  let hoveredMember = $state<{ m: AuditMember; p: AuditPassage } | null>(null);
+  /** Identity by (variant, claim_id), NOT by object reference: `m` inside a
+   *  keyed each is a reactive proxy and a re-render can hand out a fresh
+   *  wrapper, so `===` silently stopped matching and the hovered claim never
+   *  showed its keys. */
+  function isHovered(m: AuditMember): boolean {
+    const h = hoveredMember?.m;
+    return !!h && h.variant === m.variant && h.claim_id === m.claim_id;
+  }
   function onKeydown(e: KeyboardEvent) {
     if (!hoveredMember || e.ctrlKey || e.metaKey || e.altKey) return;
     const t = e.target as HTMLElement | null;
@@ -680,7 +706,15 @@
                                loops - every claim's text, then every claim's
                                buttons - so three claims produced three "Rate:"
                                rows with nothing saying which belonged to which. -->
-                          <div class="claim-block {isFocused(m) ? 'claim-focused' : ''} {g?.quality || g?.irrelevant ? 'is-graded' : ''}">
+                          <!-- svelte-ignore a11y_no_static_element_interactions -->
+                          <div
+                            class="claim-block {isFocused(m) ? 'claim-focused' : ''} {g?.quality ||
+                            g?.irrelevant
+                              ? 'is-graded'
+                              : ''}"
+                            onmouseenter={() => (hoveredMember = { m, p })}
+                            onmouseleave={() => (hoveredMember = null)}
+                          >
                             {#if onquote && m.quote}
                               <button
                                 type="button"
@@ -699,27 +733,27 @@
                             <!-- ONE question, about THIS model's claim: quality.
                                  Hover + 1/2/3/x grades without clicking. -->
                             <div
-                              class="flex flex-wrap items-center gap-1 mt-1"
+                              class="flex flex-wrap items-center gap-1 mt-1 {isHovered(m)
+                                ? 'is-armed'
+                                : ''}"
                               role="group"
-                              onmouseenter={() => (hoveredMember = { m, p })}
-                              onmouseleave={() => (hoveredMember = null)}
                             >
                               <span class="text-[10px] text-on-surface-muted/70 mr-0.5">Rate:</span>
                               {#each QUALITY as q, qi}
                                 <button
                                   onclick={() => saveClaim(m, p, { quality: q })}
                                   class="grade-chip {g?.quality === q ? 'is-set ' + q : ''}"
-                                  title="{QUALITY_HELP[q]} - keyboard: {qi + 1}"
+                                  title="{QUALITY_HELP[q]} - hover this claim and press {qi + 1}"
                                 >
-                                  <kbd>{qi + 1}</kbd>{q}
+                                  {#if isHovered(m)}<kbd>{qi + 1}</kbd>{/if}{q}
                                 </button>
                               {/each}
                               <button
                                 onclick={() => saveClaim(m, p, { irrelevant: !g?.irrelevant })}
                                 class="grade-chip ml-2 {g?.irrelevant ? 'is-set irrelevant' : ''}"
-                                title="Separate from the rating: the claim may be well made and still not worth recording. Keyboard: x"
+                                title="Separate from the rating: the claim may be well made and still not worth recording. Hover this claim and press x"
                               >
-                                <kbd>x</kbd>not worth recording
+                                {#if isHovered(m)}<kbd>x</kbd>{/if}not worth recording
                               </button>
                               {#if g?.quality || g?.irrelevant}
                                 <span class="text-[10px] text-success ml-1" title="Saved to the gold sidecar">saved</span>
@@ -745,6 +779,16 @@
 <style>
   /* The claims a clicked stretch of source produced. Marked rather than
      filtered: the neighbours are the context that makes it readable. */
+  /* Only the hovered claim shows key badges, because the keys act on THAT
+     claim and nothing else. Printing 1/2/3 beside every claim on a page of
+     thousands read as a numbered list - "if I press 6, what am I referring
+     to?" - when the number was never an index, only a key. */
+  .is-armed {
+    outline: 1px dashed color-mix(in srgb, var(--color-primary, #0d9488) 45%, transparent);
+    outline-offset: 2px;
+    border-radius: 0.2rem;
+  }
+
   .claim-focused {
     background: color-mix(in srgb, var(--color-primary, #0d9488) 18%, transparent);
     box-shadow: inset 2px 0 0 var(--color-primary, #0d9488);

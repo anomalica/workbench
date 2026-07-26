@@ -33,9 +33,8 @@
     claimKey,
     coverageRuns,
     findQuote,
-    indexRenderedText,
-    rangeFor,
-    type CoverageRun,
+    normaliseForMatch,
+    sourceSegments,
   } from "$lib/quote-locate";
   import AuditView from "./AuditView.svelte";
 
@@ -77,135 +76,83 @@
   let renderedBody = $derived(predigest ? marked.parse(predigest.body) : "");
 
   // --- linking a claim to the source it came from -----------------------------
-  // Without this the source pane is decoration: you cannot check a claim against
-  // its evidence by scrolling two panes by hand. Every claim carries a verbatim
-  // quote and this pane holds the text it was taken from, so the quote IS the
-  // link. Misses are reported, never silently ignored - a quote that is not in
-  // the source is a claim whose evidence is not there (mangled or fabricated),
-  // which is worth more to a reviewer than a scroll that quietly does nothing.
+  // The source pane is rendered as SEGMENTS - one span per stretch of text,
+  // carrying the claims drawn from it - rather than as prose with painted
+  // ranges over the top. A painted range is not an element, so resolving a
+  // click meant mapping a screen point back through the caret API to a Range
+  // captured earlier, and those go stale on any re-render: the geometry
+  // described the old layout while the browser reported the new one, so clicks
+  // landed inside nothing. Spans make hover and click ordinary DOM events on
+  // exactly the text they belong to.
   let sourceEl = $state<HTMLElement | undefined>();
   let locateNote = $state<{ kind: "exact" | "prefix" | "miss"; label: string } | null>(null);
-
-  function showSourceFor(quote: string, label: string, scroll = true) {
-    if (!sourceEl) return;
-    const indexed = indexRenderedText(sourceEl);
-    const hit = findQuote(indexed.text, quote);
-    if (!hit) {
-      locateNote = { kind: "miss", label };
-      clearHighlight();
-      return;
-    }
-    const range = rangeFor(indexed, hit.start, hit.end);
-    if (!range) {
-      locateNote = { kind: "miss", label };
-      return;
-    }
-    locateNote = { kind: hit.kind, label };
-    paint(range);
-    // A hover PREVIEWS - it must not move the reader's place. Only a click,
-    // which is a deliberate "take me there", scrolls.
-    if (!scroll) return;
-    const rect = range.getBoundingClientRect();
-    const box = sourceEl.getBoundingClientRect();
-    sourceEl.scrollTop += rect.top - box.top - box.height / 3;
-  }
-
-  // The CSS Custom Highlight API paints without touching the DOM, so Svelte's
-  // {@html} render is never fought over. Where it is unavailable the pane still
-  // scrolls - the position is most of the value.
-  function paint(range: Range) {
-    const CSSns = (globalThis as { CSS?: { highlights?: Map<string, unknown> } }).CSS;
-    if (!CSSns?.highlights) return;
-    const Ctor = (globalThis as { Highlight?: new (...r: Range[]) => unknown }).Highlight;
-    if (!Ctor) return;
-    CSSns.highlights.set("claim-source", new Ctor(range));
-  }
-
-  /** Shade the source by how many models drew a claim from each stretch, so the
-   *  pane answers "what did they use, and what did nothing touch?" at a glance.
-   *  Runs after the render, and again whenever the comparison changes. */
-  let coverageSummary = $state<{ runs: number; claimed: number; total: number } | null>(null);
-
-  /** The painted stretches, kept so a click can be resolved back to its claims. */
-  let painted = $state<{ run: CoverageRun; range: Range }[]>([]);
-  /** How many colours the extraction bands rotate through. Adjacent extractions
-   *  differ, which is the readable property - a colour per claim is impossible
-   *  (there are thousands) and a colour per model answers a question the chips
-   *  above already answer. */
+  let hoverCount = $state(0);
+  let focusedClaims = $state<string[]>([]);
+  /** Segment index the reader clicked or hovered, for the visible response. */
+  let activeSeg = $state<number | null>(null);
+  let hoverSeg = $state<number | null>(null);
   const BANDS = 5;
 
-  function paintCoverage() {
-    const CSSns = (globalThis as { CSS?: { highlights?: Map<string, unknown> } }).CSS;
-    const Ctor = (globalThis as { Highlight?: new (...r: Range[]) => unknown }).Highlight;
-    if (!sourceEl || !comparison || !CSSns?.highlights || !Ctor) return;
-    for (let n = 0; n < BANDS; n++) CSSns.highlights.delete(`claim-cover-${n}`);
-
-    const indexed = indexRenderedText(sourceEl);
+  let normalisedSource = $derived(normaliseForMatch(predigest?.body ?? ""));
+  let sourceRuns = $derived.by(() => {
+    if (!normalisedSource || !comparison) return [];
     const claims = comparison.per_model.flatMap((m) =>
       (m.claims ?? []).map((c) => ({ quote: c.quote, variant: m.variant, id: c.id })),
     );
-    const runs = coverageRuns(indexed.text, claims);
-    const buckets: Range[][] = Array.from({ length: BANDS }, () => []);
-    const kept: { run: CoverageRun; range: Range }[] = [];
-    let claimed = 0;
-    runs.forEach((r, i) => {
-      const range = rangeFor(indexed, r.start, r.end);
-      if (!range) return;
-      claimed += r.end - r.start;
-      buckets[i % BANDS].push(range);
-      kept.push({ run: r, range });
-    });
-    const store = CSSns.highlights;
-    buckets.forEach((ranges, n) => {
-      if (ranges.length) store.set(`claim-cover-${n}`, new Ctor(...ranges));
-    });
-    painted = kept;
-    coverageSummary = { runs: runs.length, claimed, total: indexed.text.length };
-  }
+    return coverageRuns(normalisedSource, claims);
+  });
+  let segments = $derived(
+    normalisedSource ? sourceSegments(normalisedSource, sourceRuns) : [],
+  );
+  // Derived, never assigned from inside another derived - Svelte forbids that,
+  // and it threw on every render of this pane.
+  let coverageSummary = $derived(
+    normalisedSource
+      ? {
+          runs: sourceRuns.length,
+          claimed: sourceRuns.reduce((n, r) => n + (r.end - r.start), 0),
+          total: normalisedSource.length,
+        }
+      : null,
+  );
 
-  /** Clicking a shaded stretch asks "what did the models make of THIS?" - the
-   *  reverse of clicking a claim to find its source, and the direction that
-   *  makes the source pane a way IN rather than a reference. */
-  let focusedClaims = $state<string[]>([]);
-  function onSourceClick(e: MouseEvent) {
-    if (!sourceEl || !painted.length) return;
-    const doc = document as Document & {
-      caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
-      caretRangeFromPoint?: (x: number, y: number) => Range | null;
-    };
-    const caret = doc.caretPositionFromPoint?.(e.clientX, e.clientY);
-    const node = caret?.offsetNode ?? doc.caretRangeFromPoint?.(e.clientX, e.clientY)?.startContainer;
-    const offset = caret?.offset ?? doc.caretRangeFromPoint?.(e.clientX, e.clientY)?.startOffset ?? 0;
-    if (!node) return;
-    const hit = painted.find((p) => {
-      try {
-        return p.range.isPointInRange(node, offset);
-      } catch {
-        return false;
-      }
-    });
-    if (!hit) {
+  function onSegmentClick(i: number, seg: { claims: string[] }) {
+    if (!seg.claims.length) {
       focusedClaims = [];
+      activeSeg = null;
       return;
     }
-    focusedClaims = hit.run.claims;
+    activeSeg = i;
+    focusedClaims = seg.claims;
     locateNote = null;
-    paint(hit.range);
   }
 
-  // Repaint when the rendered body or the comparison changes.
-  $effect(() => {
-    void renderedBody;
-    void comparison;
-    if (!sourceEl) return;
-    const id = requestAnimationFrame(() => paintCoverage());
-    return () => cancelAnimationFrame(id);
-  });
-
-  function clearHighlight() {
-    const CSSns = (globalThis as { CSS?: { highlights?: Map<string, unknown> } }).CSS;
-    CSSns?.highlights?.delete("claim-source");
+  /** Scroll the source to a claim's quote and mark it - the other direction. */
+  function showSourceFor(quote: string, label: string, scroll = true) {
+    const hit = findQuote(normalisedSource, quote);
+    if (!hit) {
+      locateNote = { kind: "miss", label };
+      activeSeg = null;
+      return;
+    }
+    locateNote = { kind: hit.kind, label };
+    // The segment containing the match start.
+    let at = 0;
+    const idx = segments.findIndex((sg) => {
+      const inIt = hit.start >= at && hit.start < at + sg.text.length;
+      at += sg.text.length;
+      return inIt;
+    });
+    if (idx < 0) return;
+    activeSeg = idx;
+    if (!scroll) return;
+    requestAnimationFrame(() => {
+      sourceEl
+        ?.querySelector(`[data-seg="${idx}"]`)
+        ?.scrollIntoView({ block: "center", behavior: "smooth" });
+    });
   }
+
   let words = $derived(predigest ? bodyWordCount(predigest.body) : 0);
   let title = $derived(comparable.find((c) => c.content_hash === selected)?.title ?? "");
 
@@ -222,7 +169,8 @@
     predigest = null;
     saveNote = null;
     locateNote = null;
-    clearHighlight();
+    activeSeg = null;
+    focusedClaims = [];
     chosen = null;
     notes = "";
     syncUrl();
@@ -399,6 +347,11 @@
               <span class="tabular-nums ml-1">· {coverageSummary.runs} spans, {Math.round((100 * coverageSummary.claimed) / coverageSummary.total)}% of source used</span>
             </span>
           {/if}
+          {#if hoverCount}
+            <span class="text-[10px] text-primary font-medium">
+              {hoverCount} claim{hoverCount === 1 ? "" : "s"} here - click to show
+            </span>
+          {/if}
           <span class="flex-1"></span>
           {#if locateNote}
             <span
@@ -429,20 +382,41 @@
         </div>
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <!-- svelte-ignore a11y_click_events_have_key_events -->
-        <div
-          bind:this={sourceEl}
-          onclick={onSourceClick}
-          class="flex-1 overflow-auto px-5 py-4 source-pane"
-        >
+        <div bind:this={sourceEl} class="flex-1 overflow-auto px-5 py-4 source-pane">
           {#if loading}
             <p class="text-sm text-on-surface-muted">Loading…</p>
           {:else if !predigest}
             <p class="text-sm text-on-surface-muted italic">No pre-digest available for this record.</p>
           {:else}
-            <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-            <div class="prose-ingest max-w-prose text-sm text-on-surface leading-relaxed">
-              {@html renderedBody}
-            </div>
+            <!-- One span per extraction, so hovering and clicking the source
+                 are ordinary DOM events on exactly the text they belong to. -->
+            <p class="max-w-prose text-sm text-on-surface leading-relaxed whitespace-pre-wrap">
+              {#each segments as seg, i (i)}
+                {#if seg.count === 0}<span>{seg.text}</span>{:else}<span
+                    data-seg={i}
+                    class="extract band-{i % BANDS} {activeSeg === i ? 'is-active' : ''}"
+                    role="button"
+                    tabindex="0"
+                    title="{seg.count} model{seg.count === 1 ? '' : 's'} drew {seg.claims
+                      .length} claim{seg.claims.length === 1 ? '' : 's'} from this - click to show"
+                    onmouseenter={() => {
+                      hoverSeg = i;
+                      hoverCount = seg.claims.length;
+                    }}
+                    onmouseleave={() => {
+                      hoverSeg = null;
+                      hoverCount = 0;
+                    }}
+                    onclick={() => onSegmentClick(i, seg)}
+                    onkeydown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        onSegmentClick(i, seg);
+                      }
+                    }}>{seg.text}</span
+                  >{/if}
+              {/each}
+            </p>
           {/if}
         </div>
       </div>
@@ -463,39 +437,38 @@
      freely and the highlight simply re-applies on the next click. ::highlight
      only accepts a few properties; background and colour are enough to make the
      span unmissable after the scroll. */
-  /* EXTRACTION BANDS. Each shaded stretch is one extraction - a run of source
-     that some claim was drawn from - and the colours rotate so that ADJACENT
-     extractions are told apart. They deliberately do not encode which model:
-     the chips above already answer that, and the question here is "where does
-     one extraction end and the next begin, and what is left over?".
-
-     Kept low-saturation. This is a backdrop the eye scans; the UNSHADED gaps
-     are what should stand out, because they are source no model extracted
-     from. */
-  :global(::highlight(claim-cover-0)) {
-    background-color: color-mix(in srgb, #0ea5e9 18%, transparent);
+  /* EXTRACTION BANDS. Each shaded span is one extraction - source a claim was
+     drawn from - and the colours rotate so NEIGHBOURING extractions are told
+     apart. They deliberately do not encode which model: the chips above answer
+     that, and the question here is "where does one extraction end and the next
+     begin, and what is left over?". The UNSHADED gaps are the finding. */
+  .extract {
+    border-radius: 0.15rem;
+    cursor: pointer;
+    transition: filter 0.1s;
   }
-  :global(::highlight(claim-cover-1)) {
-    background-color: color-mix(in srgb, #22c55e 18%, transparent);
+  .extract:hover {
+    filter: brightness(1.45) saturate(1.3);
+    outline: 1px solid color-mix(in srgb, currentColor 35%, transparent);
   }
-  :global(::highlight(claim-cover-2)) {
-    background-color: color-mix(in srgb, #f59e0b 20%, transparent);
+  .extract.is-active {
+    outline: 2px solid var(--color-primary, #0d9488);
+    outline-offset: 1px;
   }
-  :global(::highlight(claim-cover-3)) {
-    background-color: color-mix(in srgb, #8b5cf6 18%, transparent);
+  .band-0 {
+    background-color: color-mix(in srgb, #0ea5e9 20%, transparent);
   }
-  :global(::highlight(claim-cover-4)) {
-    background-color: color-mix(in srgb, #ec4899 16%, transparent);
+  .band-1 {
+    background-color: color-mix(in srgb, #22c55e 20%, transparent);
   }
-
-  /* Shaded source is clickable - it asks the models what they made of it. */
-  .source-pane {
-    cursor: default;
+  .band-2 {
+    background-color: color-mix(in srgb, #f59e0b 22%, transparent);
   }
-  /* Shaded source responds to the pointer, so it reads as something you can
-     interrogate rather than as decoration. */
-  .source-pane :global(::highlight(claim-hover)) {
-    background-color: color-mix(in srgb, var(--color-primary, #0d9488) 34%, transparent);
+  .band-3 {
+    background-color: color-mix(in srgb, #8b5cf6 20%, transparent);
+  }
+  .band-4 {
+    background-color: color-mix(in srgb, #ec4899 18%, transparent);
   }
 
   .cover-key {
@@ -515,10 +488,4 @@
     background: color-mix(in srgb, #f59e0b 32%, transparent);
   }
 
-  /* The span a clicked claim was drawn from - stronger than the bands, since it
-     is a direct answer to a direct question. */
-  :global(::highlight(claim-source)) {
-    background-color: color-mix(in srgb, var(--color-primary, #0d9488) 32%, transparent);
-    color: inherit;
-  }
 </style>

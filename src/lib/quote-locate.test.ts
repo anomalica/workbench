@@ -5,7 +5,10 @@ import {
   findQuote,
   indexRenderedText,
   normaliseForMatch,
+  offsetOfPoint,
   rangeFor,
+  runAtOffset,
+  sourceSegments,
 } from "./quote-locate";
 
 const SOURCE = normaliseForMatch(`
@@ -187,5 +190,76 @@ describe("coverageRuns: which claims each stretch belongs to", () => {
       { variant: "opus", id: "o2", quote: "A sentence that is simply not present here" },
     ]);
     expect(runs.flatMap((r) => r.claims)).toEqual([claimKey("haiku", "h1")]);
+  });
+});
+
+describe("runAtOffset", () => {
+  const RUNS = [
+    { start: 0, end: 10, count: 1, claims: ["a"] },
+    { start: 20, end: 30, count: 2, claims: ["b", "c"] },
+  ];
+
+  it("finds the run covering an offset", () => {
+    expect(runAtOffset(RUNS, 5)?.claims).toEqual(["a"]);
+    expect(runAtOffset(RUNS, 25)?.claims).toEqual(["b", "c"]);
+  });
+
+  it("returns null in the gaps and past the end", () => {
+    expect(runAtOffset(RUNS, 15)).toBeNull();
+    expect(runAtOffset(RUNS, 99)).toBeNull();
+  });
+
+  it("treats a run as half-open [start, end)", () => {
+    expect(runAtOffset(RUNS, 0)?.claims).toEqual(["a"]);
+    expect(runAtOffset(RUNS, 10)).toBeNull();
+  });
+});
+
+describe("offsetOfPoint", () => {
+  it("maps a DOM point back to its normalised index", () => {
+    const el = document.createElement("div");
+    el.innerHTML = "<p>This film was filmed on April 22.</p>";
+    document.body.appendChild(el);
+    const idx = indexRenderedText(el);
+    const textNode = el.querySelector("p")!.firstChild!;
+    // raw offset 5 is 'f' of "film", 8 is its 'm'
+    expect(idx.text[offsetOfPoint(idx, textNode, 5)]).toBe("f");
+    expect(idx.text[offsetOfPoint(idx, textNode, 8)]).toBe("m");
+    expect(
+      idx.text.slice(offsetOfPoint(idx, textNode, 5), offsetOfPoint(idx, textNode, 8) + 1),
+    ).toBe("film");
+  });
+
+  it("returns -1 for a node it never indexed", () => {
+    const el = document.createElement("div");
+    el.innerHTML = "<p>abc</p>";
+    document.body.appendChild(el);
+    const idx = indexRenderedText(el);
+    expect(offsetOfPoint(idx, document.createTextNode("elsewhere"), 1)).toBe(-1);
+  });
+});
+
+describe("sourceSegments", () => {
+  const TEXT = "alpha beta gamma delta";
+
+  it("alternates covered and uncovered stretches, losing no text", () => {
+    const segs = sourceSegments(TEXT, [{ start: 6, end: 10, count: 2, claims: ["x", "y"] }]);
+    expect(segs.map((s) => s.text).join("")).toBe(TEXT);
+    expect(segs.map((s) => s.count)).toEqual([0, 2, 0]);
+    expect(segs[1].text).toBe("beta");
+    expect(segs[1].claims).toEqual(["x", "y"]);
+  });
+
+  it("handles a run at the very start and the very end", () => {
+    const segs = sourceSegments("abcdef", [
+      { start: 0, end: 2, count: 1, claims: ["a"] },
+      { start: 4, end: 6, count: 1, claims: ["b"] },
+    ]);
+    expect(segs.map((s) => s.text)).toEqual(["ab", "cd", "ef"]);
+    expect(segs.map((s) => s.count)).toEqual([1, 0, 1]);
+  });
+
+  it("returns the whole text as one uncovered segment when nothing was claimed", () => {
+    expect(sourceSegments(TEXT, [])).toEqual([{ text: TEXT, count: 0, claims: [] }]);
   });
 });
