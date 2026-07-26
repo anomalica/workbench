@@ -274,22 +274,60 @@
   }
 
   // Keyboard grading: the claim under the cursor takes 1/2/3/x.
-  // $state, not a plain let: the hovered claim now DRIVES what is rendered (its
-  // key badges), not just what a keypress reads.
-  let hoveredMember = $state<{ m: AuditMember; p: AuditPassage } | null>(null);
+  // A keyboard CURSOR, not a hover state. Revealing the shortcuts on hover was
+  // self-defeating: you had to reach for the mouse to find out which keys
+  // existed, which is the thing the keys are there to avoid. The cursor moves
+  // with j/k (or the arrows) and the keys act on it; the pointer merely moves
+  // the cursor too, for people already holding the mouse.
+  let cursor = $state<{ m: AuditMember; p: AuditPassage } | null>(null);
+  /** Every gradable claim on screen, in reading order - what j/k step through. */
+  let claimOrder = $derived.by(() => {
+    const out: { m: AuditMember; p: AuditPassage }[] = [];
+    for (const p of listedPassages) {
+      if (!gradable(p)) continue;
+      for (const row of visibleRows(p, variants))
+        for (const cell of row.cells) for (const m of cell.members) out.push({ m, p });
+    }
+    return out;
+  });
+  function cursorIndex(): number {
+    if (!cursor) return -1;
+    return claimOrder.findIndex(
+      (c) => c.m.variant === cursor!.m.variant && c.m.claim_id === cursor!.m.claim_id,
+    );
+  }
+  function moveCursor(delta: number) {
+    if (!claimOrder.length) return;
+    const next = Math.min(Math.max(cursorIndex() + delta, 0), claimOrder.length - 1);
+    cursor = claimOrder[cursorIndex() < 0 ? 0 : next];
+    requestAnimationFrame(() => {
+      document.querySelector(".is-cursor")?.scrollIntoView({ block: "center", behavior: "smooth" });
+    });
+  }
   /** Identity by (variant, claim_id), NOT by object reference: `m` inside a
    *  keyed each is a reactive proxy and a re-render can hand out a fresh
    *  wrapper, so `===` silently stopped matching and the hovered claim never
    *  showed its keys. */
   function isHovered(m: AuditMember): boolean {
-    const h = hoveredMember?.m;
+    const h = cursor?.m;
     return !!h && h.variant === m.variant && h.claim_id === m.claim_id;
   }
   function onKeydown(e: KeyboardEvent) {
-    if (!hoveredMember || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
     const t = e.target as HTMLElement | null;
     if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
-    const { m, p } = hoveredMember;
+    if (e.key === "j" || e.key === "ArrowDown") {
+      e.preventDefault();
+      moveCursor(1);
+      return;
+    }
+    if (e.key === "k" || e.key === "ArrowUp") {
+      e.preventDefault();
+      moveCursor(-1);
+      return;
+    }
+    if (!cursor) return;
+    const { m, p } = cursor;
     if (!gradable(p)) return;
     if (e.key === "1") saveClaim(m, p, { quality: "bad" });
     else if (e.key === "2") saveClaim(m, p, { quality: "okay" });
@@ -380,6 +418,16 @@
         {variants.length}{hidden.size ? `/${allVariants.length}` : ""} models ·
         {shownPassages.length}{emptyPassageCount ? `/${payload.passages.length}` : ""} chunks
       </span>
+      {#if tab === "claims"}
+        <span
+          class="text-[10px] text-on-surface-muted font-mono"
+          title="The keys act on the highlighted claim. Nothing needs the mouse."
+        >
+          <kbd class="kbd-hint">j</kbd><kbd class="kbd-hint">k</kbd> move ·
+          <kbd class="kbd-hint">1</kbd><kbd class="kbd-hint">2</kbd><kbd class="kbd-hint">3</kbd> rate ·
+          <kbd class="kbd-hint">x</kbd> not worth recording
+        </span>
+      {/if}
       <span class="inline-flex rounded overflow-hidden border border-border">
         <button
           onclick={() => (tab = "claims")}
@@ -717,12 +765,13 @@
                                rows with nothing saying which belonged to which. -->
                           <!-- svelte-ignore a11y_no_static_element_interactions -->
                           <div
-                            class="claim-block {isFocused(m) ? 'claim-focused' : ''} {g?.quality ||
+                            class="claim-block {isHovered(m) ? 'is-cursor' : ''} {isFocused(m)
+                              ? 'claim-focused'
+                              : ''} {g?.quality ||
                             g?.irrelevant
                               ? 'is-graded'
                               : ''}"
-                            onmouseenter={() => (hoveredMember = { m, p })}
-                            onmouseleave={() => (hoveredMember = null)}
+                            onmouseenter={() => (cursor = { m, p })}
                           >
                             {#if onquote && m.quote}
                               <button
@@ -793,6 +842,11 @@
      claim and nothing else. Printing 1/2/3 beside every claim on a page of
      thousands read as a numbered list - "if I press 6, what am I referring
      to?" - when the number was never an index, only a key. */
+  .is-cursor {
+    outline: 2px solid var(--color-primary, #0d9488);
+    outline-offset: 1px;
+  }
+
   .is-armed {
     outline: 1px dashed color-mix(in srgb, var(--color-primary, #0d9488) 45%, transparent);
     outline-offset: 2px;
@@ -865,6 +919,15 @@
   .grade-chip:hover {
     background: var(--color-surface-alt, rgba(128, 128, 128, 0.12));
   }
+  .kbd-hint {
+    font-family: inherit;
+    font-size: 9px;
+    padding: 0.1rem 0.22rem;
+    margin-right: 1px;
+    border-radius: 0.15rem;
+    background: var(--color-surface-alt, rgba(128, 128, 128, 0.18));
+  }
+
   .grade-chip kbd {
     font-family: inherit;
     font-size: 9px;
