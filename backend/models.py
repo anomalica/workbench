@@ -16,7 +16,9 @@ import json
 import os
 import re
 import sqlite3
+from collections import OrderedDict
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 
 import yaml
@@ -46,12 +48,52 @@ def _now() -> str:
 # --- variant loading + detection -------------------------------------------
 
 
+# Parsed variant digests, keyed on (path, mtime_ns, size). A digest is a large
+# YAML document - the jon-stewart variants are ~450KB each and take about a
+# second apiece - and nothing about it changes until the file does, so parsing
+# one twice is pure waste. Bounded so a long-lived process cannot accumulate the
+# whole corpus in memory.
+_PARSED: "OrderedDict[tuple, dict | None]" = OrderedDict()
+_PARSED_MAX = 64
+
+
 def _load(path: Path) -> dict | None:
     try:
-        d = yaml.safe_load(path.read_text())
-        return d if isinstance(d, dict) else None
-    except (OSError, yaml.YAMLError):
+        st = path.stat()
+    except OSError:
         return None
+    key = (str(path), st.st_mtime_ns, st.st_size)
+    if key in _PARSED:
+        _PARSED.move_to_end(key)
+        return _PARSED[key]
+    try:
+        d = yaml.safe_load(path.read_text())
+        parsed = d if isinstance(d, dict) else None
+    except (OSError, yaml.YAMLError):
+        parsed = None
+    _PARSED[key] = parsed
+    _PARSED.move_to_end(key)
+    while len(_PARSED) > _PARSED_MAX:
+        _PARSED.popitem(last=False)
+    return parsed
+
+
+# The record a variant file belongs to, WITHOUT parsing it. The digest carries
+# exactly one `content_hash`, in its `record:` block near the top, so a scan of
+# the raw text answers "which record is this?" in microseconds where a full YAML
+# parse costs up to a second. Used to find the right directory; the files in it
+# are then parsed properly.
+_CONTENT_HASH_RE = re.compile(
+    r"^\s*content_hash:\s*(?:sha256:)?([0-9a-f]{64})\s*$", re.MULTILINE
+)
+
+
+def _peek_content_hash(path: Path) -> str:
+    try:
+        m = _CONTENT_HASH_RE.search(path.read_text())
+    except OSError:
+        return ""
+    return m.group(1) if m else ""
 
 
 def _claims(v: dict) -> list[dict]:
@@ -193,11 +235,25 @@ def _wall_seconds(metrics: dict, model: str, prompt_variant: str, stem: str):
 
 def _find_variants(content_hash: str) -> tuple[Path | None, list[dict]]:
     """The variant dir + a list of {model, prompt_variant, stem, data} for an
-    ingest, located by content_hash."""
+    ingest, located by content_hash.
+
+    Finds the directory by PEEKING at each candidate's text rather than parsing
+    it. The previous version fully parsed every YAML in a directory and then
+    tested only the FIRST one's content_hash - so a record late in the scan paid
+    for parsing every variant of every record before it, then threw the lot away.
+    That was 43 documents parsed and 12s served for the smallest record in the
+    corpus, which made the Digests tab unusable. Only the matching directory's
+    files are parsed now, and _load caches those."""
     for d in _variant_dirs():
         files = sorted(d.glob("*.yaml"))
-        loaded = [(f, _load(f)) for f in files]
-        loaded = [(f, v) for f, v in loaded if v]
+        # One directory holds one record's variants, so the first file that
+        # names a record settles it - and naming it costs a regex, not a parse.
+        # Falls through to the next file when one carries no hash, matching the
+        # old behaviour of skipping files that would not load.
+        dir_hash = next((h for f in files if (h := _peek_content_hash(f))), "")
+        if dir_hash != content_hash:
+            continue
+        loaded = [(f, v) for f in files if (v := _load(f))]
         if loaded and _content_hash(loaded[0][1]) == content_hash:
             return d, [
                 {
@@ -227,12 +283,15 @@ def _to_seconds(token: str) -> float | None:
     return total
 
 
-def _interval(location) -> tuple[float, float] | None:
-    """Parse a claim location ('00:01:02.3-00:01:10.0', 'page 21') to a numeric
-    interval for overlap, or None if it isn't a parseable range."""
-    if not location:
-        return None
-    loc = str(location)
+@lru_cache(maxsize=8192)
+def _interval_of(loc: str) -> tuple[float, float] | None:
+    """Parse one location string to a numeric interval.
+
+    Memoised because the alignment compares every claim against every claim of
+    the other models, and each comparison re-parsed BOTH locations: on the
+    jon-stewart comparison that was 2.6 million regex parses of a few thousand
+    distinct strings, which cost more than reading the digests off disk. A
+    location parses to the same interval every time, so it is parsed once."""
     parts = loc.split("-")
     if len(parts) == 2:
         a, b = _to_seconds(parts[0]), _to_seconds(parts[1])
@@ -243,6 +302,14 @@ def _interval(location) -> tuple[float, float] | None:
         nums = [int(n) for n in pages]
         return (float(min(nums)), float(max(nums)))
     return None
+
+
+def _interval(location) -> tuple[float, float] | None:
+    """Parse a claim location ('00:01:02.3-00:01:10.0', 'page 21') to a numeric
+    interval for overlap, or None if it isn't a parseable range."""
+    if not location:
+        return None
+    return _interval_of(str(location))
 
 
 def _overlaps(a, b) -> bool:
