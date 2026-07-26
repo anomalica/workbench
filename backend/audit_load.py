@@ -24,6 +24,7 @@ import yaml
 from backend.audit import (
     Claim,
     Node,
+    build_source_passages,
     Similar,
     Variant,
     axis_confounded,
@@ -262,11 +263,17 @@ def variant_signature(digests_path: Path, friendly_name: str) -> tuple:
 # --- serialisation to the audit-view payload --------------------------------
 
 
-def audit_payload(variants: list[Variant], similar: Similar) -> dict:
+def audit_payload(variants: list[Variant], similar: Similar, prose: str = "") -> dict:
     """The JSON the audit view renders: a variant summary (with cost) plus the
     source passages, each carrying its meaning-clusters, member phrasings, and
     the singleton flag. Clustering runs over every variant's claims together."""
-    passages = build_passages(claims_of(variants), similar)
+    # Ordered and grouped by where each claim's quote appears in the record when
+    # the source is available; by the model-reported location otherwise.
+    passages = (
+        build_source_passages(claims_of(variants), similar, prose)
+        if prose
+        else build_passages(claims_of(variants), similar)
+    )
     confounded = axis_confounded(passages, len(variants))
     return {
         # Whether the singleton signal means anything at all for this record. When
@@ -339,6 +346,10 @@ def audit_payload(variants: list[Variant], similar: Similar) -> dict:
     }
 
 
-def build_audit(digests_path: Path, friendly_name: str, similar: Similar) -> dict:
+def build_audit(
+    digests_path: Path, friendly_name: str, similar: Similar, prose: str = ""
+) -> dict:
     """Load a record's variants and produce the full audit payload."""
-    return audit_payload(load_record_variants(digests_path, friendly_name), similar)
+    return audit_payload(
+        load_record_variants(digests_path, friendly_name), similar, prose
+    )

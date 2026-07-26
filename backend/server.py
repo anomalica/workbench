@@ -2255,7 +2255,24 @@ def _resolve_similarity_threshold() -> float:
         return DEFAULT_THRESHOLD
 
 
-def _build_audit_payload(name: str) -> dict:
+def _audit_prose(full_hash: str) -> str:
+    """The record's pre-digest as one whitespace-normalised string - the text
+    claim quotes are located in, so passages follow the document rather than the
+    model-reported timecodes. Empty when the record cannot be read, which falls
+    the audit back to the location axis rather than failing."""
+    import re as _re
+
+    try:
+        ingest = source.get_ingest(full_hash)
+        body = ingest.get("body") if isinstance(ingest, dict) else None
+        if not body:
+            return ""
+        return _re.sub(r"\s+", " ", pre_digest.materialise(body)).strip()
+    except Exception:
+        return ""
+
+
+def _build_audit_payload(name: str, prose: str = "") -> dict:
     """The clustered audit payload for a record, embedding-clustered when the
     assimilator's endpoint is reachable and lexically clustered when it is not.
 
@@ -2288,13 +2305,15 @@ def _build_audit_payload(name: str) -> dict:
 
     # Prefer a cached embedding payload - valid regardless of the endpoint's
     # current state, since it was clustered from the same unchanged files.
-    embed_key = (sig, "embedding", threshold)
+    embed_key = (sig, "embedding", threshold, bool(prose))
     hit = _AUDIT_PAYLOAD_CACHE.get(embed_key)
     if hit is None:
-        hit = _AUDIT_PAYLOAD_CACHE.get((sig, "lexical", None))
+        hit = _AUDIT_PAYLOAD_CACHE.get((sig, "lexical", None, bool(prose)))
     if hit is not None:
         _AUDIT_PAYLOAD_CACHE.move_to_end(
-            embed_key if embed_key in _AUDIT_PAYLOAD_CACHE else (sig, "lexical", None)
+            embed_key
+            if embed_key in _AUDIT_PAYLOAD_CACHE
+            else (sig, "lexical", None, bool(prose))
         )
         return dict(hit)  # new top-level dict; nested passages shared read-only
 
@@ -2305,10 +2324,10 @@ def _build_audit_payload(name: str) -> dict:
         # timeout and drops us to the lexical branch.
         cache.warm(c.text for v in variants for c in v.claims)
         similar = embedding_similar(threshold=threshold, cache=cache)
-        payload = audit_payload(variants, similar)
+        payload = audit_payload(variants, similar, prose)
         method, model_id = "embedding", cache.model_id
     except EmbeddingUnavailable:
-        payload = audit_payload(variants, lexical_similar())
+        payload = audit_payload(variants, lexical_similar(), prose)
         method, model_id = "lexical", None
 
     payload["similarity"] = {
@@ -2321,7 +2340,7 @@ def _build_audit_payload(name: str) -> dict:
         # verdict on the embedding space.
         "degraded": method == "lexical",
     }
-    key = embed_key if method == "embedding" else (sig, "lexical", None)
+    key = embed_key if method == "embedding" else (sig, "lexical", None, bool(prose))
     _AUDIT_PAYLOAD_CACHE[key] = payload
     _AUDIT_PAYLOAD_CACHE.move_to_end(key)
     while len(_AUDIT_PAYLOAD_CACHE) > _AUDIT_CACHE_MAX:
@@ -2348,7 +2367,7 @@ def get_audit(full_hash: str, request: Request) -> JSONResponse:
         raise HTTPException(status_code=404, detail="Unknown record")
 
     try:
-        payload = _build_audit_payload(name)
+        payload = _build_audit_payload(name, _audit_prose(full_hash))
     except Exception as exc:
         raise HTTPException(
             status_code=500, detail=f"Failed to build audit: {exc}"

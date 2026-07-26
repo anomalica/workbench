@@ -355,6 +355,88 @@ def _cluster_by_meaning(
     return [Cluster(id=f"{id_prefix}-{k}", members=g) for k, g in enumerate(ordered)]
 
 
+def _normalise(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
+
+
+_MIN_ANCHOR = 20
+_PREFIX = 60
+
+
+def locate_in_source(prose: str, quote: str) -> tuple[int, int] | None:
+    """Where a claim's quote sits in the source, or None.
+
+    The claim's own `location` is not this: it is model-reported and then
+    re-derived by the aligner, which is how a 50-character quote ended up
+    declaring a three-hour span. The quote itself can be found in the text, and
+    that is a measurement rather than a claim about itself."""
+    q = _normalise(quote)
+    if len(q) < _MIN_ANCHOR:
+        return None
+    i = prose.find(q)
+    if i >= 0:
+        return (i, i + len(q))
+    head = q[:_PREFIX]
+    if len(head) < _MIN_ANCHOR:
+        return None
+    i = prose.find(head)
+    return (i, i + len(head)) if i >= 0 else None
+
+
+def build_source_passages(
+    claims: list[Claim], similar: Similar, prose: str
+) -> list[Passage]:
+    """Passages ordered and grouped by WHERE THE CLAIM'S QUOTE APPEARS in the
+    record, rather than by the location string the model reported.
+
+    Two things this fixes. ORDER: passages built from location strings do not
+    follow the document, so the first passage on screen could come from well
+    down the transcript - the reviewer reads the source top to bottom and the
+    claims beside it in some other order. GROUPING: locations merge by overlap,
+    and one degenerate range swallowed 85% of a record into a single passage;
+    grouping on measured quote spans put the largest group at 17 claims instead
+    of 128.
+
+    Claims whose quote cannot be found keep the old location-based grouping and
+    follow at the end - they are the broken-quote cases, and hiding them would
+    hide the signal that a claim's evidence is not in the source."""
+    located: list[tuple[int, int, Claim]] = []
+    unplaced: list[Claim] = []
+    for c in claims:
+        span = locate_in_source(prose, c.quote) if prose else None
+        if span is None:
+            unplaced.append(c)
+        else:
+            located.append((span[0], span[1], c))
+
+    passages: list[Passage] = []
+    located.sort(key=lambda t: (t[0], t[1]))
+    group: list[Claim] = []
+    group_end = -1
+    for start, end, c in located:
+        if group and start >= group_end:  # no overlap with the open group
+            passages.append(_source_passage(len(passages), group, similar))
+            group = []
+        group.append(c)
+        group_end = max(group_end, end)
+    if group:
+        passages.append(_source_passage(len(passages), group, similar))
+
+    # Whatever could not be placed keeps the old axis, after the placed ones.
+    if unplaced:
+        for p in build_passages(unplaced, similar):
+            passages.append(
+                Passage(
+                    index=len(passages),
+                    start=p.start,
+                    end=p.end,
+                    raw_locations=p.raw_locations,
+                    clusters=p.clusters,
+                )
+            )
+    return passages
+
+
 def build_passages(claims: list[Claim], similar: Similar) -> list[Passage]:
     """Group claims into source passages (by merged location range) and cluster
     each passage's claims by meaning. The core of the audit view: one variant's
@@ -389,6 +471,20 @@ def build_passages(claims: list[Claim], similar: Similar) -> list[Passage]:
         passages.append(_make_passage(len(passages), 0.0, 0.0, {raw}, members, similar))
 
     return passages
+
+
+def _source_passage(idx: int, members: list["Claim"], similar: Similar) -> Passage:
+    """A passage grouped by source position. It keeps the members' own location
+    strings for display - the reviewer still sees what each model said the
+    timecode was, including when they disagree, which is itself worth seeing."""
+    raws = sorted({c.location for c in members if c.location})
+    return Passage(
+        index=idx,
+        start=0.0,
+        end=0.0,
+        raw_locations=raws,
+        clusters=_cluster_by_meaning(members, similar, id_prefix=f"s{idx}"),
+    )
 
 
 def _make_passage(idx, start, end, raw_set, members, similar) -> Passage:

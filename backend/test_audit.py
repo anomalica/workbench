@@ -10,6 +10,7 @@ from backend.audit import (
     node_rows,
     parse_location,
     build_passages,
+    build_source_passages,
     claims_of,
     _merge_spans,
     passage_anchor,
@@ -377,3 +378,105 @@ class TestDegenerateLocations:
         passages = build_passages(claims, same_text)
         assert len(passages) == 1
         assert not passages[0].clusters[0].singleton
+
+
+class TestSourceOrderedPassages:
+    """Grouping and ordering by where a claim's quote appears in the record.
+
+    The model-reported location is not that: it is re-derived by the aligner,
+    and one degenerate range swallowed 85% of a record into a single passage.
+    Ordering by it also meant the first passage on screen could come from well
+    down the transcript, so the source read top-to-bottom while the claims
+    beside it did not.
+    """
+
+    PROSE = (
+        "Chapter one opens the story here. "
+        "The witness described a bright object over the water. "
+        "Later that evening the crew filed their report. "
+        "A final unrelated paragraph closes the record."
+    )
+
+    def q(self, variant, quote, text=None, location="99:99"):
+        return Claim(
+            variant=variant,
+            model=variant,
+            claim_id=f"{variant}:{quote[:8]}",
+            location=location,
+            quote=quote,
+            text=text or quote,
+        )
+
+    def test_orders_passages_by_position_in_the_source(self):
+        # Deliberately given in the WRONG order, with locations that would sort
+        # differently, so only the source position can produce this result.
+        claims = [
+            self.q(
+                "a",
+                "A final unrelated paragraph closes the record.",
+                location="00:00:01",
+            ),
+            self.q(
+                "a",
+                "The witness described a bright object over the water.",
+                location="00:00:99",
+            ),
+            self.q("a", "Chapter one opens the story here.", location="00:00:50"),
+        ]
+        passages = build_source_passages(claims, same_text, self.PROSE)
+        first = [c.text for cl in passages[0].clusters for c in cl.members]
+        last = [c.text for cl in passages[-1].clusters for c in cl.members]
+        assert first == ["Chapter one opens the story here."]
+        assert last == ["A final unrelated paragraph closes the record."]
+
+    def test_groups_claims_whose_quotes_overlap(self):
+        claims = [
+            self.q("haiku", "The witness described a bright object over the water."),
+            self.q(
+                "sonnet",
+                "witness described a bright object over the water. Later that evening",
+            ),
+            self.q("opus", "A final unrelated paragraph closes the record."),
+        ]
+        passages = build_source_passages(claims, same_text, self.PROSE)
+        assert len(passages) == 2
+        assert {c.variant for cl in passages[0].clusters for c in cl.members} == {
+            "haiku",
+            "sonnet",
+        }
+        assert {c.variant for cl in passages[1].clusters for c in cl.members} == {
+            "opus"
+        }
+
+    def test_one_huge_quote_does_not_swallow_the_record(self):
+        # The failure the old axis had: a claim covering everything merged with
+        # everything. Overlap on measured spans keeps the distinct ones distinct.
+        claims = [
+            self.q("a", self.PROSE),
+            self.q("b", "A final unrelated paragraph closes the record."),
+            self.q("c", "Chapter one opens the story here."),
+        ]
+        passages = build_source_passages(claims, same_text, self.PROSE)
+        assert len(passages) >= 1
+        sizes = [sum(len(cl.members) for cl in p.clusters) for p in passages]
+        assert sum(sizes) == 3
+
+    def test_an_unlocatable_quote_is_kept_and_placed_last(self):
+        # A claim whose evidence is not in the source is the broken-quote
+        # signal; dropping it would hide exactly what a reviewer needs to see.
+        claims = [
+            self.q("a", "Chapter one opens the story here."),
+            self.q(
+                "b",
+                "This sentence appears nowhere in the record at all.",
+                location="00:00:05",
+            ),
+        ]
+        passages = build_source_passages(claims, same_text, self.PROSE)
+        texts = [c.text for p in passages for cl in p.clusters for c in cl.members]
+        assert "This sentence appears nowhere in the record at all." in texts
+        assert texts[0] == "Chapter one opens the story here."
+
+    def test_falls_back_entirely_when_there_is_no_source(self):
+        claims = [self.q("a", "Chapter one opens the story here.", location="00:00:01")]
+        assert len(build_source_passages(claims, same_text, "")) == 1
