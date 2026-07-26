@@ -366,12 +366,16 @@
       {#if mixedPrompts}
         <button
           onclick={() => (showVariantDetail = !showVariantDetail)}
-          class="inline-flex items-center gap-1 text-[11px] font-medium text-on-error bg-error/80 rounded px-2 py-0.5 cursor-pointer hover:opacity-90"
-          title={promptFingerprints.includes("")
-            ? "At least one variant does not record which prompt it ran, so this cannot be verified as like-for-like."
-            : `These variants ran DIFFERENT prompts (${promptFingerprints.join(" vs ")}). A gap between them is a prompt difference as much as a model difference - do not read it as a model comparison.`}
+          class="inline-flex items-center gap-1.5 text-[11px] rounded px-2 py-0.5 cursor-pointer transition-colors
+            bg-warning-container/50 text-on-surface hover:bg-warning-container/70"
         >
-          NOT like-for-like: prompts differ - {showVariantDetail ? "hide" : "what differs?"}
+          <span class="font-medium">Mixed prompts</span>
+          <span class="text-on-surface-secondary">
+            {promptFingerprints.includes("")
+              ? "one run didn't record its prompt"
+              : "these runs didn't all use the same instructions"}
+          </span>
+          <span class="text-primary underline">{showVariantDetail ? "hide" : "compare"}</span>
         </button>
       {/if}
       {#each allVariants as v (v.id)}
@@ -439,9 +443,12 @@
           </tbody>
         </table>
         <p class="text-[11px] text-on-surface-secondary mt-2 max-w-3xl leading-relaxed">
-          Columns marked <span class="text-error font-semibold">red ←</span> are where the variants
-          diverge. A version label can be identical while the prompt behind it is not, so the SHA is
-          the real identity - two runs both labelled v3 are still different prompts.
+          Marked columns are where these runs differ. <span class="text-on-surface">Why it matters:</span>
+          if two runs used different instructions, a gap between them is not evidence about the
+          models - the one told to do more will find more. Compare like with like by switching off
+          the odd run above, or read the difference as a prompt result rather than a model result.
+          The version label alone will not tell you: two runs can both say v3 and carry different
+          prompts, which is why the SHA is shown.
         </p>
       </div>
     {/if}

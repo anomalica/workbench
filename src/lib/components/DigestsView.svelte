@@ -29,7 +29,7 @@
   } from "$lib/api";
   import { bodyWordCount } from "$lib/ingest-plain";
   import { variantLabels } from "$lib/variant-label";
-  import { findQuote, indexRenderedText, rangeFor } from "$lib/quote-locate";
+  import { coverageRuns, findQuote, indexRenderedText, rangeFor } from "$lib/quote-locate";
   import AuditView from "./AuditView.svelte";
 
   let comparable = $state<ComparableIngest[]>([]);
@@ -110,6 +110,53 @@
     if (!Ctor) return;
     CSSns.highlights.set("claim-source", new Ctor(range));
   }
+
+  /** Shade the source by how many models drew a claim from each stretch, so the
+   *  pane answers "what did they use, and what did nothing touch?" at a glance.
+   *  Runs after the render, and again whenever the comparison changes. */
+  let coverageSummary = $state<{ runs: number; claimed: number; total: number } | null>(null);
+
+  function paintCoverage() {
+    const CSSns = (globalThis as { CSS?: { highlights?: Map<string, unknown> } }).CSS;
+    const Ctor = (globalThis as { Highlight?: new (...r: Range[]) => unknown }).Highlight;
+    if (!sourceEl || !comparison || !CSSns?.highlights || !Ctor) return;
+    for (const n of [1, 2, 3]) CSSns.highlights.delete(`claim-cover-${n}`);
+
+    const indexed = indexRenderedText(sourceEl);
+    const claims = comparison.per_model.flatMap((m) =>
+      (m.claims ?? []).map((c) => ({ quote: c.quote, variant: m.variant })),
+    );
+    const runs = coverageRuns(indexed.text, claims);
+    const models = comparison.per_model.length;
+    // Three bands, not one per model: with four variants a band each is noise,
+    // and the reader's question is "one, some, or all of them?".
+    const buckets = new Map<number, Range[]>([
+      [1, []],
+      [2, []],
+      [3, []],
+    ]);
+    let claimed = 0;
+    for (const r of runs) {
+      const range = rangeFor(indexed, r.start, r.end);
+      if (!range) continue;
+      claimed += r.end - r.start;
+      const band = r.count >= models && models > 1 ? 3 : r.count > 1 ? 2 : 1;
+      buckets.get(band)?.push(range);
+    }
+    for (const [band, ranges] of buckets) {
+      if (ranges.length) CSSns.highlights.set(`claim-cover-${band}`, new Ctor(...ranges));
+    }
+    coverageSummary = { runs: runs.length, claimed, total: indexed.text.length };
+  }
+
+  // Repaint when the rendered body or the comparison changes.
+  $effect(() => {
+    void renderedBody;
+    void comparison;
+    if (!sourceEl) return;
+    const id = requestAnimationFrame(() => paintCoverage());
+    return () => cancelAnimationFrame(id);
+  });
 
   function clearHighlight() {
     const CSSns = (globalThis as { CSS?: { highlights?: Map<string, unknown> } }).CSS;
@@ -296,6 +343,14 @@
           {#if words}
             <span class="text-[11px] text-on-surface-muted tabular-nums">· {words} words</span>
           {/if}
+          {#if coverageSummary && coverageSummary.total}
+            <span class="flex items-center gap-1.5 text-[10px] text-on-surface-muted" title="Shading shows how many models drew a claim from each stretch of the source. Unshaded text is source nothing extracted from - which is the point of showing it.">
+              <span class="cover-key cover-key-1"></span>one
+              <span class="cover-key cover-key-2"></span>some
+              <span class="cover-key cover-key-3"></span>all
+              <span class="tabular-nums ml-1">· {Math.round((100 * coverageSummary.claimed) / coverageSummary.total)}% used</span>
+            </span>
+          {/if}
           <span class="flex-1"></span>
           {#if locateNote}
             <span
@@ -354,6 +409,39 @@
      freely and the highlight simply re-applies on the next click. ::highlight
      only accepts a few properties; background and colour are enough to make the
      span unmissable after the scroll. */
+  /* Coverage bands. Deliberately faint: this is a backdrop the reader scans,
+     not a foreground element - the unshaded gaps are what should catch the eye,
+     because they are the source nothing extracted from. */
+  :global(::highlight(claim-cover-1)) {
+    background-color: color-mix(in srgb, var(--color-primary, #0d9488) 8%, transparent);
+  }
+  :global(::highlight(claim-cover-2)) {
+    background-color: color-mix(in srgb, var(--color-primary, #0d9488) 16%, transparent);
+  }
+  :global(::highlight(claim-cover-3)) {
+    background-color: color-mix(in srgb, var(--color-primary, #0d9488) 26%, transparent);
+  }
+
+  .cover-key {
+    display: inline-block;
+    width: 0.6rem;
+    height: 0.6rem;
+    border-radius: 0.1rem;
+    vertical-align: -1px;
+  }
+  .cover-key-1 {
+    background: color-mix(in srgb, var(--color-primary, #0d9488) 8%, transparent);
+    box-shadow: inset 0 0 0 1px var(--color-border, rgba(128, 128, 128, 0.3));
+  }
+  .cover-key-2 {
+    background: color-mix(in srgb, var(--color-primary, #0d9488) 16%, transparent);
+  }
+  .cover-key-3 {
+    background: color-mix(in srgb, var(--color-primary, #0d9488) 26%, transparent);
+  }
+
+  /* The span a clicked claim was drawn from - stronger than the bands, since it
+     is a direct answer to a direct question. */
   :global(::highlight(claim-source)) {
     background-color: color-mix(in srgb, var(--color-primary, #0d9488) 32%, transparent);
     color: inherit;

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { findQuote, indexRenderedText, normaliseForMatch, rangeFor } from "./quote-locate";
+import {
+  coverageRuns,
+  findQuote,
+  indexRenderedText,
+  normaliseForMatch,
+  rangeFor,
+} from "./quote-locate";
 
 const SOURCE = normaliseForMatch(`
   Yeah. And, you know, it's really helpful. So, you know, today I will be asking
@@ -96,5 +102,52 @@ describe("indexRenderedText / rangeFor", () => {
     const el = render("<p>short</p>");
     const idx = indexRenderedText(el);
     expect(rangeFor(idx, 100, 120)).toBeNull();
+  });
+});
+
+describe("coverageRuns", () => {
+  const TEXT = normaliseForMatch(
+    "This film was filmed on April 22, 1991 at 3:15 in the afternoon. " +
+      "An entirely separate sentence that nobody quoted at all whatsoever.",
+  );
+
+  it("counts DISTINCT variants over each stretch", () => {
+    const runs = coverageRuns(TEXT, [
+      { variant: "haiku", quote: "This film was filmed on April 22" },
+      { variant: "sonnet", quote: "This film was filmed on April 22" },
+      // same variant twice must not count as two models agreeing
+      { variant: "haiku", quote: "This film was filmed on April 22" },
+    ]);
+    expect(runs).toHaveLength(1);
+    expect(runs[0].count).toBe(2);
+    expect(TEXT.slice(runs[0].start, runs[0].end)).toBe("This film was filmed on April 22");
+  });
+
+  it("leaves unclaimed source out of the runs - the gap IS the finding", () => {
+    const runs = coverageRuns(TEXT, [
+      { variant: "haiku", quote: "This film was filmed on April 22" },
+    ]);
+    const covered = runs.map((r) => TEXT.slice(r.start, r.end)).join("");
+    expect(covered).not.toContain("nobody quoted");
+  });
+
+  it("splits into separate runs where coverage changes", () => {
+    const runs = coverageRuns(TEXT, [
+      { variant: "haiku", quote: "This film was filmed on April 22, 1991 at 3:15" },
+      { variant: "sonnet", quote: "This film was filmed on April 22" },
+    ]);
+    // the shared opening scores 2, the haiku-only tail scores 1
+    expect(runs.map((r) => r.count)).toEqual([2, 1]);
+  });
+
+  it("ignores claims whose quote is not in the source", () => {
+    expect(
+      coverageRuns(TEXT, [{ variant: "haiku", quote: "Nothing like this appears here" }]),
+    ).toEqual([]);
+  });
+
+  it("handles an empty source and no claims", () => {
+    expect(coverageRuns("", [{ variant: "a", quote: "x" }])).toEqual([]);
+    expect(coverageRuns(TEXT, [])).toEqual([]);
   });
 });

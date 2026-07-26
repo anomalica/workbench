@@ -119,3 +119,63 @@ export function rangeFor(indexed: RenderedText, start: number, end: number): Ran
   range.setEnd(last.node, last.offset + 1);
   return range;
 }
+
+/** One stretch of source and how many variants drew a claim from it. */
+export interface CoverageRun {
+  start: number;
+  end: number;
+  /** Distinct variants whose quote covers this stretch. 0 = nothing claimed it. */
+  count: number;
+}
+
+/** Where each variant's claims landed in the source, as runs of equal coverage.
+ *
+ *  This is what makes the source pane observable WITHOUT clicking: shading it by
+ *  how many models drew on each stretch shows, at a glance, what everything
+ *  agreed on, what only one model took, and - the question the view exists to
+ *  answer - which stretches nothing claimed at all. Clicking a claim then
+ *  refines that picture rather than being the only way to see it.
+ *
+ *  Runs are merged so adjacent characters of equal coverage paint as one span:
+ *  a highlight per claim would be thousands of overlapping ranges, where this is
+ *  a few hundred. */
+export function coverageRuns(
+  haystackNorm: string,
+  claims: { quote?: string; variant: string }[],
+): CoverageRun[] {
+  if (!haystackNorm) return [];
+  // Per-character sets are too costly at this size; per-character bitmasks over
+  // the variant list keep it to one integer per character.
+  const variants = [...new Set(claims.map((c) => c.variant))];
+  const bit = new Map(variants.map((v, i) => [v, 1 << i]));
+  const mask = new Int32Array(haystackNorm.length);
+
+  for (const c of claims) {
+    const hit = findQuote(haystackNorm, c.quote ?? "");
+    if (!hit) continue;
+    const b = bit.get(c.variant) ?? 0;
+    for (let i = hit.start; i < hit.end; i++) mask[i] |= b;
+  }
+
+  const runs: CoverageRun[] = [];
+  let start = 0;
+  let current = popcount(mask[0] ?? 0);
+  for (let i = 1; i <= mask.length; i++) {
+    const count = i < mask.length ? popcount(mask[i]) : -1;
+    if (count !== current) {
+      if (current > 0) runs.push({ start, end: i, count: current });
+      start = i;
+      current = count;
+    }
+  }
+  return runs;
+}
+
+function popcount(n: number): number {
+  let c = 0;
+  while (n) {
+    n &= n - 1;
+    c++;
+  }
+  return c;
+}
