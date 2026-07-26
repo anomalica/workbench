@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  claimExtents,
   claimKey,
   coverageRuns,
   findQuote,
@@ -9,6 +10,7 @@ import {
   rangeFor,
   runAtOffset,
   sourceSegments,
+  unionExtent,
 } from "./quote-locate";
 
 const SOURCE = normaliseForMatch(`
@@ -260,6 +262,56 @@ describe("sourceSegments", () => {
   });
 
   it("returns the whole text as one uncovered segment when nothing was claimed", () => {
-    expect(sourceSegments(TEXT, [])).toEqual([{ text: TEXT, count: 0, claims: [] }]);
+    expect(sourceSegments(TEXT, [])).toEqual([
+      { text: TEXT, count: 0, claims: [], start: 0, end: TEXT.length },
+    ]);
+  });
+});
+
+describe("claimExtents / unionExtent: selecting the whole evidence", () => {
+  // Two claims quoting overlapping but DIFFERENT spans - the real shape that
+  // left the word "But" as a sliver of its own.
+  const TEXT = normaliseForMatch(
+    "But the biggest reason was no one could guarantee his anonymity. And Victor speaks of this. They would not be willing to sign a contract.",
+  );
+  const CLAIMS = [
+    {
+      variant: "haiku",
+      id: "h1",
+      quote: "But the biggest reason was no one could guarantee his anonymity.",
+    },
+    {
+      variant: "opus",
+      id: "o1",
+      quote:
+        "the biggest reason was no one could guarantee his anonymity. And Victor speaks of this.",
+    },
+  ];
+
+  it("a sliver's claims still resolve to their FULL extents", () => {
+    const runs = coverageRuns(TEXT, CLAIMS);
+    // the split really happens: "But " is covered by one claim, the overlap by two
+    expect(runs.length).toBeGreaterThan(1);
+    const sliver = runs[0];
+    expect(TEXT.slice(sliver.start, sliver.end)).toBe("But ");
+
+    const extents = claimExtents(TEXT, CLAIMS);
+    const span = unionExtent(extents, sliver.claims)!;
+    // selecting the sliver selects the whole quote it belongs to, not "But "
+    expect(TEXT.slice(span.start, span.end)).toBe(
+      "But the biggest reason was no one could guarantee his anonymity.",
+    );
+  });
+
+  it("unions across several claims when a stretch belongs to more than one", () => {
+    const extents = claimExtents(TEXT, CLAIMS);
+    const span = unionExtent(extents, [claimKey("haiku", "h1"), claimKey("opus", "o1")])!;
+    expect(TEXT.slice(span.start, span.end)).toBe(
+      "But the biggest reason was no one could guarantee his anonymity. And Victor speaks of this.",
+    );
+  });
+
+  it("is null when no claim located", () => {
+    expect(unionExtent(new Map(), ["nope"])).toBeNull();
   });
 });

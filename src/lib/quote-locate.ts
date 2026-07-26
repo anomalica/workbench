@@ -253,6 +253,10 @@ export interface SourceSegment {
   /** 0 when nothing extracted from this stretch. */
   count: number;
   claims: string[];
+  /** Offsets in the normalised source, so a segment can be tested against a
+   *  claim's full extent rather than only against itself. */
+  start: number;
+  end: number;
 }
 
 /** Cut the source into consecutive segments - covered and uncovered alternating
@@ -267,16 +271,69 @@ export function sourceSegments(haystackNorm: string, runs: CoverageRun[]): Sourc
   const out: SourceSegment[] = [];
   let at = 0;
   for (const r of runs) {
-    if (r.start > at) out.push({ text: haystackNorm.slice(at, r.start), count: 0, claims: [] });
+    if (r.start > at)
+      out.push({
+        text: haystackNorm.slice(at, r.start),
+        count: 0,
+        claims: [],
+        start: at,
+        end: r.start,
+      });
     out.push({
       text: haystackNorm.slice(r.start, r.end),
       count: r.count,
       claims: r.claims,
+      start: r.start,
+      end: r.end,
     });
     at = r.end;
   }
   if (at < haystackNorm.length) {
-    out.push({ text: haystackNorm.slice(at), count: 0, claims: [] });
+    out.push({
+      text: haystackNorm.slice(at),
+      count: 0,
+      claims: [],
+      start: at,
+      end: haystackNorm.length,
+    });
   }
   return out;
+}
+
+/** Where each claim's quote sits in the source, by claim key.
+ *
+ *  Runs split wherever the SET of covering claims changes, so a claim's
+ *  evidence is spread across several runs - two claims quoting overlapping but
+ *  different spans leave slivers where only one of them covers. Selecting a
+ *  sliver and lighting up only that sliver is useless: the reader clicked to
+ *  see the EVIDENCE, which is the whole quote. This gives the full extent so a
+ *  selection can be widened to it. */
+export function claimExtents(
+  haystackNorm: string,
+  claims: LocatableClaim[],
+): Map<string, { start: number; end: number }> {
+  const out = new Map<string, { start: number; end: number }>();
+  for (const c of claims) {
+    const hit = findQuote(haystackNorm, c.quote ?? "");
+    if (hit) out.set(claimKey(c.variant, c.id), { start: hit.start, end: hit.end });
+  }
+  return out;
+}
+
+/** The span covering every one of `keys` - the union of their extents, so a
+ *  click on any part of an extraction selects all of the evidence it belongs
+ *  to. Null when none of them located. */
+export function unionExtent(
+  extents: Map<string, { start: number; end: number }>,
+  keys: string[],
+): { start: number; end: number } | null {
+  let start = Infinity;
+  let end = -Infinity;
+  for (const k of keys) {
+    const e = extents.get(k);
+    if (!e) continue;
+    start = Math.min(start, e.start);
+    end = Math.max(end, e.end);
+  }
+  return end > start ? { start, end } : null;
 }

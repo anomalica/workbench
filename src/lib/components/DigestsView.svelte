@@ -31,10 +31,12 @@
   import { variantLabels } from "$lib/variant-label";
   import {
     claimKey,
+    claimExtents,
     coverageRuns,
     findQuote,
     normaliseForMatch,
     sourceSegments,
+    unionExtent,
   } from "$lib/quote-locate";
   import AuditView from "./AuditView.svelte";
 
@@ -88,12 +90,25 @@
   let locateNote = $state<{ kind: "exact" | "prefix" | "miss"; label: string } | null>(null);
   let hoverCount = $state(0);
   let focusedClaims = $state<string[]>([]);
-  /** Segment index the reader clicked or hovered, for the visible response. */
-  let activeSeg = $state<number | null>(null);
-  let hoverSeg = $state<number | null>(null);
+  // The SELECTED SPAN, not a segment index. Runs split wherever the set of
+  // covering claims changes, so one claim's evidence is spread over several
+  // segments - two claims quoting overlapping spans leave slivers where only
+  // one covers, which is how selecting a passage lit up the single word "But".
+  // Selecting resolves to the union of the FULL extents of the claims involved,
+  // and every segment inside that span shows as selected.
+  let activeSpan = $state<{ start: number; end: number } | null>(null);
+  let hoverSpan = $state<{ start: number; end: number } | null>(null);
   const BANDS = 5;
 
   let normalisedSource = $derived(normaliseForMatch(predigest?.body ?? ""));
+  let sourceClaims = $derived(
+    (comparison?.per_model ?? []).flatMap((m) =>
+      (m.claims ?? []).map((c) => ({ quote: c.quote, variant: m.variant, id: c.id })),
+    ),
+  );
+  let sourceExtents = $derived(
+    normalisedSource ? claimExtents(normalisedSource, sourceClaims) : new Map(),
+  );
   let sourceRuns = $derived.by(() => {
     if (!normalisedSource || !comparison) return [];
     const claims = comparison.per_model.flatMap((m) =>
@@ -116,15 +131,19 @@
       : null,
   );
 
-  function onSegmentClick(i: number, seg: { claims: string[] }) {
+  function onSegmentClick(seg: { claims: string[]; start: number; end: number }) {
     if (!seg.claims.length) {
       focusedClaims = [];
-      activeSeg = null;
+      activeSpan = null;
       return;
     }
-    activeSeg = i;
+    activeSpan = unionExtent(sourceExtents, seg.claims) ?? { start: seg.start, end: seg.end };
     focusedClaims = seg.claims;
     locateNote = null;
+  }
+
+  function inSpan(seg: { start: number; end: number }, span: { start: number; end: number } | null) {
+    return !!span && seg.start < span.end && span.start < seg.end;
   }
 
   /** Scroll the source to a claim's quote and mark it - the other direction. */
@@ -132,24 +151,14 @@
     const hit = findQuote(normalisedSource, quote);
     if (!hit) {
       locateNote = { kind: "miss", label };
-      activeSeg = null;
+      activeSpan = null;
       return;
     }
     locateNote = { kind: hit.kind, label };
-    // The segment containing the match start.
-    let at = 0;
-    const idx = segments.findIndex((sg) => {
-      const inIt = hit.start >= at && hit.start < at + sg.text.length;
-      at += sg.text.length;
-      return inIt;
-    });
-    if (idx < 0) return;
-    activeSeg = idx;
+    activeSpan = { start: hit.start, end: hit.end };
     if (!scroll) return;
     requestAnimationFrame(() => {
-      sourceEl
-        ?.querySelector(`[data-seg="${idx}"]`)
-        ?.scrollIntoView({ block: "center", behavior: "smooth" });
+      sourceEl?.querySelector(".is-active")?.scrollIntoView({ block: "center", behavior: "smooth" });
     });
   }
 
@@ -169,7 +178,7 @@
     predigest = null;
     saveNote = null;
     locateNote = null;
-    activeSeg = null;
+    activeSpan = null;
     focusedClaims = [];
     chosen = null;
     notes = "";
@@ -394,24 +403,29 @@
               {#each segments as seg, i (i)}
                 {#if seg.count === 0}<span>{seg.text}</span>{:else}<span
                     data-seg={i}
-                    class="extract band-{i % BANDS} {activeSeg === i ? 'is-active' : ''}"
+                    class="extract band-{i % BANDS} {inSpan(seg, activeSpan)
+                      ? 'is-active'
+                      : ''} {inSpan(seg, hoverSpan) ? 'is-hovered' : ''}"
                     role="button"
                     tabindex="0"
                     title="{seg.count} model{seg.count === 1 ? '' : 's'} drew {seg.claims
                       .length} claim{seg.claims.length === 1 ? '' : 's'} from this - click to show"
                     onmouseenter={() => {
-                      hoverSeg = i;
+                      hoverSpan = unionExtent(sourceExtents, seg.claims) ?? {
+                        start: seg.start,
+                        end: seg.end,
+                      };
                       hoverCount = seg.claims.length;
                     }}
                     onmouseleave={() => {
-                      hoverSeg = null;
+                      hoverSpan = null;
                       hoverCount = 0;
                     }}
-                    onclick={() => onSegmentClick(i, seg)}
+                    onclick={() => onSegmentClick(seg)}
                     onkeydown={(e) => {
                       if (e.key === "Enter" || e.key === " ") {
                         e.preventDefault();
-                        onSegmentClick(i, seg);
+                        onSegmentClick(seg);
                       }
                     }}>{seg.text}</span
                   >{/if}
@@ -451,9 +465,16 @@
     filter: brightness(1.45) saturate(1.3);
     outline: 1px solid color-mix(in srgb, currentColor 35%, transparent);
   }
+  /* The whole evidence reads as ONE selection: a shared background across every
+     segment of it, with the outline only on the edges, so a claim spread over
+     several runs does not look like several separate selections. */
+  .extract.is-hovered {
+    filter: brightness(1.4) saturate(1.25);
+  }
   .extract.is-active {
-    outline: 2px solid var(--color-primary, #0d9488);
-    outline-offset: 1px;
+    background-color: color-mix(in srgb, var(--color-primary, #0d9488) 38%, transparent);
+    box-shadow: 0 -1px 0 var(--color-primary, #0d9488) inset,
+      0 1px 0 var(--color-primary, #0d9488) inset;
   }
   .band-0 {
     background-color: color-mix(in srgb, #0ea5e9 20%, transparent);
