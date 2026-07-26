@@ -146,17 +146,27 @@
     return !!span && seg.start < span.end && span.start < seg.end;
   }
 
-  /** Scroll the source to a claim's quote and mark it - the other direction. */
+  /** Show where a claim came from - the other direction of the link.
+   *  A HOVER previews (marks the source, leaves the selection and the scroll
+   *  position alone); a CLICK selects and scrolls. Hover writing to the
+   *  selection would destroy the reader's place every time the pointer crossed
+   *  a claim on its way somewhere else. */
   function showSourceFor(quote: string, label: string, scroll = true) {
     const hit = findQuote(normalisedSource, quote);
     if (!hit) {
-      locateNote = { kind: "miss", label };
-      activeSpan = null;
+      if (scroll) {
+        locateNote = { kind: "miss", label };
+        activeSpan = null;
+      }
+      hoverSpan = null;
+      return;
+    }
+    if (!scroll) {
+      hoverSpan = { start: hit.start, end: hit.end };
       return;
     }
     locateNote = { kind: hit.kind, label };
     activeSpan = { start: hit.start, end: hit.end };
-    if (!scroll) return;
     requestAnimationFrame(() => {
       sourceEl?.querySelector(".is-active")?.scrollIntoView({ block: "center", behavior: "smooth" });
     });

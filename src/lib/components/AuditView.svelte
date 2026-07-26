@@ -677,7 +677,16 @@
               <!-- Each model's rendering of this fact, one line each. -->
               <div class="mt-2 space-y-1">
                 {#each row.cells as cell (cell.variant)}
-                  <div class="flex items-start gap-2">
+                  <!-- A model's claims sit inside its OWN block, marked down the
+                       left in the model's colour. Three claims from one model
+                       and one from the next ran together as a flat stack, so
+                       which claim belonged to which model - and where a model's
+                       run of claims ended - had to be inferred from a dot far
+                       to the left. -->
+                  <div
+                    class="model-block flex items-start gap-2 {cell.present ? 'has-claims' : ''}"
+                    style="--model-colour: {colourOf.get(cell.variant)}"
+                  >
                     <span
                       class="flex-none flex items-center gap-1.5 pt-0.5"
                       style="width: {labelCh + 2}ch"
@@ -721,6 +730,7 @@
                                 class="claim-linked text-sm text-on-surface leading-snug text-left w-full"
                                 title="Show the source this was drawn from"
                                 onmouseenter={() => onquote(m.quote, labelOf(cell.variant, cell.model), false)}
+                                onmouseleave={() => onquote("", "", false)}
                                 onclick={() => onquote(m.quote, labelOf(cell.variant, cell.model), true)}
                               >{m.text}</button>
                             {:else}
@@ -787,6 +797,30 @@
     outline: 1px dashed color-mix(in srgb, var(--color-primary, #0d9488) 45%, transparent);
     outline-offset: 2px;
     border-radius: 0.2rem;
+  }
+
+  /* One model's claims, bracketed by a rule in its colour. */
+  .model-block.has-claims {
+    border-left: 3px solid var(--model-colour, transparent);
+    padding-left: 0.5rem;
+    margin-left: -0.5rem;
+    border-radius: 0.15rem;
+  }
+  .model-block + .model-block {
+    margin-top: 0.75rem;
+  }
+
+  /* A claim and ITS rating are one card; the next claim is visibly another. */
+  .claim-block {
+    padding: 0.35rem 0.5rem;
+    border-radius: 0.25rem;
+    background: color-mix(in srgb, currentColor 3%, transparent);
+  }
+  .claim-block + .claim-block {
+    margin-top: 0.4rem;
+  }
+  .claim-block.is-graded {
+    background: color-mix(in srgb, var(--color-success, #16a34a) 7%, transparent);
   }
 
   .claim-focused {
