@@ -28,6 +28,7 @@
     type Predigest,
   } from "$lib/api";
   import { bodyWordCount } from "$lib/ingest-plain";
+  import { parseSourceBlocks } from "$lib/source-blocks";
   import { variantLabels } from "$lib/variant-label";
   import {
     claimKey,
@@ -100,7 +101,11 @@
   let hoverSpan = $state<{ start: number; end: number } | null>(null);
   const BANDS = 5;
 
-  let normalisedSource = $derived(normaliseForMatch(predigest?.body ?? ""));
+  // The body as STRUCTURE: speaker changes, page turns and notes as their own
+  // elements, prose as one continuous string. Coverage is measured over the
+  // prose alone, so an annotation never shifts a claim's offsets.
+  let parsedSource = $derived(parseSourceBlocks(predigest?.body ?? ""));
+  let normalisedSource = $derived(parsedSource.prose);
   let sourceClaims = $derived(
     (comparison?.per_model ?? []).flatMap((m) =>
       (m.claims ?? []).map((c) => ({ quote: c.quote, variant: m.variant, id: c.id })),
@@ -140,6 +145,17 @@
     activeSpan = unionExtent(sourceExtents, seg.claims) ?? { start: seg.start, end: seg.end };
     focusedClaims = seg.claims;
     locateNote = null;
+  }
+
+  /** The segments falling inside one prose block, clipped to it - so a block
+   *  renders its own share of an extraction that runs across several. */
+  function segmentsOf(block: { start: number; end: number }) {
+    return segments
+      .filter((sg) => sg.start < block.end && block.start < sg.end)
+      .map((sg) => ({
+        ...sg,
+        text: normalisedSource.slice(Math.max(sg.start, block.start), Math.min(sg.end, block.end)),
+      }));
   }
 
   function inSpan(seg: { start: number; end: number }, span: { start: number; end: number } | null) {
@@ -407,40 +423,54 @@
           {:else if !predigest}
             <p class="text-sm text-on-surface-muted italic">No pre-digest available for this record.</p>
           {:else}
-            <!-- One span per extraction, so hovering and clicking the source
-                 are ordinary DOM events on exactly the text they belong to. -->
-            <p class="max-w-prose text-sm text-on-surface leading-relaxed whitespace-pre-wrap">
-              {#each segments as seg, i (i)}
-                {#if seg.count === 0}<span>{seg.text}</span>{:else}<span
-                    data-seg={i}
-                    class="extract band-{i % BANDS} {inSpan(seg, activeSpan)
-                      ? 'is-active'
-                      : ''} {inSpan(seg, hoverSpan) ? 'is-hovered' : ''}"
-                    role="button"
-                    tabindex="0"
-                    title="{seg.count} model{seg.count === 1 ? '' : 's'} drew {seg.claims
-                      .length} claim{seg.claims.length === 1 ? '' : 's'} from this - click to show"
-                    onmouseenter={() => {
-                      hoverSpan = unionExtent(sourceExtents, seg.claims) ?? {
-                        start: seg.start,
-                        end: seg.end,
-                      };
-                      hoverCount = seg.claims.length;
-                    }}
-                    onmouseleave={() => {
-                      hoverSpan = null;
-                      hoverCount = 0;
-                    }}
-                    onclick={() => onSegmentClick(seg)}
-                    onkeydown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        onSegmentClick(seg);
-                      }
-                    }}>{seg.text}</span
-                  >{/if}
+            <!-- Each block rendered as WHAT IT IS: a speaker change is a
+                 speaker change, a page turn is a divider, and prose carries the
+                 clickable extraction spans. -->
+            <div class="max-w-prose text-sm text-on-surface leading-relaxed">
+              {#each parsedSource.blocks as block, bi (bi)}
+                {#if block.kind === "speaker"}
+                  <p class="speaker-label">{block.label}</p>
+                {:else if block.kind === "page" || block.kind === "chapter"}
+                  <p class="structure-divider"><span>{block.label}</span></p>
+                {:else if block.kind === "note"}
+                  <p class="source-note">{block.label}</p>
+                {:else}
+                  <p class="mb-2">
+                    {#each segmentsOf(block) as seg, i (i)}
+                      {#if seg.count === 0}<span>{seg.text}</span>{:else}<span
+                          class="extract band-{i % BANDS} {inSpan(seg, activeSpan)
+                            ? 'is-active'
+                            : ''} {inSpan(seg, hoverSpan) ? 'is-hovered' : ''}"
+                          role="button"
+                          tabindex="0"
+                          title="{seg.count} model{seg.count === 1 ? '' : 's'} drew {seg.claims
+                            .length} claim{seg.claims.length === 1
+                            ? ''
+                            : 's'} from this - click to show"
+                          onmouseenter={() => {
+                            hoverSpan = unionExtent(sourceExtents, seg.claims) ?? {
+                              start: seg.start,
+                              end: seg.end,
+                            };
+                            hoverCount = seg.claims.length;
+                          }}
+                          onmouseleave={() => {
+                            hoverSpan = null;
+                            hoverCount = 0;
+                          }}
+                          onclick={() => onSegmentClick(seg)}
+                          onkeydown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              onSegmentClick(seg);
+                            }
+                          }}>{seg.text}</span
+                        >{/if}
+                    {/each}
+                  </p>
+                {/if}
               {/each}
-            </p>
+            </div>
           {/if}
         </div>
       </div>
@@ -466,6 +496,40 @@
      apart. They deliberately do not encode which model: the chips above answer
      that, and the question here is "where does one extraction end and the next
      begin, and what is left over?". The UNSHADED gaps are the finding. */
+  /* Who is talking. A transcript without its speaker changes is a
+     misattribution waiting to happen. */
+  .speaker-label {
+    margin: 0.9rem 0 0.15rem;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--color-primary, #0d9488);
+  }
+  .structure-divider {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin: 1.1rem 0 0.6rem;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--color-on-surface-muted, #6b7280);
+  }
+  .structure-divider::before,
+  .structure-divider::after {
+    content: "";
+    flex: 1;
+    border-top: 1px solid var(--color-border, rgba(128, 128, 128, 0.3));
+  }
+  .source-note {
+    margin: 0.5rem 0;
+    padding: 0.2rem 0.45rem;
+    border-left: 2px solid var(--color-border, rgba(128, 128, 128, 0.4));
+    font-size: 11px;
+    font-style: italic;
+    color: var(--color-on-surface-secondary, inherit);
+  }
+
   .extract {
     border-radius: 0.15rem;
     cursor: pointer;
