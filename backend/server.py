@@ -1110,11 +1110,15 @@ class LocalIngestSource(IngestSource):
         path = md_path.parent / f"{full_hash}.audit.json"
         path.write_text(json.dumps(gold, indent=2, ensure_ascii=False) + "\n")
         title = frontmatter.get("title", full_hash[:12])
-        self._git_commit_paths(
-            [path],
-            f"audit gold: {title}",
-            author_name=author_name,
-            author_email=author_email,
+        # COMMIT ON A DEBOUNCE, not per verdict. Grading is a rapid activity -
+        # a reviewer works through claims a keypress at a time - and committing
+        # each one cost 2.1s of git inside the request, so every keypress paid
+        # for a commit before the next could start. The file is written
+        # immediately (the durable part, and what any reader sees); the commit
+        # follows once the reviewer pauses, collapsing a burst of verdicts into
+        # one commit that also reads better in the log.
+        _schedule_audit_commit(
+            self, path, f"audit gold: {title}", author_name, author_email
         )
         return True
 
@@ -2354,6 +2358,42 @@ def get_audit(full_hash: str, request: Request) -> JSONResponse:
     payload["record"] = {"hash": full_hash, "friendly_name": name}
     _attach_audit_gold(full_hash, payload)
     return JSONResponse(payload)
+
+
+# Pending audit-gold commits, keyed by path so repeated verdicts on one record
+# collapse into a single commit. A timer per path, restarted on each write.
+_AUDIT_COMMIT_TIMERS: dict[str, object] = {}
+_AUDIT_COMMIT_DELAY_S = 4.0
+
+
+def _schedule_audit_commit(
+    source_obj, path, message: str, author_name: str, author_email: str
+) -> None:
+    import threading
+
+    key = str(path)
+    existing = _AUDIT_COMMIT_TIMERS.pop(key, None)
+    if existing is not None:
+        try:
+            existing.cancel()  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+    def run() -> None:
+        _AUDIT_COMMIT_TIMERS.pop(key, None)
+        try:
+            source_obj._git_commit_paths(
+                [path], message, author_name=author_name, author_email=author_email
+            )
+        except Exception:
+            # A failed commit must not take the process down; the file is
+            # already written and the next verdict will schedule another.
+            pass
+
+    timer = threading.Timer(_AUDIT_COMMIT_DELAY_S, run)
+    timer.daemon = True
+    _AUDIT_COMMIT_TIMERS[key] = timer
+    timer.start()
 
 
 def _attach_audit_gold(full_hash: str, payload: dict) -> None:

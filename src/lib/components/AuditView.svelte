@@ -214,6 +214,20 @@
     return goldByKey.get(`${m.variant}\u0000${m.claim_id}`);
   }
 
+  /** Claims whose write is still in flight, so the UI can show "saving" without
+   *  making the reader wait for it. */
+  let pending = $state<Set<string>>(new Set());
+  const keyOf = (m: AuditMember) => `${m.variant}\u0000${m.claim_id}`;
+
+  /** Record a verdict. The chip changes IMMEDIATELY and the write goes out
+   *  behind it.
+   *
+   *  Waiting for the server meant waiting 2.1 seconds per keypress: the write
+   *  rewrites the gold sidecar AND makes a git commit in the ingests repo, so
+   *  grading at any pace was impossible - press, wait, press, wait. The verdict
+   *  is applied locally first and reverted only if the write actually fails,
+   *  which is the honest ordering: the reviewer's decision is the fact, and
+   *  persisting it is a consequence of that fact rather than a precondition. */
   async function saveClaim(
     m: AuditMember,
     p: AuditPassage,
@@ -224,12 +238,6 @@
       ...(prev?.gold_id ? { gold_id: prev.gold_id } : {}),
       variant: m.variant,
       model: m.model,
-      // The variant's PROMPT identity, taken from the payload - never parsed
-      // out of the filename. Stems are conventionally `{model}.{sha8}`, but
-      // `opus-v3.yaml` is not, so splitting on "." yielded an empty prompt_sha
-      // and the server rejected the write with 400. Every grade on that variant
-      // failed silently: the reviewer clicked, nothing changed, and nothing
-      // said why.
       prompt_sha: promptShaOf(m.variant),
       claim_id: m.claim_id,
       location: m.location || (p.raw_locations[0] ?? ""),
@@ -246,9 +254,6 @@
         : prev?.irrelevant
           ? { irrelevant: true }
           : {}),
-      // The digest-shaped claim, for the server-side fingerprint (the digester's
-      // fingerprint_of_claim maps these keys itself). audit_load renamed
-      // type -> claim_type on the way in; this undoes exactly that one rename.
       claim: {
         text: m.text,
         type: m.claim_type,
@@ -256,20 +261,33 @@
         location: m.location,
       },
     };
+
+    // Optimistic: the chip is already showing this before the request leaves.
+    const optimistic = { ...entry };
+    delete optimistic.claim;
+    const key = keyOf(m);
+    const before = goldClaims;
+    goldClaims = [
+      ...goldClaims.filter((g) => !(g.variant === m.variant && g.claim_id === m.claim_id)),
+      optimistic,
+    ];
+    pending = new Set(pending).add(key);
+
     try {
       const { gold_id } = await putAuditClaim(recordHash, entry);
-      const stored = { ...entry, gold_id };
-      delete stored.claim;
-      goldClaims = [
-        ...goldClaims.filter((g) => !(g.variant === m.variant && g.claim_id === m.claim_id)),
-        stored,
-      ];
+      goldClaims = goldClaims.map((g) =>
+        g.variant === m.variant && g.claim_id === m.claim_id ? { ...g, gold_id } : g,
+      );
     } catch (e) {
-      // A grade that silently fails to save is worse than one that errors: the
-      // reviewer moves on believing the record was made, and the gold quietly
-      // does not contain it.
+      // Put it back exactly as it was: a verdict that failed to persist must
+      // not keep sitting on screen as though it had.
+      goldClaims = before;
       saveError = e instanceof Error ? e.message : String(e);
       setTimeout(() => (saveError = null), 6000);
+    } finally {
+      const next = new Set(pending);
+      next.delete(key);
+      pending = next;
     }
   }
 
@@ -814,7 +832,9 @@
                               >
                                 {#if isHovered(m)}<kbd>x</kbd>{/if}not worth recording
                               </button>
-                              {#if g?.quality || g?.irrelevant}
+                              {#if pending.has(keyOf(m))}
+                                <span class="text-[10px] text-on-surface-muted ml-1">saving…</span>
+                              {:else if g?.quality || g?.irrelevant}
                                 <span class="text-[10px] text-success ml-1" title="Saved to the gold sidecar">saved</span>
                               {/if}
                             </div>
