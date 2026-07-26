@@ -354,3 +354,94 @@ def test_gold_is_attached_fresh_not_cached(audit_client, tmp_path, monkeypatch):
     )
     served = audit_client.get(f"/api/ingests/{HASH}/audit").json()
     assert [c["claim_id"] for c in served["gold"]["claims"]] == ["h1"]
+
+
+def test_batch_verdicts_write_once(audit_client, tmp_path, monkeypatch):
+    # Grading happens in bursts, so the natural unit is the burst. A request and
+    # a commit per keystroke made the git log a keystroke log and put a round
+    # trip between the reviewer and their next decision.
+    store = tmp_path / "store"
+    store.mkdir()
+    saves = []
+    monkeypatch.setattr(server.source, "audit_store_dir", lambda h: store)
+    monkeypatch.setattr(
+        server.source,
+        "save_audit",
+        lambda h, gold, name, email: saves.append(gold) is None or True,
+    )
+
+    def entry(claim_id, quality):
+        return {
+            "variant": "haiku",
+            "model": "haiku",
+            "prompt_sha": "s",
+            "claim_id": claim_id,
+            "text": f"claim {claim_id}",
+            "quality": quality,
+        }
+
+    res = audit_client.put(
+        f"/api/ingests/{HASH}/audit/claims",
+        json={"claims": [entry("a", "bad"), entry("b", "gold"), entry("c", "okay")]},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["saved"] == 3
+    assert len(saves) == 1  # ONE write for the batch
+    assert {c["claim_id"] for c in saves[0]["claims"]} == {"a", "b", "c"}
+    assert {c["quality"] for c in saves[0]["claims"]} == {"bad", "gold", "okay"}
+
+
+def test_a_bad_entry_rejects_the_whole_batch(audit_client, tmp_path, monkeypatch):
+    # Half-writing a burst would leave the reviewer unable to tell which of
+    # their verdicts survived.
+    store = tmp_path / "store"
+    store.mkdir()
+    saves = []
+    monkeypatch.setattr(server.source, "audit_store_dir", lambda h: store)
+    monkeypatch.setattr(
+        server.source, "save_audit", lambda h, g, n, e: saves.append(g) is None or True
+    )
+    res = audit_client.put(
+        f"/api/ingests/{HASH}/audit/claims",
+        json={
+            "claims": [
+                {
+                    "variant": "h",
+                    "model": "h",
+                    "prompt_sha": "s",
+                    "claim_id": "a",
+                    "text": "t",
+                    "quality": "good",
+                },
+                {
+                    "variant": "h",
+                    "model": "h",
+                    "prompt_sha": "s",
+                    "claim_id": "b",
+                    "text": "t",
+                    "quality": "splendid",
+                },
+            ]
+        },
+    )
+    assert res.status_code == 400
+    assert saves == []
+
+
+def test_gold_is_an_accepted_quality(audit_client, tmp_path, monkeypatch):
+    store = tmp_path / "store"
+    store.mkdir()
+    monkeypatch.setattr(server.source, "audit_store_dir", lambda h: store)
+    monkeypatch.setattr(server.source, "save_audit", lambda h, g, n, e: True)
+    res = audit_client.put(
+        f"/api/ingests/{HASH}/audit/claim",
+        json={
+            "variant": "haiku",
+            "model": "haiku",
+            "prompt_sha": "s",
+            "claim_id": "g1",
+            "text": "t",
+            "quality": "gold",
+        },
+    )
+    assert res.status_code == 200, res.text

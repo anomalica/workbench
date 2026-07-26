@@ -2508,6 +2508,58 @@ def put_audit_claim(full_hash: str, body: dict, request: Request) -> JSONRespons
     return _audit_write(full_hash, request, "claim", body)
 
 
+@app.put("/api/ingests/{full_hash}/audit/claims")
+def put_audit_claims(full_hash: str, body: dict, request: Request) -> JSONResponse:
+    """Record MANY claim verdicts in one write - anomalica/audit/2.
+
+    Grading is done in bursts: a reviewer works down a passage marking claims
+    and only then moves on. One request (and one commit) per keystroke made the
+    git log a keystroke log and put a round trip between the reviewer and their
+    next decision. The batch is validated whole - a single bad entry rejects the
+    lot rather than half-writing it - then upserted and saved once."""
+    user = _require_role(request, "reviewer")
+    entries = body.get("claims")
+    if not isinstance(entries, list) or not entries:
+        raise HTTPException(status_code=400, detail="claims must be a non-empty list")
+    for e in entries:
+        if not isinstance(e, dict):
+            raise HTTPException(status_code=400, detail="each claim must be an object")
+        problem = audit_gold.validate_claim(e)
+        if problem:
+            raise HTTPException(status_code=400, detail=problem)
+
+    store_dir = source.audit_store_dir(full_hash)
+    if store_dir is None:
+        raise HTTPException(status_code=404, detail="Unknown record")
+    gold = audit_gold.read(store_dir, full_hash) or audit_gold.empty(full_hash)
+    gold["models"] = _record_model_set(full_hash)
+
+    saved = []
+    for e in entries:
+        entry = dict(e)
+        raw_claim = entry.pop("claim", None)
+        if isinstance(raw_claim, dict):
+            from anomalica_common.digest import fingerprint_of_claim
+
+            entry["claim_fingerprint"] = fingerprint_of_claim(raw_claim)
+        entry["reviewed_by"] = user.get("email", "")
+        entry["reviewed_at"] = datetime.now(dt_timezone.utc).isoformat(
+            timespec="seconds"
+        )
+        saved.append(audit_gold.upsert_claim(gold, entry))
+
+    if not source.save_audit(full_hash, gold, user["name"], user["email"]):
+        raise HTTPException(status_code=500, detail="Could not save audit gold")
+    # An explicit save commits now: the reviewer has said they are done, so the
+    # commit should not wait on a debounce meant for incidental writes.
+    commit_now = getattr(source, "commit_audit_now", None)
+    if callable(commit_now):
+        commit_now(full_hash, user["name"], user["email"])
+    return JSONResponse(
+        {"saved": len(saved), "gold_ids": [e.get("gold_id") for e in saved]}
+    )
+
+
 @app.put("/api/ingests/{full_hash}/audit/cluster")
 def put_audit_cluster(full_hash: str, body: dict, request: Request) -> JSONResponse:
     """Create or update one cluster best-of choice - anomalica/audit/2. An

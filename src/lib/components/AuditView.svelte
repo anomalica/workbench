@@ -18,6 +18,7 @@
     AuditAccessError,
     fetchAudit,
     putAuditClaim,
+    putAuditClaims,
     type AuditPayload,
     type AuditPassage,
     type AuditCluster,
@@ -25,6 +26,7 @@
     type AuditClaimGold,
   } from "$lib/api";
   import { variantLabels } from "$lib/variant-label";
+  import { safeLocalSet } from "$lib/storage";
   import {
     visibleRows,
     passageHasContent,
@@ -215,81 +217,103 @@
     return goldByKey.get(`${m.variant}\u0000${m.claim_id}`);
   }
 
-  /** Claims whose write is still in flight, so the UI can show "saving" without
-   *  making the reader wait for it. */
-  let pending = $state<Set<string>>(new Set());
-  const keyOf = (m: AuditMember) => `${m.variant}\u0000${m.claim_id}`;
-
-  /** Record a verdict. The chip changes IMMEDIATELY and the write goes out
-   *  behind it.
+  /** Verdicts recorded in this session but not yet written. Held here, and
+   *  mirrored to localStorage, so a burst of grading costs nothing and a
+   *  reload does not lose it.
    *
-   *  Waiting for the server meant waiting 2.1 seconds per keypress: the write
-   *  rewrites the gold sidecar AND makes a git commit in the ingests repo, so
-   *  grading at any pace was impossible - press, wait, press, wait. The verdict
-   *  is applied locally first and reverted only if the write actually fails,
-   *  which is the honest ordering: the reviewer's decision is the fact, and
-   *  persisting it is a consequence of that fact rather than a precondition. */
-  async function saveClaim(
+   *  Writing on every keypress meant a request and a git commit per keystroke:
+   *  the git log became a keystroke log, and the reviewer's pace became git's.
+   *  Grading is done in bursts - work down a passage, then move on - so the
+   *  natural unit is the burst, not the press. */
+  let unsaved = $state<Record<string, AuditClaimGold>>({});
+  let saving = $state(false);
+  let savedAt = $state<string | null>(null);
+  let unsavedCount = $derived(Object.keys(unsaved).length);
+  let draftKey = $derived(recordHash ? `workbench:audit:${recordHash}` : "");
+
+  $effect(() => {
+    if (!draftKey) return;
+    try {
+      const raw = localStorage.getItem(draftKey);
+      unsaved = raw ? JSON.parse(raw) : {};
+    } catch {
+      unsaved = {};
+    }
+  });
+  $effect(() => {
+    if (!draftKey) return;
+    const n = Object.keys(unsaved).length;
+    if (n) safeLocalSet(draftKey, JSON.stringify(unsaved));
+    else localStorage.removeItem(draftKey);
+  });
+
+  /** Record a verdict locally. Instant, and nothing leaves the browser. */
+  function saveClaim(
     m: AuditMember,
     p: AuditPassage,
     change: { quality?: "bad" | "okay" | "good" | "gold"; irrelevant?: boolean },
   ) {
-    const prev = goldOf(m);
-    const entry: AuditClaimGold = {
-      ...(prev?.gold_id ? { gold_id: prev.gold_id } : {}),
-      variant: m.variant,
-      model: m.model,
-      prompt_sha: promptShaOf(m.variant),
-      claim_id: m.claim_id,
-      location: m.location || (p.raw_locations[0] ?? ""),
-      text: m.text,
-      quote: m.quote ?? "",
-      claim_type: m.claim_type ?? "",
-      ...(change.quality !== undefined
-        ? { quality: change.quality }
-        : prev?.quality
-          ? { quality: prev.quality }
-          : {}),
-      ...(change.irrelevant !== undefined
-        ? { irrelevant: change.irrelevant }
-        : prev?.irrelevant
-          ? { irrelevant: true }
-          : {}),
-      claim: {
+    const key = keyOf(m);
+    const prev = unsaved[key] ?? goldOf(m);
+    unsaved = {
+      ...unsaved,
+      [key]: {
+        ...(prev?.gold_id ? { gold_id: prev.gold_id } : {}),
+        variant: m.variant,
+        model: m.model,
+        prompt_sha: promptShaOf(m.variant),
+        claim_id: m.claim_id,
+        location: m.location || (p.raw_locations[0] ?? ""),
         text: m.text,
-        type: m.claim_type,
-        quote: m.quote,
-        location: m.location,
+        quote: m.quote ?? "",
+        claim_type: m.claim_type ?? "",
+        ...(change.quality !== undefined
+          ? { quality: change.quality }
+          : prev?.quality
+            ? { quality: prev.quality }
+            : {}),
+        ...(change.irrelevant !== undefined
+          ? { irrelevant: change.irrelevant }
+          : prev?.irrelevant
+            ? { irrelevant: true }
+            : {}),
+        claim: { text: m.text, type: m.claim_type, quote: m.quote, location: m.location },
       },
     };
+  }
 
-    // Optimistic: the chip is already showing this before the request leaves.
-    const optimistic = { ...entry };
-    delete optimistic.claim;
-    const key = keyOf(m);
-    const before = goldClaims;
-    goldClaims = [
-      ...goldClaims.filter((g) => !(g.variant === m.variant && g.claim_id === m.claim_id)),
-      optimistic,
-    ];
-    pending = new Set(pending).add(key);
-
+  async function submitVerdicts() {
+    const entries = Object.values(unsaved);
+    if (!entries.length || saving) return;
+    saving = true;
+    saveError = null;
     try {
-      const { gold_id } = await putAuditClaim(recordHash, entry);
-      goldClaims = goldClaims.map((g) =>
-        g.variant === m.variant && g.claim_id === m.claim_id ? { ...g, gold_id } : g,
-      );
+      await putAuditClaims(recordHash, entries);
+      // Fold them into the stored gold so the chips keep their state without
+      // a refetch, then clear the drafts.
+      const byKey = new Map(entries.map((e) => [`${e.variant}\u0000${e.claim_id}`, e]));
+      goldClaims = [
+        ...goldClaims.filter((g) => !byKey.has(`${g.variant}\u0000${g.claim_id}`)),
+        ...entries.map((e) => {
+          const copy = { ...e };
+          delete copy.claim;
+          return copy;
+        }),
+      ];
+      unsaved = {};
+      savedAt = new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
     } catch (e) {
-      // Put it back exactly as it was: a verdict that failed to persist must
-      // not keep sitting on screen as though it had.
-      goldClaims = before;
       saveError = e instanceof Error ? e.message : String(e);
-      setTimeout(() => (saveError = null), 6000);
     } finally {
-      const next = new Set(pending);
-      next.delete(key);
-      pending = next;
+      saving = false;
     }
+  }
+
+  const keyOf = (m: AuditMember) => `${m.variant}\u0000${m.claim_id}`;
+  /** What a chip should show: this session's verdict if there is one, else what
+   *  was already recorded. */
+  function verdictOf(m: AuditMember): AuditClaimGold | undefined {
+    return unsaved[keyOf(m)] ?? goldOf(m);
   }
 
   // Keyboard grading: the claim under the cursor takes 1/2/3/x.
@@ -542,6 +566,31 @@
       {/each}
     </div>
 
+    <!-- ONE place that says whether the work is safe, instead of a word beside
+         every claim that appeared and disappeared and shifted the row. -->
+    {#if tab === "claims" && (unsavedCount || savedAt || saving)}
+      <div
+        class="flex-none px-4 py-1.5 border-b border-border flex items-center gap-2 text-xs
+          {unsavedCount ? 'bg-warning-container/40' : 'bg-surface-alt/40'}"
+      >
+        {#if saving}
+          <span class="text-on-surface-secondary">Saving {unsavedCount} rating{unsavedCount === 1 ? "" : "s"}…</span>
+        {:else if unsavedCount}
+          <span class="text-on-surface font-medium">
+            {unsavedCount} rating{unsavedCount === 1 ? "" : "s"} not saved yet
+          </span>
+          <span class="text-on-surface-secondary">- kept in this browser until you save</span>
+          <button
+            onclick={submitVerdicts}
+            class="ml-auto text-xs font-medium rounded px-2.5 py-1 cursor-pointer
+              bg-primary text-on-primary hover:opacity-90"
+          >Save {unsavedCount}</button>
+        {:else if savedAt}
+          <span class="text-success">All ratings saved at {savedAt}</span>
+        {/if}
+      </div>
+    {/if}
+
     {#if saveError}
       <div class="flex-none px-4 py-2 bg-error/15 border-b border-error/40">
         <p class="text-xs text-on-surface">
@@ -784,7 +833,7 @@
                     {:else}
                       <div class="min-w-0 flex-1 space-y-1">
                         {#each cell.members as m (m.claim_id)}
-                          {@const g = goldOf(m)}
+                          {@const g = verdictOf(m)}
                           {@const label = frameLabel({
                             text: m.text,
                             claim_type: m.claim_type,
@@ -837,7 +886,7 @@
                                   class="grade-chip {g?.quality === q ? 'is-set ' + q : ''}"
                                   title="{QUALITY_HELP[q]} - hover this claim and press {qi + 1}"
                                 >
-                                  {#if isHovered(m)}<kbd>{qi + 1}</kbd>{/if}{q}
+                                  <kbd class:invisible={!isHovered(m)}>{qi + 1}</kbd>{q}
                                 </button>
                               {/each}
                               <button
@@ -845,13 +894,9 @@
                                 class="grade-chip ml-2 {g?.irrelevant ? 'is-set irrelevant' : ''}"
                                 title="Separate from the rating: the claim may be well made and still not worth recording. Hover this claim and press x"
                               >
-                                {#if isHovered(m)}<kbd>x</kbd>{/if}irrelevant
+                                <kbd class:invisible={!isHovered(m)}>x</kbd>irrelevant
                               </button>
-                              {#if pending.has(keyOf(m))}
-                                <span class="text-[10px] text-on-surface-muted ml-1">saving…</span>
-                              {:else if g?.quality || g?.irrelevant}
-                                <span class="text-[10px] text-success ml-1" title="Saved to the gold sidecar">saved</span>
-                              {/if}
+
                             </div>
                             {/if}
                           </div>
@@ -963,6 +1008,9 @@
     background: var(--color-surface-alt, rgba(128, 128, 128, 0.18));
   }
 
+  .grade-chip kbd.invisible {
+    visibility: hidden;
+  }
   .grade-chip kbd {
     font-family: inherit;
     font-size: 9px;

@@ -415,6 +415,24 @@ export interface AuditClaimGold {
   claim?: Record<string, unknown>;
 }
 
+/** Record MANY claim verdicts in one write - and one commit. Grading happens in
+ *  bursts, so a request per keystroke made the git log a keystroke log. */
+export async function putAuditClaims(
+  hash: string,
+  claims: AuditClaimGold[],
+): Promise<{ saved: number; gold_ids: string[] }> {
+  const res = await fetch(`/api/ingests/${hash}/audit/claims`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ claims }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail || `Save failed (${res.status})`);
+  }
+  return res.json();
+}
+
 /** Record one claim verdict (anomalica/audit/2). Returns the assigned gold_id. */
 export async function putAuditClaim(
   hash: string,
