@@ -29,6 +29,7 @@
   } from "$lib/api";
   import { bodyWordCount } from "$lib/ingest-plain";
   import { variantLabels } from "$lib/variant-label";
+  import { findQuote, indexRenderedText, rangeFor } from "$lib/quote-locate";
   import AuditView from "./AuditView.svelte";
 
   let comparable = $state<ComparableIngest[]>([]);
@@ -67,6 +68,53 @@
   let saveNote = $state<string | null>(null);
 
   let renderedBody = $derived(predigest ? marked.parse(predigest.body) : "");
+
+  // --- linking a claim to the source it came from -----------------------------
+  // Without this the source pane is decoration: you cannot check a claim against
+  // its evidence by scrolling two panes by hand. Every claim carries a verbatim
+  // quote and this pane holds the text it was taken from, so the quote IS the
+  // link. Misses are reported, never silently ignored - a quote that is not in
+  // the source is a claim whose evidence is not there (mangled or fabricated),
+  // which is worth more to a reviewer than a scroll that quietly does nothing.
+  let sourceEl = $state<HTMLElement | undefined>();
+  let locateNote = $state<{ kind: "exact" | "prefix" | "miss"; label: string } | null>(null);
+
+  function showSourceFor(quote: string, label: string) {
+    if (!sourceEl) return;
+    const indexed = indexRenderedText(sourceEl);
+    const hit = findQuote(indexed.text, quote);
+    if (!hit) {
+      locateNote = { kind: "miss", label };
+      clearHighlight();
+      return;
+    }
+    const range = rangeFor(indexed, hit.start, hit.end);
+    if (!range) {
+      locateNote = { kind: "miss", label };
+      return;
+    }
+    locateNote = { kind: hit.kind, label };
+    paint(range);
+    const rect = range.getBoundingClientRect();
+    const box = sourceEl.getBoundingClientRect();
+    sourceEl.scrollTop += rect.top - box.top - box.height / 3;
+  }
+
+  // The CSS Custom Highlight API paints without touching the DOM, so Svelte's
+  // {@html} render is never fought over. Where it is unavailable the pane still
+  // scrolls - the position is most of the value.
+  function paint(range: Range) {
+    const CSSns = (globalThis as { CSS?: { highlights?: Map<string, unknown> } }).CSS;
+    if (!CSSns?.highlights) return;
+    const Ctor = (globalThis as { Highlight?: new (...r: Range[]) => unknown }).Highlight;
+    if (!Ctor) return;
+    CSSns.highlights.set("claim-source", new Ctor(range));
+  }
+
+  function clearHighlight() {
+    const CSSns = (globalThis as { CSS?: { highlights?: Map<string, unknown> } }).CSS;
+    CSSns?.highlights?.delete("claim-source");
+  }
   let words = $derived(predigest ? bodyWordCount(predigest.body) : 0);
   let title = $derived(comparable.find((c) => c.content_hash === selected)?.title ?? "");
 
@@ -82,6 +130,8 @@
     judgment = null;
     predigest = null;
     saveNote = null;
+    locateNote = null;
+    clearHighlight();
     chosen = null;
     notes = "";
     syncUrl();
@@ -247,6 +297,26 @@
             <span class="text-[11px] text-on-surface-muted tabular-nums">· {words} words</span>
           {/if}
           <span class="flex-1"></span>
+          {#if locateNote}
+            <span
+              class="text-[10px] font-medium rounded px-1.5 py-0.5 {locateNote.kind === 'miss'
+                ? 'bg-error/80 text-on-error'
+                : locateNote.kind === 'prefix'
+                  ? 'bg-warning-container/70 text-on-warning-container'
+                  : 'bg-primary/15 text-primary'}"
+              title={locateNote.kind === "miss"
+                ? "This quote is not in the source text. The claim's evidence cannot be checked against what the model read - the quote is mangled (a speaker label folded in, an exchange stitched together) or invented."
+                : locateNote.kind === "prefix"
+                  ? "Only the opening of the quote matches the source - the rest diverges from what the model read."
+                  : "Found verbatim in the source"}
+            >
+              {locateNote.kind === "miss"
+                ? `${locateNote.label}: quote NOT in source`
+                : locateNote.kind === "prefix"
+                  ? `${locateNote.label}: opening matches, tail differs`
+                  : `${locateNote.label}: found`}
+            </span>
+          {/if}
           {#if predigest?.stored_matches === false}
             <span
               class="text-[10px] font-medium text-on-warning-container bg-warning-container/60 rounded px-1.5 py-0.5"
@@ -254,7 +324,7 @@
             >input has changed since digest</span>
           {/if}
         </div>
-        <div class="flex-1 overflow-auto px-5 py-4">
+        <div bind:this={sourceEl} class="flex-1 overflow-auto px-5 py-4">
           {#if loading}
             <p class="text-sm text-on-surface-muted">Loading…</p>
           {:else if !predigest}
@@ -271,9 +341,21 @@
       <!-- WHAT THE MODELS MADE OF IT. -->
       <div class="flex-1 flex flex-col min-h-0 border-l border-border">
         {#key selected}
-          <AuditView hash={selected} />
+          <AuditView hash={selected} onquote={showSourceFor} />
         {/key}
       </div>
     </div>
   </div>
 {/if}
+
+<style>
+  /* The located source span. Painted through the CSS Custom Highlight API, so
+     the pane's rendered markdown is never mutated - Svelte re-renders {@html}
+     freely and the highlight simply re-applies on the next click. ::highlight
+     only accepts a few properties; background and colour are enough to make the
+     span unmissable after the scroll. */
+  :global(::highlight(claim-source)) {
+    background-color: color-mix(in srgb, var(--color-primary, #0d9488) 32%, transparent);
+    color: inherit;
+  }
+</style>

@@ -35,7 +35,15 @@
     type AuditGridRow,
   } from "$lib/audit-grid";
 
-  let { hash }: { hash: string } = $props();
+  let {
+    hash,
+    onquote,
+  }: {
+    hash: string;
+    /** Ask the source pane to show where this claim came from. Absent when
+     *  there is no source pane beside us (the record's own Audit tab). */
+    onquote?: (quote: string, label: string) => void;
+  } = $props();
 
   let status = $state<"loading" | "ready" | "empty" | "error" | "forbidden">("loading");
   /** Which refusal, so the message names the actual obstacle. */
@@ -578,7 +586,16 @@
               <div class="flex flex-wrap items-start gap-x-3 gap-y-1.5">
                 <div class="min-w-0 flex-1">
                   {#each quotes as q}
-                    <p class="text-sm text-on-surface-secondary border-l-2 border-primary/40 pl-2 leading-snug">{q}</p>
+                    {#if onquote}
+                      <button
+                        type="button"
+                        class="claim-linked text-sm text-on-surface-secondary border-l-2 border-primary/40 pl-2 leading-snug text-left w-full"
+                        title="Find this passage in the source"
+                        onclick={() => onquote(q, "source")}
+                      >{q}</button>
+                    {:else}
+                      <p class="text-sm text-on-surface-secondary border-l-2 border-primary/40 pl-2 leading-snug">{q}</p>
+                    {/if}
                   {:else}
                     <p class="text-xs italic text-on-surface-muted/60">no source quote</p>
                   {/each}
@@ -604,10 +621,20 @@
                       <span class="text-xs italic text-on-surface-muted/50 pt-0.5">nothing</span>
                     {:else}
                       <div class="min-w-0 flex-1 space-y-1">
-                        {#each memberLines(cell.members) as line}
+                        {#each memberLines(cell.members) as line, li}
                           {@const label = frameLabel(line)}
+                          {@const src = cell.members[li]?.quote ?? cell.members[0]?.quote ?? ""}
                           <div>
-                            <p class="text-sm text-on-surface leading-snug">{line.text}</p>
+                            {#if onquote && src}
+                              <button
+                                type="button"
+                                class="claim-linked text-sm text-on-surface leading-snug text-left w-full"
+                                title="Show the source this was drawn from"
+                                onclick={() => onquote(src, labelOf(cell.variant, cell.model))}
+                              >{line.text}</button>
+                            {:else}
+                              <p class="text-sm text-on-surface leading-snug">{line.text}</p>
+                            {/if}
                             {#if label}
                               <p class="text-[10px] font-mono text-on-surface-muted/70 leading-tight">{label}</p>
                             {/if}
@@ -664,6 +691,18 @@
 </div>
 
 <style>
+  /* A claim that can be traced to its source says so on hover - the link is the
+     point of the split view, and an unmarked paragraph gives no hint it is
+     clickable. */
+  .claim-linked {
+    cursor: pointer;
+    border-radius: 0.15rem;
+    transition: background-color 0.12s;
+  }
+  .claim-linked:hover {
+    background: color-mix(in srgb, currentColor 8%, transparent);
+  }
+
   /* The grading controls read as BUTTONS, and the keyboard shortcut reads as a
      KEY rather than as part of the label. They previously rendered as bare text
      "1 bad  2 okay  3 good  x irrelevant", which looks like a list of labels
