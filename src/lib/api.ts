@@ -298,6 +298,10 @@ export interface AuditPassage {
    *  graded - regardless of whether other passages compared fine. */
   compared?: boolean;
   clusters: AuditCluster[];
+  /** "source" = grouped by measured quote overlap (a lone model here is a real
+   *  finding); "location" = the older axis, where a lone model may be an
+   *  artefact of how the models wrote their timecodes. */
+  grouped_by?: "source" | "location";
 }
 
 export interface AuditVariant {
@@ -405,7 +409,8 @@ export interface AuditClaimGold {
   text: string;
   quote: string;
   claim_type: string;
-  quality?: "bad" | "okay" | "good";
+  /** `gold` is above `good`: the example worth tuning a prompt to reproduce. */
+  quality?: "bad" | "okay" | "good" | "gold";
   irrelevant?: boolean;
   claim?: Record<string, unknown>;
 }

@@ -317,6 +317,7 @@ def audit_payload(variants: list[Variant], similar: Similar, prose: str = "") ->
                 # Did this passage actually compare models? False => its clusters
                 # are singletons by construction and must not be graded.
                 "compared": passage_compared(p),
+                "grouped_by": p.grouped_by,
                 "clusters": [
                     {
                         "id": cl.id,

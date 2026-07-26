@@ -255,6 +255,10 @@ class Passage:
     end: float
     raw_locations: list[str]
     clusters: list[Cluster]
+    # How this passage was formed. "source" means its members were grouped by
+    # MEASURED overlap of their quotes in the record; "location" means the old
+    # axis, built from the model-reported location string.
+    grouped_by: str = "location"
 
     @property
     def variants(self) -> set[str]:
@@ -484,6 +488,7 @@ def _source_passage(idx: int, members: list["Claim"], similar: Similar) -> Passa
         end=0.0,
         raw_locations=raws,
         clusters=_cluster_by_meaning(members, similar, id_prefix=f"s{idx}"),
+        grouped_by="source",
     )
 
 
@@ -532,6 +537,14 @@ class Variant:
 def passage_compared(passage: Passage) -> bool:
     """Did this passage actually compare models? True only if it holds claims
     from more than one.
+
+    ONLY MEANINGFUL ON THE LOCATION AXIS. It exists because passages built from
+    location STRINGS could hold one model by accident - the models write their
+    timecodes differently, so their claims about one moment landed in different
+    passages and every cluster came out a singleton by construction. A passage
+    grouped by measured quote overlap has no such accident: one model there means
+    one model quoted that text, which is a finding rather than an artefact, and
+    suppressing its grading hid 20% of the claims behind no controls at all.
 
     CONFOUNDING IS PER-PASSAGE, not per-record. Clustering only ever runs WITHIN
     a passage, so a passage holding one model produces singletons by

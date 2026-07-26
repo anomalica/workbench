@@ -67,7 +67,10 @@ from pathlib import Path
 
 SCHEMA = "anomalica/audit/2"
 
-QUALITY = ("bad", "okay", "good")
+# `gold` sits above `good`: not merely a sound extraction but one worth holding
+# up as the standard - the examples a prompt should be tuned to reproduce. Kept
+# ordinal, so a grader can read the scale as a ranking rather than as labels.
+QUALITY = ("bad", "okay", "good", "gold")
 
 
 def empty(record_hash: str) -> dict:

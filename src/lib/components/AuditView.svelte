@@ -160,11 +160,12 @@
   // Keyboard-first: hover a claim, press 1/2/3 for bad/okay/good, x for
   // irrelevant. Adjudication is per model AND prompt - the models word the same
   // fact differently every time, so grading one credits nothing to another.
-  const QUALITY = ["bad", "okay", "good"] as const;
+  const QUALITY = ["bad", "okay", "good", "gold"] as const;
   const QUALITY_HELP: Record<string, string> = {
-    bad: "Unsupported by, or misrepresents, the source - or badly made (key 1)",
-    okay: "Serviceable extraction (key 2)",
-    good: "Faithful and well made (key 3)",
+    bad: "Unsupported by, or misrepresents, the source - or badly made",
+    okay: "Serviceable extraction",
+    good: "Faithful and well made",
+    gold: "The standard to aim for - an example worth tuning a prompt to reproduce",
   };
 
   let recordHash = $derived(payload?.record.hash ?? "");
@@ -231,7 +232,7 @@
   async function saveClaim(
     m: AuditMember,
     p: AuditPassage,
-    change: { quality?: "bad" | "okay" | "good"; irrelevant?: boolean },
+    change: { quality?: "bad" | "okay" | "good" | "gold"; irrelevant?: boolean },
   ) {
     const prev = goldOf(m);
     const entry: AuditClaimGold = {
@@ -344,12 +345,17 @@
       moveCursor(-1);
       return;
     }
+    // A rating key with no cursor yet lands on the FIRST claim rather than
+    // doing nothing. The keys were listed in the header but pressing one before
+    // pressing j appeared to do nothing at all, which reads as broken.
+    if (!cursor && claimOrder.length) cursor = claimOrder[0];
     if (!cursor) return;
     const { m, p } = cursor;
     if (!gradable(p)) return;
     if (e.key === "1") saveClaim(m, p, { quality: "bad" });
     else if (e.key === "2") saveClaim(m, p, { quality: "okay" });
     else if (e.key === "3") saveClaim(m, p, { quality: "good" });
+    else if (e.key === "4") saveClaim(m, p, { quality: "gold" });
     else if (e.key === "x" || e.key === "X")
       saveClaim(m, p, { irrelevant: !goldOf(m)?.irrelevant });
     else return;
@@ -400,7 +406,14 @@
    *  of its lone-passage singletons were shown to be false (the same facts exist
    *  in the other model's claims under a different location label). */
   function gradable(p: AuditPassage): boolean {
-    return !confounded && p.compared !== false;
+    if (confounded) return false;
+    // A passage grouped by measured quote overlap is always gradable: one model
+    // there means one model quoted that text. The single-model guard belongs to
+    // the LOCATION axis, where a lone model was usually an artefact of the
+    // models writing timecodes differently - applying it here left 20% of
+    // claims with no rating controls and nothing saying why.
+    if (p.grouped_by === "source") return true;
+    return p.compared !== false;
   }
 </script>
 
@@ -442,8 +455,10 @@
           title="The keys act on the highlighted claim. Nothing needs the mouse."
         >
           <kbd class="kbd-hint">j</kbd><kbd class="kbd-hint">k</kbd> move ·
-          <kbd class="kbd-hint">1</kbd><kbd class="kbd-hint">2</kbd><kbd class="kbd-hint">3</kbd> rate ·
-          <kbd class="kbd-hint">x</kbd> not worth recording
+          <kbd class="kbd-hint">1</kbd><kbd class="kbd-hint">2</kbd><kbd class="kbd-hint">3</kbd><kbd
+            class="kbd-hint">4</kbd
+          > bad/okay/good/gold ·
+          <kbd class="kbd-hint">x</kbd> irrelevant
         </span>
       {/if}
       <span class="inline-flex rounded overflow-hidden border border-border">
@@ -704,7 +719,7 @@
           <!-- One block per fact. Inside it, EVERY model gets a line - including
                an explicit "nothing". Stacked, not columned: twenty models make a
                taller list, where twenty columns make an unreadable one. -->
-          {#if p.compared === false && !confounded}
+          {#if p.compared === false && p.grouped_by !== "source" && !confounded}
             <div class="px-4 py-1.5 bg-warning-container/20 border-b border-warning/30">
               <p class="text-[11px] text-on-surface leading-relaxed max-w-4xl">
                 Only one model filed claims at this location, so nothing here was
@@ -830,7 +845,7 @@
                                 class="grade-chip ml-2 {g?.irrelevant ? 'is-set irrelevant' : ''}"
                                 title="Separate from the rating: the claim may be well made and still not worth recording. Hover this claim and press x"
                               >
-                                {#if isHovered(m)}<kbd>x</kbd>{/if}not worth recording
+                                {#if isHovered(m)}<kbd>x</kbd>{/if}irrelevant
                               </button>
                               {#if pending.has(keyOf(m))}
                                 <span class="text-[10px] text-on-surface-muted ml-1">saving…</span>
@@ -981,6 +996,10 @@
   .grade-chip.is-set.good {
     background: var(--color-success, #16a34a);
     color: var(--color-on-success, #fff);
+  }
+  .grade-chip.is-set.gold {
+    background: #b8860b;
+    color: #fff;
   }
   .grade-chip.is-set.irrelevant {
     background: var(--color-on-surface-muted, #6b7280);
