@@ -28,6 +28,7 @@
     type Predigest,
   } from "$lib/api";
   import { bodyWordCount } from "$lib/ingest-plain";
+  import { variantLabels } from "$lib/variant-label";
   import AuditView from "./AuditView.svelte";
 
   let comparable = $state<ComparableIngest[]>([]);
@@ -50,6 +51,17 @@
   let error = $state<string | null>(null);
 
   let chosen = $state<string | null>(null);
+  // A model name is not unique - a record can hold two opus variants at
+  // different prompts. Labels disambiguate only where it is needed.
+  let labels = $derived(
+    variantLabels(
+      (comparison?.per_model ?? []).map((v) => ({
+        id: v.variant,
+        model: v.model,
+        prompt_fingerprint: v.prompt_fingerprint,
+      })),
+    ),
+  );
   let notes = $state("");
   let saving = $state(false);
   let saveNote = $state<string | null>(null);
@@ -101,8 +113,8 @@
     saveNote = null;
     error = null;
     try {
-      judgment = await saveJudgment(comparison.content_hash, comparison.models, chosen, notes);
-      saveNote = `Saved: ${chosen} marked better.`;
+      judgment = await saveJudgment(comparison.content_hash, comparison.variants ?? comparison.models, chosen, notes);
+      saveNote = `Saved: ${labels.get(chosen) ?? chosen} marked better.`;
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
@@ -187,15 +199,16 @@
         <span class="text-xs text-on-surface-muted">Loading…</span>
       {:else if comparison}
         <span class="text-xs text-on-surface-secondary">Which model did better?</span>
-        {#each comparison.models as m (m)}
+        {#each comparison.per_model as v (v.variant)}
           <button
-            onclick={() => { chosen = m; }}
+            onclick={() => { chosen = v.variant; }}
             class="text-xs font-medium rounded px-2 py-1 cursor-pointer transition-colors
-              {chosen === m
+              {chosen === v.variant
                 ? 'bg-success text-on-success'
                 : 'text-on-surface-secondary hover:bg-surface-alt border border-border'}"
+            title={labels.get(v.variant)}
           >
-            {m}
+            {labels.get(v.variant) ?? v.model}
           </button>
         {/each}
         <input

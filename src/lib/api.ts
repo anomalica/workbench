@@ -1107,6 +1107,13 @@ export interface ModelClaim {
 
 export interface ModelVariant {
   model: string;
+  /** Unique per variant (the file stem). The MODEL NAME IS NOT UNIQUE - a
+   *  record can carry two opus digests at different prompts - so anything that
+   *  identifies, keys or grades a variant must use this, never `model`. */
+  variant: string;
+  /** Digest of the prompt SHAs this variant ran; what differs when one model
+   *  appears twice. */
+  prompt_fingerprint?: string;
   prompt_variant?: string | null;
   domain_count: number;
   infra_count: number;
@@ -1123,7 +1130,10 @@ export interface ModelVariant {
 export interface ModelComparison {
   content_hash: string;
   title: string;
+  /** Model names in variant order - NOT unique, kept for compatibility. */
   models: string[];
+  /** Unique variant ids, parallel to per_model. */
+  variants?: string[];
   per_model: ModelVariant[];
   entities: { name: string; models: string[] }[];
 }

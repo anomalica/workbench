@@ -23,6 +23,8 @@ from pathlib import Path
 
 import yaml
 
+from backend.audit_load import prompt_fingerprint
+
 _ANOMALICA = Path(__file__).resolve().parents[2]
 
 
@@ -362,6 +364,16 @@ def load_comparison(content_hash: str) -> dict | None:
         per_model.append(
             {
                 "model": model,
+                # A MODEL NAME IS NOT AN IDENTITY. A record can hold two opus
+                # variants that ran different prompts, and jon-stewart does -
+                # so keying or grading by model name is ambiguous at best. It
+                # was also a crash: the Digests pane keys its list on the model
+                # name, and Svelte aborts the render on a duplicate key, which
+                # left the pane on "Loading..." for ever with every request
+                # having succeeded. The stem is unique per variant; the prompt
+                # fingerprint says WHY two variants of one model differ.
+                "variant": var["stem"],
+                "prompt_fingerprint": prompt_fingerprint(v),
                 "prompt_variant": var.get("prompt_variant"),
                 "domain_count": len(v.get("domain_claims") or []),
                 "infra_count": len(v.get("infrastructure_claims") or []),
@@ -397,7 +409,9 @@ def load_comparison(content_hash: str) -> dict | None:
     return {
         "content_hash": content_hash,
         "title": title,
+        # Kept for compatibility; NOT unique - see per_model["variant"].
         "models": [m["model"] for m in per_model],
+        "variants": [m["variant"] for m in per_model],
         "per_model": per_model,
         "entities": entities,
     }

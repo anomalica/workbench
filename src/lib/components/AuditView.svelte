@@ -24,6 +24,7 @@
     type AuditMember,
     type AuditClaimGold,
   } from "$lib/api";
+  import { variantLabels } from "$lib/variant-label";
   import {
     visibleRows,
     passageHasContent,
@@ -82,9 +83,19 @@
   let mixedPrompts = $derived(
     variants.length > 1 && (promptFingerprints.length > 1 || promptFingerprints[0] === ""),
   );
-  /** Longest model name, so the per-line labels form a readable gutter without a
+  // Two variants of ONE model (jon-stewart has two opus digests at different
+  // prompts) both rendered as "opus" - two rows with the same name, one of them
+  // silent, and no way to tell which was which or which to switch off. The
+  // label carries the prompt fingerprint only where the model name repeats.
+  let labels = $derived(variantLabels(allVariants));
+  function labelOf(id: string, fallback: string): string {
+    return labels.get(id) ?? fallback;
+  }
+  /** Longest label, so the per-line names form a readable gutter without a
    *  fixed width that truncates at 20 models with long names. */
-  let labelCh = $derived(Math.min(14, Math.max(6, ...variants.map((v) => v.model.length), 6)));
+  let labelCh = $derived(
+    Math.min(22, Math.max(6, ...variants.map((v) => labelOf(v.id, v.model).length), 6)),
+  );
 
   $effect(() => {
     const h = hash;
@@ -346,13 +357,13 @@
           onclick={() => toggleModel(v.id)}
           class="inline-flex items-center gap-1.5 text-xs rounded px-1.5 py-0.5 cursor-pointer transition-colors
             {off ? 'opacity-40 hover:opacity-70' : 'hover:bg-surface'}"
-          title={off ? `Show ${v.model}` : `Hide ${v.model}`}
+          title={off ? `Show ${labelOf(v.id, v.model)}` : `Hide ${labelOf(v.id, v.model)}`}
         >
           <span
             class="w-2.5 h-2.5 rounded-full flex-none {off ? 'ring-1 ring-inset ring-on-surface-muted' : ''}"
             style={off ? "" : `background:${colourOf.get(v.id)}`}
           ></span>
-          <span class="font-medium {off ? 'text-on-surface-muted line-through' : 'text-on-surface'}">{v.model}</span>
+          <span class="font-medium {off ? 'text-on-surface-muted line-through' : 'text-on-surface'}">{labelOf(v.id, v.model)}</span>
           <span class="text-on-surface-muted tabular-nums">{v.claim_count} claims</span>
           {#if v.cost_usd != null}
             <span class="text-on-surface-muted tabular-nums">${v.cost_usd.toFixed(2)}</span>
@@ -449,11 +460,11 @@
                 class="inline-flex items-center gap-1 text-[11px] tabular-nums
                   {t.count === 0 ? 'text-on-surface-muted/60' : 'text-on-surface-secondary'}"
                 title={t.count === 0
-                  ? `${t.model} found nothing in this chunk`
-                  : `${t.model} produced ${t.count} claim${t.count === 1 ? "" : "s"} here`}
+                  ? `${labelOf(t.variant, t.model)} found nothing in this chunk`
+                  : `${labelOf(t.variant, t.model)} produced ${t.count} claim${t.count === 1 ? "" : "s"} here`}
               >
                 <span class="w-1.5 h-1.5 rounded-full flex-none" style="background:{colourOf.get(t.variant)}"></span>
-                {t.model} {t.count}
+                {labelOf(t.variant, t.model)} {t.count}
               </span>
             {/each}
           </header>
@@ -502,11 +513,13 @@
                     <span
                       class="flex-none flex items-center gap-1.5 pt-0.5"
                       style="width: {labelCh + 2}ch"
-                      title={cell.present ? cell.model : `${cell.model} produced no claim for this fact`}
+                      title={cell.present
+                        ? labelOf(cell.variant, cell.model)
+                        : `${labelOf(cell.variant, cell.model)} produced no claim for this fact`}
                     >
                       <span class="w-1.5 h-1.5 rounded-full flex-none" style="background:{colourOf.get(cell.variant)}"></span>
                       <span class="text-[11px] tabular-nums truncate
-                        {cell.present ? 'text-on-surface-secondary' : 'text-on-surface-muted/50'}">{cell.model}</span>
+                        {cell.present ? 'text-on-surface-secondary' : 'text-on-surface-muted/50'}">{labelOf(cell.variant, cell.model)}</span>
                     </span>
                     {#if !cell.present}
                       <span class="text-xs italic text-on-surface-muted/50 pt-0.5">nothing</span>
@@ -532,31 +545,22 @@
                               onmouseenter={() => (hoveredMember = { m, p })}
                               onmouseleave={() => (hoveredMember = null)}
                             >
+                              <span class="text-[10px] text-on-surface-muted/70 mr-0.5">Rate:</span>
                               {#each QUALITY as q, qi}
                                 <button
                                   onclick={() => saveClaim(m, p, { quality: q })}
-                                  class="text-[11px] font-medium rounded px-1.5 py-0.5 cursor-pointer transition-colors
-                                    {g?.quality === q
-                                      ? q === 'bad'
-                                        ? 'bg-error text-on-error'
-                                        : q === 'okay'
-                                          ? 'bg-warning text-on-warning'
-                                          : 'bg-success text-on-success'
-                                      : 'text-on-surface-muted hover:bg-surface-alt'}"
-                                  title={QUALITY_HELP[q]}
+                                  class="grade-chip {g?.quality === q ? 'is-set ' + q : ''}"
+                                  title="{QUALITY_HELP[q]} - keyboard: {qi + 1}"
                                 >
-                                  {qi + 1} {q}
+                                  <kbd>{qi + 1}</kbd>{q}
                                 </button>
                               {/each}
                               <button
                                 onclick={() => saveClaim(m, p, { irrelevant: !g?.irrelevant })}
-                                class="text-[11px] font-medium rounded px-1.5 py-0.5 cursor-pointer transition-colors ml-1
-                                  {g?.irrelevant
-                                    ? 'bg-on-surface-muted text-surface'
-                                    : 'text-on-surface-muted hover:bg-surface-alt'}"
-                                title="Not worth recording, however well made - the noise metric, separate from quality (key x)"
+                                class="grade-chip ml-2 {g?.irrelevant ? 'is-set irrelevant' : ''}"
+                                title="Separate from the rating: the claim may be well made and still not worth recording. Keyboard: x"
                               >
-                                x irrelevant
+                                <kbd>x</kbd>not worth recording
                               </button>
                               {#if g}
                                 <span class="text-[10px] text-on-surface-muted/60 ml-1" title="Adjudication is per model AND prompt; this verdict belongs to this prompt generation">
@@ -578,3 +582,69 @@
     </div>
   {/if}
 </div>
+
+<style>
+  /* The grading controls read as BUTTONS, and the keyboard shortcut reads as a
+     KEY rather than as part of the label. They previously rendered as bare text
+     "1 bad  2 okay  3 good  x irrelevant", which looks like a list of labels
+     with stray numerals - the affordance was invisible and the shortcut looked
+     like part of the word. */
+  .grade-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-size: 11px;
+    line-height: 1;
+    padding: 0.25rem 0.45rem;
+    border-radius: 0.25rem;
+    border: 1px solid var(--color-border, rgba(128, 128, 128, 0.35));
+    background: transparent;
+    color: var(--color-on-surface-secondary, inherit);
+    cursor: pointer;
+    transition:
+      background-color 0.12s,
+      border-color 0.12s,
+      color 0.12s;
+  }
+  .grade-chip:hover {
+    background: var(--color-surface-alt, rgba(128, 128, 128, 0.12));
+  }
+  .grade-chip kbd {
+    font-family: inherit;
+    font-size: 9px;
+    font-weight: 600;
+    line-height: 1;
+    padding: 0.12rem 0.25rem;
+    border-radius: 0.15rem;
+    background: var(--color-surface-alt, rgba(128, 128, 128, 0.18));
+    color: var(--color-on-surface-muted, inherit);
+    opacity: 0.85;
+  }
+  /* The chosen one is filled, so a graded claim is legible at a glance while
+     scrolling; the rest stay quiet outlines. */
+  .grade-chip.is-set {
+    border-color: transparent;
+    font-weight: 600;
+  }
+  .grade-chip.is-set kbd {
+    background: rgba(255, 255, 255, 0.25);
+    color: inherit;
+    opacity: 0.9;
+  }
+  .grade-chip.is-set.bad {
+    background: var(--color-error, #dc2626);
+    color: var(--color-on-error, #fff);
+  }
+  .grade-chip.is-set.okay {
+    background: var(--color-warning, #d97706);
+    color: var(--color-on-warning, #fff);
+  }
+  .grade-chip.is-set.good {
+    background: var(--color-success, #16a34a);
+    color: var(--color-on-success, #fff);
+  }
+  .grade-chip.is-set.irrelevant {
+    background: var(--color-on-surface-muted, #6b7280);
+    color: var(--color-surface, #fff);
+  }
+</style>
