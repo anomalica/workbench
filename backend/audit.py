@@ -427,6 +427,10 @@ class Variant:
     # which is the one conclusion this view exists to support. Only the sha can
     # tell them apart, so the sha is what we key on.
     prompt_fingerprint: str = ""
+    # When the extraction ran, and each pass's prompt identity. Two variants of
+    # one model are told apart by these, not by the model name.
+    extracted_at: str = ""
+    prompts: list[dict] = field(default_factory=list)
 
 
 def passage_compared(passage: Passage) -> bool:

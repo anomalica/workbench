@@ -20,6 +20,16 @@ export interface LabelledVariant {
   model: string;
   /** Digest of the prompt SHAs the variant ran; "" when unknown. */
   prompt_fingerprint?: string;
+  /** ISO timestamp of the extraction run. */
+  extracted_at?: string;
+}
+
+/** `24 Jul` from an ISO timestamp, or "" if it isn't one. */
+function runDate(iso: string | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
 }
 
 /** Map of variant id -> display label, disambiguated only where needed. */
@@ -28,15 +38,24 @@ export function variantLabels(variants: LabelledVariant[]): Map<string, string> 
   for (const v of variants) seen.set(v.model, (seen.get(v.model) ?? 0) + 1);
 
   const out = new Map<string, string>();
+  const dateCounts = new Map<string, number>();
+  for (const v of variants) {
+    const k = `${v.model}|${runDate(v.extracted_at)}`;
+    dateCounts.set(k, (dateCounts.get(k) ?? 0) + 1);
+  }
   for (const v of variants) {
     if ((seen.get(v.model) ?? 0) < 2) {
       out.set(v.id, v.model);
       continue;
     }
-    // Ambiguous: qualify it. Prefer the prompt fingerprint (what differs);
-    // fall back to the id, which is unique by construction, so a variant is
-    // never rendered indistinguishable from another.
-    const qualifier = v.prompt_fingerprint || v.id;
+    // Ambiguous: qualify it. Prefer the RUN DATE - "opus · 24 Jul" tells a
+    // reader something, where "opus · ba1de88a" only tells them the two are not
+    // the same. Fall back to the fingerprint, then the id, so a variant is never
+    // rendered indistinguishable from another.
+    // A date only disambiguates if it is itself unique for this model.
+    const date = runDate(v.extracted_at);
+    const dateIsUnique = date && (dateCounts.get(`${v.model}|${date}`) ?? 0) === 1;
+    const qualifier = (dateIsUnique ? date : "") || v.prompt_fingerprint || v.id;
     out.set(v.id, `${v.model} · ${qualifier}`);
   }
   return out;

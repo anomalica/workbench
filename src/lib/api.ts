@@ -312,6 +312,19 @@ export interface AuditVariant {
   prompt_fingerprint: string;
   claim_count: number;
   node_count?: number;
+  /** ISO timestamp of the extraction run - the readable way to tell two
+   *  variants of one model apart. */
+  extracted_at?: string;
+  /** Per-pass prompt identity. The VERSION LABEL LIES (two variants both say
+   *  v3 with different prompts), so `sha` is the real identity and is what a
+   *  diff between variants must compare. */
+  prompts?: AuditPromptRef[];
+}
+
+export interface AuditPromptRef {
+  pass: string;
+  version: string;
+  sha: string;
 }
 
 /** One entity and which variants extracted it - Pass A's half of the two-pass

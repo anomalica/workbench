@@ -173,6 +173,29 @@ def prompt_fingerprint(doc: dict) -> str:
     return hashlib.sha256("|".join(shas).encode()).hexdigest()[:8]
 
 
+def prompt_detail(doc: dict) -> list[dict]:
+    """Per-pass prompt identity: which pass, its version LABEL, and the sha that
+    is its real identity.
+
+    Needed because "prompts differ" is useless on its own - a reviewer looking at
+    two opus digests cannot act on it without knowing WHICH prompt differs. On
+    jon-stewart the two opus variants share their nodes prompt exactly and differ
+    only in the claims prompt, which both label `v3` while carrying different
+    shas."""
+    out = []
+    for p in doc.get("prompts") or []:
+        if not isinstance(p, dict):
+            continue
+        out.append(
+            {
+                "pass": str(p.get("pass", "") or p.get("id", "") or ""),
+                "version": str(p.get("version", "") or ""),
+                "sha": str(p.get("sha256", "") or "")[:8],
+            }
+        )
+    return out
+
+
 def load_variant(doc: dict, variant_id: str) -> Variant:
     """Build a Variant from a parsed digest doc."""
     model = str(doc.get("model", "") or "")
@@ -184,6 +207,8 @@ def load_variant(doc: dict, variant_id: str) -> Variant:
     return Variant(
         id=variant_id,
         model=model,
+        extracted_at=str(doc.get("extracted_at", "") or ""),
+        prompts=prompt_detail(doc),
         claims=parse_claims(doc, variant_id, model),
         nodes=parse_nodes(doc, variant_id, model),
         cost_usd=_variant_cost(doc),
@@ -256,6 +281,8 @@ def audit_payload(variants: list[Variant], similar: Similar) -> dict:
                 "cost_usd": v.cost_usd,
                 "prompt_ids": v.prompt_ids,
                 "prompt_fingerprint": v.prompt_fingerprint,
+                "extracted_at": v.extracted_at,
+                "prompts": v.prompts,
                 "claim_count": len(v.claims),
                 "node_count": len(v.nodes),
             }

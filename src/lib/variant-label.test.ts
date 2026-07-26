@@ -54,3 +54,41 @@ describe("hasAmbiguousModels", () => {
     expect(hasAmbiguousModels(JON_STEWART.filter((v) => v.id !== "opus-v3"))).toBe(false);
   });
 });
+
+describe("labelling by run date", () => {
+  const DATED = [
+    {
+      id: "opus-v3",
+      model: "opus",
+      prompt_fingerprint: "ba1de88a",
+      extracted_at: "2026-07-11T10:51:34Z",
+    },
+    {
+      id: "opus.d161b1ed",
+      model: "opus",
+      prompt_fingerprint: "515508ce",
+      extracted_at: "2026-07-24T10:41:05Z",
+    },
+  ];
+
+  it("prefers the run date - it tells a reader something a hash does not", () => {
+    const labels = variantLabels(DATED);
+    expect(labels.get("opus-v3")).toBe("opus · 11 Jul");
+    expect(labels.get("opus.d161b1ed")).toBe("opus · 24 Jul");
+  });
+
+  it("falls back to the fingerprint when two runs share a date", () => {
+    // A date that does not separate them is worse than useless - it looks like
+    // an answer while both rows still read the same.
+    const sameDay = DATED.map((v) => ({ ...v, extracted_at: "2026-07-24T10:00:00Z" }));
+    const labels = variantLabels(sameDay);
+    expect(labels.get("opus-v3")).toBe("opus · ba1de88a");
+    expect(labels.get("opus.d161b1ed")).toBe("opus · 515508ce");
+    expect(new Set([...labels.values()]).size).toBe(2);
+  });
+
+  it("ignores an unparseable timestamp rather than labelling with junk", () => {
+    const bad = DATED.map((v) => ({ ...v, extracted_at: "not a date" }));
+    expect(variantLabels(bad).get("opus-v3")).toBe("opus · ba1de88a");
+  });
+});

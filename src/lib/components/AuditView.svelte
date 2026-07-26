@@ -256,7 +256,15 @@
   // --- entities (Pass A) ------------------------------------------------------
   // The other half of the two-pass output. Which entities a model found is a
   // recall signal in its own right, and it was invisible until now.
-  let showNodes = $state(false);
+  //
+  // A TAB, not an expanding panel. Squeezed above the claims it was a wall of
+  // chips with no room to breathe, and it pushed the claims off screen while
+  // reading neither as a list nor as a comparison.
+  let tab = $state<"claims" | "entities">("claims");
+  let showNodes = $derived(tab === "entities");
+  /** Detail of how the variants actually differ - "prompts differ" is not
+   *  actionable until you can see WHICH prompt. */
+  let showVariantDetail = $state(false);
   let nodeRows = $derived(
     (payload?.nodes ?? []).filter((n) => n.found_by.some((v) => !hidden.has(v))),
   );
@@ -308,16 +316,22 @@
         {variants.length}{hidden.size ? `/${allVariants.length}` : ""} models ·
         {shownPassages.length}{emptyPassageCount ? `/${payload.passages.length}` : ""} chunks
       </span>
-      {#if payload.nodes?.length}
+      <span class="inline-flex rounded overflow-hidden border border-border">
         <button
-          onclick={() => (showNodes = !showNodes)}
-          class="text-xs rounded px-2 py-0.5 cursor-pointer transition-colors
-            {showNodes ? 'bg-primary/15 text-primary font-medium' : 'text-on-surface-secondary hover:bg-surface'}"
-          title="Which ENTITIES each model extracted - the other half of the two-pass output, compared the same way as the claims"
-        >
-          {showNodes ? "Hide" : "Show"} entities ({nodeRows.length})
-        </button>
-      {/if}
+          onclick={() => (tab = "claims")}
+          class="text-xs px-2.5 py-1 cursor-pointer transition-colors
+            {tab === 'claims' ? 'bg-primary text-on-primary font-medium' : 'text-on-surface-secondary hover:bg-surface'}"
+          title="What each model CLAIMED, chunk by chunk"
+        >Claims</button>
+        <button
+          onclick={() => (tab = "entities")}
+          disabled={!payload.nodes?.length}
+          class="text-xs px-2.5 py-1 transition-colors border-l border-border
+            {tab === 'entities' ? 'bg-primary text-on-primary font-medium' : 'text-on-surface-secondary hover:bg-surface'}
+            {payload.nodes?.length ? 'cursor-pointer' : 'opacity-40 cursor-not-allowed'}"
+          title="Which ENTITIES each model extracted - the other half of the two-pass output"
+        >Entities{payload.nodes?.length ? ` (${nodeRows.length})` : ""}</button>
+      </span>
       {#if payload.similarity?.degraded}
         <span
           class="inline-flex items-center gap-1 text-[11px] font-medium text-on-warning bg-warning/80 rounded px-2 py-0.5"
@@ -342,14 +356,15 @@
         </span>
       {/if}
       {#if mixedPrompts}
-        <span
-          class="inline-flex items-center gap-1 text-[11px] font-medium text-on-error bg-error/80 rounded px-2 py-0.5"
+        <button
+          onclick={() => (showVariantDetail = !showVariantDetail)}
+          class="inline-flex items-center gap-1 text-[11px] font-medium text-on-error bg-error/80 rounded px-2 py-0.5 cursor-pointer hover:opacity-90"
           title={promptFingerprints.includes("")
             ? "At least one variant does not record which prompt it ran, so this cannot be verified as like-for-like."
             : `These variants ran DIFFERENT prompts (${promptFingerprints.join(" vs ")}). A gap between them is a prompt difference as much as a model difference - do not read it as a model comparison.`}
         >
-          NOT like-for-like: prompts differ
-        </span>
+          NOT like-for-like: prompts differ - {showVariantDetail ? "hide" : "what differs?"}
+        </button>
       {/if}
       {#each allVariants as v (v.id)}
         {@const off = hidden.has(v.id)}
@@ -378,6 +393,51 @@
       {/each}
     </div>
 
+    {#if showVariantDetail}
+      <!-- WHAT differs, not just THAT it differs. The version label lies: two
+           variants can both say v3 and carry different prompt SHAs, which is
+           exactly the jon-stewart case. -->
+      <div class="flex-none px-4 py-3 bg-surface-alt/60 border-b border-border overflow-x-auto">
+        <table class="text-[11px] font-mono border-collapse">
+          <thead>
+            <tr class="text-on-surface-muted">
+              <th class="text-left pr-4 pb-1 font-medium">variant</th>
+              <th class="text-left pr-4 pb-1 font-medium">run</th>
+              {#each allVariants[0]?.prompts ?? [] as pr (pr.pass)}
+                <th class="text-left pr-4 pb-1 font-medium">{pr.pass} prompt</th>
+              {/each}
+              <th class="text-right pr-4 pb-1 font-medium">claims</th>
+              <th class="text-right pb-1 font-medium">entities</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each allVariants as v (v.id)}
+              <tr class="text-on-surface">
+                <td class="pr-4 py-0.5 whitespace-nowrap">
+                  <span class="inline-block w-2 h-2 rounded-full mr-1.5" style="background:{colourOf.get(v.id)}"></span>
+                  {labelOf(v.id, v.model)}
+                </td>
+                <td class="pr-4 py-0.5 whitespace-nowrap text-on-surface-secondary">{(v.extracted_at ?? "").slice(0, 10) || "—"}</td>
+                {#each v.prompts ?? [] as pr (pr.pass)}
+                  {@const differs = allVariants.some((o) => (o.prompts ?? []).some((q) => q.pass === pr.pass && q.sha !== pr.sha))}
+                  <td class="pr-4 py-0.5 whitespace-nowrap {differs ? 'text-error font-semibold' : 'text-on-surface-muted'}">
+                    {pr.version}·{pr.sha}{differs ? " ←" : ""}
+                  </td>
+                {/each}
+                <td class="pr-4 py-0.5 text-right tabular-nums">{v.claim_count}</td>
+                <td class="py-0.5 text-right tabular-nums">{v.node_count ?? "—"}</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+        <p class="text-[11px] text-on-surface-secondary mt-2 max-w-3xl leading-relaxed">
+          Columns marked <span class="text-error font-semibold">red ←</span> are where the variants
+          diverge. A version label can be identical while the prompt behind it is not, so the SHA is
+          the real identity - two runs both labelled v3 are still different prompts.
+        </p>
+      </div>
+    {/if}
+
     {#if confounded}
       <div class="flex-none px-4 py-2.5 bg-error/10 border-b border-error/30">
         <p class="text-xs text-on-surface max-w-4xl leading-relaxed">
@@ -392,8 +452,9 @@
 
     {#if showNodes}
       <!-- Entities (Pass A). No source location, so this is a whole-record
-           comparison, not a per-chunk one - it sits above the passage walk. -->
-      <div class="flex-none max-h-64 overflow-auto border-b border-border bg-surface-alt/40 px-4 py-3">
+           comparison, not a per-chunk one - which is why it is its own TAB
+           rather than a strip crammed above the chunks. -->
+      <div class="flex-1 min-h-0 overflow-auto px-4 py-3">
         <p class="text-[11px] text-on-surface-muted mb-2 max-w-4xl leading-relaxed">
           Entities each model extracted. {sharedNodeCount} of {nodeRows.length} were found by
           more than one selected model. Matched on name and type exactly - the same entity
@@ -401,31 +462,48 @@
           silently merged into false agreement.
         </p>
         {#each nodeTypes as t (t)}
-          <div class="mb-2">
-            <p class="text-[10px] uppercase tracking-wide text-on-surface-muted/80 mb-1">{t || "untyped"}</p>
-            <div class="flex flex-wrap gap-1">
-              {#each nodeRows.filter((n) => n.type === t) as n (n.type + n.name)}
+          {@const rows = nodeRows.filter((n) => n.type === t)}
+          <section class="mb-5">
+            <h3 class="text-[11px] uppercase tracking-wide text-on-surface-muted mb-1.5 pb-1 border-b border-border">
+              {t || "untyped"} <span class="tabular-nums">({rows.length})</span>
+            </h3>
+            <!-- One entity per ROW, with a fixed gutter of model dots. Chips
+                 wrapped inline made this a wall of text where nothing lined up;
+                 a column of dots lets the eye scan straight down for the gaps,
+                 which is the whole point of the comparison. -->
+            <ul class="grid gap-x-6 gap-y-0.5" style="grid-template-columns: repeat(auto-fill, minmax(22rem, 1fr));">
+              {#each rows as n (n.type + n.name)}
                 {@const finders = n.found_by.filter((v) => !hidden.has(v))}
-                <span
-                  class="inline-flex items-center gap-1 text-[11px] rounded px-1.5 py-0.5
-                    {finders.length > 1 ? 'bg-surface' : 'bg-warning-container/30'}"
-                  title={finders.length > 1
-                    ? `Found by ${finders.length} models`
-                    : `Only ${allVariants.find((v) => v.id === finders[0])?.model ?? finders[0]} extracted this entity`}
-                >
-                  {#each finders as f (f)}
-                    <span class="w-1.5 h-1.5 rounded-full flex-none" style="background:{colourOf.get(f)}"></span>
-                  {/each}
-                  <span class="text-on-surface">{n.name}</span>
-                </span>
+                <li class="flex items-baseline gap-2 py-0.5 border-b border-border/30">
+                  <span class="flex-none flex gap-0.5 pt-0.5" style="width: {Math.max(allVariants.length, 2) * 0.5}rem">
+                    {#each allVariants as v (v.id)}
+                      {@const found = finders.includes(v.id)}
+                      <span
+                        class="w-1.5 h-1.5 rounded-full flex-none"
+                        style={found
+                          ? `background:${colourOf.get(v.id)}`
+                          : "background:transparent;box-shadow:inset 0 0 0 1px var(--color-border,rgba(128,128,128,0.4))"}
+                        title="{labelOf(v.id, v.model)} {found ? 'found' : 'did NOT find'} {n.name}"
+                      ></span>
+                    {/each}
+                  </span>
+                  <span class="text-xs {finders.length > 1 ? 'text-on-surface' : 'text-on-surface-secondary'} min-w-0 break-words">
+                    {n.name}
+                  </span>
+                  {#if finders.length === 1}
+                    <span class="ml-auto flex-none text-[10px] text-on-surface-muted/70 whitespace-nowrap">
+                      only {labelOf(finders[0], finders[0])}
+                    </span>
+                  {/if}
+                </li>
               {/each}
-            </div>
-          </div>
+            </ul>
+          </section>
         {/each}
       </div>
     {/if}
 
-    {#if emptyPassageCount > 0}
+    {#if emptyPassageCount > 0 && tab === "claims"}
       <div class="flex-none px-4 py-1.5 bg-surface-alt/40 border-b border-border flex items-center gap-2">
         <span class="text-[11px] text-on-surface-muted">
           {emptyPassageCount} chunk{emptyPassageCount === 1 ? "" : "s"} hidden - no selected model
@@ -440,6 +518,7 @@
       </div>
     {/if}
 
+    {#if tab === "claims"}
     <div class="flex-1 overflow-auto min-h-0">
       {#each listedPassages as p (p.index)}
         {@const rows = rowsOf(p)}
@@ -580,6 +659,7 @@
         </section>
       {/each}
     </div>
+    {/if}
   {/if}
 </div>
 
