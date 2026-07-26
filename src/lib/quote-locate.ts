@@ -120,12 +120,28 @@ export function rangeFor(indexed: RenderedText, start: number, end: number): Ran
   return range;
 }
 
-/** One stretch of source and how many variants drew a claim from it. */
+/** One stretch of source and the claims drawn from it. */
 export interface CoverageRun {
   start: number;
   end: number;
   /** Distinct variants whose quote covers this stretch. 0 = nothing claimed it. */
   count: number;
+  /** The claims themselves, as `variant\u0000claim_id` keys - what to show when
+   *  the reader clicks this stretch and asks "what did they make of THIS?". */
+  claims: string[];
+}
+
+export interface LocatableClaim {
+  quote?: string;
+  variant: string;
+  /** The claim's own id within its digest. */
+  id?: string;
+}
+
+/** The key that identifies a claim across the comparison payload and the audit
+ *  payload - both carry the digest's own claim id alongside its variant. */
+export function claimKey(variant: string, id: string | undefined): string {
+  return `${variant}\u0000${id ?? ""}`;
 }
 
 /** Where each variant's claims landed in the source, as runs of equal coverage.
@@ -139,31 +155,43 @@ export interface CoverageRun {
  *  Runs are merged so adjacent characters of equal coverage paint as one span:
  *  a highlight per claim would be thousands of overlapping ranges, where this is
  *  a few hundred. */
-export function coverageRuns(
-  haystackNorm: string,
-  claims: { quote?: string; variant: string }[],
-): CoverageRun[] {
+export function coverageRuns(haystackNorm: string, claims: LocatableClaim[]): CoverageRun[] {
   if (!haystackNorm) return [];
   // Per-character sets are too costly at this size; per-character bitmasks over
   // the variant list keep it to one integer per character.
   const variants = [...new Set(claims.map((c) => c.variant))];
   const bit = new Map(variants.map((v, i) => [v, 1 << i]));
   const mask = new Int32Array(haystackNorm.length);
+  // Which claims touch each character. Sparse by design: only located claims
+  // appear, and a reader clicking a stretch wants exactly these.
+  const at = new Map<number, string[]>();
 
   for (const c of claims) {
     const hit = findQuote(haystackNorm, c.quote ?? "");
     if (!hit) continue;
     const b = bit.get(c.variant) ?? 0;
-    for (let i = hit.start; i < hit.end; i++) mask[i] |= b;
+    const key = claimKey(c.variant, c.id);
+    for (let i = hit.start; i < hit.end; i++) {
+      mask[i] |= b;
+      const list = at.get(i);
+      if (list) list.push(key);
+      else at.set(i, [key]);
+    }
   }
 
   const runs: CoverageRun[] = [];
   let start = 0;
   let current = popcount(mask[0] ?? 0);
+  const flush = (end: number) => {
+    if (current <= 0) return;
+    const keys = new Set<string>();
+    for (let i = start; i < end; i++) for (const k of at.get(i) ?? []) keys.add(k);
+    runs.push({ start, end, count: current, claims: [...keys] });
+  };
   for (let i = 1; i <= mask.length; i++) {
     const count = i < mask.length ? popcount(mask[i]) : -1;
     if (count !== current) {
-      if (current > 0) runs.push({ start, end: i, count: current });
+      flush(i);
       start = i;
       current = count;
     }

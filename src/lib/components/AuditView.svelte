@@ -38,11 +38,17 @@
   let {
     hash,
     onquote,
+    focus = [],
   }: {
     hash: string;
-    /** Ask the source pane to show where this claim came from. Absent when
-     *  there is no source pane beside us (the record's own Audit tab). */
-    onquote?: (quote: string, label: string) => void;
+    /** Claim keys (`variant\u0000claim_id`) the source pane asked to show -
+     *  the reverse link: click a stretch of source, land on what the models
+     *  made of it. */
+    focus?: string[];
+    /** Ask the source pane to show where this claim came from. `scroll` is
+     *  false on hover - a preview should not move the reader's place - and true
+     *  on click. Absent when there is no source pane beside us. */
+    onquote?: (quote: string, label: string, scroll?: boolean) => void;
   } = $props();
 
   let status = $state<"loading" | "ready" | "empty" | "error" | "forbidden">("loading");
@@ -162,14 +168,38 @@
   };
 
   let recordHash = $derived(payload?.record.hash ?? "");
+  /** Surfaced when a grade fails to persist - never swallowed. */
+  let saveError = $state<string | null>(null);
 
-  /** The stored verdict for a variant claim, keyed (variant, claim_id). Local
-   *  saves update this map so chips reflect immediately. */
+  // The reviewer's verdicts, held as their OWN top-level state rather than as a
+  // field mutated inside the fetched payload. Writing back into
+  // `payload.gold.claims` did save on the server and did nothing on screen: the
+  // chip kept its unset styling until a reload, so a grade looked like it had
+  // been ignored. Keeping the list here makes the update a plain reassignment,
+  // which is unambiguously reactive.
+  let goldClaims = $state<AuditClaimGold[]>([]);
+  $effect(() => {
+    goldClaims = payload?.gold?.claims ?? [];
+  });
   let goldByKey = $derived.by(() => {
     const m = new Map<string, AuditClaimGold>();
-    for (const g of payload?.gold?.claims ?? []) m.set(`${g.variant}\u0000${g.claim_id}`, g);
+    for (const g of goldClaims) m.set(`${g.variant}\u0000${g.claim_id}`, g);
     return m;
   });
+  let focusSet = $derived(new Set(focus));
+  function isFocused(m: AuditMember): boolean {
+    return focusSet.has(`${m.variant}\u0000${m.claim_id}`);
+  }
+  // Scroll to the first focused claim when the source pane hands us a new set.
+  $effect(() => {
+    if (!focus.length) return;
+    requestAnimationFrame(() => {
+      document
+        .querySelector(".claim-focused")
+        ?.scrollIntoView({ block: "center", behavior: "smooth" });
+    });
+  });
+
   function goldOf(m: AuditMember): AuditClaimGold | undefined {
     return goldByKey.get(`${m.variant}\u0000${m.claim_id}`);
   }
@@ -214,16 +244,16 @@
       const { gold_id } = await putAuditClaim(recordHash, entry);
       const stored = { ...entry, gold_id };
       delete stored.claim;
-      payload?.gold?.claims &&
-        (payload.gold.claims = [
-          ...payload.gold.claims.filter(
-            (g) => !(g.variant === m.variant && g.claim_id === m.claim_id),
-          ),
-          stored,
-        ]);
-      payload = payload;
-    } catch {
-      /* leave the UI unchanged on failure */
+      goldClaims = [
+        ...goldClaims.filter((g) => !(g.variant === m.variant && g.claim_id === m.claim_id)),
+        stored,
+      ];
+    } catch (e) {
+      // A grade that silently fails to save is worse than one that errors: the
+      // reviewer moves on believing the record was made, and the gold quietly
+      // does not contain it.
+      saveError = e instanceof Error ? e.message : String(e);
+      setTimeout(() => (saveError = null), 6000);
     }
   }
 
@@ -404,6 +434,14 @@
         </button>
       {/each}
     </div>
+
+    {#if saveError}
+      <div class="flex-none px-4 py-2 bg-error/15 border-b border-error/40">
+        <p class="text-xs text-on-surface">
+          <span class="font-semibold">That rating did not save.</span> {saveError}
+        </p>
+      </div>
+    {/if}
 
     {#if showVariantDetail}
       <!-- WHAT differs, not just THAT it differs. The version label lies: two
@@ -598,7 +636,8 @@
                         type="button"
                         class="claim-linked text-sm text-on-surface-secondary border-l-2 border-primary/40 pl-2 leading-snug text-left w-full"
                         title="Find this passage in the source"
-                        onclick={() => onquote(q, "source")}
+                        onmouseenter={() => onquote(q, "source", false)}
+                        onclick={() => onquote(q, "source", true)}
                       >{q}</button>
                     {:else}
                       <p class="text-sm text-on-surface-secondary border-l-2 border-primary/40 pl-2 leading-snug">{q}</p>
@@ -628,32 +667,39 @@
                       <span class="text-xs italic text-on-surface-muted/50 pt-0.5">nothing</span>
                     {:else}
                       <div class="min-w-0 flex-1 space-y-1">
-                        {#each memberLines(cell.members) as line, li}
-                          {@const label = frameLabel(line)}
-                          {@const src = cell.members[li]?.quote ?? cell.members[0]?.quote ?? ""}
-                          <div>
-                            {#if onquote && src}
+                        {#each cell.members as m (m.claim_id)}
+                          {@const g = goldOf(m)}
+                          {@const label = frameLabel({
+                            text: m.text,
+                            claim_type: m.claim_type,
+                            attestation: m.attestation,
+                            refs: m.refs,
+                          })}
+                          <!-- ONE claim, and directly beneath it the rating for
+                               THAT claim. They were rendered in two separate
+                               loops - every claim's text, then every claim's
+                               buttons - so three claims produced three "Rate:"
+                               rows with nothing saying which belonged to which. -->
+                          <div class="claim-block {isFocused(m) ? 'claim-focused' : ''} {g?.quality || g?.irrelevant ? 'is-graded' : ''}">
+                            {#if onquote && m.quote}
                               <button
                                 type="button"
                                 class="claim-linked text-sm text-on-surface leading-snug text-left w-full"
                                 title="Show the source this was drawn from"
-                                onclick={() => onquote(src, labelOf(cell.variant, cell.model))}
-                              >{line.text}</button>
+                                onmouseenter={() => onquote(m.quote, labelOf(cell.variant, cell.model), false)}
+                                onclick={() => onquote(m.quote, labelOf(cell.variant, cell.model), true)}
+                              >{m.text}</button>
                             {:else}
-                              <p class="text-sm text-on-surface leading-snug">{line.text}</p>
+                              <p class="text-sm text-on-surface leading-snug">{m.text}</p>
                             {/if}
                             {#if label}
                               <p class="text-[10px] font-mono text-on-surface-muted/70 leading-tight">{label}</p>
                             {/if}
-                          </div>
-                        {/each}
-                        {#if canGrade}
-                          {#each cell.members as m (m.claim_id)}
-                            {@const g = goldOf(m)}
+                            {#if canGrade}
                             <!-- ONE question, about THIS model's claim: quality.
                                  Hover + 1/2/3/x grades without clicking. -->
                             <div
-                              class="flex flex-wrap items-center gap-1"
+                              class="flex flex-wrap items-center gap-1 mt-1"
                               role="group"
                               onmouseenter={() => (hoveredMember = { m, p })}
                               onmouseleave={() => (hoveredMember = null)}
@@ -675,14 +721,13 @@
                               >
                                 <kbd>x</kbd>not worth recording
                               </button>
-                              {#if g}
-                                <span class="text-[10px] text-on-surface-muted/60 ml-1" title="Adjudication is per model AND prompt; this verdict belongs to this prompt generation">
-                                  under {g.prompt_sha}
-                                </span>
+                              {#if g?.quality || g?.irrelevant}
+                                <span class="text-[10px] text-success ml-1" title="Saved to the gold sidecar">saved</span>
                               {/if}
                             </div>
-                          {/each}
-                        {/if}
+                            {/if}
+                          </div>
+                        {/each}
                       </div>
                     {/if}
                   </div>
@@ -698,6 +743,13 @@
 </div>
 
 <style>
+  /* The claims a clicked stretch of source produced. Marked rather than
+     filtered: the neighbours are the context that makes it readable. */
+  .claim-focused {
+    background: color-mix(in srgb, var(--color-primary, #0d9488) 18%, transparent);
+    box-shadow: inset 2px 0 0 var(--color-primary, #0d9488);
+  }
+
   /* A claim that can be traced to its source says so on hover - the link is the
      point of the split view, and an unmarked paragraph gives no hint it is
      clickable. */

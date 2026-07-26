@@ -29,7 +29,14 @@
   } from "$lib/api";
   import { bodyWordCount } from "$lib/ingest-plain";
   import { variantLabels } from "$lib/variant-label";
-  import { coverageRuns, findQuote, indexRenderedText, rangeFor } from "$lib/quote-locate";
+  import {
+    claimKey,
+    coverageRuns,
+    findQuote,
+    indexRenderedText,
+    rangeFor,
+    type CoverageRun,
+  } from "$lib/quote-locate";
   import AuditView from "./AuditView.svelte";
 
   let comparable = $state<ComparableIngest[]>([]);
@@ -79,7 +86,7 @@
   let sourceEl = $state<HTMLElement | undefined>();
   let locateNote = $state<{ kind: "exact" | "prefix" | "miss"; label: string } | null>(null);
 
-  function showSourceFor(quote: string, label: string) {
+  function showSourceFor(quote: string, label: string, scroll = true) {
     if (!sourceEl) return;
     const indexed = indexRenderedText(sourceEl);
     const hit = findQuote(indexed.text, quote);
@@ -95,6 +102,9 @@
     }
     locateNote = { kind: hit.kind, label };
     paint(range);
+    // A hover PREVIEWS - it must not move the reader's place. Only a click,
+    // which is a deliberate "take me there", scrolls.
+    if (!scroll) return;
     const rect = range.getBoundingClientRect();
     const box = sourceEl.getBoundingClientRect();
     sourceEl.scrollTop += rect.top - box.top - box.height / 3;
@@ -116,37 +126,71 @@
    *  Runs after the render, and again whenever the comparison changes. */
   let coverageSummary = $state<{ runs: number; claimed: number; total: number } | null>(null);
 
+  /** The painted stretches, kept so a click can be resolved back to its claims. */
+  let painted = $state<{ run: CoverageRun; range: Range }[]>([]);
+  /** How many colours the extraction bands rotate through. Adjacent extractions
+   *  differ, which is the readable property - a colour per claim is impossible
+   *  (there are thousands) and a colour per model answers a question the chips
+   *  above already answer. */
+  const BANDS = 5;
+
   function paintCoverage() {
     const CSSns = (globalThis as { CSS?: { highlights?: Map<string, unknown> } }).CSS;
     const Ctor = (globalThis as { Highlight?: new (...r: Range[]) => unknown }).Highlight;
     if (!sourceEl || !comparison || !CSSns?.highlights || !Ctor) return;
-    for (const n of [1, 2, 3]) CSSns.highlights.delete(`claim-cover-${n}`);
+    for (let n = 0; n < BANDS; n++) CSSns.highlights.delete(`claim-cover-${n}`);
 
     const indexed = indexRenderedText(sourceEl);
     const claims = comparison.per_model.flatMap((m) =>
-      (m.claims ?? []).map((c) => ({ quote: c.quote, variant: m.variant })),
+      (m.claims ?? []).map((c) => ({ quote: c.quote, variant: m.variant, id: c.id })),
     );
     const runs = coverageRuns(indexed.text, claims);
-    const models = comparison.per_model.length;
-    // Three bands, not one per model: with four variants a band each is noise,
-    // and the reader's question is "one, some, or all of them?".
-    const buckets = new Map<number, Range[]>([
-      [1, []],
-      [2, []],
-      [3, []],
-    ]);
+    const buckets: Range[][] = Array.from({ length: BANDS }, () => []);
+    const kept: { run: CoverageRun; range: Range }[] = [];
     let claimed = 0;
-    for (const r of runs) {
+    runs.forEach((r, i) => {
       const range = rangeFor(indexed, r.start, r.end);
-      if (!range) continue;
+      if (!range) return;
       claimed += r.end - r.start;
-      const band = r.count >= models && models > 1 ? 3 : r.count > 1 ? 2 : 1;
-      buckets.get(band)?.push(range);
-    }
-    for (const [band, ranges] of buckets) {
-      if (ranges.length) CSSns.highlights.set(`claim-cover-${band}`, new Ctor(...ranges));
-    }
+      buckets[i % BANDS].push(range);
+      kept.push({ run: r, range });
+    });
+    const store = CSSns.highlights;
+    buckets.forEach((ranges, n) => {
+      if (ranges.length) store.set(`claim-cover-${n}`, new Ctor(...ranges));
+    });
+    painted = kept;
     coverageSummary = { runs: runs.length, claimed, total: indexed.text.length };
+  }
+
+  /** Clicking a shaded stretch asks "what did the models make of THIS?" - the
+   *  reverse of clicking a claim to find its source, and the direction that
+   *  makes the source pane a way IN rather than a reference. */
+  let focusedClaims = $state<string[]>([]);
+  function onSourceClick(e: MouseEvent) {
+    if (!sourceEl || !painted.length) return;
+    const doc = document as Document & {
+      caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+      caretRangeFromPoint?: (x: number, y: number) => Range | null;
+    };
+    const caret = doc.caretPositionFromPoint?.(e.clientX, e.clientY);
+    const node = caret?.offsetNode ?? doc.caretRangeFromPoint?.(e.clientX, e.clientY)?.startContainer;
+    const offset = caret?.offset ?? doc.caretRangeFromPoint?.(e.clientX, e.clientY)?.startOffset ?? 0;
+    if (!node) return;
+    const hit = painted.find((p) => {
+      try {
+        return p.range.isPointInRange(node, offset);
+      } catch {
+        return false;
+      }
+    });
+    if (!hit) {
+      focusedClaims = [];
+      return;
+    }
+    focusedClaims = hit.run.claims;
+    locateNote = null;
+    paint(hit.range);
   }
 
   // Repaint when the rendered body or the comparison changes.
@@ -344,11 +388,15 @@
             <span class="text-[11px] text-on-surface-muted tabular-nums">· {words} words</span>
           {/if}
           {#if coverageSummary && coverageSummary.total}
-            <span class="flex items-center gap-1.5 text-[10px] text-on-surface-muted" title="Shading shows how many models drew a claim from each stretch of the source. Unshaded text is source nothing extracted from - which is the point of showing it.">
-              <span class="cover-key cover-key-1"></span>one
-              <span class="cover-key cover-key-2"></span>some
-              <span class="cover-key cover-key-3"></span>all
-              <span class="tabular-nums ml-1">· {Math.round((100 * coverageSummary.claimed) / coverageSummary.total)}% used</span>
+            <span
+              class="flex items-center gap-1.5 text-[10px] text-on-surface-muted"
+              title="Each shaded stretch is one extraction - source a claim was drawn from. Colours only separate neighbouring extractions; they do not mean a model. UNSHADED text is source nothing extracted from. Click any shaded stretch to see what the models made of it."
+            >
+              <span class="cover-key cover-key-0"></span>
+              <span class="cover-key cover-key-1"></span>
+              <span class="cover-key cover-key-2"></span>
+              extractions - click one
+              <span class="tabular-nums ml-1">· {coverageSummary.runs} spans, {Math.round((100 * coverageSummary.claimed) / coverageSummary.total)}% of source used</span>
             </span>
           {/if}
           <span class="flex-1"></span>
@@ -379,7 +427,13 @@
             >input has changed since digest</span>
           {/if}
         </div>
-        <div bind:this={sourceEl} class="flex-1 overflow-auto px-5 py-4">
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <div
+          bind:this={sourceEl}
+          onclick={onSourceClick}
+          class="flex-1 overflow-auto px-5 py-4 source-pane"
+        >
           {#if loading}
             <p class="text-sm text-on-surface-muted">Loading…</p>
           {:else if !predigest}
@@ -396,7 +450,7 @@
       <!-- WHAT THE MODELS MADE OF IT. -->
       <div class="flex-1 flex flex-col min-h-0 border-l border-border">
         {#key selected}
-          <AuditView hash={selected} onquote={showSourceFor} />
+          <AuditView hash={selected} onquote={showSourceFor} focus={focusedClaims} />
         {/key}
       </div>
     </div>
@@ -409,17 +463,39 @@
      freely and the highlight simply re-applies on the next click. ::highlight
      only accepts a few properties; background and colour are enough to make the
      span unmissable after the scroll. */
-  /* Coverage bands. Deliberately faint: this is a backdrop the reader scans,
-     not a foreground element - the unshaded gaps are what should catch the eye,
-     because they are the source nothing extracted from. */
+  /* EXTRACTION BANDS. Each shaded stretch is one extraction - a run of source
+     that some claim was drawn from - and the colours rotate so that ADJACENT
+     extractions are told apart. They deliberately do not encode which model:
+     the chips above already answer that, and the question here is "where does
+     one extraction end and the next begin, and what is left over?".
+
+     Kept low-saturation. This is a backdrop the eye scans; the UNSHADED gaps
+     are what should stand out, because they are source no model extracted
+     from. */
+  :global(::highlight(claim-cover-0)) {
+    background-color: color-mix(in srgb, #0ea5e9 18%, transparent);
+  }
   :global(::highlight(claim-cover-1)) {
-    background-color: color-mix(in srgb, var(--color-primary, #0d9488) 8%, transparent);
+    background-color: color-mix(in srgb, #22c55e 18%, transparent);
   }
   :global(::highlight(claim-cover-2)) {
-    background-color: color-mix(in srgb, var(--color-primary, #0d9488) 16%, transparent);
+    background-color: color-mix(in srgb, #f59e0b 20%, transparent);
   }
   :global(::highlight(claim-cover-3)) {
-    background-color: color-mix(in srgb, var(--color-primary, #0d9488) 26%, transparent);
+    background-color: color-mix(in srgb, #8b5cf6 18%, transparent);
+  }
+  :global(::highlight(claim-cover-4)) {
+    background-color: color-mix(in srgb, #ec4899 16%, transparent);
+  }
+
+  /* Shaded source is clickable - it asks the models what they made of it. */
+  .source-pane {
+    cursor: default;
+  }
+  /* Shaded source responds to the pointer, so it reads as something you can
+     interrogate rather than as decoration. */
+  .source-pane :global(::highlight(claim-hover)) {
+    background-color: color-mix(in srgb, var(--color-primary, #0d9488) 34%, transparent);
   }
 
   .cover-key {
@@ -429,15 +505,14 @@
     border-radius: 0.1rem;
     vertical-align: -1px;
   }
+  .cover-key-0 {
+    background: color-mix(in srgb, #0ea5e9 30%, transparent);
+  }
   .cover-key-1 {
-    background: color-mix(in srgb, var(--color-primary, #0d9488) 8%, transparent);
-    box-shadow: inset 0 0 0 1px var(--color-border, rgba(128, 128, 128, 0.3));
+    background: color-mix(in srgb, #22c55e 30%, transparent);
   }
   .cover-key-2 {
-    background: color-mix(in srgb, var(--color-primary, #0d9488) 16%, transparent);
-  }
-  .cover-key-3 {
-    background: color-mix(in srgb, var(--color-primary, #0d9488) 26%, transparent);
+    background: color-mix(in srgb, #f59e0b 32%, transparent);
   }
 
   /* The span a clicked claim was drawn from - stronger than the bands, since it

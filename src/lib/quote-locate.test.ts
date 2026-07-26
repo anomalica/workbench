@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  claimKey,
   coverageRuns,
   findQuote,
   indexRenderedText,
@@ -149,5 +150,42 @@ describe("coverageRuns", () => {
   it("handles an empty source and no claims", () => {
     expect(coverageRuns("", [{ variant: "a", quote: "x" }])).toEqual([]);
     expect(coverageRuns(TEXT, [])).toEqual([]);
+  });
+});
+
+describe("coverageRuns: which claims each stretch belongs to", () => {
+  const TEXT = normaliseForMatch(
+    "This film was filmed on April 22, 1991 at 3:15 in the afternoon on behalf of the Department of Naval Intelligence.",
+  );
+
+  it("names the claims drawn from a stretch, so a click can show them", () => {
+    const runs = coverageRuns(TEXT, [
+      { variant: "haiku", id: "h1", quote: "This film was filmed on April 22" },
+      { variant: "sonnet", id: "s9", quote: "This film was filmed on April 22" },
+    ]);
+    expect(runs).toHaveLength(1);
+    expect(runs[0].claims.sort()).toEqual(
+      [claimKey("haiku", "h1"), claimKey("sonnet", "s9")].sort(),
+    );
+  });
+
+  it("keeps each stretch's own claims when coverage changes mid-quote", () => {
+    const runs = coverageRuns(TEXT, [
+      { variant: "haiku", id: "h1", quote: "This film was filmed on April 22, 1991 at 3:15" },
+      { variant: "sonnet", id: "s9", quote: "This film was filmed on April 22" },
+    ]);
+    // shared opening carries both; the haiku-only tail carries just haiku
+    expect(runs[0].claims.sort()).toEqual(
+      [claimKey("haiku", "h1"), claimKey("sonnet", "s9")].sort(),
+    );
+    expect(runs[1].claims).toEqual([claimKey("haiku", "h1")]);
+  });
+
+  it("does not attribute a stretch to a claim that failed to locate", () => {
+    const runs = coverageRuns(TEXT, [
+      { variant: "haiku", id: "h1", quote: "This film was filmed on April 22" },
+      { variant: "opus", id: "o2", quote: "A sentence that is simply not present here" },
+    ]);
+    expect(runs.flatMap((r) => r.claims)).toEqual([claimKey("haiku", "h1")]);
   });
 });
