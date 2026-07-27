@@ -382,13 +382,13 @@ def test_batch_verdicts_write_once(audit_client, tmp_path, monkeypatch):
 
     res = audit_client.put(
         f"/api/ingests/{HASH}/audit/claims",
-        json={"claims": [entry("a", "bad"), entry("b", "gold"), entry("c", "okay")]},
+        json={"claims": [entry("a", "bad"), entry("b", "good"), entry("c", "okay")]},
     )
     assert res.status_code == 200, res.text
     assert res.json()["saved"] == 3
     assert len(saves) == 1  # ONE write for the batch
     assert {c["claim_id"] for c in saves[0]["claims"]} == {"a", "b", "c"}
-    assert {c["quality"] for c in saves[0]["claims"]} == {"bad", "gold", "okay"}
+    assert {c["quality"] for c in saves[0]["claims"]} == {"bad", "good", "okay"}
 
 
 def test_a_bad_entry_rejects_the_whole_batch(audit_client, tmp_path, monkeypatch):
@@ -428,7 +428,51 @@ def test_a_bad_entry_rejects_the_whole_batch(audit_client, tmp_path, monkeypatch
     assert saves == []
 
 
-def test_gold_is_an_accepted_quality(audit_client, tmp_path, monkeypatch):
+def test_faithfulness_and_value_are_independent(audit_client, tmp_path, monkeypatch):
+    # The point of splitting them: a claim can be faultlessly extracted and
+    # still worthless, so both answers must be recordable on one claim.
+    store = tmp_path / "store"
+    store.mkdir()
+    written = {}
+    monkeypatch.setattr(server.source, "audit_store_dir", lambda h: store)
+    monkeypatch.setattr(
+        server.source, "save_audit", lambda h, g, n, e: written.update(g=g) or True
+    )
+    res = audit_client.put(
+        f"/api/ingests/{HASH}/audit/claim",
+        json={
+            "variant": "haiku",
+            "model": "haiku",
+            "prompt_sha": "s",
+            "claim_id": "c1",
+            "text": "t",
+            "quality": "good",
+            "value": "irrelevant",
+        },
+    )
+    assert res.status_code == 200, res.text
+    [claim] = written["g"]["claims"]
+    assert claim["quality"] == "good" and claim["value"] == "irrelevant"
+
+
+def test_rejects_a_value_outside_the_scale(audit_client, tmp_path, monkeypatch):
+    monkeypatch.setattr(server.source, "audit_store_dir", lambda h: tmp_path)
+    res = audit_client.put(
+        f"/api/ingests/{HASH}/audit/claim",
+        json={
+            "variant": "h",
+            "model": "h",
+            "prompt_sha": "s",
+            "claim_id": "c",
+            "text": "t",
+            "value": "priceless",
+        },
+    )
+    assert res.status_code == 400
+    assert "value must be" in res.json()["detail"]
+
+
+def test_gold_is_an_accepted_value(audit_client, tmp_path, monkeypatch):
     store = tmp_path / "store"
     store.mkdir()
     monkeypatch.setattr(server.source, "audit_store_dir", lambda h: store)
@@ -441,7 +485,7 @@ def test_gold_is_an_accepted_quality(audit_client, tmp_path, monkeypatch):
             "prompt_sha": "s",
             "claim_id": "g1",
             "text": "t",
-            "quality": "gold",
+            "value": "gold",
         },
     )
     assert res.status_code == 200, res.text

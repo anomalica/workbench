@@ -67,10 +67,23 @@ from pathlib import Path
 
 SCHEMA = "anomalica/audit/2"
 
-# `gold` sits above `good`: not merely a sound extraction but one worth holding
-# up as the standard - the examples a prompt should be tuned to reproduce. Kept
-# ordinal, so a grader can read the scale as a ranking rather than as labels.
-QUALITY = ("bad", "okay", "good", "gold")
+# TWO INDEPENDENT AXES, because they are two different questions with two
+# different fixes.
+#
+# FAITHFULNESS is about the model's work: does the claim represent what the
+# source actually says, with the right attribution and shape. A bad claim means
+# fix the prompt.
+#
+# VALUE is about the archive: is this worth having at all. An irrelevant claim
+# means the prompt is fishing in the wrong water - the extraction can be
+# faultless and the catch still worthless.
+#
+# They were briefly one scale with `gold` as a fourth rung above `good`, which
+# conflated them: a valuable-but-ordinarily-extracted claim marked gold would
+# have inflated the model's fidelity score. Both are ordinal, so a grader reads
+# each as a ranking rather than as labels.
+QUALITY = ("bad", "okay", "good")
+VALUE = ("irrelevant", "potentially", "gold")
 
 
 def empty(record_hash: str) -> dict:
@@ -140,8 +153,13 @@ def validate_claim(entry: dict) -> str | None:
     q = entry.get("quality")
     if q is not None and q not in QUALITY:
         return "quality must be bad | okay | good"
-    if q is None and "irrelevant" not in entry:
-        return "a verdict needs a quality or an irrelevant mark"
+    v = entry.get("value")
+    if v is not None and v not in VALUE:
+        return "value must be irrelevant | potentially | gold"
+    if q is None and v is None and "irrelevant" not in entry:
+        return "a verdict needs a faithfulness or a value"
+    # `irrelevant: true` is the old boolean form of value=irrelevant; accepted so
+    # a verdict written before the split still reads.
     if "irrelevant" in entry and not isinstance(entry["irrelevant"], bool):
         return "irrelevant must be a bool"
     return None

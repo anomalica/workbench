@@ -409,8 +409,11 @@ export interface AuditClaimGold {
   text: string;
   quote: string;
   claim_type: string;
-  /** `gold` is above `good`: the example worth tuning a prompt to reproduce. */
-  quality?: "bad" | "okay" | "good" | "gold";
+  /** FAITHFULNESS - how well the model did the extraction. */
+  quality?: "bad" | "okay" | "good";
+  /** VALUE - whether the claim is worth having, independent of how well it was
+   *  made. A faultless extraction of trivia is `good` and `irrelevant`. */
+  value?: "irrelevant" | "potentially" | "gold";
   irrelevant?: boolean;
   claim?: Record<string, unknown>;
 }

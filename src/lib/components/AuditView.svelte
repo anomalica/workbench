@@ -162,12 +162,19 @@
   // Keyboard-first: hover a claim, press 1/2/3 for bad/okay/good, x for
   // irrelevant. Adjudication is per model AND prompt - the models word the same
   // fact differently every time, so grading one credits nothing to another.
-  const QUALITY = ["bad", "okay", "good", "gold"] as const;
+  // Two questions, asked separately because they have different answers and
+  // different fixes: how well was it EXTRACTED, and is it worth HAVING.
+  const QUALITY = ["bad", "okay", "good"] as const;
+  const VALUE = ["irrelevant", "potentially", "gold"] as const;
   const QUALITY_HELP: Record<string, string> = {
     bad: "Unsupported by, or misrepresents, the source - or badly made",
     okay: "Serviceable extraction",
     good: "Faithful and well made",
-    gold: "The standard to aim for - an example worth tuning a prompt to reproduce",
+  };
+  const VALUE_HELP: Record<string, string> = {
+    irrelevant: "Not worth recording, however well extracted",
+    potentially: "Might matter - worth keeping, not yet a finding",
+    gold: "Prized: a claim the archive exists to hold",
   };
 
   let recordHash = $derived(payload?.record.hash ?? "");
@@ -251,7 +258,10 @@
   function saveClaim(
     m: AuditMember,
     p: AuditPassage,
-    change: { quality?: "bad" | "okay" | "good" | "gold"; irrelevant?: boolean },
+    change: {
+      quality?: "bad" | "okay" | "good";
+      value?: "irrelevant" | "potentially" | "gold";
+    },
   ) {
     const key = keyOf(m);
     const prev = unsaved[key] ?? goldOf(m);
@@ -272,10 +282,10 @@
           : prev?.quality
             ? { quality: prev.quality }
             : {}),
-        ...(change.irrelevant !== undefined
-          ? { irrelevant: change.irrelevant }
-          : prev?.irrelevant
-            ? { irrelevant: true }
+        ...(change.value !== undefined
+          ? { value: change.value }
+          : prev?.value
+            ? { value: prev.value }
             : {}),
         claim: { text: m.text, type: m.claim_type, quote: m.quote, location: m.location },
       },
@@ -379,9 +389,10 @@
     if (e.key === "1") saveClaim(m, p, { quality: "bad" });
     else if (e.key === "2") saveClaim(m, p, { quality: "okay" });
     else if (e.key === "3") saveClaim(m, p, { quality: "good" });
-    else if (e.key === "4") saveClaim(m, p, { quality: "gold" });
-    else if (e.key === "0" || e.key === "x" || e.key === "X")
-      saveClaim(m, p, { irrelevant: !goldOf(m)?.irrelevant });
+    else if (e.key === "8" || e.key === "0" || e.key === "x" || e.key === "X")
+      saveClaim(m, p, { value: "irrelevant" });
+    else if (e.key === "9") saveClaim(m, p, { value: "potentially" });
+    else if (e.key === "7") saveClaim(m, p, { value: "gold" });
     else return;
     e.preventDefault();
   }
@@ -479,10 +490,10 @@
           title="The keys act on the highlighted claim. Nothing needs the mouse."
         >
           <kbd class="kbd-hint">j</kbd><kbd class="kbd-hint">k</kbd> move ·
-          <kbd class="kbd-hint">0</kbd> irrelevant ·
-          <kbd class="kbd-hint">1</kbd><kbd class="kbd-hint">2</kbd><kbd class="kbd-hint">3</kbd><kbd
-            class="kbd-hint">4</kbd
-          > bad/okay/good/gold
+          <kbd class="kbd-hint">1</kbd><kbd class="kbd-hint">2</kbd><kbd class="kbd-hint">3</kbd>
+          extracted bad/okay/good ·
+          <kbd class="kbd-hint">8</kbd><kbd class="kbd-hint">9</kbd><kbd class="kbd-hint">7</kbd>
+          worth irrelevant/potentially/gold
         </span>
       {/if}
       <span class="inline-flex rounded overflow-hidden border border-border">
@@ -871,35 +882,44 @@
                               <p class="text-[10px] font-mono text-on-surface-muted/70 leading-tight">{label}</p>
                             {/if}
                             {#if canGrade}
-                            <!-- ONE question, about THIS model's claim: quality.
-                                 Hover + 1/2/3/x grades without clicking. -->
+                            <!-- TWO ROWS, because these are two questions. One
+                                 row of six read as a single scale, so choosing
+                                 from both looked like a mistake rather than the
+                                 point: a claim can be faultlessly extracted and
+                                 still worthless. -->
                             <div
-                              class="flex flex-wrap items-center gap-1 mt-1 {isHovered(m)
-                                ? 'is-armed'
-                                : ''}"
+                              class="grade-rows mt-1 {isHovered(m) ? 'is-armed' : ''}"
                               role="group"
                             >
-                              <span class="text-[10px] text-on-surface-muted/70 mr-0.5">Rate:</span>
-                              <button
-                                onclick={() => saveClaim(m, p, { irrelevant: !g?.irrelevant })}
-                                class="grade-chip mr-2 {g?.irrelevant ? 'is-set irrelevant' : ''}"
-                                title="Not worth recording, however well made - the noise metric, kept separate from the quality scale"
-                              >
-                                <kbd class:invisible={!isHovered(m)}>0</kbd>irrelevant
-                              </button>
-                              {#each QUALITY as q, qi}
-                                <button
-                                  onclick={() => saveClaim(m, p, { quality: q })}
-                                  class="grade-chip {g?.quality === q ? 'is-set ' + q : ''}"
-                                  title="{QUALITY_HELP[q]} - hover this claim and press {qi + 1}"
-                                >
-                                  <kbd class:invisible={!isHovered(m)}>{qi + 1}</kbd>{q}
-                                </button>
-                              {/each}
-
-
+                              <div class="grade-row">
+                                <span class="grade-axis">extracted</span>
+                                {#each QUALITY as q, qi}
+                                  <button
+                                    onclick={() => saveClaim(m, p, { quality: q })}
+                                    class="grade-chip {g?.quality === q ? 'is-set ' + q : ''}"
+                                    title="{QUALITY_HELP[q]} - hover this claim and press {qi + 1}"
+                                  >
+                                    <kbd class:invisible={!isHovered(m)}>{qi + 1}</kbd>{q}
+                                  </button>
+                                {/each}
+                              </div>
+                              <div class="grade-row">
+                                <span class="grade-axis">worth</span>
+                                {#each VALUE as v, vi}
+                                  <button
+                                    onclick={() => saveClaim(m, p, { value: v })}
+                                    class="grade-chip {g?.value === v ||
+                                    (v === 'irrelevant' && g?.irrelevant && !g?.value)
+                                      ? 'is-set ' + v
+                                      : ''}"
+                                    title="{VALUE_HELP[v]} - hover this claim and press {[8, 9, 7][vi]}"
+                                  >
+                                    <kbd class:invisible={!isHovered(m)}>{[8, 9, 7][vi]}</kbd>{v}
+                                  </button>
+                                {/each}
+                              </div>
                             </div>
-                            {/if}
+                                                        {/if}
                           </div>
                         {/each}
                       </div>
@@ -1049,6 +1069,32 @@
   .grade-chip.is-set.gold {
     background: #b8860b;
     color: #fff;
+  }
+  .grade-chip.is-set.potentially {
+    background: color-mix(in srgb, #b8860b 45%, transparent);
+    color: inherit;
+  }
+
+  /* The two questions read as two, with the axis named rather than left to be
+     inferred from the labels. */
+  .grade-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+  .grade-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.25rem;
+  }
+  .grade-axis {
+    width: 4.5rem;
+    flex: none;
+    font-size: 10px;
+    text-align: right;
+    padding-right: 0.3rem;
+    color: var(--color-on-surface-muted, #6b7280);
   }
   .grade-chip.is-set.irrelevant {
     background: var(--color-on-surface-muted, #6b7280);
