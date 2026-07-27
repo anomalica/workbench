@@ -491,9 +491,9 @@
         >
           <kbd class="kbd-hint">j</kbd><kbd class="kbd-hint">k</kbd> move ·
           <kbd class="kbd-hint">1</kbd><kbd class="kbd-hint">2</kbd><kbd class="kbd-hint">3</kbd>
-          extracted bad/okay/good ·
+          extraction bad/okay/good ·
           <kbd class="kbd-hint">8</kbd><kbd class="kbd-hint">9</kbd><kbd class="kbd-hint">7</kbd>
-          worth irrelevant/potentially/gold
+          value irrelevant/potentially/gold
         </span>
       {/if}
       <span class="inline-flex rounded overflow-hidden border border-border">
@@ -892,7 +892,7 @@
                               role="group"
                             >
                               <div class="grade-row">
-                                <span class="grade-axis">extracted</span>
+                                <span class="grade-axis">extraction</span>
                                 {#each QUALITY as q, qi}
                                   <button
                                     onclick={() => saveClaim(m, p, { quality: q })}
@@ -904,7 +904,7 @@
                                 {/each}
                               </div>
                               <div class="grade-row">
-                                <span class="grade-axis">worth</span>
+                                <span class="grade-axis">value</span>
                                 {#each VALUE as v, vi}
                                   <button
                                     onclick={() => saveClaim(m, p, { value: v })}
