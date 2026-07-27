@@ -380,7 +380,7 @@
     else if (e.key === "2") saveClaim(m, p, { quality: "okay" });
     else if (e.key === "3") saveClaim(m, p, { quality: "good" });
     else if (e.key === "4") saveClaim(m, p, { quality: "gold" });
-    else if (e.key === "x" || e.key === "X")
+    else if (e.key === "0" || e.key === "x" || e.key === "X")
       saveClaim(m, p, { irrelevant: !goldOf(m)?.irrelevant });
     else return;
     e.preventDefault();
@@ -479,10 +479,10 @@
           title="The keys act on the highlighted claim. Nothing needs the mouse."
         >
           <kbd class="kbd-hint">j</kbd><kbd class="kbd-hint">k</kbd> move ·
+          <kbd class="kbd-hint">0</kbd> irrelevant ·
           <kbd class="kbd-hint">1</kbd><kbd class="kbd-hint">2</kbd><kbd class="kbd-hint">3</kbd><kbd
             class="kbd-hint">4</kbd
-          > bad/okay/good/gold ·
-          <kbd class="kbd-hint">x</kbd> irrelevant
+          > bad/okay/good/gold
         </span>
       {/if}
       <span class="inline-flex rounded overflow-hidden border border-border">
@@ -880,6 +880,13 @@
                               role="group"
                             >
                               <span class="text-[10px] text-on-surface-muted/70 mr-0.5">Rate:</span>
+                              <button
+                                onclick={() => saveClaim(m, p, { irrelevant: !g?.irrelevant })}
+                                class="grade-chip mr-2 {g?.irrelevant ? 'is-set irrelevant' : ''}"
+                                title="Not worth recording, however well made - the noise metric, kept separate from the quality scale"
+                              >
+                                <kbd class:invisible={!isHovered(m)}>0</kbd>irrelevant
+                              </button>
                               {#each QUALITY as q, qi}
                                 <button
                                   onclick={() => saveClaim(m, p, { quality: q })}
@@ -889,13 +896,7 @@
                                   <kbd class:invisible={!isHovered(m)}>{qi + 1}</kbd>{q}
                                 </button>
                               {/each}
-                              <button
-                                onclick={() => saveClaim(m, p, { irrelevant: !g?.irrelevant })}
-                                class="grade-chip ml-2 {g?.irrelevant ? 'is-set irrelevant' : ''}"
-                                title="Separate from the rating: the claim may be well made and still not worth recording. Hover this claim and press x"
-                              >
-                                <kbd class:invisible={!isHovered(m)}>x</kbd>irrelevant
-                              </button>
+
 
                             </div>
                             {/if}
