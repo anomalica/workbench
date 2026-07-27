@@ -3,28 +3,50 @@
     title,
     publisher,
     creators,
+    datePublished = "",
     canEdit = false,
     onsave,
   }: {
     title: string;
     publisher: string;
     creators: string[];
+    /** `date_published` verbatim - a year, a year-month or a full date. */
+    datePublished?: string;
     canEdit?: boolean;
     /** Persist all fields in one edit. "" / [] clear the respective key -
      *  except title, which never clears: a record must stay findable in the
      *  list, so an emptied title keeps the current one. */
-    onsave: (data: { title: string; publisher: string; creators: string[] }) => void;
+    onsave: (data: {
+      title: string;
+      publisher: string;
+      creators: string[];
+      datePublished: string;
+    }) => void;
   } = $props();
 
   let editing = $state(false);
   let draftTitle = $state("");
   let draftPublisher = $state("");
   let draftCreators = $state<string[]>([]);
+  let draftDate = $state("");
+
+  // A YEAR, a year-month, or a full date - all three occur in the corpus,
+  // because sources state what they state. A picker would force a full date and
+  // turn "1947" into "1947-01-01", which invents a day the source never gave.
+  const DATE_SHAPE = /^\d{4}(-\d{2}(-\d{2})?)?$/;
+  let dateProblem = $derived(
+    draftDate.trim() === "" || DATE_SHAPE.test(draftDate.trim())
+      ? ""
+      : "Use YYYY, YYYY-MM or YYYY-MM-DD",
+  );
 
   function startEdit() {
     draftTitle = title;
     draftPublisher = publisher;
     draftCreators = creators.length > 0 ? [...creators] : [""];
+    // A timestamp form is offered as its date; the reviewer can keep or narrow
+    // it, but nothing is rewritten unless they choose to.
+    draftDate = (datePublished || "").trim().slice(0, 10);
     editing = true;
   }
 
@@ -33,10 +55,12 @@
   }
 
   function save() {
+    if (dateProblem) return;
     onsave({
       title: draftTitle.trim() || title,
       publisher: draftPublisher,
       creators: draftCreators.map((c) => c.trim()).filter((c) => c !== ""),
+      datePublished: draftDate.trim(),
     });
     editing = false;
   }
@@ -76,6 +100,10 @@
         <span class="text-on-surface-muted w-32 flex-none">Authors / Creators</span>
         <span class="text-on-surface">{creators.length > 0 ? creators.join(", ") : "—"}</span>
       </div>
+      <div class="flex items-baseline gap-2">
+        <span class="text-on-surface-muted w-32 flex-none">Published</span>
+        <span class="text-on-surface">{datePublished || "—"}</span>
+      </div>
       {#if canEdit}
         <div>
           <button
@@ -98,6 +126,21 @@
           class="bg-surface border border-border rounded px-2 py-1 text-on-surface
             outline-none focus:border-primary placeholder:text-on-surface-muted/50"
         />
+      </label>
+      <label class="flex flex-col gap-1">
+        <span class="text-on-surface-muted">Published</span>
+        <input
+          type="text"
+          bind:value={draftDate}
+          placeholder="1947, 1947-06 or 1947-06-24"
+          class="bg-surface border rounded px-2 py-1 text-on-surface outline-none
+            placeholder:text-on-surface-muted/50
+            {dateProblem ? 'border-error focus:border-error' : 'border-border focus:border-primary'}"
+        />
+        <span class="text-[11px] {dateProblem ? 'text-error' : 'text-on-surface-muted'}">
+          {dateProblem ||
+            "As precise as the source states - a year alone is a real answer, not a missing one."}
+        </span>
       </label>
       <label class="flex flex-col gap-1">
         <span class="text-on-surface-muted">Publisher</span>

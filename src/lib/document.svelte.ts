@@ -948,12 +948,18 @@ function readOverlayNextId(rawFm: string): number | null {
   }
 }
 
-function rewriteFrontmatterFields(
+export function rewriteFrontmatterFields(
   rawFm: string,
   fields: Record<string, string | string[] | number>,
 ): string {
   const fmContent = rawFm.replace(/^---\n/, "").replace(/---\n$/, "");
-  const doc = (yaml.load(fmContent) as Record<string, unknown>) ?? {};
+  // CORE_SCHEMA: dates stay STRINGS. The default schema resolves `2015-03-05`
+  // to a JS Date and dumps it back as `2015-03-05T00:00:00.000Z`, so renaming a
+  // record silently rewrote every date in its frontmatter - and a date carrying
+  // an offset was normalised to UTC, which can move it to a different day. The
+  // record says when it was published; an edit to the title is not an occasion
+  // to reinterpret that.
+  const doc = (yaml.load(fmContent, { schema: yaml.CORE_SCHEMA }) as Record<string, unknown>) ?? {};
   for (const [key, value] of Object.entries(fields)) {
     if (typeof value === "number") {
       doc[key] = value;

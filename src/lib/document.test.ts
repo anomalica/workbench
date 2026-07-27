@@ -14,6 +14,7 @@ import {
   eventNoteAnchorIndex,
 } from "./transcript-words";
 import yaml from "js-yaml";
+import { rewriteFrontmatterFields } from "./document.svelte";
 
 // We can't test the Svelte $state-based DocumentStore directly in Vitest
 // (it needs the Svelte runtime). Instead we test the parse-modify-serialize
@@ -831,5 +832,49 @@ describe("insertEventNote attaches a first-class note to a word (not a new word)
     const out = insertEventNote(FM + BODY, 2.5, "[laughs]");
     expect(out.startsWith(FM)).toBe(true);
     expect(out.match(/<!-- speaker:/g)?.length).toBe(1);
+  });
+});
+
+describe("frontmatter edits leave dates alone", () => {
+  const FM =
+    [
+      "---",
+      "title: Original",
+      "date_published: 2015-03-05",
+      "date_accessed: 2026-07-24 10:00:00+09:00",
+      "founded: 1947",
+      "---",
+    ].join("\n") + "\n";
+
+  it("does not rewrite a date when another field is edited", () => {
+    // js-yaml's default schema resolves 2015-03-05 to a Date and dumps it back
+    // as 2015-03-05T00:00:00.000Z, so renaming a record silently reformatted
+    // every date in its frontmatter.
+    const out = rewriteFrontmatterFields(FM, { title: "Renamed" });
+    expect(out).toContain("2015-03-05");
+    expect(out).not.toContain("T00:00:00");
+  });
+
+  it("does not shift a dated offset into another day", () => {
+    // Normalising to UTC moves the clock, and for an offset date that can move
+    // the DAY - the record says when it was published, and an edit to the title
+    // is not an occasion to reinterpret that.
+    const out = rewriteFrontmatterFields(FM, { title: "Renamed" });
+    expect(out).toContain("2026-07-24 10:00:00+09:00");
+  });
+
+  it("keeps a year-only date as a year", () => {
+    expect(rewriteFrontmatterFields(FM, { title: "R" })).toMatch(/founded: '?1947'?/);
+  });
+
+  it("writes a new publication date, including a partial one", () => {
+    expect(rewriteFrontmatterFields(FM, { date_published: "1947" })).toMatch(
+      /date_published: ["']?1947["']?/,
+    );
+    expect(rewriteFrontmatterFields(FM, { date_published: "1947-06" })).toContain("1947-06");
+  });
+
+  it("clearing the date removes the key rather than writing an empty one", () => {
+    expect(rewriteFrontmatterFields(FM, { date_published: "" })).not.toContain("date_published");
   });
 });

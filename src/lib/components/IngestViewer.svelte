@@ -3961,9 +3961,15 @@
             title={liveTitle}
             publisher={livePublisher}
             creators={liveCreators}
+            datePublished={ingest.frontmatter.date_published ?? ""}
             canEdit={!!user}
-            onsave={({ title, publisher, creators }) =>
-              doc.updateFrontmatter({ title, publisher, creators })}
+            onsave={({ title, publisher, creators, datePublished }) =>
+              doc.updateFrontmatter({
+                title,
+                publisher,
+                creators,
+                date_published: datePublished,
+              })}
           />
           <!-- Acquisition provenance: where this record came from. -->
           <div class="flex items-baseline gap-2 text-xs font-ui">
