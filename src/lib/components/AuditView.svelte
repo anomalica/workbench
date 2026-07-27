@@ -797,7 +797,7 @@
                    the FACT (not on any one model's wording of it). -->
               <div class="flex flex-wrap items-start gap-x-3 gap-y-1.5">
                 <div class="min-w-0 flex-1">
-                  {#each quotes as q}
+                  {#each quotes.length === 1 ? quotes : [] as q}
                     {#if onquote}
                       <button
                         type="button"
@@ -810,7 +810,14 @@
                       <p class="text-sm text-on-surface-secondary border-l-2 border-primary/40 pl-2 leading-snug">{q}</p>
                     {/if}
                   {:else}
-                    <p class="text-xs italic text-on-surface-muted/60">no source quote</p>
+                    {#if quotes.length > 1}
+                      <p class="text-[10px] text-on-surface-muted/70">
+                        The models quoted {quotes.length} different spans here - each claim carries
+                        its own below.
+                      </p>
+                    {:else}
+                      <p class="text-xs italic text-on-surface-muted/60">no source quote</p>
+                    {/if}
                   {/each}
                 </div>
               </div>
@@ -880,6 +887,17 @@
                             {/if}
                             {#if label}
                               <p class="text-[10px] font-mono text-on-surface-muted/70 leading-tight">{label}</p>
+                            {/if}
+                            <!-- The model's OWN quote, shown whenever the models
+                                 in this cluster did not all quote the same span.
+                                 A list of distinct quotes above four claims left
+                                 the reader unable to say which evidence belonged
+                                 to which claim - and that pairing is the thing
+                                 being judged: a claim quoting a narrower span
+                                 than it needs is quote-mining, visible only when
+                                 claim and quote sit together. -->
+                            {#if quotes.length > 1 && m.quote}
+                              <p class="member-quote">{m.quote}</p>
                             {/if}
                             {#if canGrade}
                             <!-- TWO ROWS, because these are two questions. One
@@ -966,6 +984,16 @@
   }
 
   /* A claim and ITS rating are one card; the next claim is visibly another. */
+  /* Evidence sits with the claim it supports. */
+  .member-quote {
+    margin-top: 0.2rem;
+    padding-left: 0.45rem;
+    border-left: 2px solid color-mix(in srgb, var(--color-primary, #0d9488) 45%, transparent);
+    font-size: 11px;
+    line-height: 1.35;
+    color: var(--color-on-surface-secondary, inherit);
+  }
+
   .claim-block {
     padding: 0.35rem 0.5rem;
     border-radius: 0.25rem;
