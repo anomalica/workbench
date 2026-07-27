@@ -158,6 +158,22 @@
       }));
   }
 
+  /** A CHUNK's whole span, drawn on the source so "chunk" means something the
+   *  reader can see rather than a heading they must take on trust. Hovering the
+   *  chunk header outlines its text; clicking scrolls to it. */
+  let chunkSpan = $state<{ start: number; end: number } | null>(null);
+  function showChunk(claimKeys: string[], scroll: boolean) {
+    if (!claimKeys.length) {
+      chunkSpan = null;
+      return;
+    }
+    chunkSpan = unionExtent(sourceExtents, claimKeys);
+    if (!scroll || !chunkSpan) return;
+    requestAnimationFrame(() => {
+      sourceEl?.querySelector(".in-chunk")?.scrollIntoView({ block: "center", behavior: "smooth" });
+    });
+  }
+
   function inSpan(seg: { start: number; end: number }, span: { start: number; end: number } | null) {
     return !!span && seg.start < span.end && span.start < seg.end;
   }
@@ -440,7 +456,12 @@
                       {#if seg.count === 0}<span>{seg.text}</span>{:else}<span
                           class="extract band-{i % BANDS} {inSpan(seg, activeSpan)
                             ? 'is-active'
-                            : ''} {inSpan(seg, hoverSpan) ? 'is-hovered' : ''}"
+                            : ''} {inSpan(seg, hoverSpan) ? 'is-hovered' : ''} {inSpan(
+                            seg,
+                            chunkSpan,
+                          )
+                            ? 'in-chunk'
+                            : ''}"
                           role="button"
                           tabindex="0"
                           title="{seg.count} model{seg.count === 1 ? '' : 's'} drew {seg.claims
@@ -478,7 +499,12 @@
       <!-- WHAT THE MODELS MADE OF IT. -->
       <div class="flex-1 flex flex-col min-h-0 border-l border-border">
         {#key selected}
-          <AuditView hash={selected} onquote={showSourceFor} focus={focusedClaims} />
+          <AuditView
+            hash={selected}
+            onquote={showSourceFor}
+            onchunk={showChunk}
+            focus={focusedClaims}
+          />
         {/key}
       </div>
     </div>
@@ -545,6 +571,13 @@
   .extract.is-hovered {
     filter: brightness(1.4) saturate(1.25);
   }
+  /* The chunk the reader is pointing at, bracketed on the text. */
+  .extract.in-chunk {
+    box-shadow:
+      0 -2px 0 var(--color-primary, #0d9488) inset,
+      0 2px 0 var(--color-primary, #0d9488) inset;
+  }
+
   .extract.is-active {
     background-color: color-mix(in srgb, var(--color-primary, #0d9488) 38%, transparent);
     box-shadow: 0 -1px 0 var(--color-primary, #0d9488) inset,

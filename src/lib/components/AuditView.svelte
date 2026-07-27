@@ -39,9 +39,13 @@
   let {
     hash,
     onquote,
+    onchunk,
     focus = [],
   }: {
     hash: string;
+    /** Ask the source pane to show a whole CHUNK's span - what a chunk IS,
+     *  demonstrated on the text rather than asserted by a heading. */
+    onchunk?: (claimKeys: string[], scroll: boolean) => void;
     /** Claim keys (`variant\u0000claim_id`) the source pane asked to show -
      *  the reverse link: click a stretch of source, land on what the models
      *  made of it. */
@@ -745,7 +749,25 @@
         <section class="border-b-4 border-border/60">
           <!-- Chunk header: where in the source, and what each model found HERE
                (an explicit 0 included - "found nothing here" is a finding). -->
-          <header class="px-4 py-2 bg-surface-alt/60 flex flex-wrap items-center gap-x-3 gap-y-1 sticky top-0 z-10 border-b border-border">
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <!-- svelte-ignore a11y_click_events_have_key_events -->
+          <header
+            class="px-4 py-2 bg-surface-alt/60 flex flex-wrap items-center gap-x-3 gap-y-1 sticky top-0 z-10 border-b border-border {onchunk
+              ? 'chunk-header'
+              : ''}"
+            title={onchunk ? "Show this chunk's span in the source" : undefined}
+            onmouseenter={() =>
+              onchunk?.(
+                rows.flatMap((r) => r.cells.flatMap((c) => c.members.map((m) => keyOf(m)))),
+                false,
+              )}
+            onmouseleave={() => onchunk?.([], false)}
+            onclick={() =>
+              onchunk?.(
+                rows.flatMap((r) => r.cells.flatMap((c) => c.members.map((m) => keyOf(m)))),
+                true,
+              )}
+          >
             <span class="text-xs font-mono tabular-nums font-medium text-on-surface-secondary">
               {passageLabel(p.start, p.end, p.raw_locations)}
             </span>
@@ -976,9 +998,17 @@
     background: color-mix(in srgb, var(--color-success, #16a34a) 7%, transparent);
   }
 
+  /* "These came from the text you touched" - a tint, not a border. Outlining
+     every claim in a chunk made the whole column look selected and left the
+     keyboard cursor with nothing distinctive to say. */
   .claim-focused {
-    background: color-mix(in srgb, var(--color-primary, #0d9488) 18%, transparent);
-    box-shadow: inset 2px 0 0 var(--color-primary, #0d9488);
+    background: color-mix(in srgb, var(--color-primary, #0d9488) 10%, transparent);
+  }
+  .chunk-header {
+    cursor: pointer;
+  }
+  .chunk-header:hover {
+    background: color-mix(in srgb, var(--color-primary, #0d9488) 12%, transparent);
   }
 
   /* A claim that can be traced to its source says so on hover - the link is the
@@ -1069,8 +1099,8 @@
     color: #fff;
   }
   .grade-chip.is-set.potentially {
-    background: color-mix(in srgb, #b8860b 45%, transparent);
-    color: inherit;
+    background: #2563eb;
+    color: #fff;
   }
 
   /* The two questions read as two, with the axis named rather than left to be
@@ -1094,8 +1124,13 @@
     padding-right: 0.3rem;
     color: var(--color-on-surface-muted, #6b7280);
   }
+  /* Two axes, two palettes. EXTRACTION runs red-amber-green, the familiar
+     ramp for "how well was this done". VALUE runs slate-blue-gold, a different
+     hue family entirely, so a filled chip says which question it answered
+     without the reader tracing back to the row label - and so `okay` and
+     `potentially` stop looking like the same verdict. */
   .grade-chip.is-set.irrelevant {
-    background: var(--color-on-surface-muted, #6b7280);
-    color: var(--color-surface, #fff);
+    background: #475569;
+    color: #fff;
   }
 </style>
