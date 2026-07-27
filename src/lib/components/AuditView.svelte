@@ -30,7 +30,6 @@
   import {
     visibleRows,
     passageHasContent,
-    passageQuotes,
     passageTally,
     memberLines,
     frameLabel,
@@ -790,38 +789,8 @@
             </div>
           {/if}
           {#each rows as row (row.cluster.id)}
-            {@const quotes = passageQuotes([row.cluster])}
             {@const canGrade = gradable(p)}
             <article class="px-4 py-3 border-b border-border/50 {row.singleton && canGrade ? 'bg-warning-container/10' : ''}">
-              <!-- The source span this fact was drawn from, and the verdict on
-                   the FACT (not on any one model's wording of it). -->
-              <div class="flex flex-wrap items-start gap-x-3 gap-y-1.5">
-                <div class="min-w-0 flex-1">
-                  {#each quotes.length === 1 ? quotes : [] as q}
-                    {#if onquote}
-                      <button
-                        type="button"
-                        class="claim-linked text-sm text-on-surface-secondary border-l-2 border-primary/40 pl-2 leading-snug text-left w-full"
-                        title="Find this passage in the source"
-                        onmouseenter={() => onquote(q, "source", false)}
-                        onclick={() => onquote(q, "source", true)}
-                      >{q}</button>
-                    {:else}
-                      <p class="text-sm text-on-surface-secondary border-l-2 border-primary/40 pl-2 leading-snug">{q}</p>
-                    {/if}
-                  {:else}
-                    {#if quotes.length > 1}
-                      <p class="text-[10px] text-on-surface-muted/70">
-                        The models quoted {quotes.length} different spans here - each claim carries
-                        its own below.
-                      </p>
-                    {:else}
-                      <p class="text-xs italic text-on-surface-muted/60">no source quote</p>
-                    {/if}
-                  {/each}
-                </div>
-              </div>
-
               <!-- Each model's rendering of this fact, one line each. -->
               <div class="mt-2 space-y-1">
                 {#each row.cells as cell (cell.variant)}
@@ -888,15 +857,16 @@
                             {#if label}
                               <p class="text-[10px] font-mono text-on-surface-muted/70 leading-tight">{label}</p>
                             {/if}
-                            <!-- The model's OWN quote, shown whenever the models
-                                 in this cluster did not all quote the same span.
-                                 A list of distinct quotes above four claims left
-                                 the reader unable to say which evidence belonged
-                                 to which claim - and that pairing is the thing
-                                 being judged: a claim quoting a narrower span
-                                 than it needs is quote-mining, visible only when
-                                 claim and quote sit together. -->
-                            {#if quotes.length > 1 && m.quote}
+                            <!-- The model's OWN quote, always, inside its own
+                                 box. Listing the cluster's distinct quotes above
+                                 the claims left the reader unable to say which
+                                 evidence belonged to which claim, and showing
+                                 them there only SOMETIMES made the layout answer
+                                 a different question depending on the cluster.
+                                 The grouping already says these are one fact;
+                                 the box says what each model made of it and
+                                 which words it took. -->
+                            {#if m.quote}
                               <p class="member-quote">{m.quote}</p>
                             {/if}
                             {#if canGrade}
