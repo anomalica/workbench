@@ -1844,52 +1844,6 @@
              and making it a mode meant deciding which one you were in before
              you knew what you had found. -->
         <div class="w-px h-4 bg-border" aria-hidden="true"></div>
-        <button
-          onclick={() => { if (range) { onhighlight?.(range.from, range.to); clearSelection(); } }}
-          class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
-          title="Highlight these words (highlights may overlap)"
-        >
-          Highlight
-        </button>
-        {#if range && highlightAtWord(range.from)}
-          {@const hit = highlightAtWord(range.from)}
-          <div class="w-px h-4 bg-border" aria-hidden="true"></div>
-          <button
-            onclick={() => { contextFor = hit; clearSelection(); }}
-            class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
-            title="This highlight needs an earlier one to make sense (e.g. it says 'he' - link the highlight that names him). Click it next."
-          >
-            Needs context
-          </button>
-        {/if}
-        <div class="w-px h-4 bg-border" aria-hidden="true"></div>
-        <button
-          onclick={startSpanNote}
-          class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
-          title="Attach a note over these words - what's on screen, context the words miss"
-        >
-          Note
-        </button>
-        {#if onlinksource}
-          <button
-            onclick={() => { if (range) { onlinksource?.(range.from, range.to); clearSelection(); } }}
-            class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
-            title="These words refer to another ingested source - link them to it (optionally to an exact passage in it)"
-          >
-            Refer to source
-          </button>
-        {/if}
-        {#if selectionHasMarkup}
-          <div class="w-px h-4 bg-border" aria-hidden="true"></div>
-          <button
-            onclick={clearMarkupUnderSelection}
-            class="text-xs font-ui font-medium text-on-surface-secondary cursor-pointer hover:underline"
-            title="Remove the highlight(s)/note(s) over these words"
-          >
-            Clear
-          </button>
-        {/if}
-        <div class="w-px h-4 bg-border" aria-hidden="true"></div>
         <div class="relative">
           <button
             onclick={(e) => {
@@ -1917,14 +1871,6 @@
         </div>
         <div class="w-px h-4 bg-border" aria-hidden="true"></div>
         <button
-          onclick={cycleCase}
-          class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline tabular-nums min-w-7 text-center"
-          title="Cycle case: lowercase -> Capitalised -> UPPERCASE"
-        >
-          {caseLabel}
-        </button>
-        <div class="w-px h-4 bg-border" aria-hidden="true"></div>
-        <button
           onclick={() => { pickerOpen = false; editingSelection = true; }}
           class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
           title={single
@@ -1933,6 +1879,64 @@
         >
           {single ? "Edit word" : "Edit selection"}
         </button>
+        <div class="w-px h-4 bg-border" aria-hidden="true"></div>
+        <button
+          onclick={cycleCase}
+          class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline tabular-nums min-w-7 text-center"
+          title="Cycle case: lowercase -> Capitalised -> UPPERCASE"
+        >
+          {caseLabel}
+        </button>
+        <div class="w-px h-4 bg-border" aria-hidden="true"></div>
+        <button
+          onclick={() => { if (range) { onhighlight?.(range.from, range.to); clearSelection(); } }}
+          class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
+          title="Highlight these words (highlights may overlap)"
+        >
+          Highlight
+        </button>
+        {#if range && highlightAtWord(range.from)}
+          {@const hit = highlightAtWord(range.from)}
+          <div class="w-px h-4 bg-border" aria-hidden="true"></div>
+          <button
+            onclick={() => { contextFor = hit; clearSelection(); }}
+            class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
+            title="This highlight needs an earlier one to make sense (e.g. it says 'he' - link the highlight that names him). Click it next."
+          >
+            Needs context
+          </button>
+        {/if}
+        <div class="w-px h-4 bg-border" aria-hidden="true"></div>
+        <button
+          onclick={startSpanNote}
+          class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
+          title="Attach a note over these words - what's on screen, context the words miss"
+        >
+          Note
+        </button>
+        {#if onlinksource}
+          <!-- A source reference IS a note - a note whose body is another
+               record rather than typed text - so it sits with Note rather than
+               as a separate verb in the bar. -->
+          <span class="text-on-surface-muted/60 text-xs" aria-hidden="true">/</span>
+          <button
+            onclick={() => { if (range) { onlinksource?.(range.from, range.to); clearSelection(); } }}
+            class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
+            title="These words refer to another ingested source - link them to it (optionally to an exact passage in it)"
+          >
+            source
+          </button>
+        {/if}
+        {#if selectionHasMarkup}
+          <div class="w-px h-4 bg-border" aria-hidden="true"></div>
+          <button
+            onclick={clearMarkupUnderSelection}
+            class="text-xs font-ui font-medium text-on-surface-secondary cursor-pointer hover:underline"
+            title="Remove the highlight(s)/note(s) over these words"
+          >
+            Clear
+          </button>
+        {/if}
       <button
         onclick={clearSelection}
         class="p-0.5 rounded cursor-pointer text-on-surface-muted/60 hover:text-on-surface hover:bg-surface-alt transition-colors"
