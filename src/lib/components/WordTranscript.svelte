@@ -1839,7 +1839,6 @@
       <span class="text-xs font-ui text-on-surface-secondary tabular-nums">
         {count} word{count === 1 ? "" : "s"}
       </span>
-      {#if true}
         <!-- Annotation actions, offered wherever the words are shown: marking a
              passage is not a separate activity from reading or correcting it,
              and making it a mode meant deciding which one you were in before
@@ -1890,7 +1889,6 @@
             Clear
           </button>
         {/if}
-      {:else}
         <div class="w-px h-4 bg-border" aria-hidden="true"></div>
         <div class="relative">
           <button
@@ -1935,7 +1933,6 @@
         >
           {single ? "Edit word" : "Edit selection"}
         </button>
-      {/if}
       <button
         onclick={clearSelection}
         class="p-0.5 rounded cursor-pointer text-on-surface-muted/60 hover:text-on-surface hover:bg-surface-alt transition-colors"
