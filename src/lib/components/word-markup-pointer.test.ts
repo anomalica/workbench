@@ -113,12 +113,15 @@ describe("chain hover lights both ends of the link", () => {
     expect(chained()).toEqual([]);
   });
 
-  it("edit mode never shows it - Ingest keeps highlights subtle", async () => {
+  it("shows the chain in the editing view too - there is one view now", async () => {
+    // Chain hover used to be markup-only, and highlights rendered as a faint
+    // undifferentiated band while editing. With a single view there is one
+    // rendering: the link is visible wherever the words are.
     render(WordTranscript, { props: props({ mode: "edit" }) });
     await settle();
     await fireEvent.pointerOver(word(3), { clientX: 50, clientY: 50 });
     await settle();
-    expect(chained()).toEqual([]);
+    expect(chained().length).toBeGreaterThan(0);
   });
 });
 
@@ -151,12 +154,16 @@ describe("markup: click plays, drag pauses", () => {
     expect(onseek).not.toHaveBeenCalled();
   });
 
-  it("edit mode keeps the immediate seek-on-press", async () => {
+  it("defers the seek in the editing view too, so a drag can cancel it", async () => {
+    // Editing used to seek on press. That started audio under a gesture which
+    // often turned out to be a selection, so the press now only ARMS the play
+    // and pointerup fires it - the behaviour markup already had.
     const onseek = vi.fn();
     render(WordTranscript, { props: props({ mode: "edit", onseek }) });
     await settle();
     await fireEvent.pointerDown(word(2), { button: 0, clientX: 100, clientY: 100 });
-    expect(onseek).toHaveBeenCalledTimes(1);
+    expect(onseek).not.toHaveBeenCalled();
+    await fireEvent.pointerUp(window, { clientX: 100, clientY: 100 });
     expect(onseek).toHaveBeenCalledWith(2.0);
   });
 

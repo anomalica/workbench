@@ -1064,7 +1064,6 @@
     // Note authoring is Markup's job. Leaving the shortcut live in Ingest would
     // reintroduce, invisibly, exactly the affordance just removed from its
     // toolbar - a hidden key that still writes notes from the reading view.
-    if (mode !== "markup") return;
     e.preventDefault();
     addNoteAtCurrentTime();
   }
@@ -1218,7 +1217,7 @@
     const cols = highlightColorsByWord.get(g);
     // Ingest collapses any number of overlapping highlights to ONE faint band:
     // the signal there is "this is highlighted", not which one it is.
-    const subtle = mode !== "markup";
+    const subtle = false;
     applyWordHighlight(el, subtle && cols?.length ? [SUBTLE_HL] : cols, subtle);
     c.toggle("wt-highlight", cols !== undefined);
     c.toggle("wt-spannote", spanNoteWordSet.has(g));
@@ -1285,7 +1284,7 @@
     const el = (e.target as HTMLElement | null)?.closest?.("[data-word-index]") as HTMLElement | null;
     if (!dragging) {
       // Not dragging: this is a plain hover. Track the chain-hover emphasis.
-      if (mode === "markup") {
+      {
         const id = el ? highlightAtWord(Number(el.dataset.wordIndex)) : null;
         hoverChainId = id && contextIndex.isChained(id) ? id : null;
       }
@@ -1341,9 +1340,7 @@
   }
 
   // Double-click a word to jump straight into the editor on that single word.
-  // Markup is read-only, so there is no word editor to open.
   function onContainerDblClick(e: MouseEvent) {
-    if (mode === "markup") return;
     const el = (e.target as HTMLElement | null)?.closest?.("[data-word-index]") as HTMLElement | null;
     if (!el) return;
     selectWord(Number(el.dataset.wordIndex), false);
@@ -1503,11 +1500,12 @@
     dragging = true;
     pressOrigin = { x: e.clientX, y: e.clientY };
     if (!selectOnly && !pickingContext && onseek && words[g]) {
-      // Markup defers playback to pointerup so a drag can cancel it: a bare
-      // click plays the word, a drag pauses instead. Edit keeps the immediate
-      // seek - there, clicking IS the listen-here gesture.
-      if (mode === "markup") pendingSeek = words[g].start;
-      else onseek(words[g].start);
+      // Playback is deferred to pointerup so a drag can cancel it: a bare click
+      // plays the word, a drag is a selection and pauses instead. This was
+      // markup's behaviour; with one view it is everyone's, and it is the
+      // better one - an immediate seek starts audio under a gesture that turns
+      // out to be a selection.
+      pendingSeek = words[g].start;
     }
   }
 
@@ -1659,7 +1657,7 @@
   });
 
   function toggleHeaderPicker(run: SpeakerRun) {
-    if (mode === "markup") return; // no speaker reassignment in read-only markup
+
     // Opening a header picker deselects any word range to avoid two live menus.
     anchor = null;
     range = null;
@@ -1841,7 +1839,7 @@
       <span class="text-xs font-ui text-on-surface-secondary tabular-nums">
         {count} word{count === 1 ? "" : "s"}
       </span>
-      {#if mode === "markup" || onhighlight || onspannote}
+      {#if true}
         <!-- Annotation actions, offered wherever the words are shown: marking a
              passage is not a separate activity from reading or correcting it,
              and making it a mode meant deciding which one you were in before
@@ -1961,32 +1959,13 @@
      therefore sits on the LEFT and coverage stays anchored right, so the figure
      never moves or disappears as a selection comes and goes. -->
 <div class="flex-none flex items-center gap-2 px-4 py-1.5 border-b border-border bg-surface-alt">
-  {#if onmodechange}
-    <!-- The mode switch. Reading/observing and marking up are two modes over the
-         SAME rendered transcript, not two tabs - switching used to remount the
-         word view and reparse the body. Here the DOM stays put. -->
-    <div class="inline-flex rounded overflow-hidden border border-border text-xs font-ui font-medium">
-      <button
-        onclick={() => onmodechange?.("edit")}
-        class="px-2 py-0.5 transition-colors
-          {mode !== 'markup' ? 'bg-primary text-on-primary' : 'text-on-surface-secondary hover:bg-surface cursor-pointer'}"
-        title="Read, observe and correct the transcript. Highlight and note are available here too."
-      >Read</button>
-      <button
-        onclick={() => onmodechange?.("markup")}
-        class="px-2 py-0.5 transition-colors border-l border-border
-          {mode === 'markup' ? 'bg-primary text-on-primary' : 'text-on-surface-secondary hover:bg-surface cursor-pointer'}"
-        title="Annotation only - the transcript cannot be edited from here."
-      >Mark up</button>
-    </div>
-    <div class="w-px h-4 bg-border" aria-hidden="true"></div>
-  {/if}
+
   <span class="text-xs font-ui text-on-surface-muted tabular-nums">Playing {secondsToClock(currentTime)}</span>
   {#if range}
     {@const selN = range.to - range.from + 1}
     <span class="text-xs font-ui text-on-surface-muted tabular-nums">{selN} selected</span>
     <!-- Observation is an Ingest job; markup is annotation-only. -->
-    {#if mode !== "markup"}
+    {#if true}
       <button
         onclick={() => setSelectionObserved(true)}
         disabled={rangeAllObserved()}
@@ -2041,7 +2020,7 @@
   <span class="text-xs font-ui text-on-surface-muted/60">{notes.length} note{notes.length === 1 ? "" : "s"}</span>
 </div>
 
-{#if mode === "markup" && contextFor !== null}
+{#if contextFor !== null}
   <div class="flex-none flex items-center gap-2 px-4 py-1.5 bg-primary/10 border-b border-primary/30">
     <span class="text-xs font-ui text-on-surface">
       Click the earlier highlight that <strong>{contextFor}</strong> needs for context.
@@ -2053,7 +2032,7 @@
   </div>
 {/if}
 
-{#if mode === "markup" && range && highlightAtWord(range.from)}
+{#if range && highlightAtWord(range.from)}
   {@const hit = highlightAtWord(range.from)!}
   {@const needs = contextOf(hit)}
   {@const dependents = contextDependents(hit)}
@@ -2139,14 +2118,8 @@
           : 'auto'};contain-intrinsic-size:auto {runIntrinsic(run)}px"
       >
         <div class="flex items-center justify-between gap-2 pb-1">
-          {#if mode === "markup"}
-            <!-- Read-only speaker label: markup doesn't reassign speakers. -->
-            <div class="flex items-center gap-2 px-1 -mx-1">
-              <div class="w-4 flex-none flex items-center justify-center">
-                <SpeakerDot speaker={run.speaker} />
-              </div>
-              <span class="text-xs font-ui font-medium text-on-surface-secondary">{run.speaker}</span>
-            </div>
+          {#if false}
+            <div></div>
           {:else}
             <!-- Clickable speaker chip: reassigns the whole turn. -->
             <div class="relative inline-block">

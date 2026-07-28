@@ -1304,7 +1304,10 @@
     }
   }
 
-  let markupMode = $state(_loadFlag(MARKUP_MODE_KEY));
+  // The word view no longer has modes - it offers editing and marking together
+  // - so nothing switches this any more. A stored `true` from before the merge
+  // would otherwise strand a reviewer in the old read-only half.
+  let markupMode = $state(false);
 
   // Cross-record link picker: "Refer to source" over a markup selection opens
   // it; confirming writes the {{link-start/end}} pair via doc.addWordLink. The
@@ -4206,7 +4209,6 @@
         <div class="relative flex-1 flex flex-col min-h-0">
           <WordTranscript
             mode={inMarkup ? "markup" : "edit"}
-            onmodechange={(m) => (markupMode = m === "markup")}
             showObservedOnly={observedOnly}
             onobservedonlychange={(v) => (observedOnly = v)}
             recordHash={ingest.content_hash}
