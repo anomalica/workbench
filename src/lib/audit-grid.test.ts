@@ -228,10 +228,22 @@ describe("memberLines / frameLabel", () => {
 
   it("builds a compact frame, dropping empty parts", () => {
     expect(
-      frameLabel({ text: "t", claim_type: "observation", attestation: "reported", refs: [] }),
+      frameLabel({
+        text: "t",
+        claim_type: "observation",
+        attestation: "reported",
+        speaker: "",
+        refs: [],
+      }),
     ).toBe("observation · reported");
     expect(
-      frameLabel({ text: "t", claim_type: "observation", attestation: "", refs: ["doc-1"] }),
+      frameLabel({
+        text: "t",
+        claim_type: "observation",
+        attestation: "",
+        speaker: "",
+        refs: ["doc-1"],
+      }),
     ).toBe("observation · refs: doc-1");
   });
 });
