@@ -108,6 +108,63 @@ class NodeRow:
         return self.found_by == 1
 
 
+@dataclass
+class NodeGroup:
+    """Entity rows that may be the SAME THING in different words. Grouped, never
+    merged: "Stewart, Jon" and "Jon Stewart" are shown side by side so a
+    reviewer can see the competing forms and choose, because a silent merge
+    invents an agreement between models that then reads as recall."""
+
+    rows: list[NodeRow]
+
+    @property
+    def variants(self) -> set[str]:
+        return {v for r in self.rows for v in r.by_variant}
+
+
+def group_node_rows(rows: list[NodeRow], similar: Similar) -> list[NodeGroup]:
+    """Single-link grouping of entity rows by name similarity, within a type.
+    The predicate is the same one the claims use, so grouping happens in the
+    embedding space when it is available and by exact name when it is not."""
+
+    class _Named:
+        __slots__ = ("text",)
+
+        def __init__(self, text: str):
+            self.text = text
+
+    out: list[NodeGroup] = []
+    by_type: dict[str, list[NodeRow]] = {}
+    for r in rows:
+        by_type.setdefault(r.type, []).append(r)
+
+    for _type, group in by_type.items():
+        parent = list(range(len(group)))
+
+        def find(i: int) -> int:
+            while parent[i] != i:
+                parent[i] = parent[parent[i]]
+                i = parent[i]
+            return i
+
+        for i in range(len(group)):
+            for j in range(i + 1, len(group)):
+                if find(i) == find(j):
+                    continue
+                if similar(_Named(group[i].name), _Named(group[j].name)):
+                    parent[find(i)] = find(j)
+
+        buckets: dict[int, list[NodeRow]] = {}
+        for i, r in enumerate(group):
+            buckets.setdefault(find(i), []).append(r)
+        for rs in buckets.values():
+            out.append(NodeGroup(rows=sorted(rs, key=lambda r: r.name.casefold())))
+
+    return sorted(
+        out, key=lambda g: (g.rows[0].type.casefold(), g.rows[0].name.casefold())
+    )
+
+
 def node_rows(variants: list["Variant"]) -> list[NodeRow]:
     """Every distinct entity across the variants, with which models found it.
 

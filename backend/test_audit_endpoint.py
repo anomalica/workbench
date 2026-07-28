@@ -229,7 +229,11 @@ def test_nodes_compared_across_models(audit_client, tmp_path):
     (vdir / "haiku.yaml").write_text(yaml.safe_dump(haiku))
 
     body = audit_client.get(f"/api/ingests/{HASH}/audit").json()
-    by_name = {n["name"].casefold(): n for n in body["nodes"]}
+    # Entities come back GROUPED - forms that may be the same thing sit together
+    # so a reviewer sees the alternatives; the group never merges them.
+    by_name = {
+        alt["name"].casefold(): alt for g in body["nodes"] for alt in g["alternatives"]
+    }
     # Case differs between the models; the entity is still one row.
     assert sorted(by_name["jon stewart"]["found_by"]) == ["haiku", "opus"]
     assert by_name["jon stewart"]["singleton"] is False
@@ -489,3 +493,74 @@ def test_gold_is_an_accepted_value(audit_client, tmp_path, monkeypatch):
         },
     )
     assert res.status_code == 200, res.text
+
+
+def test_entity_verdicts_save(audit_client, tmp_path, monkeypatch):
+    # Entities fail differently from claims: `too_generic` and
+    # `incorrect_formatting` are faults of the entity, not of the extraction.
+    store = tmp_path / "store"
+    store.mkdir()
+    written = {}
+    monkeypatch.setattr(server.source, "audit_store_dir", lambda h: store)
+    monkeypatch.setattr(
+        server.source, "save_audit", lambda h, g, n, e: written.update(g=g) or True
+    )
+    res = audit_client.put(
+        f"/api/ingests/{HASH}/audit/nodes",
+        json={
+            "nodes": [
+                {
+                    "variant": "haiku",
+                    "type": "person",
+                    "name": "Jon Stewart",
+                    "quality": "good",
+                },
+                {
+                    "variant": "opus",
+                    "type": "person",
+                    "name": "Stewart, Jon",
+                    "quality": "incorrect_formatting",
+                },
+                {
+                    "variant": "opus",
+                    "type": "organisation",
+                    "name": "the government",
+                    "quality": "too_generic",
+                },
+            ]
+        },
+    )
+    assert res.status_code == 200, res.text
+    stored = {(n["variant"], n["name"]): n["quality"] for n in written["g"]["nodes"]}
+    assert stored[("opus", "Stewart, Jon")] == "incorrect_formatting"
+    assert stored[("opus", "the government")] == "too_generic"
+
+    # Re-judging one entity replaces its verdict rather than adding another.
+    audit_client.put(
+        f"/api/ingests/{HASH}/audit/nodes",
+        json={
+            "nodes": [
+                {
+                    "variant": "haiku",
+                    "type": "person",
+                    "name": "Jon Stewart",
+                    "quality": "irrelevant",
+                }
+            ]
+        },
+    )
+    haiku = [n for n in written["g"]["nodes"] if n["variant"] == "haiku"]
+    assert len(haiku) == 1 and haiku[0]["quality"] == "irrelevant"
+
+
+def test_rejects_an_entity_quality_outside_the_scale(
+    audit_client, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(server.source, "audit_store_dir", lambda h: tmp_path)
+    res = audit_client.put(
+        f"/api/ingests/{HASH}/audit/nodes",
+        json={
+            "nodes": [{"variant": "h", "type": "person", "name": "X", "quality": "bad"}]
+        },
+    )
+    assert res.status_code == 400

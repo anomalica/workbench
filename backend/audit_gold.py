@@ -83,6 +83,13 @@ SCHEMA = "anomalica/audit/2"
 # have inflated the model's fidelity score. Both are ordinal, so a grader reads
 # each as a ranking rather than as labels.
 QUALITY = ("bad", "okay", "good")
+
+# Entities fail differently from claims. `too_generic` and `incorrect_formatting`
+# are faults of the ENTITY, not of how well it was extracted: a node can be
+# faithfully pulled from the source and still be useless as a node ("the
+# government") or right-but-malformed ("Stewart, Jon" where the graph wants
+# "Jon Stewart").
+NODE_QUALITY = ("irrelevant", "too_generic", "incorrect_formatting", "good")
 VALUE = ("irrelevant", "potentially", "gold")
 
 
@@ -163,6 +170,34 @@ def validate_claim(entry: dict) -> str | None:
     if "irrelevant" in entry and not isinstance(entry["irrelevant"], bool):
         return "irrelevant must be a bool"
     return None
+
+
+def validate_node(entry: dict) -> str | None:
+    """The reason an entity verdict is invalid, or None."""
+    for field in ("variant", "type", "name"):
+        if not isinstance(entry.get(field), str) or not entry[field]:
+            return f"missing or invalid {field}"
+    q = entry.get("quality")
+    if q not in NODE_QUALITY:
+        return "quality must be " + " | ".join(NODE_QUALITY)
+    return None
+
+
+def upsert_node(gold: dict, entry: dict) -> dict:
+    """Add or replace an entity verdict. Identity is (variant, type, name): a
+    node's own id is regenerated every run, so it is provenance, not identity."""
+    entries = gold.setdefault("nodes", [])
+    key = (entry["variant"], entry["type"].casefold(), entry["name"].casefold())
+    for i, e in enumerate(entries):
+        if (
+            e.get("variant"),
+            str(e.get("type", "")).casefold(),
+            str(e.get("name", "")).casefold(),
+        ) == key:
+            entries[i] = entry
+            return entry
+    entries.append(entry)
+    return entry
 
 
 def validate_cluster(entry: dict) -> str | None:

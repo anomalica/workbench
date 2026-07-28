@@ -2430,6 +2430,7 @@ def _attach_audit_gold(full_hash: str, payload: dict) -> None:
     payload["gold"] = {
         "claims": gold.get("claims", []),
         "clusters": gold.get("clusters", []),
+        "nodes": gold.get("nodes", []),
     }
 
 
@@ -2558,6 +2559,40 @@ def put_audit_claims(full_hash: str, body: dict, request: Request) -> JSONRespon
     return JSONResponse(
         {"saved": len(saved), "gold_ids": [e.get("gold_id") for e in saved]}
     )
+
+
+@app.put("/api/ingests/{full_hash}/audit/nodes")
+def put_audit_nodes(full_hash: str, body: dict, request: Request) -> JSONResponse:
+    """Record entity verdicts - one write, one commit, like the claim batch."""
+    user = _require_role(request, "reviewer")
+    entries = body.get("nodes")
+    if not isinstance(entries, list) or not entries:
+        raise HTTPException(status_code=400, detail="nodes must be a non-empty list")
+    for e in entries:
+        if not isinstance(e, dict):
+            raise HTTPException(status_code=400, detail="each node must be an object")
+        problem = audit_gold.validate_node(e)
+        if problem:
+            raise HTTPException(status_code=400, detail=problem)
+
+    store_dir = source.audit_store_dir(full_hash)
+    if store_dir is None:
+        raise HTTPException(status_code=404, detail="Unknown record")
+    gold = audit_gold.read(store_dir, full_hash) or audit_gold.empty(full_hash)
+    gold["models"] = _record_model_set(full_hash)
+    for e in entries:
+        entry = dict(e)
+        entry["reviewed_by"] = user.get("email", "")
+        entry["reviewed_at"] = datetime.now(dt_timezone.utc).isoformat(
+            timespec="seconds"
+        )
+        audit_gold.upsert_node(gold, entry)
+    if not source.save_audit(full_hash, gold, user["name"], user["email"]):
+        raise HTTPException(status_code=500, detail="Could not save audit gold")
+    commit_now = getattr(source, "commit_audit_now", None)
+    if callable(commit_now):
+        commit_now(full_hash, user["name"], user["email"])
+    return JSONResponse({"saved": len(entries)})
 
 
 @app.put("/api/ingests/{full_hash}/audit/cluster")

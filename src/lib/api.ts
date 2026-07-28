@@ -338,6 +338,32 @@ export interface AuditPromptRef {
  *  output. Outside the passage axis: nodes carry no source location, so this is
  *  a whole-record comparison. Matched across models on (type, name), exactly -
  *  a fuzzy merge would invent agreement a reviewer would read as recall. */
+/** Entity forms that may be the same thing. Shown side by side, never merged. */
+export interface AuditNodeGroup {
+  alternatives: AuditNode[];
+  found_by: string[];
+}
+
+/** A reviewer's verdict on one entity form. */
+export interface AuditNodeGold {
+  variant: string;
+  type: string;
+  name: string;
+  quality: "irrelevant" | "too_generic" | "incorrect_formatting" | "good";
+}
+
+export async function putAuditNodes(hash: string, nodes: AuditNodeGold[]): Promise<void> {
+  const res = await fetch(`/api/ingests/${hash}/audit/nodes`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ nodes }),
+  });
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({}));
+    throw new Error(d.detail || `Save failed (${res.status})`);
+  }
+}
+
 export interface AuditNode {
   type: string;
   name: string;
@@ -371,12 +397,16 @@ export interface AuditPayload {
   similarity?: AuditSimilarity;
   record: { hash: string; friendly_name: string };
   variants: AuditVariant[];
-  nodes?: AuditNode[];
+  nodes?: AuditNodeGroup[];
   passages: AuditPassage[];
   missed?: AuditGold[];
   /** anomalica/audit/2 gold as stored: raw claim verdicts + cluster best-ofs.
    *  Matching onto the displayed run is the client's job, by (variant, claim_id). */
-  gold?: { claims: AuditClaimGold[]; clusters: Record<string, unknown>[] };
+  gold?: {
+    claims: AuditClaimGold[];
+    clusters: Record<string, unknown>[];
+    nodes?: AuditNodeGold[];
+  };
 }
 
 /** Fetch the model/digest audit comparison for a record. Null when no extraction

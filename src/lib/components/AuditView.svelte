@@ -19,6 +19,8 @@
     fetchAudit,
     putAuditClaim,
     putAuditClaims,
+    putAuditNodes,
+    type AuditNodeGold,
     type AuditPayload,
     type AuditPassage,
     type AuditCluster,
@@ -429,13 +431,71 @@
   /** Detail of how the variants actually differ - "prompts differ" is not
    *  actionable until you can see WHICH prompt. */
   let showVariantDetail = $state(false);
-  let nodeRows = $derived(
-    (payload?.nodes ?? []).filter((n) => n.found_by.some((v) => !hidden.has(v))),
+  let nodeGroups = $derived(
+    (payload?.nodes ?? []).filter((g) => g.found_by.some((v) => !hidden.has(v))),
   );
-  let nodeTypes = $derived([...new Set(nodeRows.map((n) => n.type))].sort());
+  let nodeTypes = $derived(
+    [...new Set(nodeGroups.map((g) => g.alternatives[0]?.type ?? ""))].sort(),
+  );
+  let nodeRows = $derived(nodeGroups.flatMap((g) => g.alternatives));
   let sharedNodeCount = $derived(
     nodeRows.filter((n) => n.found_by.filter((v) => !hidden.has(v)).length > 1).length,
   );
+
+  // --- entity verdicts ------------------------------------------------------
+  // Entities fail differently from claims: `too generic` and `incorrect
+  // formatting` are faults of the ENTITY, not of how well it was extracted.
+  const NODE_QUALITY = ["irrelevant", "too_generic", "incorrect_formatting", "good"] as const;
+  const NODE_LABEL: Record<string, string> = {
+    irrelevant: "irrelevant",
+    too_generic: "too generic",
+    incorrect_formatting: "wrong form",
+    good: "good",
+  };
+  const NODE_HELP: Record<string, string> = {
+    irrelevant: "Not worth a node at all",
+    too_generic: "Real, but useless as an entity - \"the government\", \"researchers\"",
+    incorrect_formatting: "Right entity, wrong surface form",
+    good: "Correct and well formed",
+  };
+  let unsavedNodes = $state<Record<string, AuditNodeGold>>({});
+  let unsavedNodeCount = $derived(Object.keys(unsavedNodes).length);
+  let savedNodes = $derived(payload?.gold?.nodes ?? []);
+  function nodeKey(variant: string, type: string, name: string) {
+    return `${variant}\u0000${type}\u0000${name}`.toLowerCase();
+  }
+  function nodeVerdict(variant: string, n: { type: string; name: string }) {
+    const k = nodeKey(variant, n.type, n.name);
+    return (
+      unsavedNodes[k] ??
+      savedNodes.find((g) => nodeKey(g.variant, g.type, g.name) === k)
+    );
+  }
+  function rateNode(
+    variant: string,
+    n: { type: string; name: string },
+    quality: (typeof NODE_QUALITY)[number],
+  ) {
+    unsavedNodes = {
+      ...unsavedNodes,
+      [nodeKey(variant, n.type, n.name)]: { variant, type: n.type, name: n.name, quality },
+    };
+  }
+  async function submitNodes() {
+    const entries = Object.values(unsavedNodes);
+    if (!entries.length || saving) return;
+    saving = true;
+    try {
+      await putAuditNodes(recordHash, entries);
+      if (payload?.gold) payload.gold.nodes = [...savedNodes, ...entries];
+      unsavedNodes = {};
+      savedAt = new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+    } catch (e) {
+      saveError = e instanceof Error ? e.message : String(e);
+    } finally {
+      saving = false;
+    }
+  }
 
   /** Can this passage's clusters be graded? Only if the models were actually
    *  compared here. A passage holding ONE model emits singletons by
@@ -581,23 +641,27 @@
 
     <!-- ONE place that says whether the work is safe, instead of a word beside
          every claim that appeared and disappeared and shifted the row. -->
-    {#if tab === "claims" && (unsavedCount || savedAt || saving)}
+    {#if unsavedCount || unsavedNodeCount || savedAt || saving}
       <div
         class="flex-none px-4 py-1.5 border-b border-border flex items-center gap-2 text-xs
           {unsavedCount ? 'bg-warning-container/40' : 'bg-surface-alt/40'}"
       >
         {#if saving}
           <span class="text-on-surface-secondary">Saving {unsavedCount} rating{unsavedCount === 1 ? "" : "s"}…</span>
-        {:else if unsavedCount}
+        {:else if unsavedCount || unsavedNodeCount}
           <span class="text-on-surface font-medium">
-            {unsavedCount} rating{unsavedCount === 1 ? "" : "s"} not saved yet
+            {unsavedCount + unsavedNodeCount} rating{unsavedCount + unsavedNodeCount === 1 ? "" : "s"}
+            not saved yet
           </span>
           <span class="text-on-surface-secondary">- kept in this browser until you save</span>
           <button
-            onclick={submitVerdicts}
+            onclick={() => {
+              if (unsavedCount) submitVerdicts();
+              if (unsavedNodeCount) submitNodes();
+            }}
             class="ml-auto text-xs font-medium rounded px-2.5 py-1 cursor-pointer
               bg-primary text-on-primary hover:opacity-90"
-          >Save {unsavedCount}</button>
+          >Save {unsavedCount + unsavedNodeCount}</button>
         {:else if savedAt}
           <span class="text-success">All ratings saved at {savedAt}</span>
         {/if}
@@ -684,39 +748,48 @@
           silently merged into false agreement.
         </p>
         {#each nodeTypes as t (t)}
-          {@const rows = nodeRows.filter((n) => n.type === t)}
+          {@const groups = nodeGroups.filter((g) => g.alternatives[0]?.type === t)}
           <section class="mb-5">
             <h3 class="text-[11px] uppercase tracking-wide text-on-surface-muted mb-1.5 pb-1 border-b border-border">
-              {t || "untyped"} <span class="tabular-nums">({rows.length})</span>
+              {t || "untyped"} <span class="tabular-nums">({groups.length})</span>
             </h3>
-            <!-- One entity per ROW, with a fixed gutter of model dots. Chips
-                 wrapped inline made this a wall of text where nothing lined up;
-                 a column of dots lets the eye scan straight down for the gaps,
-                 which is the whole point of the comparison. -->
-            <ul class="grid gap-x-6 gap-y-0.5" style="grid-template-columns: repeat(auto-fill, minmax(22rem, 1fr));">
-              {#each rows as n (n.type + n.name)}
-                {@const finders = n.found_by.filter((v) => !hidden.has(v))}
-                <li class="flex items-baseline gap-2 py-0.5 border-b border-border/30">
-                  <span class="flex-none flex gap-0.5 pt-0.5" style="width: {Math.max(allVariants.length, 2) * 0.5}rem">
-                    {#each allVariants as v (v.id)}
-                      {@const found = finders.includes(v.id)}
-                      <span
-                        class="w-1.5 h-1.5 rounded-full flex-none"
-                        style={found
-                          ? `background:${colourOf.get(v.id)}`
-                          : "background:transparent;box-shadow:inset 0 0 0 1px var(--color-border,rgba(128,128,128,0.4))"}
-                        title="{labelOf(v.id, v.model)} {found ? 'found' : 'did NOT find'} {n.name}"
-                      ></span>
-                    {/each}
-                  </span>
-                  <span class="text-xs {finders.length > 1 ? 'text-on-surface' : 'text-on-surface-secondary'} min-w-0 break-words">
-                    {n.name}
-                  </span>
-                  {#if finders.length === 1}
-                    <span class="ml-auto flex-none text-[10px] text-on-surface-muted/70 whitespace-nowrap">
-                      only {labelOf(finders[0], finders[0])}
-                    </span>
-                  {/if}
+            <ul class="flex flex-col gap-1">
+              {#each groups as g, gi (t + gi)}
+                <!-- A GROUP is forms that may be the same thing. They sit side
+                     by side so the reviewer can see the alternatives and judge
+                     each; the grouping suggests, it never merges. -->
+                <li class="entity-group {g.alternatives.length > 1 ? 'has-alternatives' : ''}">
+                  {#each g.alternatives as n (n.type + n.name)}
+                    {@const finders = n.found_by.filter((v) => !hidden.has(v))}
+                    <div class="flex items-baseline gap-2 flex-wrap py-0.5">
+                      <span class="flex-none flex gap-0.5 pt-0.5" style="width: {Math.max(allVariants.length, 2) * 0.5}rem">
+                        {#each allVariants as v (v.id)}
+                          {@const found = finders.includes(v.id)}
+                          <span
+                            class="w-1.5 h-1.5 rounded-full flex-none"
+                            style={found
+                              ? `background:${colourOf.get(v.id)}`
+                              : "background:transparent;box-shadow:inset 0 0 0 1px var(--color-border,rgba(128,128,128,0.4))"}
+                            title="{labelOf(v.id, v.model)} {found ? 'found' : 'did NOT find'} {n.name}"
+                          ></span>
+                        {/each}
+                      </span>
+                      <span class="text-xs text-on-surface min-w-0 break-words flex-1">{n.name}</span>
+                      {#each finders as fv (fv)}
+                        {@const verdict = nodeVerdict(fv, n)}
+                        <span class="flex items-center gap-0.5">
+                          <span class="text-[9px] text-on-surface-muted mr-0.5">{labelOf(fv, fv)}</span>
+                          {#each NODE_QUALITY as q}
+                            <button
+                              onclick={() => rateNode(fv, n, q)}
+                              class="node-chip {verdict?.quality === q ? 'is-set ' + q : ''}"
+                              title={NODE_HELP[q]}
+                            >{NODE_LABEL[q]}</button>
+                          {/each}
+                        </span>
+                      {/each}
+                    </div>
+                  {/each}
                 </li>
               {/each}
             </ul>
@@ -1079,6 +1152,47 @@
     margin-right: 1px;
     border-radius: 0.15rem;
     background: var(--color-surface-alt, rgba(128, 128, 128, 0.18));
+  }
+
+  /* Alternatives are bracketed together, so "these may be the same thing"
+     reads off the layout rather than needing a label. */
+  .entity-group {
+    padding: 0.15rem 0.35rem;
+    border-radius: 0.2rem;
+  }
+  .entity-group.has-alternatives {
+    border-left: 2px solid color-mix(in srgb, var(--color-primary, #0d9488) 55%, transparent);
+    background: color-mix(in srgb, currentColor 3%, transparent);
+  }
+  .node-chip {
+    font-size: 9px;
+    line-height: 1;
+    padding: 0.15rem 0.3rem;
+    border-radius: 0.15rem;
+    border: 1px solid var(--color-border, rgba(128, 128, 128, 0.35));
+    background: transparent;
+    color: var(--color-on-surface-muted, inherit);
+    cursor: pointer;
+  }
+  .node-chip:hover {
+    background: var(--color-surface-alt, rgba(128, 128, 128, 0.15));
+  }
+  .node-chip.is-set {
+    border-color: transparent;
+    font-weight: 600;
+    color: #fff;
+  }
+  .node-chip.is-set.good {
+    background: var(--color-success, #16a34a);
+  }
+  .node-chip.is-set.irrelevant {
+    background: #475569;
+  }
+  .node-chip.is-set.too_generic {
+    background: #b45309;
+  }
+  .node-chip.is-set.incorrect_formatting {
+    background: #7c3aed;
   }
 
   .grade-chip kbd.invisible {

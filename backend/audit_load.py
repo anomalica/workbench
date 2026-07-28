@@ -31,6 +31,7 @@ from backend.audit import (
     axis_confounded,
     build_passages,
     claims_of,
+    group_node_rows,
     node_rows,
     passage_compared,
 )
@@ -299,15 +300,23 @@ def audit_payload(variants: list[Variant], similar: Similar, prose: str = "") ->
         # Pass A's entities, compared across models. Outside the passage axis:
         # nodes carry no source location, so which model found which entity is a
         # whole-record comparison, not a per-chunk one.
+        # Entities, grouped where they may be the same thing said differently.
+        # The group SHOWS the alternatives; it never merges them.
         "nodes": [
             {
-                "type": r.type,
-                "name": r.name,
-                "found_by": sorted(r.by_variant),
-                "singleton": r.singleton,
-                "node_ids": {vid: n.node_id for vid, n in r.by_variant.items()},
+                "alternatives": [
+                    {
+                        "type": r.type,
+                        "name": r.name,
+                        "found_by": sorted(r.by_variant),
+                        "singleton": r.singleton,
+                        "node_ids": {vid: n.node_id for vid, n in r.by_variant.items()},
+                    }
+                    for r in g.rows
+                ],
+                "found_by": sorted(g.variants),
             }
-            for r in node_rows(variants)
+            for g in group_node_rows(node_rows(variants), similar)
         ],
         "passages": [
             {
