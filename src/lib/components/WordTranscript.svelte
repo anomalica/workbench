@@ -1431,20 +1431,29 @@
     });
   });
 
+  /** Whether the selection sits inside a single speaker turn. Reassign and
+   *  split are per-turn operations; across a boundary they have no meaning, so
+   *  they withdraw rather than the selection being prevented. */
+  let selectionInOneRun = $derived(
+    range !== null && runOfWord.get(range.from)?.startWord === runOfWord.get(range.to)?.startWord,
+  );
+
   function clampToRun(a: number, b: number): { from: number; to: number } | null {
-    // Markup annotates across speakers, so a selection there is only bounded by
-    // the transcript itself; editing must stay in one turn (reassign/split are
-    // per-turn operations), so it clamps `b` into the anchor's run.
-    if (mode === "markup") {
-      if (words.length === 0) return null;
-      const lo = Math.max(0, Math.min(a, b));
-      const hi = Math.min(words.length - 1, Math.max(a, b));
-      return { from: lo, to: hi };
-    }
-    const run = runOfWord.get(a);
-    if (!run) return null;
-    const lo = Math.max(run.startWord, Math.min(a, b));
-    const hi = Math.min(run.endWord, Math.max(a, b));
+    // A SELECTION IS NEVER CLAMPED. It used to stop at the speaker boundary
+    // outside markup mode, because reassign and split are per-turn operations
+    // and a selection spanning two turns has no meaning for them. But that made
+    // the boundary a wall for every OTHER purpose too - a quote crossing a
+    // question and its answer could not be highlighted or noted without
+    // switching modes, and the sentence a reviewer wants to mark is very often
+    // exactly the one that crosses.
+    //
+    // So the selection is free and the ACTIONS gate instead: per-turn
+    // operations offer themselves only while the selection sits in one turn,
+    // which is a statement about those operations rather than a restriction on
+    // reading.
+    if (words.length === 0) return null;
+    const lo = Math.max(0, Math.min(a, b));
+    const hi = Math.min(words.length - 1, Math.max(a, b));
     return { from: lo, to: hi };
   }
 
@@ -1504,17 +1513,32 @@
 
   function onWordPointerEnter(g: number) {
     if (dragging && anchor !== null) {
-      // The press has become a drag - the reviewer is selecting to annotate,
-      // so the pending click-to-play is off and playback pauses out of the way.
-      if (g !== anchor && pendingSeek !== null) {
+      // The press has become a DRAG - the reviewer is selecting a range, and
+      // audio running on under the gesture fights it. True in either mode: in
+      // markup the pending click-to-play is simply cancelled, while in edit the
+      // press has already seeked and started playing, so it has to be stopped.
+      // Only the first crossing pauses; after that the drag is silent anyway.
+      if (g !== anchor) {
+        // Cancel any click-to-play the press armed, AND stop playback that the
+        // press already started. Markup arms a pending seek; edit seeks
+        // immediately - either way the drag means "I am selecting", so nothing
+        // should be playing under it. Once per gesture.
         pendingSeek = null;
-        onpause?.();
+        if (!pausedForDrag) {
+          pausedForDrag = true;
+          onpause?.();
+        }
       }
       range = clampToRun(anchor, g);
     }
   }
 
+  /** Whether this drag has already stopped playback, so crossing further words
+   *  does not keep firing a pause. Reset when the gesture ends. */
+  let pausedForDrag = false;
+
   function stopDrag() {
+    pausedForDrag = false;
     if (pendingSeek !== null) {
       onseek?.(pendingSeek);
       pendingSeek = null;
@@ -1817,10 +1841,11 @@
       <span class="text-xs font-ui text-on-surface-secondary tabular-nums">
         {count} word{count === 1 ? "" : "s"}
       </span>
-      {#if mode === "markup"}
-        <!-- Annotation actions: mint a highlight (no text) or a note (with text),
-             and clear any mark under the selection. Editing lives in the Ingest
-             tab; markup is read-only over the words. -->
+      {#if mode === "markup" || onhighlight || onspannote}
+        <!-- Annotation actions, offered wherever the words are shown: marking a
+             passage is not a separate activity from reading or correcting it,
+             and making it a mode meant deciding which one you were in before
+             you knew what you had found. -->
         <div class="w-px h-4 bg-border" aria-hidden="true"></div>
         <button
           onclick={() => { if (range) { onhighlight?.(range.from, range.to); clearSelection(); } }}
@@ -1873,10 +1898,17 @@
           <button
             onclick={(e) => {
               e.stopPropagation();
+              if (!selectionInOneRun) return;
               pickerOpen = !pickerOpen;
             }}
-            class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline flex items-center gap-1"
-            title="Assign these words to a speaker"
+            disabled={!selectionInOneRun}
+            class="text-xs font-ui font-medium flex items-center gap-1
+              {selectionInOneRun
+                ? 'text-primary cursor-pointer hover:underline'
+                : 'text-on-surface-muted/50 cursor-default'}"
+            title={selectionInOneRun
+              ? "Assign these words to a speaker"
+              : "This selection crosses a speaker change. Reassigning is a per-turn operation - select within one turn to use it."}
           >
             Assign speaker
             <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -1938,13 +1970,13 @@
         onclick={() => onmodechange?.("edit")}
         class="px-2 py-0.5 transition-colors
           {mode !== 'markup' ? 'bg-primary text-on-primary' : 'text-on-surface-secondary hover:bg-surface cursor-pointer'}"
-        title="Read, observe and correct the transcript. Selecting stays within one speaker turn."
+        title="Read, observe and correct the transcript. Highlight and note are available here too."
       >Read</button>
       <button
         onclick={() => onmodechange?.("markup")}
         class="px-2 py-0.5 transition-colors border-l border-border
           {mode === 'markup' ? 'bg-primary text-on-primary' : 'text-on-surface-secondary hover:bg-surface cursor-pointer'}"
-        title="Highlight and note. Selections can span speakers."
+        title="Annotation only - the transcript cannot be edited from here."
       >Mark up</button>
     </div>
     <div class="w-px h-4 bg-border" aria-hidden="true"></div>
