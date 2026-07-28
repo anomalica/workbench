@@ -284,3 +284,34 @@ describe("hiding dead chunks without hiding the missed-fact signal", () => {
     expect(passageHasContent(empty, variants)).toBe(false);
   });
 });
+
+describe("frameLabel shows who said it", () => {
+  const line = (extra = {}) => ({
+    text: "David Grusch has risked his career to expose critical information.",
+    claim_type: "opinion",
+    attestation: "first_hand",
+    speaker: "Burlison, Eric",
+    refs: ["Grusch, David"],
+    ...extra,
+  });
+
+  it("leads with the speaker - it is the attribution", () => {
+    // Omitting it made a model that keeps `text` as the bare proposition and
+    // the name in `speaker` look like it had dropped the attribution, while a
+    // model that baked the name into its prose looked more careful. Both had
+    // recorded it; only one was being rendered.
+    expect(frameLabel(line())).toBe(
+      "said by Burlison, Eric · opinion · first_hand · refs: Grusch, David",
+    );
+  });
+
+  it("omits the speaker when there is none, rather than saying 'said by'", () => {
+    expect(frameLabel(line({ speaker: "" }))).toBe("opinion · first_hand · refs: Grusch, David");
+  });
+
+  it("keeps two claims apart when only their speaker differs", () => {
+    const a = { ...line(), variant: "a", model: "a", claim_id: "1", location: "", quote: "" };
+    const b = { ...a, speaker: "Grusch, David", claim_id: "2" };
+    expect(memberLines([a, b])).toHaveLength(2);
+  });
+});

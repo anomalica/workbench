@@ -114,18 +114,20 @@ export interface MemberLine {
   text: string;
   claim_type: string;
   attestation: string;
+  speaker: string;
   refs: string[];
 }
 
 export function memberLines(members: AuditMember[]): MemberLine[] {
   const by = new Map<string, MemberLine>();
   for (const m of members) {
-    const key = `${m.text}|${m.claim_type}|${m.attestation}|${m.refs.join(",")}`;
+    const key = `${m.text}|${m.claim_type}|${m.attestation}|${m.speaker}|${m.refs.join(",")}`;
     if (!by.has(key)) {
       by.set(key, {
         text: m.text,
         claim_type: m.claim_type,
         attestation: m.attestation,
+        speaker: m.speaker ?? "",
         refs: m.refs,
       });
     }
@@ -133,9 +135,18 @@ export function memberLines(members: AuditMember[]): MemberLine[] {
   return [...by.values()];
 }
 
-/** type · attestation · refs, empties dropped. */
+/** who said it · type · attestation · refs, empties dropped.
+ *
+ *  SPEAKER LEADS, because it is the attribution and the frame is unreadable
+ *  without it. It was omitted, so a model that put the attribution in its
+ *  `speaker` field and kept `text` as the bare proposition looked like it had
+ *  dropped the attribution entirely, while one that baked the name into its
+ *  prose looked more careful. They were doing the same thing differently, and
+ *  the display was scoring them on which one it happened to render. */
 export function frameLabel(line: MemberLine): string {
-  const parts = [line.claim_type, line.attestation].filter(Boolean);
+  const parts: string[] = [];
+  if (line.speaker) parts.push(`said by ${line.speaker}`);
+  parts.push(...[line.claim_type, line.attestation].filter(Boolean));
   if (line.refs.length) parts.push(`refs: ${line.refs.join(", ")}`);
   return parts.join(" · ");
 }

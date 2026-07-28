@@ -847,6 +847,7 @@
                             text: m.text,
                             claim_type: m.claim_type,
                             attestation: m.attestation,
+                            speaker: m.speaker ?? "",
                             refs: m.refs,
                           })}
                           <!-- ONE claim, and directly beneath it the rating for
