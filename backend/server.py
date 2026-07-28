@@ -2260,14 +2260,14 @@ def _audit_prose(full_hash: str) -> str:
     claim quotes are located in, so passages follow the document rather than the
     model-reported timecodes. Empty when the record cannot be read, which falls
     the audit back to the location axis rather than failing."""
-    import re as _re
+    from backend.audit import normalise_source
 
     try:
         ingest = source.get_ingest(full_hash)
         body = ingest.get("body") if isinstance(ingest, dict) else None
         if not body:
             return ""
-        return _re.sub(r"\s+", " ", pre_digest.materialise(body)).strip()
+        return normalise_source(pre_digest.materialise(body))
     except Exception:
         return ""
 

@@ -25,6 +25,7 @@ from backend.audit import (
     Claim,
     Node,
     build_source_passages,
+    locate_in_source,
     Similar,
     Variant,
     axis_confounded,
@@ -330,6 +331,12 @@ def audit_payload(variants: list[Variant], similar: Similar, prose: str = "") ->
                                 "claim_id": m.claim_id,
                                 "location": m.location,
                                 "quote": m.quote,
+                                # Whether the quote can be found in the record.
+                                # False is a FINDING - the claim's evidence is
+                                # not in the source - not a reason to hide the
+                                # claim or withhold its rating.
+                                "located": bool(prose)
+                                and locate_in_source(prose, m.quote) is not None,
                                 "text": m.text,
                                 "claim_type": m.claim_type,
                                 "attestation": m.attestation,

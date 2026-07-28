@@ -359,7 +359,38 @@ def _cluster_by_meaning(
     return [Cluster(id=f"{id_prefix}-{k}", members=g) for k, g in enumerate(ordered)]
 
 
+# Typography the reader cannot see but a byte comparison can. A source rendered
+# with curly quotes and a model quoting it with straight ones are quoting the
+# same words; failing to match on that is a fact about punctuation, not about
+# the extraction.
+_TYPOGRAPHIC = {
+    "\u2018": "'",
+    "\u2019": "'",
+    "\u201a": "'",
+    "\u201b": "'",
+    "\u201c": '"',
+    "\u201d": '"',
+    "\u201e": '"',
+    "\u201f": '"',
+    "\u2013": "-",
+    "\u2014": "-",
+    "\u2212": "-",
+    "\u00a0": " ",
+    "\u2026": "...",
+}
+
+
+def normalise_source(text: str) -> str:
+    """The one normalisation. BOTH sides of a quote match must use it - the
+    prose was being collapsed for whitespace only while the quote also had its
+    typography folded, so converting a model's straight quote to match a
+    source's curly one guaranteed they could never meet."""
+    return _normalise(text)
+
+
 def _normalise(text: str) -> str:
+    for a, b in _TYPOGRAPHIC.items():
+        text = text.replace(a, b)
     return re.sub(r"\s+", " ", text).strip()
 
 
@@ -380,6 +411,18 @@ def locate_in_source(prose: str, quote: str) -> tuple[int, int] | None:
     i = prose.find(q)
     if i >= 0:
         return (i, i + len(q))
+
+    # An ELIDED quote ("Grusch...will contribute his expertise") is not
+    # contiguous text, so it can never match whole. Its first fragment still
+    # says where the evidence starts, which is what a reader needs.
+    for part in re.split(r"\s*\.\.\.\s*", q):
+        part = part.strip()
+        if len(part) < _MIN_ANCHOR:
+            continue
+        j = prose.find(part)
+        if j >= 0:
+            return (j, j + len(part))
+
     head = q[:_PREFIX]
     if len(head) < _MIN_ANCHOR:
         return None

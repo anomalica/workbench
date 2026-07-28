@@ -249,6 +249,9 @@ export interface AuditMember {
   claim_id: string;
   location: string;
   quote: string;
+  /** False when the quote cannot be found in the record - the claim's evidence
+   *  is not in the source. A finding, not a defect of the view. */
+  located?: boolean;
   text: string;
   claim_type: string;
   attestation: string;

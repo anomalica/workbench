@@ -480,3 +480,57 @@ class TestSourceOrderedPassages:
     def test_falls_back_entirely_when_there_is_no_source(self):
         claims = [self.q("a", "Chapter one opens the story here.", location="00:00:01")]
         assert len(build_source_passages(claims, same_text, "")) == 1
+
+
+class TestQuoteMatchingTypography:
+    """A source's typography is not a fact about the extraction.
+
+    Sources are rendered with curly quotes and dashes; models quote them with
+    straight ones. Comparing byte-for-byte failed on punctuation the reader
+    cannot see, which dropped real claims onto the fallback axis and made them
+    look unplaceable.
+    """
+
+    PROSE = (
+        "Rep. Burlison’s office said the complaint was found "
+        "“credible and urgent” by the inspector general — and reported it."
+    )
+
+    def test_matches_across_curly_and_straight_quotes(self):
+        from backend.audit import locate_in_source, normalise_source
+
+        prose = normalise_source(self.PROSE)
+        assert (
+            locate_in_source(prose, 'was found "credible and urgent" by the inspector')
+            is not None
+        )
+
+    def test_matches_across_a_curly_apostrophe(self):
+        from backend.audit import locate_in_source, normalise_source
+
+        prose = normalise_source(self.PROSE)
+        assert (
+            locate_in_source(prose, "Rep. Burlison's office said the complaint")
+            is not None
+        )
+
+    def test_matches_an_elided_quote_at_its_first_fragment(self):
+        # "Grusch...will contribute his expertise" is not contiguous text and can
+        # never match whole; its opening still says where the evidence starts.
+        from backend.audit import locate_in_source, normalise_source
+
+        prose = normalise_source(self.PROSE)
+        hit = locate_in_source(prose, "Rep. Burlison's office said...reported it")
+        assert hit is not None
+        assert prose[hit[0] : hit[1]].startswith("Rep. Burlison's office said")
+
+    def test_a_quote_that_is_genuinely_absent_still_fails(self):
+        # The signal must survive the leniency: a claim whose evidence is not in
+        # the source has to keep reading as not in the source.
+        from backend.audit import locate_in_source, normalise_source
+
+        prose = normalise_source(self.PROSE)
+        assert (
+            locate_in_source(prose, "holding those accountable who have broken the law")
+            is None
+        )

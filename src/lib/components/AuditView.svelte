@@ -443,15 +443,14 @@
    *  record as a whole passes - the DoD record has exactly that shape, and both
    *  of its lone-passage singletons were shown to be false (the same facts exist
    *  in the other model's claims under a different location label). */
-  function gradable(p: AuditPassage): boolean {
-    if (confounded) return false;
-    // A passage grouped by measured quote overlap is always gradable: one model
-    // there means one model quoted that text. The single-model guard belongs to
-    // the LOCATION axis, where a lone model was usually an artefact of the
-    // models writing timecodes differently - applying it here left 20% of
-    // claims with no rating controls and nothing saying why.
-    if (p.grouped_by === "source") return true;
-    return p.compared !== false;
+  function gradable(_p: AuditPassage): boolean {
+    // ALWAYS. The guard came from an era of per-CLUSTER verdicts, where a
+    // verdict really did depend on the models having been compared. A rating is
+    // now per claim - read the quote, read the claim, judge it - and that needs
+    // no comparison at all. Withholding the controls hid the claims most worth
+    // rating: the one whose quote is not in the source was unrateable precisely
+    // because no other model had matched it.
+    return true;
   }
 </script>
 
@@ -803,10 +802,10 @@
           {#if p.compared === false && p.grouped_by !== "source" && !confounded}
             <div class="px-4 py-1.5 bg-warning-container/20 border-b border-warning/30">
               <p class="text-[11px] text-on-surface leading-relaxed max-w-4xl">
-                Only one model filed claims at this location, so nothing here was
-                compared. These are not unique findings - another model may have
-                reported the same facts under a different location label. Grading is
-                off for this chunk.
+                Placed by the model's own location label rather than by finding its
+                quote in the record, so "only one model here" may be a labelling
+                difference rather than a real gap. The claims themselves are still
+                yours to rate.
               </p>
             </div>
           {/if}
@@ -890,7 +889,15 @@
                                  the box says what each model made of it and
                                  which words it took. -->
                             {#if m.quote}
-                              <p class="member-quote">{m.quote}</p>
+                              <p class="member-quote {m.located === false ? 'not-in-source' : ''}">
+                                {m.quote}
+                                {#if m.located === false}
+                                  <span
+                                    class="not-found-tag"
+                                    title="This quote could not be found in the record. The claim's evidence is not in the source - the wording was altered, stitched together, or invented."
+                                  >not in the source</span>
+                                {/if}
+                              </p>
                             {/if}
                             {#if canGrade}
                             <!-- TWO ROWS, because these are two questions. One
@@ -985,6 +992,22 @@
     font-size: 11px;
     line-height: 1.35;
     color: var(--color-on-surface-secondary, inherit);
+  }
+
+  .member-quote.not-in-source {
+    border-left-color: var(--color-error, #dc2626);
+  }
+  .not-found-tag {
+    display: inline-block;
+    margin-left: 0.35rem;
+    padding: 0 0.3rem;
+    border-radius: 0.15rem;
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    background: var(--color-error, #dc2626);
+    color: var(--color-on-error, #fff);
   }
 
   .claim-block {
