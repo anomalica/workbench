@@ -534,3 +534,49 @@ class TestQuoteMatchingTypography:
             locate_in_source(prose, "holding those accountable who have broken the law")
             is None
         )
+
+
+class TestQuoteWindowMatching:
+    """A quote is anchored by ANY stretch of it, not only its opening.
+
+    A model writing "holding those accountable who have broken the law..."
+    where the record says "hold those accountable who have broken the law..."
+    has 180 characters of verbatim text behind one inflected verb. Anchoring on
+    the first 60 characters called that untraceable, which is a fact about the
+    matcher rather than about the extraction.
+    """
+
+    PROSE = (
+        "We will restore oversight and hold those accountable who have broken "
+        "the law and lied not only to our Congress, but also to the Executive "
+        "Office of the President."
+    )
+
+    def test_one_wrong_word_at_the_start_does_not_lose_the_quote(self):
+        from backend.audit import locate_in_source, normalise_source
+
+        prose = normalise_source(self.PROSE)
+        hit = locate_in_source(
+            prose,
+            "holding those accountable who have broken the law and lied not only to our Congress",
+        )
+        assert hit is not None
+        assert "broken the law" in prose[hit[0] : hit[1]]
+
+    def test_a_quote_sharing_no_long_run_still_fails(self):
+        # The signal must survive the leniency, or "traceable" means nothing.
+        from backend.audit import locate_in_source, normalise_source
+
+        prose = normalise_source(self.PROSE)
+        assert (
+            locate_in_source(
+                prose, "The witness described a bright object over the water"
+            )
+            is None
+        )
+
+    def test_a_short_quote_is_still_refused_as_an_anchor(self):
+        from backend.audit import locate_in_source, normalise_source
+
+        prose = normalise_source(self.PROSE)
+        assert locate_in_source(prose, "hold those") is None

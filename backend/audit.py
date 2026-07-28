@@ -423,11 +423,20 @@ def locate_in_source(prose: str, quote: str) -> tuple[int, int] | None:
         if j >= 0:
             return (j, j + len(part))
 
-    head = q[:_PREFIX]
-    if len(head) < _MIN_ANCHOR:
-        return None
-    i = prose.find(head)
-    return (i, i + len(head)) if i >= 0 else None
+    # A WINDOW ANYWHERE IN THE QUOTE, not just its opening. Anchoring on the
+    # first 60 characters meant one altered word at the START defeated the
+    # match, however verbatim the rest was: a quote reading "holding those
+    # accountable..." where the source says "hold those accountable..." is 180
+    # characters of exact text behind one inflected verb, and calling that
+    # untraceable is a fact about the matcher rather than about the extraction.
+    for start in range(0, max(len(q) - _PREFIX, 0) + 1, _MIN_ANCHOR):
+        window = q[start : start + _PREFIX]
+        if len(window) < _MIN_ANCHOR:
+            break
+        i = prose.find(window)
+        if i >= 0:
+            return (i, i + len(window))
+    return None
 
 
 def build_source_passages(
