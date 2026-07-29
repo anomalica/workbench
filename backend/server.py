@@ -1193,8 +1193,16 @@ class LocalIngestSource(IngestSource):
         body at submission time; `parent_commit` records the repo HEAD before
         the review commit. When `observed_coverage` is supplied, the reviewer's
         verdict (observed_coverage, digestible, total_units) is stored at the
-        sidecar top level and the schema bumped to /1 - the digester's gate
-        reads that verdict rather than recomputing from the spans."""
+        sidecar top level and the schema bumped to /1.
+
+        The verdict is NOT enforced anywhere. The digester's `assess_record` is
+        imported by one caller, its `coverage` reporting command; the `extract`
+        path never consults it, so an unreviewed record digests exactly like a
+        reviewed one and the resulting digest does not record which it was.
+        This comment used to claim the gate read the verdict - a documented
+        safety property that nothing enforces is worse than no property at all,
+        because it gets relied on. Until the digester enforces it, this is a
+        report, not a gate."""
         import subprocess
         from datetime import datetime, timezone
 
