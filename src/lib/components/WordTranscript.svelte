@@ -487,7 +487,7 @@
   // the whole turn), or null.
   let headerPicker = $state<number | null>(null);
   // Word/selection editor (text + timing + add/delete) over the range. Labelled
-  // "Edit word" for a single word, "Edit selection" for several - one modal.
+  // One modal for a word or a run of them.
 
   let editingSelection = $state(false);
   let selectionInfo = $derived.by(() => {
@@ -1506,6 +1506,14 @@
       // better one - an immediate seek starts audio under a gesture that turns
       // out to be a selection.
       pendingSeek = words[g].start;
+      // The PRESS stops playback, not just a drag across words. Holding on a
+      // word is how you steady yourself before selecting, and audio running on
+      // under a held finger is the same fight a drag has. Releasing without
+      // moving still fires the pending seek, so a plain click plays as before.
+      if (!pausedForDrag) {
+        pausedForDrag = true;
+        onpause?.();
+      }
     }
   }
 
@@ -1877,7 +1885,7 @@
             ? "Edit this word: text, timing, split or delete"
             : "Edit the selected words together: text, timing, add/delete words"}
         >
-          {single ? "Edit word" : "Edit selection"}
+          Edit
         </button>
         <div class="w-px h-4 bg-border" aria-hidden="true"></div>
         <button
