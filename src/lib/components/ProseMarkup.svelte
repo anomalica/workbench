@@ -53,8 +53,17 @@
    *  (it is used once, at the moment of the click, and never stored). */
   const LEAD = 160;
 
+  /** The document's own selection event rather than a mouseup here: a
+   *  double-click on a word, a keyboard extension and a drag all end in a
+   *  selection, and only one of them ends in a mouseup on this container. */
+  $effect(() => {
+    const on = () => capture();
+    document.addEventListener("selectionchange", on);
+    return () => document.removeEventListener("selectionchange", on);
+  });
+
   function capture() {
-  if (!canMark || composing) return;
+    if (!canMark || composing) return;
   const sel = window.getSelection();
   if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
     picked = null;
@@ -136,10 +145,10 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
   bind:this={containerEl}
+  data-prose-markup="1"
   class={children ? "contents" : klass}
   data-scroll-sync={children ? undefined : true}
   onscroll={children ? undefined : onscroll}
-  onmouseup={capture}
 >
 {#if children}
   {@render children()}
