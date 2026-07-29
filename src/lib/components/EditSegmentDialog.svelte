@@ -104,6 +104,27 @@
     }, 0);
   }
 
+  /** Strike the selected words: `~~like this~~`. Kept as markdown rather than
+   *  a new annotation because it needs no format change and renders struck
+   *  wherever the record is read. Note the words still REACH the model as
+   *  prose - a strike says "the source shows this crossed out", not "ignore
+   *  this". Toggles, so a second press unstrikes. */
+  function strikeSelection() {
+    const el = textareaEl;
+    const start = el?.selectionStart ?? 0;
+    const end = el?.selectionEnd ?? start;
+    if (start === end) return;
+    const picked = text.slice(start, end);
+    const already = picked.startsWith("~~") && picked.endsWith("~~") && picked.length > 4;
+    const replaced = already ? picked.slice(2, -2) : `~~${picked}~~`;
+    text = text.slice(0, start) + replaced + text.slice(end);
+    const to = start + replaced.length;
+    setTimeout(() => {
+      el?.focus();
+      el?.setSelectionRange(start, to);
+    }, 0);
+  }
+
   function save() {
     const newText = text.trim();
     if (!newText) return;
@@ -264,6 +285,13 @@
       <!-- Quick-insert non-verbal event notes at the cursor. The reviewer can
            also just type any `[...]`; these are the common ones. -->
       <div class="mt-1.5 flex flex-wrap items-center gap-1.5">
+        <button
+          type="button"
+          onclick={strikeSelection}
+          class="text-xs font-ui px-1.5 py-0.5 bg-surface border border-border rounded cursor-pointer hover:border-primary/50 hover:text-primary text-on-surface-secondary line-through"
+          title="Strike the selected words - the source shows them crossed out. They stay in the record and still reach the model; press again to unstrike."
+        >abc</button>
+        <span class="w-px h-3.5 bg-border" aria-hidden="true"></span>
         <span class="text-[0.65rem] font-ui uppercase tracking-wide text-on-surface-muted">Event note</span>
         {#each EVENT_NOTE_PRESETS as preset}
           <button
