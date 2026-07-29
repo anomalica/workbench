@@ -59,7 +59,7 @@
   import { imageRefsInBody } from "$lib/image-captions";
   import { messageInner, parseMessage, messageHeaderHtml } from "$lib/email-thread";
   import { untrack } from "svelte";
-  import { marked } from "marked";
+  import { marked } from "$lib/markdown";
   import yaml from "js-yaml";
 
   let {

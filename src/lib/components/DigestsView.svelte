@@ -16,7 +16,7 @@
   // there; without the ingest beside it, "what did the models miss?" is
   // unanswerable, and that is the question this view exists to answer.
   import { onMount } from "svelte";
-  import { marked } from "marked";
+  import { marked } from "$lib/markdown";
   import {
     fetchComparable,
     fetchComparison,
