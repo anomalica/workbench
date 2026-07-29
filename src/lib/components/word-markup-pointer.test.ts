@@ -178,7 +178,10 @@ describe("markup: click plays, drag pauses", () => {
     await fireEvent.pointerOver(word(2), { button: 0, clientX: 110, clientY: 100 });
     await fireEvent.pointerUp(window, { button: 0, clientX: 110, clientY: 100 });
     await settle();
-    expect(onpause).not.toHaveBeenCalled();
+    // The press pauses (click-and-hold is a way to stop playback), the release
+    // seeks - so a wiggled click still ENDS up playing that word, which is what
+    // "still a click" means here.
+    expect(onpause).toHaveBeenCalledTimes(1);
     expect(onseek).toHaveBeenCalledTimes(1);
   });
 });
@@ -204,6 +207,8 @@ describe("the context-pick click is consumed, not played", () => {
     await fireEvent.click(screen.getByText("Needs context"));
     await settle();
     onseek.mockClear();
+    // The first click's press legitimately paused; this test is about the second.
+    onpause.mockClear();
 
     // ...and click the EARLIER highlight to complete the link.
     await click(0);
