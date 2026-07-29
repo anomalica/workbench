@@ -1844,14 +1844,10 @@
     class="absolute z-30 flex items-center gap-2
       bg-surface-raised border border-primary/60 ring-2 ring-primary/25 rounded-full shadow-xl px-3 py-1.5"
   >
-      <span class="text-xs font-ui text-on-surface-secondary tabular-nums">
-        {count} word{count === 1 ? "" : "s"}
-      </span>
         <!-- Annotation actions, offered wherever the words are shown: marking a
              passage is not a separate activity from reading or correcting it,
              and making it a mode meant deciding which one you were in before
              you knew what you had found. -->
-        <div class="w-px h-4 bg-border" aria-hidden="true"></div>
         <div class="relative">
           <button
             onclick={(e) => {
@@ -1860,16 +1856,20 @@
               pickerOpen = !pickerOpen;
             }}
             disabled={!selectionInOneRun}
-            class="text-xs font-ui font-medium flex items-center gap-1
+            aria-label="Assign speaker"
+            class="flex items-center gap-0.5 p-1 rounded transition-colors
               {selectionInOneRun
-                ? 'text-primary cursor-pointer hover:underline'
-                : 'text-on-surface-muted/50 cursor-default'}"
+                ? 'text-primary cursor-pointer hover:bg-primary/10'
+                : 'text-on-surface-muted/40 cursor-default'}"
             title={selectionInOneRun
               ? "Assign these words to a speaker"
               : "This selection crosses a speaker change. Reassigning is a per-turn operation - select within one turn to use it."}
           >
-            Assign speaker
-            <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round"
+                d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+            </svg>
+            <svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true">
               <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
             </svg>
           </button>
@@ -1880,12 +1880,16 @@
         <div class="w-px h-4 bg-border" aria-hidden="true"></div>
         <button
           onclick={() => { pickerOpen = false; editingSelection = true; }}
-          class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
+          aria-label="Edit"
+          class="text-primary cursor-pointer p-1 rounded hover:bg-primary/10 transition-colors"
           title={single
             ? "Edit this word: text, timing, split or delete"
             : "Edit the selected words together: text, timing, add/delete words"}
         >
-          Edit
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round"
+              d="M16.86 3.99a1.88 1.88 0 012.66 2.65L7.6 18.56l-3.54.89.89-3.54L16.86 3.99z" />
+          </svg>
         </button>
         <div class="w-px h-4 bg-border" aria-hidden="true"></div>
         <button
@@ -1898,10 +1902,15 @@
         <div class="w-px h-4 bg-border" aria-hidden="true"></div>
         <button
           onclick={() => { if (range) { onhighlight?.(range.from, range.to); clearSelection(); } }}
-          class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
+          aria-label="Highlight"
+          class="text-primary cursor-pointer p-1 rounded hover:bg-primary/10 transition-colors"
           title="Highlight these words (highlights may overlap)"
         >
-          Highlight
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round"
+              d="M14.5 3.5l6 6-7.5 7.5H7.5l-1.5-4 8.5-9.5z" />
+            <path stroke-linecap="round" stroke-width="3.5" d="M5.5 21h13" />
+          </svg>
         </button>
         {#if range && highlightAtWord(range.from)}
           {@const hit = highlightAtWord(range.from)}
@@ -1917,10 +1926,14 @@
         <div class="w-px h-4 bg-border" aria-hidden="true"></div>
         <button
           onclick={startSpanNote}
-          class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
+          aria-label="Note"
+          class="text-primary cursor-pointer p-1 rounded hover:bg-primary/10 transition-colors"
           title="Attach a note over these words - what's on screen, context the words miss"
         >
-          Note
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round"
+              d="M4 5.5A1.5 1.5 0 015.5 4h13A1.5 1.5 0 0120 5.5v9a1.5 1.5 0 01-1.5 1.5H9l-5 4V5.5zM8 8h8M8 11.5h5" />
+          </svg>
         </button>
         {#if onlinksource}
           <!-- A source reference IS a note - a note whose body is another
@@ -1929,10 +1942,14 @@
           <span class="text-on-surface-muted/60 text-xs" aria-hidden="true">/</span>
           <button
             onclick={() => { if (range) { onlinksource?.(range.from, range.to); clearSelection(); } }}
-            class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
-            title="These words refer to another ingested source - link them to it (optionally to an exact passage in it)"
+            aria-label="Link to a source"
+            class="text-primary cursor-pointer p-1 rounded hover:bg-primary/10 transition-colors"
+            title="A note whose body is another record: these words refer to an ingested source - link them to it (optionally to an exact passage in it)"
           >
-            source
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round"
+                d="M10.5 13.5a4 4 0 005.66 0l3-3a4 4 0 10-5.66-5.66l-1 1M13.5 10.5a4 4 0 00-5.66 0l-3 3a4 4 0 105.66 5.66l1-1" />
+            </svg>
           </button>
         {/if}
         {#if selectionHasMarkup}
