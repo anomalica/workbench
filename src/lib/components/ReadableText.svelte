@@ -422,8 +422,17 @@
     onbodyedit(edit.body);
   }
 
+  /** True while Alt is held: the blocks release the selection so the browser
+   *  can make a text one. */
+  let textSelect = $state(false);
+
   function onBlockPointerDown(e: PointerEvent, i: number) {
     if (e.button !== 0) return;
+    // Alt-drag is a TEXT selection, not a block one. The plain drag belongs to
+    // read coverage - it is the commoner act and had the gesture first - so
+    // marking up a phrase (a note on some handwriting, a highlight) has to ask
+    // for it, and while Alt is held the blocks stop swallowing the selection.
+    if (e.altKey || e.ctrlKey) return;
     // Let clicks on links behave normally. Native text selection is suppressed
     // via `select-none` on the blocks, so only the block highlight shows.
     if ((e.target as HTMLElement).closest("a")) return;
@@ -540,7 +549,19 @@
   }
 </script>
 
-<svelte:window onpointerup={onWindowPointerUp} onkeydown={onWindowKeydown} />
+<svelte:window
+  onpointerup={onWindowPointerUp}
+  onkeydown={(e) => {
+    if (e.key === "Alt" || e.key === "Control") textSelect = true;
+    onWindowKeydown(e);
+  }}
+  onkeyup={(e) => {
+    // Held, not toggled - and released on blur too, or leaving the window with
+    // Alt down leaves the blocks unselectable.
+    if (e.key === "Alt" || e.key === "Control") textSelect = false;
+  }}
+  onblur={() => (textSelect = false)}
+/>
 
 <div class="flex flex-col min-h-0 flex-1">
   <!-- Coverage toolbar: progress + contextual selection actions -->
@@ -733,7 +754,10 @@
             {#if expanded}
               <div class="px-3 pb-2 opacity-50">
                 {#each item.blocks as { html: regionHtml }}
-                  <div class="prose prose-sm max-w-none select-none prose-img:rounded prose-img:max-w-full">
+                  <div
+                    class="prose prose-sm max-w-none prose-img:rounded prose-img:max-w-full
+                      {textSelect ? '' : 'select-none'}"
+                  >
                     <!-- eslint-disable-next-line svelte/no-at-html-tags -->
                     {@html regionHtml}
                   </div>
@@ -782,7 +806,7 @@
                element wired to the brand semantic tokens, light + dark); only
                structural image utilities are set here. -->
           <div
-            class="prose prose-sm max-w-none flex-1 py-1 select-none
+            class="prose prose-sm max-w-none flex-1 py-1 {textSelect ? '' : 'select-none'}
               prose-img:rounded prose-img:max-w-full
               {state === 'none' && !structural ? 'opacity-70' : ''}"
           >

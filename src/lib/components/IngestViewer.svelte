@@ -49,6 +49,7 @@
   import FindReplaceView from "./FindReplaceView.svelte";
   import AuditView from "./AuditView.svelte";
   import EpubViewer from "./EpubViewer.svelte";
+  import ProseMarkup from "./ProseMarkup.svelte";
   import WordTranscript from "./WordTranscript.svelte";
   import MarkupList from "./MarkupList.svelte";
   import SpeakerFilter from "./SpeakerFilter.svelte";
@@ -1617,6 +1618,24 @@
 
   /** Render {{redacted: ~N words}} and {{illegible}} markers as styled
    *  inline blocks. Each redacted word is shown as a fixed-width bar. */
+  /** Render the paired {{note-start/end}} and {{highlight-start/end}} markers
+   *  as spans. The markers themselves are never shown - they are structure,
+   *  and a reviewer who can see the syntax will try to edit it. */
+  function renderSpanMarkers(html: string): string {
+    return html
+      .replace(/\{\{note-start:\s*\[\s*([A-Za-z0-9]+)\s*,\s*([\s\S]*?)\]\}\}/g, (_, id, text) => {
+        const note = String(text).trim().replace(/^"|"$/g, "").replace(/\\"/g, '"');
+        const attr = note.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+        return `<span class="prose-note" data-note-id="${id}" title="${attr}">`;
+      })
+      .replace(/\{\{note-end:\s*([A-Za-z0-9]+)\s*\}\}/g, "</span>")
+      .replace(
+        /\{\{highlight-start:\s*([A-Za-z0-9]+)\s*\}\}/g,
+        (_, id) => `<span class="prose-highlight" data-highlight-id="${id}">`,
+      )
+      .replace(/\{\{highlight-end:\s*([A-Za-z0-9]+)\s*\}\}/g, "</span>");
+  }
+
   function renderRedactions(html: string): string {
     return html.replace(
       /\{\{(redacted|illegible)(?::\s*~(\d+)\s*words?)?\}\}/g,
@@ -4746,10 +4765,13 @@
 
       {:else}
         {#if isTextRecord}
+          <ProseMarkup body={currentBody()} canMark={!!user} onbody={(b) => doc.editBody(b)}>
           <ReadableText
             body={currentBody()}
             renderBlock={(src, lineFrom) =>
-              renderRedactions(marked.parse(preprocessAnnotations(src, !!user, lineFrom)) as string)}
+              renderSpanMarkers(
+                renderRedactions(marked.parse(preprocessAnnotations(src, !!user, lineFrom)) as string),
+              )}
             previousObserved={myObservedSpans}
             storageKey={`workbench:read:${ingest.content_hash}`}
             bind:containerEl={proseContainer}
@@ -4758,21 +4780,25 @@
             onbodyedit={user ? (b) => doc.editBody(b) : undefined}
             onblockclick={followBlockToSource}
           />
+          </ProseMarkup>
         {:else}
           {@const processedBody = preprocessAnnotations(currentBody())}
-          {@const renderedHtml = renderRedactions(marked.parse(processedBody) as string)}
-          <div
-            bind:this={proseContainer}
-            data-scroll-sync
+          {@const renderedHtml = renderSpanMarkers(
+            renderRedactions(marked.parse(processedBody) as string),
+          )}
+          <ProseMarkup
+            bind:containerEl={proseContainer}
+            html={renderedHtml}
+            body={currentBody()}
+            canMark={!!user}
+            onbody={(b) => doc.editBody(b)}
             onscroll={handleContentScroll}
             class="flex-1 overflow-auto px-8 py-6 prose
               {singleColumn ? 'mx-auto' : 'max-w-none'}
               text-on-surface prose-headings:text-on-surface prose-a:text-primary
               prose-img:rounded prose-img:max-w-full prose-hr:border-border
               prose-p:leading-relaxed prose-li:leading-relaxed"
-          >
-            {@html renderedHtml}
-          </div>
+          />
         {/if}
       {/if}
     </div>

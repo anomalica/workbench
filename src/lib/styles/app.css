@@ -140,6 +140,19 @@ body {
   cursor: help;
 }
 
+/* Reviewer markup on a document. A note is underlined rather than filled: the
+   note is ABOUT the words, so the words have to stay readable underneath it,
+   while a highlight is a claim on the words themselves and tints them. */
+.prose-note {
+  border-bottom: 2px dotted var(--color-primary);
+  cursor: help;
+}
+
+.prose-highlight {
+  background-color: color-mix(in srgb, var(--color-primary-container) 55%, transparent);
+  border-radius: 2px;
+}
+
 .segment-irrelevant {
   background: var(--color-surface-alt) !important;
   color: var(--color-on-surface-muted) !important;
