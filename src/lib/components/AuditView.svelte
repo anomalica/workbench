@@ -761,7 +761,14 @@
                 <li class="entity-group {g.alternatives.length > 1 ? 'has-alternatives' : ''}">
                   {#each g.alternatives as n (n.type + n.name)}
                     {@const finders = n.found_by.filter((v) => !hidden.has(v))}
-                    <div class="flex items-baseline gap-2 flex-wrap py-0.5">
+                    <!-- Name on its own line, chips beneath. They shared one
+                         wrapping row, so a record with six variants left the
+                         name about 30px and it wrapped one character per line:
+                         "Nimitz Carrier Strike Group" read vertically. The
+                         chips' width is set by the variant count and the name's
+                         is whatever is left, which is the wrong way round. -->
+                    <div class="flex flex-col gap-1 py-1">
+                      <div class="flex items-baseline gap-2">
                       <span class="flex-none flex gap-0.5 pt-0.5" style="width: {Math.max(allVariants.length, 2) * 0.5}rem">
                         {#each allVariants as v (v.id)}
                           {@const found = finders.includes(v.id)}
@@ -774,7 +781,11 @@
                           ></span>
                         {/each}
                       </span>
-                      <span class="text-xs text-on-surface min-w-0 break-words flex-1">{n.name}</span>
+                        <span class="text-xs text-on-surface min-w-0 break-words flex-1"
+                          >{n.name}</span
+                        >
+                      </div>
+                      <div class="flex items-center gap-2 flex-wrap pl-1">
                       {#each finders as fv (fv)}
                         {@const verdict = nodeVerdict(fv, n)}
                         <span class="flex items-center gap-0.5">
@@ -788,6 +799,7 @@
                           {/each}
                         </span>
                       {/each}
+                      </div>
                     </div>
                   {/each}
                 </li>
