@@ -353,7 +353,7 @@ class LocalIngestSource(IngestSource):
         if not (records_dir.exists() and digest_records.exists()):
             return digested
         for symlink in records_dir.glob("*.md"):
-            if not (digest_records / f"{symlink.stem}.yaml").exists():
+            if not (digest_records / f"{record_slug(symlink.name)}.yaml").exists():
                 continue
             try:
                 with open(symlink.resolve()) as f:
@@ -1253,6 +1253,18 @@ class LocalIngestSource(IngestSource):
             json.dump(sidecar, f, indent=2)
             f.write("\n")
         return True
+
+
+def record_slug(symlink_name: str) -> str:
+    """The digest's name for a record, from its records/ symlink.
+
+    The ingester now writes `{slug}.v2.md` alongside the older `{slug}.md`, but
+    a digest is still named `{slug}.yaml` - so `Path.stem` yields `{slug}.v2`
+    and matches nothing. That silently hid 14 of 46 digests: the record listed
+    as undigested, and the Digests tab had nothing to adjudicate. A format
+    suffix is not part of the record's identity, so it is stripped."""
+    stem = symlink_name[:-3] if symlink_name.endswith(".md") else symlink_name
+    return re.sub(r"\.v\d+$", "", stem)
 
 
 class GitHubIngestSource(IngestSource):
