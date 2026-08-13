@@ -2454,6 +2454,12 @@
     return bad;
   });
 
+  /** Words in a cut, so the marker says how much was removed rather than just
+   *  that something was. */
+  function wordCount(text: string): number {
+    return text.split(/\s+/).filter(Boolean).length;
+  }
+
   // Derived: visible segments grouped by consecutive same-speaker runs
   let visibleGroups = $derived(groupSegmentsBySpeaker(visibleSegments));
 
@@ -4670,7 +4676,27 @@
                           <span aria-hidden="true">&#9650;</span>
                         {/if}{secondsToTime(segment.seconds)}
                       </button>
-                      <span class="text-sm text-on-surface leading-relaxed flex-1">{segment.lines.join(" ")}</span>
+                      {#if isSegmentIrrelevant(segment) && !groupIrrelevant}
+                        <!-- Cut content, inside a turn that continues. Showing
+                             the words greyed out still makes the reviewer read
+                             past them; showing nothing hides that a cut was
+                             made here. So: a marker where it happened, and the
+                             text itself on hover for anyone checking the cut
+                             was right. -->
+                        <span
+                          class="flex-1 text-sm leading-relaxed text-on-surface-muted/50 cursor-help select-none"
+                          title="Marked irrelevant - not sent for extraction:&#10;&#10;{segment.lines.join(' ')}"
+                        >
+                          <span class="inline-flex items-center gap-1 px-1.5 rounded bg-surface-alt border border-border/60 text-[11px] font-ui align-middle">
+                            <svg class="w-3 h-3 flex-none" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+                              <path stroke-linecap="round" d="M6 12h12" />
+                            </svg>
+                            {wordCount(segment.lines.join(" "))} words cut
+                          </span>
+                        </span>
+                      {:else}
+                        <span class="text-sm text-on-surface leading-relaxed flex-1">{segment.lines.join(" ")}</span>
+                      {/if}
                       {#if isSingleSelected}
                         <div
                           class="flex items-center gap-0.5 flex-none pt-0.5"

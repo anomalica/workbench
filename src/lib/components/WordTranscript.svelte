@@ -6,7 +6,7 @@
     resolveAnchorTarget,
     shouldPersistScroll,
   } from "$lib/scroll-anchor";
-  import { parseWords, runDisplays, wordsInTimeRange, wordActiveAt } from "$lib/transcript-words";
+  import { foldTurns, parseWords, wordsInTimeRange, wordActiveAt } from "$lib/transcript-words";
   import type { SpeakerRun } from "$lib/transcript-words";
   import { buildContextIndex } from "$lib/highlight-context";
   import { pointerMoved } from "$lib/drag-intent";
@@ -637,15 +637,17 @@
    *  a cut folded into the turn around it. See runDisplays. */
   // Cuts only fold into the surrounding turn while they are drawn as markers.
   // Showing the words puts them back in the flow, where they need their own
-  // block and their own header to be readable as removed content.
-  let displays = $derived(
+  // block to be readable as removed content.
+  let turns = $derived(
     hideIrrelevant
-      ? runDisplays(renderRuns, SPEAKER_IRRELEVANT)
-      : renderRuns.map(() => ({ header: true, divider: true, cutInsideTurn: false })),
+      ? foldTurns(renderRuns, SPEAKER_IRRELEVANT)
+      : renderRuns.map((r) => ({ speaker: r.speaker, lead: r, parts: [{ run: r, cut: false }] })),
   );
 
   /** The words a cut removed, for the marker's tooltip - the reviewer checking
-   *  their own cut needs to see what is behind it without undoing it. */
+   *  their own cut needs to see what is behind it without undoing it. No count
+   *  is shown: the common cut is a two-word correction, and saying "2 words
+   *  cut" in the prose is louder than the words it replaced. */
   function cutText(run: SpeakerRun): string {
     const out: string[] = [];
     for (let g = run.startWord; g <= run.endWord; g++) out.push(words[g]?.text ?? "");
@@ -2149,29 +2151,25 @@
         observe some of it first.
       </p>
     {/if}
-    {#each renderRuns as run, runIndex (run.startWord)}
-      {@const shape = displays[runIndex] ?? { header: true, divider: true, cutInsideTurn: false }}
-      {@const obs = observedInRun(run)}
-      {@const total = run.endWord - run.startWord + 1}
-      {@const runGs = Array.from({ length: total }, (_, k) => run.startWord + k).filter(
-        (g) => !showObservedOnly || observedVisible.has(g),
-      )}
+    {#each turns as turn (turn.lead.startWord)}
+      {@const run = turn.lead}
+      {@const spoken = turn.parts.filter((p) => !p.cut)}
+      {@const obs = spoken.reduce((n, p) => n + observedInRun(p.run), 0)}
+      {@const total = spoken.reduce((n, p) => n + p.run.endWord - p.run.startWord + 1, 0)}
       <!-- content-visibility:auto lets the browser skip layout/paint for runs
            off-screen while keeping their words in the DOM (so jump-to-word,
            claim links and karaoke centring still find them). It clips overflow,
            which would cut off this run's speaker dropdown, so the run with an
            open header picker switches to visible. -->
       <div
-        class="px-4 pb-2 {shape.divider ? 'border-b border-border/50 pt-3' : 'pt-0'}"
+        class="border-b border-border/50 px-4 pt-3 pb-2"
         style="content-visibility:{headerPicker === run.startWord
           ? 'visible'
           : 'auto'};contain-intrinsic-size:auto {runIntrinsic(run)}px"
       >
-        <div class="flex items-center justify-between gap-2 {shape.header ? 'pb-1' : ''}">
-          {#if !shape.header}
-            <!-- The turn carries on around a cut, so its speaker is already
-                 named above; repeating the header here is what made one turn
-                 look like three. -->
+        <div class="flex items-center justify-between gap-2 pb-1">
+          {#if false}
+            <div></div>
           {:else}
             <!-- Clickable speaker chip: reassigns the whole turn. -->
             <div class="relative inline-block">
@@ -2222,26 +2220,15 @@
         <!-- leading-[1.75]: a touch more than relaxed so highlight underline
              bands sit in real leading below a wrapped line, never reaching the
              text below. -->
-        {#if run.speaker === SPEAKER_IRRELEVANT && hideIrrelevant}
-          <!-- Cut content inside a turn that carries on. Rendering the words
-               greyed still makes the reviewer read past them; rendering
-               nothing hides that a cut was made at all. So the cut shows as a
-               marker where it happened, and hovering reveals what was taken
-               out - which is what anyone checking the cut was right needs. -->
-          <p class="pl-6 py-0.5">
-            <span
-              class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded cursor-help select-none
-                bg-surface-alt border border-border/60 text-[11px] font-ui text-on-surface-muted"
-              title={cutText(run)}
-            >
-              <svg class="w-3 h-3 flex-none" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
-                <path stroke-linecap="round" d="M6 12h12" />
-              </svg>
-              {run.endWord - run.startWord + 1} words cut
-            </span>
-          </p>
-        {:else}
         <p class="pl-6 text-sm text-on-surface leading-[1.75]">
+          {#each turn.parts as part (part.run.startWord)}{#if part.cut}<span
+                class="wt-cut"
+                title={cutText(part.run)}
+                aria-label="Content marked irrelevant"
+              ></span>{" "}{:else}{@const runGs = Array.from(
+                { length: part.run.endWord - part.run.startWord + 1 },
+                (_, k) => part.run.startWord + k,
+              ).filter((g) => !showObservedOnly || observedVisible.has(g))}
           {#each runGs as g (g)}<span
               data-word-index={g}
               class="wt-word">{words[g].text}</span>{" "}
@@ -2409,9 +2396,8 @@
             {#if composeSpanNote?.from === g}
               {@render spanNoteCompose()}
             {/if}
-          {/each}
+          {/each}{/if}{/each}
         </p>
-        {/if}
       </div>
     {/each}
   </div>

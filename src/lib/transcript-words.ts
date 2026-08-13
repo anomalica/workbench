@@ -910,41 +910,56 @@ export function nextRelevantWordStartAfter(
   return null; // everything after the playhead is irrelevant - nothing to seek to
 }
 
-/** How a turn should be drawn once cuts are folded into it.
+/** One speaker's turn, with any cuts inside it folded in.
  *
- *  Marking a sentence irrelevant splits the speaker's turn in three - the same
- *  person, mid-thought, drawn as three blocks with two headers they never
- *  earned, which reads as a change of speaker when nothing of the sort
- *  happened. The runs stay as they are in the record (a cut IS a speaker
- *  change to `[irrelevant]`, and that is what the pipeline reads); only the
- *  drawing changes: a cut between two runs of the same speaker becomes a
- *  marker inside one continuous block. */
-export interface RunDisplay {
-  /** Draw this run's speaker header. False for the continuation after a cut. */
-  header: boolean;
-  /** Draw the rule that separates one turn from the next. */
-  divider: boolean;
-  /** This run is a cut sitting inside a turn that carries on around it. */
-  cutInsideTurn: boolean;
+ *  Marking a few words irrelevant splits the speaker's turn in the record - a
+ *  cut IS a speaker change to `[irrelevant]`, which is what the pipeline reads
+ *  and strips. But drawn literally that turns "he said the wrong word and
+ *  corrected himself" into three blocks with two headers, for a two-word
+ *  correction. The runs are unchanged; they are just drawn as one turn, with
+ *  the cut inline in the prose where it happened.
+ *
+ *  A cut with no turn around it - at the start of a record, or between two
+ *  different speakers - stays a turn of its own. */
+export interface TurnPart {
+  run: SpeakerRun;
+  cut: boolean;
 }
 
-export function runDisplays(runs: SpeakerRun[], irrelevant: string): RunDisplay[] {
-  return runs.map((run, i) => {
+export interface Turn {
+  speaker: string;
+  /** The run the turn's header, picker and selection act on. */
+  lead: SpeakerRun;
+  parts: TurnPart[];
+}
+
+export function foldTurns(runs: SpeakerRun[], irrelevant: string): Turn[] {
+  const turns: Turn[] = [];
+  for (let i = 0; i < runs.length; i++) {
+    const run = runs[i];
     if (run.speaker === irrelevant) {
-      // Look past any adjoining cuts: two sentences cut one after the other
-      // still sit inside the same turn.
-      let b = i - 1;
-      while (b >= 0 && runs[b].speaker === irrelevant) b--;
-      let a = i + 1;
-      while (a < runs.length && runs[a].speaker === irrelevant) a++;
-      const inside = b >= 0 && a < runs.length && runs[b].speaker === runs[a].speaker;
-      return { header: !inside, divider: !inside, cutInsideTurn: inside };
+      // Only fold into the previous turn when the same speaker resumes after
+      // the cut - otherwise the turn really did end here.
+      let next = i + 1;
+      while (next < runs.length && runs[next].speaker === irrelevant) next++;
+      const last = turns[turns.length - 1];
+      const resumes = next < runs.length && !!last && runs[next].speaker === last.speaker;
+      if (last && last.speaker !== irrelevant && resumes) {
+        last.parts.push({ run, cut: true });
+        continue;
+      }
+      turns.push({ speaker: run.speaker, lead: run, parts: [{ run, cut: true }] });
+      continue;
     }
-    // A run continues the turn when the only thing between it and the previous
-    // run by the same speaker is cuts.
-    let j = i - 1;
-    while (j >= 0 && runs[j].speaker === irrelevant) j--;
-    const continues = j >= 0 && j < i - 1 && runs[j].speaker === run.speaker;
-    return { header: !continues, divider: !continues, cutInsideTurn: false };
-  });
+    const last = turns[turns.length - 1];
+    // Resume the turn only across a cut; two adjacent runs by the same speaker
+    // are a separate matter and stay as the record has them.
+    const acrossCut = !!last && last.parts[last.parts.length - 1]?.cut;
+    if (last && last.speaker === run.speaker && acrossCut) {
+      last.parts.push({ run, cut: false });
+    } else {
+      turns.push({ speaker: run.speaker, lead: run, parts: [{ run, cut: false }] });
+    }
+  }
+  return turns;
 }

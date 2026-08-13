@@ -140,6 +140,24 @@ body {
   cursor: help;
 }
 
+/* A cut in a transcript: words the reviewer marked irrelevant, which the
+   pre-digest strips before the model sees them. Drawn as a hairline gap in the
+   prose rather than a block - the common case is a two-word correction, and a
+   labelled box for that is louder than the thing it removed. Hover shows what
+   was taken out. */
+.wt-cut {
+  display: inline-block;
+  width: 0.75em;
+  height: 0.28em;
+  vertical-align: 0.12em;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--color-on-surface) 22%, transparent);
+  cursor: help;
+}
+.wt-cut:hover {
+  background: color-mix(in srgb, var(--color-on-surface) 45%, transparent);
+}
+
 /* Reviewer markup on a document. A note is underlined rather than filled: the
    note is ABOUT the words, so the words have to stay readable underneath it,
    while a highlight is a claim on the words themselves and tints them. */
