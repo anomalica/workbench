@@ -127,8 +127,8 @@ def records_repo(tmp_path, monkeypatch):
     """A tiny ingests store + digests with one public and one gated record."""
     ing = tmp_path / "ingests"
     (ing / "store").mkdir(parents=True)
-    (ing / "records").mkdir()
-    dig = tmp_path / "digests" / "records"
+    (ing / "by-name").mkdir()
+    dig = tmp_path / "digests"
     dig.mkdir(parents=True)
 
     for h, status, name in [
@@ -140,7 +140,7 @@ def records_repo(tmp_path, monkeypatch):
             f"title: {name}\n---\nBODY of {name}\n"
         )
         (ing / "store" / f"{h}.md").write_text(md)
-        os.symlink(ing / "store" / f"{h}.md", ing / "records" / f"{name}.md")
+        os.symlink(ing / "store" / f"{h}.md", ing / "by-name" / f"{name}.md")
         (dig / f"{name}.yaml").write_text(
             yaml.safe_dump(
                 {

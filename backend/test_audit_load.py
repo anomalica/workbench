@@ -136,9 +136,7 @@ class TestVariantResolution:
         assert [f.name for f in files] == ["haiku.yaml", "opus.yaml"]
 
     def test_falls_back_to_canonical_when_no_variants_dir(self, tmp_path):
-        records = tmp_path / "records"
-        records.mkdir(parents=True)
-        (records / "rec.yaml").write_text(yaml.safe_dump(DIGEST))
+        (tmp_path / "rec.yaml").write_text(yaml.safe_dump(DIGEST))
         files = variant_files(tmp_path, "rec")
         assert [f.name for f in files] == ["rec.yaml"]
 

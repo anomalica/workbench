@@ -38,7 +38,7 @@ def _git(repo, *args, **kwargs):
 def ingests_repo(tmp_path):
     repo = tmp_path / "ingests"
     store = repo / "store"
-    records = repo / "records"
+    records = repo / "by-name"
     store.mkdir(parents=True)
     records.mkdir()
     (store / f"{CONTENT_HASH}.md").write_text(RECORD)
@@ -61,7 +61,7 @@ def test_archive_stages_both_sides_of_the_move(ingests_repo):
     tracked = _git(ingests_repo, "ls-files").stdout.splitlines()
     assert f"store/v1/{CONTENT_HASH}.md" in tracked
     assert f"store/{CONTENT_HASH}.md" not in tracked
-    assert "records/2020-01-01-web-archive-me.md" not in tracked
+    assert "by-name/2020-01-01-web-archive-me.md" not in tracked
 
 
 def test_unarchive_stages_both_sides_of_the_move(ingests_repo):
@@ -75,7 +75,7 @@ def test_unarchive_stages_both_sides_of_the_move(ingests_repo):
     tracked = _git(ingests_repo, "ls-files").stdout.splitlines()
     assert f"store/{CONTENT_HASH}.md" in tracked
     assert f"store/v1/{CONTENT_HASH}.md" not in tracked
-    assert "records/2020-01-01-web-archive-me.md" in tracked
+    assert "by-name/2020-01-01-web-archive-me.md" in tracked
 
 
 def test_archive_round_trip_keeps_record_listed(ingests_repo):

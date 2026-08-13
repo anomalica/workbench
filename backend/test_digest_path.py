@@ -19,8 +19,8 @@ def _record(content_hash: str) -> str:
 
 
 def _setup(tmp_path, monkeypatch):
-    records = tmp_path / "ingests" / "records"
-    digests = tmp_path / "digests" / "records"
+    records = tmp_path / "ingests" / "by-name"
+    digests = tmp_path / "digests"
     records.mkdir(parents=True)
     digests.mkdir(parents=True)
 

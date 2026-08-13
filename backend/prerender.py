@@ -174,7 +174,7 @@ def _build_digest_map(server) -> dict:
     """{content_hash: digest_yaml_path} for every record with a digest, in one
     pass over the records/ symlinks (vs _hash_to_digest_path's per-call O(n) walk)."""
     out: dict[str, Path] = {}
-    records_dir = server.ingests_path / "records"
+    records_dir = server.ingests_path / "by-name"
     if not records_dir.exists():
         return out
     for symlink in records_dir.glob("*.md"):
@@ -186,7 +186,7 @@ def _build_digest_map(server) -> dict:
         if not content_hash:
             continue
         stem = re.sub(r"\.v\d+$", "", symlink.stem)
-        yaml_path = server.digests_path / "records" / f"{stem}.yaml"
+        yaml_path = server.digests_path / f"{stem}.yaml"
         if yaml_path.exists():
             out[content_hash] = yaml_path
     return out

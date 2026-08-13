@@ -4,7 +4,7 @@ This is the disk/YAML seam that `audit.py` deliberately does not own. A variant
 is one (model, prompt) digest of a record; they live at
 `digests/variants/{friendly-name}/*.yaml` keyed by the reproducibility triple
 (pre-digest-hash + prompt-version + model), with the canonical digest at
-`digests/records/{friendly-name}.yaml`. The 1:N variant store is not populated
+`digests/{friendly-name}.yaml`. The 1:N variant store is not populated
 yet (ADR 0039), so this loads the canonical as a single variant today and picks
 up `variants/{name}/*.yaml` when the digester's variant-run lands.
 
@@ -228,14 +228,14 @@ def load_variant_file(path: Path) -> Variant:
 
 def variant_files(digests_path: Path, friendly_name: str) -> list[Path]:
     """Every variant file for a record, in stable name order: the per-variant
-    files under `variants/{name}/`, else the canonical `records/{name}.yaml` as a
+    files under `variants/{name}/`, else the canonical `{name}.yaml` as a
     lone variant while the 1:N store is unpopulated."""
     variant_dir = digests_path / "variants" / friendly_name
     if variant_dir.is_dir():
         files = sorted(variant_dir.glob("*.yaml")) + sorted(variant_dir.glob("*.md"))
         if files:
             return files
-    canonical = digests_path / "records" / f"{friendly_name}.yaml"
+    canonical = digests_path / f"{friendly_name}.yaml"
     return [canonical] if canonical.exists() else []
 
 

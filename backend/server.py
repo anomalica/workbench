@@ -62,7 +62,7 @@ MIN_POOL_FOR_CLOZE_GATE = 5
 VERIFICATION_SESSION_TTL_SECONDS = 1800
 
 DEFAULT_INGESTS_PATH = Path(__file__).resolve().parents[2] / "ingests"
-DEFAULT_SOURCES_PATH = Path(__file__).resolve().parents[2] / "sources"
+DEFAULT_RECORDS_PATH = Path(__file__).resolve().parents[2] / "records"
 DEFAULT_DIGESTS_PATH = Path(__file__).resolve().parents[2] / "digests"
 DEFAULT_CONTENT_PATH = Path(__file__).resolve().parents[2] / "content"
 # Grading results the digester emits for the relevance-tuning loop
@@ -348,8 +348,8 @@ class LocalIngestSource(IngestSource):
         friendly records/ symlink slug, so walk the symlinks once and only read
         a record's frontmatter when its digest actually exists."""
         digested: set[str] = set()
-        records_dir = self.store.parent / "records"
-        digest_records = digests_path / "records"
+        records_dir = self.store.parent / "by-name"
+        digest_records = digests_path
         if not (records_dir.exists() and digest_records.exists()):
             return digested
         for symlink in records_dir.glob("*.md"):
@@ -467,7 +467,7 @@ class LocalIngestSource(IngestSource):
 
     def _symlink_for_hash(self, full_hash: str) -> Path | None:
         """Find the records/ symlink pointing at store/{hash}.md, if any."""
-        records_dir = self.store.parent / "records"
+        records_dir = self.store.parent / "by-name"
         if not records_dir.exists():
             return None
         for symlink in records_dir.glob("*.md"):
@@ -603,7 +603,7 @@ class LocalIngestSource(IngestSource):
 
         paths: list[Path] = [dest, md_path]
         symlink_name = self._make_symlink_name(frontmatter)
-        records_dir = self.store.parent / "records"
+        records_dir = self.store.parent / "by-name"
         if records_dir.exists():
             link_path = records_dir / symlink_name
             link_path.symlink_to(Path("../store") / md_path.name)
@@ -1347,7 +1347,7 @@ app = FastAPI(title="Anomalica Workbench API")
 setup_auth(app)
 
 source: IngestSource = build_source()
-sources_path = Path(os.environ.get("SOURCES_PATH", str(DEFAULT_SOURCES_PATH)))
+sources_path = Path(os.environ.get("SOURCES_PATH", str(DEFAULT_RECORDS_PATH)))
 ingests_path = Path(os.environ.get("INGESTS_PATH", str(DEFAULT_INGESTS_PATH)))
 digests_path = Path(os.environ.get("DIGESTS_PATH", str(DEFAULT_DIGESTS_PATH)))
 content_path = Path(os.environ.get("CONTENT_PATH", str(DEFAULT_CONTENT_PATH)))
@@ -1664,14 +1664,14 @@ def get_ingest(full_hash: str) -> JSONResponse:
 def _hash_to_digest_path(full_hash: str) -> Path | None:
     """Map an ingest content_hash to its matching digest YAML, if one exists.
 
-    The digester writes per-record YAML at ``digests/records/<name>.yaml``
+    The digester writes per-record YAML at ``digests/<name>.yaml``
     where ``<name>`` is the friendly filename used by the ingester's records/
     symlinks (e.g. ``2024-08-19-ebook-imminent-...``). To bridge the two we
     walk the ingest records/ symlinks, resolve each to its store/{hash}.md
     target, read the content_hash from frontmatter, and return the matching
     digest path.
     """
-    records_dir = ingests_path / "records"
+    records_dir = ingests_path / "by-name"
     if not records_dir.exists():
         return None
     for symlink in records_dir.glob("*.md"):
@@ -1688,7 +1688,7 @@ def _hash_to_digest_path(full_hash: str) -> Path | None:
             # writes ``<name>.yaml`` with no suffix. Strip it so v2 audio/video
             # records resolve to their digest instead of 404ing.
             stem = re.sub(r"\.v\d+$", "", symlink.stem)
-            yaml_path = digests_path / "records" / f"{stem}.yaml"
+            yaml_path = digests_path / f"{stem}.yaml"
             if yaml_path.exists():
                 return yaml_path
             return None
@@ -2231,7 +2231,7 @@ def _hash_to_friendly_name(full_hash: str) -> str | None:
     """The digester's friendly record name (stem, version suffix stripped) for an
     ingest content_hash - the key under which its digest and variants are filed.
     None if no ingest record matches the hash."""
-    records_dir = ingests_path / "records"
+    records_dir = ingests_path / "by-name"
     if not records_dir.exists():
         return None
     for symlink in records_dir.glob("*.md"):

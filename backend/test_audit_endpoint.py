@@ -33,10 +33,10 @@ def _digest(model, claims):
 @pytest.fixture
 def audit_client(tmp_path, monkeypatch):
     ingests = tmp_path / "ingests"
-    (ingests / "records").mkdir(parents=True)
+    (ingests / "by-name").mkdir(parents=True)
     # A record file the friendly-name resolver reads (a plain file resolves to
     # itself; the v-suffix strip still applies to the stem).
-    (ingests / "records" / f"{NAME}.v2.md").write_text(
+    (ingests / "by-name" / f"{NAME}.v2.md").write_text(
         f"---\nschema: anomalica/record/1\ncontent_hash: {HASH}\ntitle: T\n---\nBody.\n"
     )
     digests = tmp_path / "digests"
@@ -140,7 +140,7 @@ def test_malformed_hash_404(audit_client):
 def test_record_without_variants_404(audit_client, tmp_path, monkeypatch):
     # A record that resolves but has no digest/variants at all.
     other = "c" * 64
-    (tmp_path / "ingests" / "records" / "2026-01-02-video-empty.v2.md").write_text(
+    (tmp_path / "ingests" / "by-name" / "2026-01-02-video-empty.v2.md").write_text(
         f"---\nschema: anomalica/record/1\ncontent_hash: {other}\ntitle: T\n---\nB\n"
     )
     assert audit_client.get(f"/api/ingests/{other}/audit").status_code == 404
