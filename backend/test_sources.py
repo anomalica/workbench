@@ -14,7 +14,7 @@ HASH = "5" * 64
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
-    monkeypatch.setattr(server, "sources_path", tmp_path)
+    monkeypatch.setattr(server, "records_path", tmp_path)
     return TestClient(server.app)
 
 
