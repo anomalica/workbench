@@ -72,7 +72,7 @@ export function isContentLine(line: string, isComment: boolean): boolean {
 // Block-level irrelevant regions for prose records: whole blocks wrapped in
 // marker comment lines. The text is never deleted - the digester strips the
 // region before extraction. Non-nesting; multiple regions per body. The
-// canonical form is `<!-- irrelevant: start -->` (record-format.md - the
+// canonical form is `<!-- irrelevant: start -->` (ingest-format.md - the
 // space makes it a YAML mapping); parsing tolerates a missing space.
 const IRRELEVANT_START = /^<!--\s*irrelevant:\s*start\s*-->$/;
 const IRRELEVANT_END = /^<!--\s*irrelevant:\s*end\s*-->$/;
@@ -139,7 +139,7 @@ export function parseTextBlocks(body: string): TextBlock[] {
 }
 
 /** Wrap the inclusive line range in irrelevant markers, each on its own
- *  blank-line-separated annotation line (the canonical record-format.md
+ *  blank-line-separated annotation line (the canonical ingest-format.md
  *  layout). The range must be block-aligned (the caller passes block
  *  boundaries); the wrapped text itself is untouched. Returns the new body. */
 export function markIrrelevantLines(body: string, lineFrom: number, lineTo: number): string {

@@ -57,7 +57,7 @@ export function resolveSourceAddress(input: SourceAddressInput): SourceAddress {
   // extension is a property of the file (76 records say `container: ogg` yet are
   // stored .opus). It comes from the record's `archived_ext`, stamped by the
   // ingester at archive time. Do NOT reconcile it with `source_file` - that is
-  // the ORIGINAL filename and may legitimately disagree (record-format.md:74).
+  // the ORIGINAL filename and may legitimately disagree (ingest-format.md:74).
   if (!archivedExt) return { kind: "none" };
   if (copyrightStatus !== OPEN_ZONE_STATUS) return { kind: "none" };
 

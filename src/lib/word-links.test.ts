@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { parseWords, serializeWords, splitWord, replaceWordRange } from "./transcript-words";
 
 /**
- * Cross-record links: the third paired-marker type (record-format.md, spec
+ * Cross-record links: the third paired-marker type (ingest-format.md, spec
  * 4da321f). `{{link-start: [id, "sha256:...", "quote"?]}}` ... `{{link-end: id}}`
  * rides the same machinery as highlights and span notes: same overlap-by-id and
  * orphan rules, same word-edit remapping, same single overlay id space.

@@ -106,7 +106,7 @@ const WORD_TOKEN = /\{\{t:(\d+(?:\.\d+)?)\}\}([\s\S]*?)(?=\{\{t:|$)/g;
 // `{{Fravor: holds up photo}}`). Reviewer-authored notes moved to the `{{...}}`
 // family so they stop colliding with the `[...]` that real source text is full
 // of - footnote refs `[^1]`, `[sic]`, editorial `[bracketed]` clarifications -
-// which are now left as ordinary word content (record-format.md, ratified). The
+// which are now left as ordinary word content (ingest-format.md, ratified). The
 // reserved `{{t:}}`, `{{highlight-*}}` and `{{note-start/end:}}` markers are
 // consumed upstream, so any `{{...}}` reaching splitSegment is a keyed/keyless
 // event note.

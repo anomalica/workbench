@@ -1437,7 +1437,7 @@
 
   /** Replace annotation comment blocks with visible HTML elements.
    *
-   *  Per architecture/record-format.md, structural-only annotations
+   *  Per architecture/ingest-format.md, structural-only annotations
    *  (chapter, chapter_title, printed_page) are suppressed in the body -
    *  they drive navigation, not prose. Speaker annotations are also
    *  suppressed here; the transcript view consumes them via parseTranscript.
@@ -1546,7 +1546,7 @@
             const alt = typeof img.alt === "string" ? img.alt : "";
             const caption = typeof img.caption === "string" ? img.caption.trim() : "";
             const cap = caption ? `<figcaption>${escapeHtml(caption)}</figcaption>` : "";
-            // Description (record-format.md#image): the reviewer's faithful
+            // Description (ingest-format.md#image): the reviewer's faithful
             // transcription of what is IN the image. Unlike the caption, this is
             // CONTENT - the pre-digest keeps it and it can become a claim - so it
             // reads as a distinct, labelled block, not a caption. Editable in the
@@ -1569,7 +1569,7 @@
             } else if (imageControls) {
               descBlock = `<button type="button" class="image-description-edit image-description-add" data-image-line="${imageLine}">+ Describe what's in this image</button>`;
             }
-            // Display-only relevance flag (record-format.md#image): `irrelevant:
+            // Display-only relevance flag (ingest-format.md#image): `irrelevant:
             // true` drops the image from the rendered page. Never touches
             // coverage or extraction. data-image-line lets the caption re-target
             // picker and the relevance toggle identify which image a click hits.
@@ -3215,7 +3215,7 @@
   <!-- Cross-record link picker: select the record these words refer to,
        optionally anchor to an exact passage in it (a verbatim quote - the
        location is re-derived from it, so it survives the target's
-       re-extraction; spec record-format.md, Cross-record links). -->
+       re-extraction; spec ingest-format.md, Cross-record links). -->
   {#if linkPicker}
     <div
       class="fixed inset-0 bg-ink/50 z-50 flex items-center justify-center p-4"

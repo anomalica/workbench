@@ -1,0 +1,43 @@
+{
+  "version": "5",
+  "specifiers": {
+    "jsr:@std/yaml@1": "1.1.1"
+  },
+  "jsr": {
+    "@std/yaml@1.1.1": {
+      "integrity": "a57665ecf3d17b926380593a56625d8a10cc7281802f1e993b5ebc94a48e71f8"
+    }
+  },
+  "workspace": {
+    "packageJson": {
+      "dependencies": [
+        "npm:@milkdown/core@^7.21.1",
+        "npm:@milkdown/ctx@^7.21.1",
+        "npm:@milkdown/plugin-listener@^7.21.1",
+        "npm:@milkdown/preset-commonmark@^7.21.1",
+        "npm:@milkdown/theme-nord@^7.21.1",
+        "npm:@milkdown/utils@^7.21.1",
+        "npm:@sveltejs/vite-plugin-svelte@^6.2.4",
+        "npm:@tailwindcss/typography@~0.5.19",
+        "npm:@tailwindcss/vite@^4.2.2",
+        "npm:@testing-library/jest-dom@^6.9.1",
+        "npm:@testing-library/svelte@^5.3.1",
+        "npm:@types/cytoscape@^3.21.9",
+        "npm:@types/js-yaml@^4.0.9",
+        "npm:@zip.js/zip.js@^2.8.26",
+        "npm:cytoscape@^3.34.0",
+        "npm:hash-wasm@^4.12.0",
+        "npm:js-yaml@^4.1.1",
+        "npm:jsdom@^29.0.2",
+        "npm:marked@18",
+        "npm:pdfjs-dist@^5.6.205",
+        "npm:svelte-check@^4.4.2",
+        "npm:svelte@^5.54.0",
+        "npm:tailwindcss@^4.2.2",
+        "npm:typescript@^5.9.3",
+        "npm:vite@^7.3.1",
+        "npm:vitest@^4.1.4"
+      ]
+    }
+  }
+}

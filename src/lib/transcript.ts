@@ -303,7 +303,7 @@ export const SPECIAL_SPEAKERS = [
 /** Common non-verbal transcript event notes. A reviewer inserts one as an
  *  unkeyed inline note token (`{{laughs}}`) at the point the event occurs; the
  *  digester reads a `[...]` note in a transcript as a meta event, never spoken
- *  words (record-format.md - the bracket meta-notation). Distinct from the
+ *  words (ingest-format.md - the bracket meta-notation). Distinct from the
  *  keyed `{{actor: action}}` inline annotation, which is unchanged. */
 export const EVENT_NOTE_PRESETS = [
   "laughs",

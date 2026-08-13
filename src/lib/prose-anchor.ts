@@ -8,7 +8,7 @@
  * There is no offset in the rendered text that means anything in the body.
  *
  * So the selection is anchored the way the record format anchors everything
- * else that has to survive a re-render - by its text (`record-format.md`,
+ * else that has to survive a re-render - by its text (`ingest-format.md`,
  * "Anchor by quote, re-derived"). The body is normalised into something close
  * to what the reader saw, carrying a per-character map back to the real
  * offsets; the selected text is found in THAT, and the map converts the hit

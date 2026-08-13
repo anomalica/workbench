@@ -7,7 +7,7 @@
  * "Mark as caption": move a block of loose prose beneath a figure INTO the
  * `caption` field of the nearest preceding structured image annotation.
  *
- * Why it matters (record-format.md#image, ADR 0042): a source's printed
+ * Why it matters (ingest-format.md#image, ADR 0042): a source's printed
  * caption often carries a copyright / attribution line, and the pre-digest
  * strips the whole image annotation before extraction - so a caption
  * structured ON the image never reaches the model as a factual claim, but
@@ -309,7 +309,7 @@ export function imageIsIrrelevantAt(body: string, line: number): boolean {
 
 /** Set or clear `irrelevant: true` on the image annotated at `line`. This is
  *  DISPLAY-only metadata the assembler/site reads to drop the image from the
- *  rendered page (record-format.md#image); it never touches read-coverage
+ *  rendered page (ingest-format.md#image); it never touches read-coverage
  *  (image annotations are structural, zero units) or extraction (the pre-digest
  *  strips every image annotation). Clearing removes the line, so absent = keep.
  *  No-op (ok:false) when the image is missing or already in the target state. */
@@ -355,7 +355,7 @@ export function imageDescriptionAt(body: string, line: number): string {
 
 /** Set (or clear, when the value is empty) the `description:` field on the image
  *  annotated at `line`. Unlike caption/alt/irrelevant, the description is
- *  CONTENT (record-format.md#image): the pre-digest KEEPS it and renders it as
+ *  CONTENT (ingest-format.md#image): the pre-digest KEEPS it and renders it as
  *  prose to the model, so a claim can be drawn from what the image shows (a
  *  screenshotted tweet's text, a chart's figures). It still never affects read-
  *  coverage - the image annotation stays a zero-unit structural block. No-op

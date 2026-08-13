@@ -197,7 +197,7 @@ describe("parsing as YAML, not by hand", () => {
   });
 
   it("reads the spec's unquoted example as well as the emitted quoted form", () => {
-    // record-format.md shows `from:` unquoted; the ingester quotes it. Both are
+    // ingest-format.md shows `from:` unquoted; the ingester quotes it. Both are
     // valid YAML and both must read the same.
     const spec = "n: 2, from: John Podesta <john.podesta@gmail.com>, quoted: true";
     expect(parseMessage(spec).who).toBe("John Podesta");
