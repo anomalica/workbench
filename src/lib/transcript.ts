@@ -385,12 +385,24 @@ export interface SegmentGroup {
 }
 
 /** Group consecutive segments by speaker so the speaker header only needs to
- *  be shown once per run. Timestamps stay on individual segments. */
+ *  be shown once per run. Timestamps stay on individual segments.
+ *
+ *  An irrelevant segment does NOT end a run. Marking a sentence irrelevant
+ *  used to split the speaker's block in three - the same person, mid-thought,
+ *  rendered as three separate turns with two headers they never earned - which
+ *  reads as a change of speaker when nothing of the sort happened. The
+ *  segment stays inside the surrounding block and the viewer draws it as a
+ *  marker rather than as text, so the cut is visible where it happened without
+ *  breaking the turn around it.
+ *
+ *  A run of irrelevant segments with no relevant block before it keeps its own
+ *  group: there is no turn to sit inside. */
 export function groupSegmentsBySpeaker(segments: Segment[]): SegmentGroup[] {
   const groups: SegmentGroup[] = [];
   for (const seg of segments) {
     const last = groups[groups.length - 1];
-    if (last && last.speaker === seg.speaker) {
+    const insideATurn = !!last && last.speaker !== SPEAKER_IRRELEVANT;
+    if (last && (last.speaker === seg.speaker || (isSegmentIrrelevant(seg) && insideATurn))) {
       last.segments.push(seg);
     } else {
       groups.push({ speaker: seg.speaker, segments: [seg] });

@@ -599,7 +599,10 @@ describe("groupSegmentsBySpeaker", () => {
     expect(groupSegmentsBySpeaker([])).toEqual([]);
   });
 
-  it("treats [irrelevant] as its own group", () => {
+  it("keeps an irrelevant segment inside the turn it interrupts", () => {
+    // Cutting a sentence used to split the speaker's turn in three, giving the
+    // same person two extra headers mid-thought and reading as a change of
+    // speaker. The turn is one turn; the cut is drawn inside it.
     const body = `
 <!-- speaker: Speaker 1 -->
 00:00:01.8 A.
@@ -611,8 +614,52 @@ describe("groupSegmentsBySpeaker", () => {
 00:00:10.0 B.
 `;
     const groups = groupSegmentsBySpeaker(parseTranscript(body));
-    expect(groups.length).toBe(3);
-    expect(groups.map((g) => g.speaker)).toEqual(["Speaker 1", "[irrelevant]", "Speaker 1"]);
+    expect(groups.length).toBe(1);
+    expect(groups[0].speaker).toBe("Speaker 1");
+    expect(groups[0].segments.map((g) => g.lines[0])).toEqual(["A.", "Skip.", "B."]);
+  });
+
+  it("does not merge two different speakers across a cut", () => {
+    // The cut attaches to the turn it interrupted; the next speaker still
+    // starts their own.
+    const body = `
+<!-- speaker: Speaker 1 -->
+00:00:01.8 A.
+
+<!-- speaker: [irrelevant] -->
+00:00:05.0 Skip.
+
+<!-- speaker: Speaker 2 -->
+00:00:10.0 B.
+`;
+    const groups = groupSegmentsBySpeaker(parseTranscript(body));
+    expect(groups.map((g) => g.speaker)).toEqual(["Speaker 1", "Speaker 2"]);
+    expect(groups[0].segments.length).toBe(2);
+  });
+
+  it("gives a cut at the very start its own group", () => {
+    // There is no turn for it to sit inside.
+    const body = `
+<!-- speaker: [irrelevant] -->
+00:00:01.0 Sponsor read.
+
+<!-- speaker: Speaker 1 -->
+00:00:10.0 A.
+`;
+    const groups = groupSegmentsBySpeaker(parseTranscript(body));
+    expect(groups.map((g) => g.speaker)).toEqual(["[irrelevant]", "Speaker 1"]);
+  });
+
+  it("keeps a wholly-cut run as one irrelevant group", () => {
+    const body = `
+<!-- speaker: [irrelevant] -->
+00:00:01.0 One.
+00:00:03.0 Two.
+`;
+    const groups = groupSegmentsBySpeaker(parseTranscript(body));
+    expect(groups.length).toBe(1);
+    expect(groups[0].speaker).toBe("[irrelevant]");
+    expect(groups[0].segments.length).toBe(2);
   });
 });
 

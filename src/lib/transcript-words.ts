@@ -909,3 +909,42 @@ export function nextRelevantWordStartAfter(
   }
   return null; // everything after the playhead is irrelevant - nothing to seek to
 }
+
+/** How a turn should be drawn once cuts are folded into it.
+ *
+ *  Marking a sentence irrelevant splits the speaker's turn in three - the same
+ *  person, mid-thought, drawn as three blocks with two headers they never
+ *  earned, which reads as a change of speaker when nothing of the sort
+ *  happened. The runs stay as they are in the record (a cut IS a speaker
+ *  change to `[irrelevant]`, and that is what the pipeline reads); only the
+ *  drawing changes: a cut between two runs of the same speaker becomes a
+ *  marker inside one continuous block. */
+export interface RunDisplay {
+  /** Draw this run's speaker header. False for the continuation after a cut. */
+  header: boolean;
+  /** Draw the rule that separates one turn from the next. */
+  divider: boolean;
+  /** This run is a cut sitting inside a turn that carries on around it. */
+  cutInsideTurn: boolean;
+}
+
+export function runDisplays(runs: SpeakerRun[], irrelevant: string): RunDisplay[] {
+  return runs.map((run, i) => {
+    if (run.speaker === irrelevant) {
+      // Look past any adjoining cuts: two sentences cut one after the other
+      // still sit inside the same turn.
+      let b = i - 1;
+      while (b >= 0 && runs[b].speaker === irrelevant) b--;
+      let a = i + 1;
+      while (a < runs.length && runs[a].speaker === irrelevant) a++;
+      const inside = b >= 0 && a < runs.length && runs[b].speaker === runs[a].speaker;
+      return { header: !inside, divider: !inside, cutInsideTurn: inside };
+    }
+    // A run continues the turn when the only thing between it and the previous
+    // run by the same speaker is cuts.
+    let j = i - 1;
+    while (j >= 0 && runs[j].speaker === irrelevant) j--;
+    const continues = j >= 0 && j < i - 1 && runs[j].speaker === run.speaker;
+    return { header: !continues, divider: !continues, cutInsideTurn: false };
+  });
+}
