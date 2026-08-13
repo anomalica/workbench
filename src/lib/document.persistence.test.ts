@@ -150,3 +150,83 @@ describe("DocumentStore - persistence across simulated refresh", () => {
     expect(docB.current).toContain("Speaker 5");
   });
 });
+
+describe("what a draft costs in the browser", () => {
+  const BOOK = `---\ntitle: A Book\n---\n\n${Array.from(
+    { length: 20_000 },
+    (_, i) => `00:00:0${i % 9}.0 Line ${i} of an ordinary paragraph of prose.`,
+  ).join("\n")}\n`;
+  const BOOK_HASH = "b00c0ffee0000000000000000000000000";
+
+  const stored = (hash: string) => localStorage.getItem(`workbench:doc:${hash}`)?.length ?? 0;
+
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("stores the difference, not another copy of the book", () => {
+    // The reported failure: one edit in a 780KB book wrote 780KB, and the next
+    // book found the ~5MB origin quota already gone - "your last edit could NOT
+    // be saved in this browser".
+    const doc = new DocumentStore();
+    doc.load(BOOK, BOOK_HASH);
+    doc.editBody(doc.current.replace("Line 9000 of", "Line 9000 [irrelevant] of"));
+
+    expect(BOOK.length).toBeGreaterThan(700_000);
+    expect(stored(BOOK_HASH)).toBeGreaterThan(0);
+    expect(stored(BOOK_HASH)).toBeLessThan(2_000);
+  });
+
+  it("restores that edit exactly on the next load", () => {
+    const doc = new DocumentStore();
+    doc.load(BOOK, BOOK_HASH);
+    doc.editBody(doc.current.replace("Line 9000 of", "Line 9000 [irrelevant] of"));
+    const edited = doc.current;
+
+    const reopened = new DocumentStore();
+    reopened.load(BOOK, BOOK_HASH);
+    expect(reopened.current).toBe(edited);
+  });
+
+  it("removes the key once the browser matches the server again", () => {
+    // Mark's point: after a submit - or an undo back to the start - there is
+    // nothing left to protect, so the draft should not sit there holding quota.
+    const doc = new DocumentStore();
+    doc.load(BOOK, BOOK_HASH);
+    doc.editBody(doc.current.replace("Line 5 of", "Line 5 [irrelevant] of"));
+    expect(stored(BOOK_HASH)).toBeGreaterThan(0);
+
+    doc.undo();
+    expect(doc.current).toBe(BOOK);
+    expect(localStorage.getItem(`workbench:doc:${BOOK_HASH}`)).toBeNull();
+  });
+
+  it("still restores a draft written before drafts were patches", () => {
+    // Someone's unsaved work from the previous format is not forfeit.
+    const legacy = SAMPLE_MARKDOWN.replace("Speaker 5", "Ross Coulthart");
+    localStorage.setItem(
+      `workbench:doc:${HASH}`,
+      JSON.stringify({ current: legacy, past: [SAMPLE_MARKDOWN], future: [] }),
+    );
+    const before = localStorage.getItem(`workbench:doc:${HASH}`)!.length;
+    const doc = new DocumentStore();
+    doc.load(SAMPLE_MARKDOWN, HASH);
+    expect(doc.current).toBe(legacy);
+    expect(doc.canUndo).toBe(true);
+    // Rewritten as a patch on sight - the quota is filled by drafts for the
+    // records the reviewer is NOT currently editing.
+    expect(localStorage.getItem(`workbench:doc:${HASH}`)!.length).toBeLessThan(before);
+  });
+
+  it("drops a draft whose record has changed underneath it", () => {
+    const doc = new DocumentStore();
+    doc.load(BOOK, BOOK_HASH);
+    doc.editBody(doc.current.replace("Line 5 of", "Line 5 [irrelevant] of"));
+
+    const reingested = `${BOOK}\nAn extra line the ingester added later.\n`;
+    const reopened = new DocumentStore();
+    reopened.load(reingested, BOOK_HASH);
+    expect(reopened.current).toBe(reingested);
+    expect(localStorage.getItem(`workbench:doc:${BOOK_HASH}`)).toBeNull();
+  });
+});

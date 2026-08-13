@@ -104,11 +104,10 @@ describe("assign unnamed speaker then refresh", () => {
     expect(doc.current).not.toContain("Speaker 5");
     expect(doc.current).toContain("Ross Coulthart");
 
-    // Verify localStorage was written
-    const saved = localStorage.getItem(`workbench:doc:${HASH}`);
-    expect(saved).not.toBeNull();
-    const state = JSON.parse(saved!);
-    expect(state.current).not.toContain("Speaker 5");
+    // A draft is stored, and it is a patch against the server's copy rather
+    // than a second copy of the record - so it is read back through the store
+    // rather than by reaching into the JSON.
+    expect(localStorage.getItem(`workbench:doc:${HASH}`)).not.toBeNull();
 
     // Simulate refresh: brand new DocumentStore
     const doc2 = new DocumentStore();
@@ -130,13 +129,10 @@ describe("assign unnamed speaker then refresh", () => {
     expect(finalState).toContain("Ross Coulthart");
     expect(finalState).toContain("David Marler");
 
-    // localStorage should have the latest state
+    // localStorage should hold the latest state, as a patch.
     const saved = localStorage.getItem(`workbench:doc:${HASH}`);
     expect(saved).not.toBeNull();
-    const state = JSON.parse(saved!);
-    expect(state.current).toBe(finalState);
-    // History is trimmed to keep localStorage manageable
-    expect(state.past.length).toBeLessThanOrEqual(20);
+    expect(saved!.length).toBeLessThan(MARKDOWN.length);
 
     // Simulate refresh
     const doc2 = new DocumentStore();
@@ -154,9 +150,12 @@ describe("assign unnamed speaker then refresh", () => {
     doc.load(MARKDOWN, HASH);
     doc.mergeSpeakers(["Speaker 5"], "Ross Coulthart");
 
-    const saved = localStorage.getItem(`workbench:doc:${HASH}`);
-    expect(saved).not.toBeNull();
-    expect(JSON.parse(saved!).current).not.toContain("Speaker 5");
+    expect(localStorage.getItem(`workbench:doc:${HASH}`)).not.toBeNull();
+    expect(doc.saveFailed).toBe(false);
+
+    const reopened = new DocumentStore();
+    reopened.load(MARKDOWN, HASH);
+    expect(reopened.current).not.toContain("Speaker 5");
   });
 
   it("verifies localStorage key is consistent between save and load", () => {
