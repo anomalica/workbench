@@ -6,6 +6,7 @@
  */
 
 import yaml from "js-yaml";
+import { type DraftPatch, decodePatch, encodePatch, patchSize } from "./draft-patch";
 
 const MAX_HISTORY = 200;
 
@@ -49,10 +50,22 @@ export class DocumentStore {
     if (saved) {
       try {
         const state = JSON.parse(saved);
-        this.current = state.current ?? markdown;
-        this.past = state.past ?? [];
-        this.future = state.future ?? [];
-        return;
+        const restored = this.readDraft(state, markdown);
+        if (restored) {
+          this.current = restored.current;
+          this.past = restored.past;
+          this.future = restored.future;
+          // A draft in the old whole-copy format is rewritten as a patch on
+          // sight rather than on the reviewer's next edit - it is the drafts
+          // for books they are NOT editing right now that fill the quota.
+          if (state.v !== 2) this.save();
+          return;
+        }
+        // A patch that will not apply means the record changed underneath the
+        // draft. Dropping it is the only safe move - splicing the reviewer's
+        // lines into a document they never saw would be worse than losing
+        // them - and keeping the dead key would just consume quota.
+        localStorage.removeItem(this.storageKey);
       } catch {
         // Corrupted save, start fresh
       }
@@ -61,6 +74,32 @@ export class DocumentStore {
     this.current = markdown;
     this.past = [];
     this.future = [];
+  }
+
+  /** Read either shape: v2 patches, or the pre-patch drafts that hold whole
+   *  copies of the document. The old ones are still someone's unsaved work, so
+   *  they are honoured on the way in and rewritten as patches on the next
+   *  save. */
+  private readDraft(
+    state: Record<string, unknown>,
+    markdown: string,
+  ): { current: string; past: string[]; future: string[] } | null {
+    if (state.v === 2) {
+      const apply = (patch: unknown) => (patch ? decodePatch(markdown, patch as DraftPatch) : null);
+      const current = apply(state.patch);
+      if (current === null) return null;
+      const seq = (list: unknown) =>
+        ((list as DraftPatch[] | undefined) ?? [])
+          .map(apply)
+          .filter((t): t is string => t !== null);
+      return { current, past: seq(state.past), future: seq(state.future) };
+    }
+    if (typeof state.current !== "string") return null;
+    return {
+      current: state.current,
+      past: (state.past as string[]) ?? [],
+      future: (state.future as string[]) ?? [],
+    };
   }
 
   private pushEdit(newContent: string) {
@@ -92,39 +131,59 @@ export class DocumentStore {
   }
 
   private save() {
-    // Only persist the last few undo entries to avoid blowing localStorage's
-    // ~5MB quota. Each entry is the full markdown text, so 200 entries for a
-    // 50KB file would be 10MB - well over the limit.
-    const maxStoredHistory = 20;
-    const trimmedPast = this.past.slice(-maxStoredHistory);
-    const payload = JSON.stringify({
-      current: this.current,
-      past: trimmedPast,
-      future: this.future.slice(0, maxStoredHistory),
-    });
-    try {
-      localStorage.setItem(this.storageKey, payload);
+    // Nothing to protect: the browser's copy matches the server's, so a draft
+    // would only consume quota another record's real work may need. This is
+    // what clears the key after a submit, and after an undo back to where the
+    // reviewer started. Undo/redo history is not work - it survives in memory
+    // for the session, and a reload from here loses a keystroke, not an edit.
+    if (!this.dirty) {
+      localStorage.removeItem(this.storageKey);
       this.saveFailed = false;
       return;
-    } catch (e) {
-      // Quota exceeded - try again with no history at all
-      console.warn("[doc.save] localStorage quota exceeded, saving without history");
     }
-    try {
-      localStorage.setItem(
-        this.storageKey,
-        JSON.stringify({ current: this.current, past: [], future: [] }),
-      );
-      this.saveFailed = false;
-    } catch {
-      // Both attempts failed: the edit exists only in this tab's memory. This
-      // must NEVER fail silently - a reload from here loses it for good (this
-      // is exactly what happened to a 3-hour review once). saveFailed drives a
-      // blocking banner in the viewer; nothing else can substitute for it,
-      // since there is no other durable place this edit exists yet.
-      console.error("[doc.save] localStorage save failed entirely - edit is NOT saved");
-      this.saveFailed = true;
+
+    const patch = encodePatch(this.original, this.current);
+    // History is a convenience; the current text is the work. So history is
+    // kept only while it is affordable, newest first, and dropped entirely
+    // before the edit itself is ever at risk.
+    const budget = 512 * 1024;
+    let spent = patchSize(patch);
+    const affordable = (versions: string[]) => {
+      const out: DraftPatch[] = [];
+      for (const v of versions) {
+        const p = encodePatch(this.original, v);
+        const size = patchSize(p);
+        if (spent + size > budget) break;
+        spent += size;
+        out.push(p);
+      }
+      return out;
+    };
+    // Reversed so the entries nearest the present survive the budget, then
+    // restored to chronological order for readDraft.
+    const past = affordable([...this.past].reverse()).reverse();
+    const future = affordable(this.future);
+
+    for (const payload of [
+      JSON.stringify({ v: 2, patch, past, future }),
+      JSON.stringify({ v: 2, patch, past: [], future: [] }),
+    ]) {
+      try {
+        localStorage.setItem(this.storageKey, payload);
+        this.saveFailed = false;
+        return;
+      } catch {
+        // Quota exceeded - retry with no history at all.
+      }
     }
+
+    // Both attempts failed: the edit exists only in this tab's memory. This
+    // must NEVER fail silently - a reload from here loses it for good (this
+    // is exactly what happened to a 3-hour review once). saveFailed drives a
+    // blocking banner in the viewer; nothing else can substitute for it,
+    // since there is no other durable place this edit exists yet.
+    console.error("[doc.save] localStorage save failed entirely - edit is NOT saved");
+    this.saveFailed = true;
   }
 
   discard() {
