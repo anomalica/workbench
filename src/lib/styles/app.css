@@ -154,6 +154,13 @@ body {
   background: color-mix(in srgb, var(--color-on-surface) 22%, transparent);
   cursor: help;
 }
+/* The playhead is inside the cut. Without this the karaoke highlight simply
+   vanishes for the length of the removed words and then reappears further
+   down, which reads as playback having lost its place. */
+.wt-cut-active {
+  background: var(--color-primary);
+}
+
 .wt-cut:hover {
   background: color-mix(in srgb, var(--color-on-surface) 45%, transparent);
 }

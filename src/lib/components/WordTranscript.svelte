@@ -2222,7 +2222,9 @@
              text below. -->
         <p class="pl-6 text-sm text-on-surface leading-[1.75]">
           {#each turn.parts as part (part.run.startWord)}{#if part.cut}<span
-                class="wt-cut"
+                class="wt-cut {activeWord >= part.run.startWord && activeWord <= part.run.endWord
+                  ? 'wt-cut-active'
+                  : ''}"
                 title={cutText(part.run)}
                 aria-label="Content marked irrelevant"
               ></span>{" "}{:else}{@const runGs = Array.from(
