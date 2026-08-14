@@ -2475,7 +2475,7 @@
           ? 'visible'
           : 'auto'};contain-intrinsic-size:auto {runIntrinsic(run)}px"
       >
-        {#if opensExternal}
+        {#if opensExternal && !quotedRuns.has(run.startWord)}
           <!-- The passage's own header: what this clip is, said once at the
                top of it. It belongs to the passage, not to the speakers inside
                it - a clip cutting between two voices is still one clip from
@@ -2586,7 +2586,18 @@
              where the clip began or what it was. -->
         {#each turnSegments(turn) as seg (seg.key)}
           {#if seg.kind === "external"}
-            <div class="wt-quoted-turn my-2 py-1.5">
+            {@const opens = seg.gs[0] === seg.external.fromWord}
+            {@const closes = seg.gs[seg.gs.length - 1] === seg.external.toWord}
+            <!-- A clip can run across several turns. It is ONE clip, so only
+                 the segment that opens it carries the header, and the strip is
+                 unbroken between them: three headers for one quotation read as
+                 three quotations. A turn that is wholly quoted already sits in
+                 the block, so its segment does not draw a second one. -->
+            <div
+              class="{quotedRuns.has(turn.lead.startWord) ? '' : 'wt-quoted-turn'}
+                {opens ? 'mt-2 pt-1.5' : ''} {closes ? 'mb-2 pb-1.5' : ''}"
+            >
+              {#if opens}
               <div class="group/ext flex items-center gap-2 pb-1 text-[11px] font-ui">
                 <span class="text-on-surface-muted/50 uppercase tracking-wide flex-none">External</span>
                 {#if seg.external.description}
@@ -2606,6 +2617,7 @@
                   class="flex-none px-1 rounded cursor-pointer text-on-surface-muted/60 hover:text-error opacity-0 group-hover/ext:opacity-100 transition-opacity"
                   title="These words are this recording's own after all">remove</button>
               </div>
+              {/if}
               <p class="pl-2 text-sm leading-[1.75]">{@render wordSpans(seg.gs)}</p>
             </div>
           {:else if seg.kind === "cut"}
