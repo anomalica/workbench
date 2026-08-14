@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Segment } from "$lib/transcript";
-  import { isDefaultSpeakerName, isSpecialSpeaker, SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE, SPEAKER_GROUP } from "$lib/transcript";
+  import { assignableSpecialSpeakers, isDefaultSpeakerName, isSpecialSpeaker, SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE, SPEAKER_GROUP } from "$lib/transcript";
   import SpeakerDot from "./SpeakerDot.svelte";
   import { fetchSpeakers } from "$lib/api";
   import { type KnownSpeaker, suggestSpeakers } from "$lib/speaker-suggest";
@@ -295,7 +295,7 @@
                   </button>
                 {/each}
                 <div class="border-t border-border mt-1 pt-1">
-                  {#each [SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE, SPEAKER_GROUP] as specialName}
+                  {#each assignableSpecialSpeakers() as specialName}
                     <button
                       onclick={(e) => { e.stopPropagation(); mergeInto(row.id, specialName); }}
                       class="block w-full text-left px-3 py-1.5 text-sm font-ui cursor-pointer hover:bg-primary-container/30 text-on-surface-muted italic"
@@ -574,7 +574,7 @@
                 </button>
               {/each}
               <div class="border-t border-border mt-1 pt-1">
-                {#each [SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE, SPEAKER_GROUP] as specialName}
+                {#each assignableSpecialSpeakers() as specialName}
                   <button
                     onclick={(e) => { e.stopPropagation(); assignSpeaker(row.id, specialName); }}
                     class="block w-full text-left px-3 py-1.5 text-sm font-ui cursor-pointer hover:bg-primary-container/30 text-on-surface-muted italic"

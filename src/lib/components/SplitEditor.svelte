@@ -6,7 +6,7 @@
     isSpecialSpeaker,
     SPEAKER_IRRELEVANT,
     SPEAKER_NARRATOR,
-    SPEAKER_EXTERNAL_FOOTAGE,
+    assignableSpecialSpeakers,
     SPEAKER_GROUP,
   } from "$lib/transcript";
   import SpeakerDot from "./SpeakerDot.svelte";
@@ -80,7 +80,7 @@
 
   // --- Picker groups (named > special > other), mirroring the per-sentence
   // menu. The part's own current speaker is dropped from its list. ---
-  const SPECIALS = [SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE, SPEAKER_GROUP];
+  const SPECIALS = assignableSpecialSpeakers();
   function namedFor(current: string): string[] {
     return namedSpeakers.filter((s) => s !== current);
   }

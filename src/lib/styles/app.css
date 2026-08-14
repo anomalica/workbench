@@ -150,13 +150,16 @@ body {
   cursor: help;
 }
 
-/* A passage played from another recording. Tinted rather than badged: the
-   reviewer needs to see at a glance where the quoted material starts and stops
-   while reading, and a label at the boundary only tells them at the boundary.
-   Kept quieter than a highlight - this is provenance, not emphasis. */
+/* A passage played or quoted from somewhere else.
+   Underline, never a background. A background reads as a HIGHLIGHT - emphasis,
+   "look here" - and this is the opposite kind of fact: it says nothing about
+   how important the words are, only where they came from. It also must not
+   read as excluded: unlike a cut, external text IS sent to the model, because
+   the clip is often the best evidence in the record. So it stays full-strength
+   text, which keeps it clear of the faded look that means unviewed, and
+   carries a quiet rule underneath instead. */
 .wt-external {
-  background: color-mix(in srgb, var(--color-secondary, #7a6ff0) 14%, transparent);
-  box-shadow: 0 -1px 0 0 color-mix(in srgb, var(--color-secondary, #7a6ff0) 35%, transparent) inset;
+  box-shadow: 0 1px 0 0 color-mix(in srgb, var(--color-secondary, #7a6ff0) 55%, transparent);
 }
 
 /* A cut in a transcript: words the reviewer marked irrelevant, which the

@@ -9,7 +9,7 @@
     insertEventNote as spliceEventNote,
     SPEAKER_IRRELEVANT,
     SPEAKER_NARRATOR,
-    SPEAKER_EXTERNAL_FOOTAGE,
+    assignableSpecialSpeakers,
     SPEAKER_GROUP,
   } from "$lib/transcript";
   import SpeakerDot from "./SpeakerDot.svelte";
@@ -83,7 +83,7 @@
   });
 
   let namedGroup = $derived(namedSpeakers.filter((s) => s !== editSpeaker));
-  let specialGroup = $derived([SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE, SPEAKER_GROUP].filter((s) => s !== editSpeaker));
+  let specialGroup = $derived(assignableSpecialSpeakers(editSpeaker));
   let otherGroup = $derived(
     allSpeakers.filter((s) => s !== editSpeaker && !namedSpeakers.includes(s) && !isSpecialSpeaker(s)),
   );

@@ -35,7 +35,7 @@
   import CoverageStrip from "./CoverageStrip.svelte";
   import { DocumentStore } from "$lib/document.svelte";
   import { safeLocalSet } from "$lib/storage";
-  import { parseTranscript, parseTimeToSeconds, secondsToTime, findActiveSegmentForTime, segmentAtTime, nextRelevantSegmentAfter, extractFrontmatterSpeakers, isSegmentIrrelevant, isSpecialSpeaker, nextSpeakerName, groupSegmentsBySpeaker, orderedNamedSpeakers, SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE, SPEAKER_GROUP } from "$lib/transcript";
+  import { assignableSpecialSpeakers, parseTranscript, parseTimeToSeconds, secondsToTime, findActiveSegmentForTime, segmentAtTime, nextRelevantSegmentAfter, extractFrontmatterSpeakers, isSegmentIrrelevant, isSpecialSpeaker, nextSpeakerName, groupSegmentsBySpeaker, orderedNamedSpeakers, SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE, SPEAKER_GROUP } from "$lib/transcript";
   import { nextSegmentBoundary, singleEndForCurrentTime } from "$lib/playback";
   import { resolveSourceAddress, resolvePeaksUrl } from "$lib/source-address";
   import { savePlayhead, loadPlayhead, shouldPersist } from "$lib/playhead";
@@ -4556,7 +4556,7 @@
                 {#if multiPickerOpen}
                   {@const current = ""}
                   {@const nm = namedSpeakersOrdered.filter((s) => s !== current)}
-                  {@const sp = [SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE, SPEAKER_GROUP].filter((s) => s !== current)}
+                  {@const sp = assignableSpecialSpeakers(current)}
                   {@const ot = allSpeakerNames().filter((s) => !namedSpeakers.includes(s) && !isSpecialSpeaker(s))}
                   {@const assign = (name: string) => {
                     const targets = segments
@@ -4682,7 +4682,7 @@
                   {#if groupPickerOpen}
                     {@const current = group.speaker}
                     {@const nm = namedSpeakersOrdered.filter((s) => s !== current)}
-                    {@const sp = [SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE, SPEAKER_GROUP].filter((s) => s !== current)}
+                    {@const sp = assignableSpecialSpeakers(current)}
                     {@const ot = allSpeakerNames().filter((s) => s !== current && !namedSpeakers.includes(s) && !isSpecialSpeaker(s))}
                     <div
                       onclick={(e) => e.stopPropagation()}
@@ -4825,7 +4825,7 @@
                         {#if sentencePickerOpen}
                           {@const current = segment.speaker}
                           {@const nm = namedSpeakersOrdered.filter((s) => s !== current)}
-                          {@const sp = [SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE, SPEAKER_GROUP].filter((s) => s !== current)}
+                          {@const sp = assignableSpecialSpeakers(current)}
                           {@const ot = allSpeakerNames().filter((s) => s !== current && !namedSpeakers.includes(s) && !isSpecialSpeaker(s))}
                           <div
                             onclick={(e) => e.stopPropagation()}

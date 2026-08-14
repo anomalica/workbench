@@ -286,6 +286,19 @@ export function extractFrontmatterSpeakers(rawFrontmatter: string): string[] {
 
 /** Special speaker names. */
 export const SPEAKER_IRRELEVANT = "[irrelevant]";
+
+/** The speaker tokens still OFFERED when reassigning a turn.
+ *
+ *  `[external footage]` is deliberately absent, and still recognised
+ *  everywhere else so existing records keep rendering. It is deprecated in
+ *  ingest-format.md: a clip is now marked on the PASSAGE, which keeps the
+ *  speaker as the person and stops one clip counting as fresh corroboration
+ *  every time another record replays it. Offering both asks the reviewer to
+ *  choose between two ways of saying one thing, and the losing choice throws
+ *  away who was speaking. */
+export function assignableSpecialSpeakers(exclude?: string): string[] {
+  return [SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_GROUP].filter((s) => s !== exclude);
+}
 export const SPEAKER_NARRATOR = "[narrator]";
 export const SPEAKER_EXTERNAL_FOOTAGE = "[external footage]";
 /** Multiple speakers saying the same thing simultaneously - chants,
