@@ -42,19 +42,32 @@ function scanCommentBlocks(lines: string[]): CommentBlock[] {
   const blocks: CommentBlock[] = [];
   for (let i = 0; i < lines.length; i++) {
     const t = lines[i].trim();
-    if (t.length > 6 && t.startsWith("<!--") && t.endsWith("-->")) {
-      blocks.push({ from: i, to: i, inner: t.slice(4, -3).trim() });
-    } else if (t === "<!--") {
-      const inner: string[] = [];
-      let j = i + 1;
-      while (j < lines.length && lines[j].trim() !== "-->") {
-        inner.push(lines[j]);
-        j++;
-      }
-      if (j < lines.length) {
-        blocks.push({ from: i, to: j, inner: inner.join("\n") });
-        i = j;
-      }
+    // An annotation does not always start its line. The Fourth Mind wraps its
+    // title image in a markdown link - `[<!--` opens and `-->](http://...)`
+    // closes - and requiring the line to BE the marker missed it, so the image
+    // had no known line, every control on it rendered with line -1, and
+    // "Mark irrelevant" silently did nothing on that record.
+    const open = t.indexOf("<!--");
+    if (open === -1) continue;
+    const closeSameLine = t.indexOf("-->", open + 4);
+    if (closeSameLine !== -1) {
+      const inner = t.slice(open + 4, closeSameLine).trim();
+      if (inner) blocks.push({ from: i, to: i, inner });
+      continue;
+    }
+    // Multi-line: anything after the opener on this line belongs to the body.
+    const first = t.slice(open + 4);
+    const inner: string[] = first.trim() ? [first] : [];
+    let j = i + 1;
+    while (j < lines.length && !lines[j].includes("-->")) {
+      inner.push(lines[j]);
+      j++;
+    }
+    if (j < lines.length) {
+      const tail = lines[j].slice(0, lines[j].indexOf("-->"));
+      if (tail.trim()) inner.push(tail);
+      blocks.push({ from: i, to: j, inner: inner.join("\n") });
+      i = j;
     }
   }
   return blocks;

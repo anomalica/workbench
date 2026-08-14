@@ -409,3 +409,47 @@ describe("setImageDescriptionAt / imageDescriptionAt", () => {
     expect(totalUnits(parseTextBlocks(body))).toBe(before);
   });
 });
+
+describe("an annotation that does not start its own line", () => {
+  // The Fourth Mind wraps its title image in a markdown link, so the opener is
+  // `[<!--` and the closer is `-->](http://www.unknowncountry.com)`. Requiring
+  // the line to BE the marker found no image at all: every control on that
+  // record rendered with line -1 and "Mark irrelevant" did nothing.
+  const WRAPPED = [
+    "# THE FOURTH MIND",
+    "",
+    "[<!--",
+    "image:",
+    "  file: e8bda5ecb164.jpg",
+    '  alt: "Walker &amp; Collier, Inc"',
+    "-->](http://www.unknowncountry.com)",
+    "",
+    "Body text.",
+  ].join("\n");
+
+  it("finds the image and reports the line the annotation opens on", () => {
+    const refs = imageRefsInBody(WRAPPED);
+    expect(refs).toHaveLength(1);
+    expect(refs[0].file).toBe("e8bda5ecb164.jpg");
+    expect(refs[0].line).toBe(2);
+  });
+
+  it("can mark that image irrelevant", () => {
+    const edit = setImageRelevanceAt(WRAPPED, 2, true);
+    expect(edit.ok).toBe(true);
+    expect(edit.body).toContain("irrelevant: true");
+    // The link around it is left exactly as the source had it.
+    expect(edit.body).toContain("[<!--");
+    expect(edit.body).toContain("-->](http://www.unknowncountry.com)");
+  });
+
+  it("still handles a single-line annotation wrapped in a link", () => {
+    const one = "[<!-- image: {file: a1b2c3d4e5f6.jpg} -->](http://e.com)";
+    expect(imageRefsInBody(one)).toHaveLength(1);
+  });
+
+  it("leaves an ordinary annotation exactly as it was", () => {
+    const plain = ["<!--", "image:", "  file: 0123456789ab.jpg", "-->"].join("\n");
+    expect(imageRefsInBody(plain)).toEqual([{ line: 0, file: "0123456789ab.jpg" }]);
+  });
+});
