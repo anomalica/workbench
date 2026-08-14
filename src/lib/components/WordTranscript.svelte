@@ -315,35 +315,23 @@
     return m;
   });
 
-  /** Turns that lie wholly inside a quoted passage, and the letter each is
-   *  labelled with.
+  /** Turns that lie wholly inside a quoted passage.
    *
-   *  A clip's voices are relabelled A, B, C for display only. `Speaker 7` and
-   *  `Speaker 4` read as this record's own unnamed speakers - the reviewer's
-   *  outstanding work - when they are neither: they are voices in somebody
-   *  else's recording, and nothing here will ever identify them. Letters say
-   *  "a different voice in this clip" and claim nothing more. The record still
-   *  holds the original name, so unsetting the passage brings it straight
-   *  back. */
-  let quotedRunLabel = $derived.by(() => {
-    const m = new Map<number, string>();
+   *  They keep their own speaker name. Letters were tried and are wrong: they
+   *  restart per passage, so voice A in one clip and voice A in another read as
+   *  the same person when they are strangers - and they flatten a voice the
+   *  reviewer HAS identified back to an anonymous label. The diarisation number
+   *  is already unique within the record, so `Speaker 8` stays `Speaker 8`, and
+   *  a named one keeps their name. What marks it as a clip is the block it sits
+   *  in, not a rewritten label. */
+  let quotedRuns = $derived.by(() => {
+    const s = new Set<number>();
     for (const e of parsed.externals) {
-      let n = 0;
-      const seen = new Map<string, string>();
       for (const r of runs) {
-        if (r.startWord < e.fromWord || r.endWord > e.toWord) continue;
-        const already = seen.get(r.speaker);
-        if (already) {
-          m.set(r.startWord, already);
-          continue;
-        }
-        const letter = String.fromCharCode(65 + (n % 26));
-        n++;
-        seen.set(r.speaker, letter);
-        m.set(r.startWord, letter);
+        if (r.startWord >= e.fromWord && r.endWord <= e.toWord) s.add(r.startWord);
       }
     }
-    return m;
+    return s;
   });
 
   let externalAtSelection = $derived.by(() => {
@@ -2383,7 +2371,7 @@
     {/if}
     {#each turns as turn (turn.lead.startWord)}
       {@const run = turn.lead}
-      {@const quotedLabel = quotedRunLabel.get(run.startWord)}
+      {@const quotedLabel = quotedRuns.has(run.startWord)}
       {@const spoken = turn.parts.filter((p) => !p.cut)}
       {@const obs = spoken.reduce((n, p) => n + observedInRun(p.run), 0)}
       {@const total = spoken.reduce((n, p) => n + p.run.endWord - p.run.startWord + 1, 0)}
@@ -2402,14 +2390,28 @@
       >
         <div class="flex items-center justify-between gap-2 pb-1">
           {#if quotedLabel}
-            <span class="flex items-center gap-2 text-xs font-ui text-on-surface-muted/70">
-              <svg class="w-3.5 h-3.5 flex-none" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
-                <rect x="2" y="6" width="14" height="10" rx="2" />
-                <path stroke-linecap="round" stroke-linejoin="round" d="M22 8l-6 4 6 4V8z" />
-              </svg>
-              Voice {quotedLabel}
-              <span class="text-on-surface-muted/40">quoted</span>
-            </span>
+            <!-- Still a picker: a reviewer who knows whose clip this is should
+                 be able to say so. Muted, and tagged, because the fact worth
+                 seeing first is that it is quoted. -->
+            <div class="relative inline-block">
+              <button
+                onclick={(e) => { e.stopPropagation(); toggleHeaderPicker(run); }}
+                class="group flex items-center gap-2 cursor-pointer rounded px-1 -mx-1 hover:bg-primary-container/20 transition-colors"
+                title="Whose voice is this in the clip?"
+              >
+                <svg class="w-3.5 h-3.5 flex-none text-on-surface-muted/60" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="2" y="6" width="14" height="10" rx="2" />
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M22 8l-6 4 6 4V8z" />
+                </svg>
+                <span class="text-xs font-ui text-on-surface-muted/80 group-hover:underline">
+                  {run.speaker}
+                </span>
+                <span class="text-[10px] font-ui uppercase tracking-wide text-on-surface-muted/40">external</span>
+              </button>
+              {#if headerPicker === run.startWord}
+                {@render speakerMenu(run.speaker, (name) => chooseRunSpeaker(run, name))}
+              {/if}
+            </div>
           {:else}
             <!-- Clickable speaker chip: reassigns the whole turn. -->
             <div class="relative inline-block">

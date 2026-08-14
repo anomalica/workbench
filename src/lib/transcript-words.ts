@@ -930,6 +930,31 @@ export function namedSpeakersInOrder(runs: SpeakerRun[]): string[] {
  *  The word-format analogue of counting segments per speaker - segments don't
  *  exist for a record/2 body, so the panel counts words instead. Includes
  *  special speakers ([irrelevant], [narrator], ...) so they stay filterable. */
+/** Speakers who appear ONLY inside quoted passages, with how much they say
+ *  there. The complement of speakerWordCounts: those two together account for
+ *  every voice in the record, split by whether it belongs to this recording. */
+export function quotedSpeakerCounts(
+  runs: SpeakerRun[],
+  externals: WordExternal[],
+): { id: string; total: number }[] {
+  if (externals.length === 0) return [];
+  const own = new Set(speakerWordCounts(runs, externals).map((r) => r.id));
+  const quoted = (g: number) => externals.some((e) => g >= e.fromWord && g <= e.toWord);
+  const totals = new Map<string, number>();
+  const firstSeen = new Map<string, number>();
+  for (const r of runs) {
+    if (!r.speaker || own.has(r.speaker)) continue;
+    for (let g = r.startWord; g <= r.endWord; g++) {
+      if (!quoted(g)) continue;
+      if (!firstSeen.has(r.speaker)) firstSeen.set(r.speaker, g);
+      totals.set(r.speaker, (totals.get(r.speaker) ?? 0) + 1);
+    }
+  }
+  return [...firstSeen.entries()]
+    .sort((a, b) => a[1] - b[1])
+    .map(([id]) => ({ id, total: totals.get(id) ?? 0 }));
+}
+
 /** Speakers and how much each says, EXCLUDING anything inside an external
  *  passage.
  *

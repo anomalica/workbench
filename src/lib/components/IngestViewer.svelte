@@ -56,7 +56,7 @@
   import ReadableText from "./ReadableText.svelte";
   import EditableMetadata from "./EditableMetadata.svelte";
   import ReviewHistory from "./ReviewHistory.svelte";
-  import { hasWordTimestamps, parseWords, nextRelevantWordStartAfter, speakerWordCounts } from "$lib/transcript-words";
+  import { hasWordTimestamps, parseWords, nextRelevantWordStartAfter, speakerWordCounts, quotedSpeakerCounts } from "$lib/transcript-words";
   import { imageRefsInBody } from "$lib/image-captions";
   import { messageInner, parseMessage, messageHeaderHtml } from "$lib/email-thread";
   import { untrack } from "svelte";
@@ -238,6 +238,11 @@
   // where the panel counts segments instead.
   let wordSpeakerRows = $derived(
     parsedWords ? speakerWordCounts(parsedWords.runs, parsedWords.externals) : null,
+  );
+  /** Voices that occur only inside quoted passages - listed in their own
+   *  sidebar section rather than among this record's speakers. */
+  let quotedSpeakerRows = $derived(
+    parsedWords ? quotedSpeakerCounts(parsedWords.runs, parsedWords.externals) : [],
   );
   // Latest observation verdict reported by the word editor (word-index spans +
   // coverage fraction + digestible + total words), persisted on review submit.
@@ -3671,6 +3676,7 @@
           <SpeakerManager
             {segments}
             rows={wordSpeakerRows}
+            externalRows={quotedSpeakerRows}
             {namedSpeakers}
             {selectedSpeakers}
             {filteredSpeakers}

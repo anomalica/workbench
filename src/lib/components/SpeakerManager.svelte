@@ -8,6 +8,7 @@
   let {
     segments,
     rows = null,
+    externalRows = [],
     namedSpeakers,
     selectedSpeakers,
     filteredSpeakers,
@@ -25,6 +26,11 @@
      *  given (per-word records, where total is a WORD count) it replaces the
      *  segment-derived rows; null falls back to counting segments (v1). */
     rows?: { id: string; total: number }[] | null;
+    /** Speakers who appear ONLY inside quoted passages, with their word counts.
+     *  Listed apart: they are voices in somebody else's recording, so they are
+     *  not this record's participants and not the reviewer's unnamed backlog -
+     *  but hiding them entirely loses the fact that the clips are there. */
+    externalRows?: { id: string; total: number }[];
     namedSpeakers: string[];
     selectedSpeakers: Set<string>;
     filteredSpeakers: Set<string>;
@@ -442,6 +448,8 @@
   {/if}
 {/snippet}
 
+
+
 <!-- Special speakers -->
 {#if special.length > 0}
   <div class="mt-3 mb-3">
@@ -543,6 +551,26 @@
             </svg>
           </button>
         {/if}
+
+{#if externalRows.length > 0}
+  <div class="mt-3">
+    <div class="flex items-center gap-2 px-2 py-1 mb-1">
+      <span class="text-xs font-ui font-medium text-on-surface-muted uppercase flex-1"
+        >External ({externalRows.length})</span
+      >
+    </div>
+    {#each externalRows as row}
+      <div class="flex items-center gap-2 px-2 py-1.5 rounded text-sm text-on-surface-muted/70">
+        <span
+          class="flex-none w-2.5 h-2.5 rounded-full border border-current opacity-50"
+          aria-hidden="true"
+        ></span>
+        <span class="flex-1 min-w-0 truncate">{row.id}</span>
+        <span class="flex-none text-[10px] font-mono tabular-nums text-on-surface-muted/50">{row.total}</span>
+      </div>
+    {/each}
+  </div>
+{/if}
 
         <!-- Assign to named speaker -->
         <div class="relative">
