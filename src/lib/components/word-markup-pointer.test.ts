@@ -204,6 +204,10 @@ describe("the context-pick click is consumed, not played", () => {
     await click(3);
     expect(onseek).toHaveBeenCalledTimes(1);
     // ...enter picking mode...
+    // Markup now lives behind a menu, so it has to be opened first - the same
+    // click the reviewer makes.
+    await fireEvent.click(screen.getByLabelText("Markup"));
+    await settle();
     await fireEvent.click(screen.getByText("Needs context"));
     await settle();
     onseek.mockClear();
@@ -222,6 +226,10 @@ describe("the context-pick click is consumed, not played", () => {
     render(WordTranscript, { props: props({ onseek }) });
     await settle();
     await click(3);
+    // Markup now lives behind a menu, so it has to be opened first - the same
+    // click the reviewer makes.
+    await fireEvent.click(screen.getByLabelText("Markup"));
+    await settle();
     await fireEvent.click(screen.getByText("Needs context"));
     await settle();
     onseek.mockClear();
