@@ -187,6 +187,12 @@ body {
   border-left: 2px solid color-mix(in srgb, var(--color-on-surface) 18%, transparent);
   padding-left: 3px;
 }
+/* ...but not when the whole turn is already inside the block's own rule. Two
+   marks for one boundary reads as two quotations, one nested in the other. */
+.wt-quoted-turn .wt-word.wt-external {
+  border-left: none;
+  padding-left: 0;
+}
 /* Playback still lights the word being spoken - a clip plays like anything
    else, and losing the karaoke would make it unreadable to follow. */
 .wt-quoted-turn .wt-word.wt-active {
