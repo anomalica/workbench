@@ -3415,21 +3415,21 @@
       tabindex="-1"
     >
       <div class="bg-surface rounded-lg shadow-lg max-w-lg w-full p-6">
-        <h3 class="font-ui font-semibold text-on-surface mb-1">Mark as external content</h3>
+        <h3 class="font-ui font-semibold text-on-surface mb-1">Quoted from a source</h3>
         <p class="text-xs text-on-surface-muted mb-4">
-          A clip played inside this recording, or a passage quoted from another
-          document - shown here, not said here. The speaker stays as they are:
-          the person in the clip is still the person who said it.
+          These words are not this speaker's own - a clip played here, or a
+          passage read out from somewhere else. The name on the turn stays as
+          it is: whoever is in the clip still said it.
         </p>
 
         <label class="block text-xs font-ui text-on-surface-secondary mb-1" for="external-desc">
-          What is it? (optional)
+          Where is it from? (optional)
         </label>
         <input
           id="external-desc"
           type="text"
           bind:value={externalDescription}
-          placeholder="e.g. Larry King Live, 1996"
+          placeholder="e.g. Larry King Live, 1996 - or leave blank if you don't know"
           class="w-full px-3 py-1.5 mb-4 text-sm bg-surface-alt border border-border rounded outline-none focus:border-primary"
         />
 
@@ -3438,7 +3438,7 @@
              clip quoted by three records count as one piece of evidence
              instead of three. -->
         <label class="block text-xs font-ui text-on-surface-secondary mb-1" for="external-search">
-          Have we ingested the original? (optional)
+          ...and if that source is itself a record here, name it
         </label>
         <input
           id="external-search"
@@ -3479,7 +3479,7 @@
           <button
             onclick={confirmExternal}
             class="px-3 py-1.5 text-sm font-ui font-medium rounded bg-primary text-on-primary cursor-pointer hover:opacity-90"
-          >Mark as external</button>
+          >Mark as quoted</button>
         </div>
       </div>
     </div>

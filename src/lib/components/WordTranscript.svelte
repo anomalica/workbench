@@ -2011,7 +2011,7 @@
               {markupOpen || selectionHasMarkup || linkAtSelection
                 ? 'text-primary bg-primary/10'
                 : 'text-primary hover:bg-primary/10'}"
-            title="Highlight, add note, link external source, mark as external"
+            title="Highlight, add note, refers to a source, quoted from a source"
           >
             <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
               <path stroke-linecap="round" stroke-linejoin="round" d="M14.5 3.5l6 6-7.5 7.5H7.5l-1.5-4 8.5-9.5z" />
@@ -2111,13 +2111,13 @@
               onclick={() => { if (range) { onlinksource?.(range.from, range.to); clearSelection(); } }}
               aria-label="Link external source"
               class="flex items-center gap-2 w-full text-left px-3 py-1.5 text-xs font-ui cursor-pointer transition-colors hover:bg-primary-container/30 text-on-surface"
-              title="A note whose body is another record: these words refer to an ingested source - link them to it"
+              title="The speaker is talking ABOUT another record - their own words, mentioning it"
             >
               <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
                 <path stroke-linecap="round" stroke-linejoin="round"
                   d="M10.5 13.5a4 4 0 005.66 0l3-3a4 4 0 10-5.66-5.66l-1 1M13.5 10.5a4 4 0 00-5.66 0l-3 3a4 4 0 105.66 5.66l1-1" />
               </svg>
-              <span>Link external source</span>
+              <span>Refers to a source</span>
             </button>
           {/if}
           {#if externalAtSelection}
@@ -2131,7 +2131,7 @@
                 <rect x="3" y="5" width="18" height="13" rx="2" />
                 <path stroke-linecap="round" d="M4 4l16 16" />
               </svg>
-              <span>Remove external mark</span>
+              <span>Not quoted after all</span>
             </button>
           {:else if onexternal}
             <!-- The speaker is NOT changed by this. The person in a clip is
@@ -2142,13 +2142,13 @@
               onclick={() => { if (range) onexternal?.(range.from, range.to); }}
               aria-label="Mark as external"
               class="flex items-center gap-2 w-full text-left px-3 py-1.5 text-xs font-ui cursor-pointer transition-colors hover:bg-primary-container/30 text-on-surface"
-              title="These words came from another recording or document - a clip played here, not spoken here"
+              title="These words are not the speaker's - a clip played here, or a passage read out from somewhere else"
             >
               <svg class="w-4 h-4 flex-none" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
                 <rect x="2" y="6" width="14" height="10" rx="2" />
                 <path stroke-linecap="round" stroke-linejoin="round" d="M22 8l-6 4 6 4V8z" />
               </svg>
-              <span>Mark as external</span>
+              <span>Quoted from a source</span>
             </button>
           {/if}
           {#if selectionHasMarkup}
