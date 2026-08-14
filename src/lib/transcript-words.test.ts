@@ -583,3 +583,46 @@ describe("event notes survive editing the word they anchor to", () => {
     expect(parseWords(out).words.filter((w) => w.notes?.length).length).toBe(1);
   });
 });
+
+describe("speakers inside a quoted passage", () => {
+  const W = (t: string, i: number) => `{{t:${(i + 1).toFixed(2)}}}${t}`;
+  const body = [
+    "<!-- speaker: Jesse Michels -->",
+    `${W("I", 0)} ${W("asked", 1)} ${W("him", 2)}`,
+    "",
+    "<!-- speaker: Speaker 7 -->",
+    `{{external-start: [x1, "Larry King Live, 1996"]}}${W("We", 3)} ${W("found", 4)} ${W("something", 5)}{{external-end: x1}}`,
+    "",
+    "<!-- speaker: Jesse Michels -->",
+    `${W("and", 6)} ${W("that", 7)}`,
+  ].join("\n");
+
+  it("leaves a voice that only speaks inside a clip out of the speaker list", () => {
+    // Speaker 7 was never in the room. Counting them fills the unnamed list
+    // with people the reviewer has no reason to identify - work that looks
+    // outstanding and is not.
+    const p = parseWords(body);
+    const rows = speakerWordCounts(p.runs, p.externals);
+    expect(rows.map((r) => r.id)).toEqual(["Jesse Michels"]);
+  });
+
+  it("counts only the words a speaker says outside a clip", () => {
+    const p = parseWords(body);
+    expect(speakerWordCounts(p.runs, p.externals)[0].total).toBe(5);
+  });
+
+  it("keeps a speaker who talks both inside and outside one", () => {
+    const mixed = [
+      "<!-- speaker: Jesse Michels -->",
+      `${W("Before", 0)} {{external-start: [x1, "A clip"]}}${W("quoted", 1)}{{external-end: x1}} ${W("after", 2)}`,
+    ].join("\n");
+    const p = parseWords(mixed);
+    const rows = speakerWordCounts(p.runs, p.externals);
+    expect(rows).toEqual([{ id: "Jesse Michels", total: 2 }]);
+  });
+
+  it("counts everyone when nothing is marked", () => {
+    const p = parseWords(body);
+    expect(speakerWordCounts(p.runs).map((r) => r.id)).toEqual(["Jesse Michels", "Speaker 7"]);
+  });
+});

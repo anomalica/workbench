@@ -151,15 +151,22 @@ body {
 }
 
 /* A passage played or quoted from somewhere else.
-   Underline, never a background. A background reads as a HIGHLIGHT - emphasis,
-   "look here" - and this is the opposite kind of fact: it says nothing about
-   how important the words are, only where they came from. It also must not
-   read as excluded: unlike a cut, external text IS sent to the model, because
-   the clip is often the best evidence in the record. So it stays full-strength
-   text, which keeps it clear of the faded look that means unviewed, and
-   carries a quiet rule underneath instead. */
+   Read as a quoted block, the way an email quotes a reply: set in a dimmer
+   colour so the eye passes over it as somebody else's words, with a rule down
+   the left edge marking its extent. No underline - that read as emphasis, and
+   this claims none - and no white text, because the full-strength colour is
+   what says "this record's own voice". Still legible, because it IS extracted:
+   unlike a cut it reaches the model, and it is often the best evidence here. */
 .wt-external {
-  box-shadow: 0 1px 0 0 color-mix(in srgb, var(--color-secondary, #7a6ff0) 55%, transparent);
+  color: color-mix(in srgb, var(--color-secondary, #7a6ff0) 72%, var(--color-on-surface) 28%);
+}
+.wt-word.wt-external.wt-observed {
+  color: color-mix(in srgb, var(--color-secondary, #7a6ff0) 72%, var(--color-on-surface) 28%);
+}
+/* The whole quoted run lights when the pointer is anywhere in it, so its
+   extent is obvious before the reviewer acts on it. */
+p:has(.wt-external:hover) .wt-external {
+  background: color-mix(in srgb, var(--color-secondary, #7a6ff0) 12%, transparent);
 }
 
 /* A cut in a transcript: words the reviewer marked irrelevant, which the

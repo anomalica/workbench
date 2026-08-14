@@ -236,7 +236,9 @@
   });
   // Per-speaker WORD counts for the speaker panel (word records); null for v1,
   // where the panel counts segments instead.
-  let wordSpeakerRows = $derived(parsedWords ? speakerWordCounts(parsedWords.runs) : null);
+  let wordSpeakerRows = $derived(
+    parsedWords ? speakerWordCounts(parsedWords.runs, parsedWords.externals) : null,
+  );
   // Latest observation verdict reported by the word editor (word-index spans +
   // coverage fraction + digestible + total words), persisted on review submit.
   let wordVerdict = $state<{

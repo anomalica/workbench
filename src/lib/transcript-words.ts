@@ -930,13 +930,34 @@ export function namedSpeakersInOrder(runs: SpeakerRun[]): string[] {
  *  The word-format analogue of counting segments per speaker - segments don't
  *  exist for a record/2 body, so the panel counts words instead. Includes
  *  special speakers ([irrelevant], [narrator], ...) so they stay filterable. */
-export function speakerWordCounts(runs: SpeakerRun[]): { id: string; total: number }[] {
+/** Speakers and how much each says, EXCLUDING anything inside an external
+ *  passage.
+ *
+ *  A voice in a played clip is not a speaker in this record - they were never
+ *  in the room. Counting them put people in the record's speaker list who are
+ *  not in it, and worse, filled the unnamed list with `Speaker 7`, `Speaker 4`
+ *  from clips the reviewer has no reason to identify: work that looks
+ *  outstanding but is not. A speaker who ONLY appears inside external passages
+ *  drops out of the list entirely. */
+export function speakerWordCounts(
+  runs: SpeakerRun[],
+  externals: WordExternal[] = [],
+): { id: string; total: number }[] {
+  const quoted = (g: number) => externals.some((e) => g >= e.fromWord && g <= e.toWord);
   const firstSeen = new Map<string, number>();
   const totals = new Map<string, number>();
   for (const r of runs) {
     if (!r.speaker) continue;
-    if (!firstSeen.has(r.speaker)) firstSeen.set(r.speaker, r.startWord);
-    totals.set(r.speaker, (totals.get(r.speaker) ?? 0) + (r.endWord - r.startWord + 1));
+    let own = 0;
+    let first = -1;
+    for (let g = r.startWord; g <= r.endWord; g++) {
+      if (quoted(g)) continue;
+      if (first === -1) first = g;
+      own++;
+    }
+    if (own === 0) continue;
+    if (!firstSeen.has(r.speaker)) firstSeen.set(r.speaker, first);
+    totals.set(r.speaker, (totals.get(r.speaker) ?? 0) + own);
   }
   return [...firstSeen.entries()]
     .sort((a, b) => a[1] - b[1])
