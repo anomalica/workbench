@@ -1624,6 +1624,7 @@
     const pickingContext = contextFor !== null;
     selectWord(g, false);
     dragging = true;
+    pressedAt = performance.now();
     pressOrigin = { x: e.clientX, y: e.clientY };
     if (!selectOnly && !pickingContext && onseek && words[g]) {
       // Playback is deferred to pointerup so a drag can cancel it: a bare click
@@ -1669,10 +1670,23 @@
    *  does not keep firing a pause. Reset when the gesture ends. */
   let pausedForDrag = false;
 
+  /** When the current press started, so a HOLD can be told from a click.
+   *
+   *  Both pause on the way down. A click then releases into the pending seek
+   *  and plays from that word, which is what a click is for. A hold means the
+   *  reviewer wanted the audio to stop - they are reading, or about to select,
+   *  or looking at something - and playing on release would undo the one thing
+   *  they asked for. Same outcome as a drag, without having to move. */
+  let pressedAt = 0;
+  const HOLD_MS = 350;
+
   function stopDrag() {
+    const held = pressedAt > 0 && performance.now() - pressedAt >= HOLD_MS;
     pausedForDrag = false;
+    pressedAt = 0;
     if (pendingSeek !== null) {
-      onseek?.(pendingSeek);
+      // A hold has already paused; releasing it must not start playing again.
+      if (!held) onseek?.(pendingSeek);
       pendingSeek = null;
     }
     dragging = false;

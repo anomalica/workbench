@@ -238,3 +238,36 @@ describe("the context-pick click is consumed, not played", () => {
     expect(onseek).not.toHaveBeenCalled();
   });
 });
+
+describe("holding a word, without dragging", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("pauses and stays paused when the press is held", async () => {
+    // A drag pauses because the reviewer is selecting. A hold means the same
+    // thing without the movement - they want the audio to stop - so releasing
+    // must not play from that word and undo it.
+    const onseek = vi.fn();
+    const onpause = vi.fn();
+    render(WordTranscript, { props: props({ onseek, onpause }) });
+    await settle();
+    await fireEvent.pointerDown(word(2), { button: 0, clientX: 100, clientY: 100 });
+    await new Promise((r) => setTimeout(r, 420));
+    await fireEvent.pointerUp(window, { button: 0, clientX: 100, clientY: 100 });
+    await settle();
+    expect(onpause).toHaveBeenCalledTimes(1);
+    expect(onseek).not.toHaveBeenCalled();
+  });
+
+  it("still plays from the word on a quick click", async () => {
+    const onseek = vi.fn();
+    const onpause = vi.fn();
+    render(WordTranscript, { props: props({ onseek, onpause }) });
+    await settle();
+    await fireEvent.pointerDown(word(2), { button: 0, clientX: 100, clientY: 100 });
+    await fireEvent.pointerUp(window, { button: 0, clientX: 100, clientY: 100 });
+    await settle();
+    expect(onseek).toHaveBeenCalledTimes(1);
+  });
+});
