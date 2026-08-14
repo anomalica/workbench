@@ -100,6 +100,7 @@
 
   let suggestions = $derived(suggestSpeakers(known, newSpeakerName, namedSpeakers));
 
+
   function takeSuggestion(name: string) {
     newSpeakerName = name;
     addSpeaker();
@@ -117,11 +118,28 @@
   // Editing
   let editingId = $state<string | null>(null);
   let editingValue = $state("");
+
+  /** Renaming a diarisation id to a person is where a name is usually first
+   *  written, so the same list has to appear there. */
+  let editSuggestions = $derived(
+    suggestSpeakers(
+      known,
+      editingValue,
+      namedSpeakers.filter((n) => n !== editingId),
+    ),
+  );
+
+  function takeEditSuggestion(name: string) {
+    editingValue = name;
+    commitEdit();
+  }
+
   let editInputEl: HTMLInputElement | undefined = $state();
 
   function startEdit(id: string) {
     editingId = id;
     editingValue = id;
+    loadKnown();
     setTimeout(() => editInputEl?.focus(), 0);
   }
 
@@ -218,15 +236,18 @@
         <SpeakerDot speaker={row.id} size="md" ring={filteredSpeakers.has(row.id)} />
       </button>
       {#if editingId === row.id}
-        <input
-          bind:this={editInputEl}
-          type="text"
-          bind:value={editingValue}
-          onblur={commitEdit}
-          onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitEdit(); } else if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); } }}
-          onclick={(e) => e.stopPropagation()}
-          class="flex-1 min-w-0 bg-surface text-sm font-ui text-on-surface outline-none px-1 py-0.5 rounded border border-primary"
-        />
+        <div class="relative flex-1 min-w-0">
+          <input
+            bind:this={editInputEl}
+            type="text"
+            bind:value={editingValue}
+            onblur={commitEdit}
+            onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitEdit(); } else if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); } }}
+            onclick={(e) => e.stopPropagation()}
+            class="w-full bg-surface text-sm font-ui text-on-surface outline-none px-1 py-0.5 rounded border border-primary"
+          />
+          {@render nameSuggestions(editSuggestions, takeEditSuggestion)}
+        </div>
       {:else}
         <span class="flex-1 min-w-0 text-sm font-ui text-on-surface truncate">{row.id}</span>
         <button
@@ -310,15 +331,18 @@
     >
       <SpeakerDot speaker={name} size="md" />
       {#if editingId === name}
-        <input
-          bind:this={editInputEl}
-          type="text"
-          bind:value={editingValue}
-          onblur={commitEdit}
-          onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitEdit(); } else if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); } }}
-          onclick={(e) => e.stopPropagation()}
-          class="flex-1 min-w-0 bg-surface text-sm font-ui text-on-surface outline-none px-1 py-0.5 rounded border border-primary"
-        />
+        <div class="relative flex-1 min-w-0">
+          <input
+            bind:this={editInputEl}
+            type="text"
+            bind:value={editingValue}
+            onblur={commitEdit}
+            onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitEdit(); } else if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); } }}
+            onclick={(e) => e.stopPropagation()}
+            class="w-full bg-surface text-sm font-ui text-on-surface outline-none px-1 py-0.5 rounded border border-primary"
+          />
+          {@render nameSuggestions(editSuggestions, takeEditSuggestion)}
+        </div>
       {:else}
         <span class="flex-1 text-sm font-ui text-on-surface-muted truncate">{name}</span>
         <button
@@ -397,6 +421,27 @@
   {/if}
 </div>
 
+{#snippet nameSuggestions(items: KnownSpeaker[], take: (name: string) => void)}
+  {#if items.length > 0}
+    <ul class="absolute left-0 right-0 top-full z-20 mt-0.5 border border-border rounded bg-surface shadow-lg overflow-hidden">
+      {#each items as s (s.name)}
+        <li>
+          <button
+            type="button"
+            onmousedown={(e) => e.preventDefault()}
+            onclick={() => take(s.name)}
+            class="w-full text-left px-2 py-1 text-xs font-ui cursor-pointer flex items-baseline gap-2 hover:bg-primary-container/30"
+            title="Use this spelling - already in {s.ingests} ingest{s.ingests === 1 ? '' : 's'}"
+          >
+            <span class="text-on-surface flex-1 truncate">{s.name}</span>
+            <span class="text-[10px] tabular-nums text-on-surface-muted flex-none">{s.ingests}</span>
+          </button>
+        </li>
+      {/each}
+    </ul>
+  {/if}
+{/snippet}
+
 <!-- Special speakers -->
 {#if special.length > 0}
   <div class="mt-3 mb-3">
@@ -473,15 +518,18 @@
           <SpeakerDot speaker={row.id} size="md" ring={filteredSpeakers.has(row.id)} />
         </button>
         {#if editingId === row.id}
-          <input
-            bind:this={editInputEl}
-            type="text"
-            bind:value={editingValue}
-            onblur={commitEdit}
-            onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitEdit(); } else if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); } }}
-            onclick={(e) => e.stopPropagation()}
-            class="flex-1 min-w-0 bg-surface text-sm font-ui text-on-surface outline-none px-1 py-0.5 rounded border border-primary"
-          />
+          <div class="relative flex-1 min-w-0">
+            <input
+              bind:this={editInputEl}
+              type="text"
+              bind:value={editingValue}
+              onblur={commitEdit}
+              onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitEdit(); } else if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); } }}
+              onclick={(e) => e.stopPropagation()}
+              class="w-full bg-surface text-sm font-ui text-on-surface outline-none px-1 py-0.5 rounded border border-primary"
+            />
+            {@render nameSuggestions(editSuggestions, takeEditSuggestion)}
+          </div>
         {:else}
           <span class="flex-1 min-w-0 text-sm font-ui text-on-surface-muted truncate">{row.id}</span>
           <button
