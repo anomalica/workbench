@@ -1685,26 +1685,34 @@
   /** Render the paired {{note-start/end}} and {{highlight-start/end}} markers
    *  as spans. The markers themselves are never shown - they are structure,
    *  and a reviewer who can see the syntax will try to edit it. */
-  /** Make links in a rendered ingest safe to be near.
+  /** Render a link in an ingest as text, never as a link.
    *
-   *  The body is somebody else's document, and its links go wherever that
-   *  document's author pointed them. Two things went wrong with that in a
-   *  reviewer's editor. A click NAVIGATED THE WORKBENCH AWAY - The Fourth
-   *  Mind's title image is `[<!-- image -->](http://www.unknowncountry.com)`,
-   *  so pressing it left the app for the publisher's website, unsaved review
-   *  and all. And because the anchor wrapped the image, it swallowed the click
-   *  meant for the image's own controls, so "mark irrelevant" could not be
-   *  reached at all.
+   *  The body is somebody else's document and we cannot vouch for where its
+   *  links point. Two things went wrong with treating them as links at all. A
+   *  click NAVIGATED THE WORKBENCH AWAY - The Fourth Mind's title image is
+   *  `[<!-- image -->](http://www.unknowncountry.com)`, so pressing it left the
+   *  app for the publisher's site, open review and all - and because the anchor
+   *  wrapped the image it also swallowed the click meant for the image's own
+   *  controls, so "mark irrelevant" could not be reached.
    *
-   *  So: an anchor that wraps nothing but an image is unwrapped - the image is
-   *  the content, the link is the publisher's chrome, and the controls belong
-   *  to the reviewer. Every other link opens in a new tab and carries
-   *  noopener/noreferrer, so following one is a deliberate act that never
-   *  costs the reviewer their place. */
+   *  Opening in a new tab fixes the navigation and not the substance: these are
+   *  unvetted URLs from books we did not write, and a workbench that makes them
+   *  clickable is a workbench that helps propagate whatever they point at.
+   *
+   *  So nothing here is clickable. The words stay, the target is readable on
+   *  hover and in the Raw view, and the record itself is untouched - stripping
+   *  the URL from the stored text would be deleting source material to make a
+   *  display problem go away. An anchor wrapping only an image leaves no marker
+   *  at all: the image is the content, the href was the publisher's chrome. */
   function hardenLinks(html: string): string {
     return html
       .replace(/<a\b[^>]*>(\s*<img\b[^>]*>\s*)<\/a>/gi, "$1")
-      .replace(/<a\b(?![^>]*\btarget=)/gi, '<a target="_blank" rel="noopener noreferrer nofollow"');
+      .replace(/<a\b([^>]*)>/gi, (_m, attrs: string) => {
+        const href = /href\s*=\s*"([^"]*)"/i.exec(attrs)?.[1] ?? "";
+        const safe = href.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+        return `<span class="dead-link" title="Link in the source, not followed here: ${safe}">`;
+      })
+      .replace(/<\/a>/gi, "</span>");
   }
 
   function renderSpanMarkers(html: string): string {

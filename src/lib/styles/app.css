@@ -140,6 +140,16 @@ body {
   cursor: help;
 }
 
+/* A link the source document carried. Shown as what it is and never followed:
+   we cannot vouch for where an unvetted URL from someone else's book points,
+   and a reviewer's editor should not be the thing that helps it travel. The
+   dotted underline says "there was a link here"; the target is on hover and in
+   the Raw view. */
+.dead-link {
+  border-bottom: 1px dotted color-mix(in srgb, var(--color-on-surface) 40%, transparent);
+  cursor: help;
+}
+
 /* A passage played from another recording. Tinted rather than badged: the
    reviewer needs to see at a glance where the quoted material starts and stops
    while reading, and a label at the boundary only tells them at the boundary.
