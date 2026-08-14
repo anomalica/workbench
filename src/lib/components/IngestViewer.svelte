@@ -1685,6 +1685,28 @@
   /** Render the paired {{note-start/end}} and {{highlight-start/end}} markers
    *  as spans. The markers themselves are never shown - they are structure,
    *  and a reviewer who can see the syntax will try to edit it. */
+  /** Make links in a rendered ingest safe to be near.
+   *
+   *  The body is somebody else's document, and its links go wherever that
+   *  document's author pointed them. Two things went wrong with that in a
+   *  reviewer's editor. A click NAVIGATED THE WORKBENCH AWAY - The Fourth
+   *  Mind's title image is `[<!-- image -->](http://www.unknowncountry.com)`,
+   *  so pressing it left the app for the publisher's website, unsaved review
+   *  and all. And because the anchor wrapped the image, it swallowed the click
+   *  meant for the image's own controls, so "mark irrelevant" could not be
+   *  reached at all.
+   *
+   *  So: an anchor that wraps nothing but an image is unwrapped - the image is
+   *  the content, the link is the publisher's chrome, and the controls belong
+   *  to the reviewer. Every other link opens in a new tab and carries
+   *  noopener/noreferrer, so following one is a deliberate act that never
+   *  costs the reviewer their place. */
+  function hardenLinks(html: string): string {
+    return html
+      .replace(/<a\b[^>]*>(\s*<img\b[^>]*>\s*)<\/a>/gi, "$1")
+      .replace(/<a\b(?![^>]*\btarget=)/gi, '<a target="_blank" rel="noopener noreferrer nofollow"');
+  }
+
   function renderSpanMarkers(html: string): string {
     return html
       .replace(/\{\{note-start:\s*\[\s*([A-Za-z0-9]+)\s*,\s*([\s\S]*?)\]\}\}/g, (_, id, text) => {
@@ -4347,7 +4369,9 @@
             {/each}
 
             <!-- The model input itself, rendered like the ingest view. -->
-            {@const predigestHtml = renderRedactions(marked.parse(preprocessAnnotations(predigest.body)) as string)}
+            {@const predigestHtml = hardenLinks(
+              renderRedactions(marked.parse(preprocessAnnotations(predigest.body)) as string),
+            )}
             <div class="px-8 py-6 prose max-w-none text-on-surface prose-headings:text-on-surface prose-a:text-primary prose-img:rounded prose-img:max-w-full prose-hr:border-border">
               <!-- eslint-disable-next-line svelte/no-at-html-tags -->
               {@html predigestHtml}
@@ -4977,8 +5001,12 @@
           <ReadableText
             body={currentBody()}
             renderBlock={(src, lineFrom) =>
-              renderSpanMarkers(
-                renderRedactions(marked.parse(preprocessAnnotations(src, !!user, lineFrom)) as string),
+              hardenLinks(
+                renderSpanMarkers(
+                  renderRedactions(
+                    marked.parse(preprocessAnnotations(src, !!user, lineFrom)) as string,
+                  ),
+                ),
               )}
             previousObserved={myObservedSpans}
             storageKey={`workbench:read:${ingest.content_hash}`}
@@ -4991,8 +5019,8 @@
           </ProseMarkup>
         {:else}
           {@const processedBody = preprocessAnnotations(currentBody())}
-          {@const renderedHtml = renderSpanMarkers(
-            renderRedactions(marked.parse(processedBody) as string),
+          {@const renderedHtml = hardenLinks(
+            renderSpanMarkers(renderRedactions(marked.parse(processedBody) as string)),
           )}
           <ProseMarkup
             bind:containerEl={proseContainer}
