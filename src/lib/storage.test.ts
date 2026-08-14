@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { pruneOrphanedDrafts, safeLocalSet } from "./storage";
+import { compactLegacyDrafts, pruneOrphanedDrafts, safeLocalSet } from "./storage";
 
 /**
  * A localStorage stand-in with a byte budget, so we can exercise the real
@@ -150,5 +150,54 @@ describe("pruneOrphanedDrafts", () => {
     pruneOrphanedDrafts(new Set(["alive"]));
     expect(localStorage.getItem("some-other-app:setting")).toBe("x");
     expect(localStorage.getItem("workbench:digest-collapsed")).toBe("{}");
+  });
+});
+
+describe("compactLegacyDrafts", () => {
+  beforeEach(() => localStorage.clear());
+
+  it("drops the history from a pre-patch draft and keeps the work", () => {
+    // The reported recurrence: the patch change shrinks the record being
+    // opened, so every other book the reviewer edited stays a whole copy and
+    // the quota is gone before they reach the one they came for.
+    const book = "x".repeat(50_000);
+    localStorage.setItem(
+      "workbench:doc:aaa",
+      JSON.stringify({ current: book, past: Array(20).fill(book), future: [] }),
+    );
+    const before = localStorage.getItem("workbench:doc:aaa")!.length;
+
+    const { compacted, freedBytes } = compactLegacyDrafts();
+
+    expect(compacted).toBe(1);
+    expect(freedBytes).toBeGreaterThan(900_000);
+    const after = JSON.parse(localStorage.getItem("workbench:doc:aaa")!);
+    expect(after.current).toBe(book); // the edit itself survives untouched
+    expect(after.past).toEqual([]);
+    expect(localStorage.getItem("workbench:doc:aaa")!.length).toBeLessThan(before / 20);
+  });
+
+  it("leaves patch-format drafts alone", () => {
+    const patch = JSON.stringify({ v: 2, patch: { base: 1, ops: [] }, past: [], future: [] });
+    localStorage.setItem("workbench:doc:bbb", patch);
+    expect(compactLegacyDrafts().compacted).toBe(0);
+    expect(localStorage.getItem("workbench:doc:bbb")).toBe(patch);
+  });
+
+  it("leaves a legacy draft that has no history to drop", () => {
+    const one = JSON.stringify({ current: "abc", past: [], future: [] });
+    localStorage.setItem("workbench:doc:ccc", one);
+    expect(compactLegacyDrafts().compacted).toBe(0);
+  });
+
+  it("leaves a draft it cannot parse rather than deleting work it failed to read", () => {
+    localStorage.setItem("workbench:doc:ddd", "{not json");
+    expect(compactLegacyDrafts().compacted).toBe(0);
+    expect(localStorage.getItem("workbench:doc:ddd")).toBe("{not json");
+  });
+
+  it("does not touch other workbench keys", () => {
+    localStorage.setItem("workbench:read:eee", JSON.stringify({ current: "x", past: ["y"] }));
+    expect(compactLegacyDrafts().compacted).toBe(0);
   });
 });

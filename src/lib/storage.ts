@@ -88,6 +88,49 @@ export function safeLocalSet(key: string, value: string): boolean {
  * Returns how many keys were removed and roughly how many bytes were freed,
  * so a caller can log it - this runs silently otherwise.
  */
+/**
+ * Shrink drafts written before drafts were patches.
+ *
+ * A pre-patch draft holds a whole copy of the record plus up to twenty more as
+ * undo history, so one edited book could be 2MB of a ~5MB origin quota. The
+ * reader that restores them rewrites each as a patch - but only for the record
+ * being opened, which leaves every OTHER book the reviewer edited sitting at
+ * full size, and the quota gone before they touch the one they came for. That
+ * is why "storage full" came back after the patch change: the fix applied to
+ * the record in front of them, not to the ones behind.
+ *
+ * The history cannot be re-expressed as patches from here - that needs the
+ * server's copy of each record, which is not to hand at load. But history is a
+ * convenience where the current text is the work, so it is dropped: a 21-copy
+ * draft becomes a 1-copy draft, and the reviewer loses undo depth on records
+ * they are not looking at rather than losing an edit on the one they are.
+ */
+export function compactLegacyDrafts(): { compacted: number; freedBytes: number } {
+  let compacted = 0;
+  let freedBytes = 0;
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (!k?.startsWith("workbench:doc:")) continue;
+    const raw = localStorage.getItem(k);
+    if (!raw) continue;
+    try {
+      const state = JSON.parse(raw);
+      if (state.v === 2) continue; // already a patch
+      if (typeof state.current !== "string") continue;
+      if (!state.past?.length && !state.future?.length) continue;
+      const next = JSON.stringify({ current: state.current, past: [], future: [] });
+      if (next.length >= raw.length) continue;
+      localStorage.setItem(k, next);
+      freedBytes += raw.length - next.length;
+      compacted++;
+    } catch {
+      // Unreadable draft: leave it. Deleting something we cannot parse risks
+      // deleting work we simply failed to understand.
+    }
+  }
+  return { compacted, freedBytes };
+}
+
 export function pruneOrphanedDrafts(liveHashes: ReadonlySet<string>): {
   removed: number;
   freedBytes: number;

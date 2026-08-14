@@ -33,7 +33,7 @@
   import { carryoverState } from "$lib/carryover";
   import { themeState } from "$lib/theme.svelte";
   import { trackView, trackEvent } from "$lib/umami";
-  import { pruneOrphanedDrafts } from "$lib/storage";
+  import { compactLegacyDrafts, pruneOrphanedDrafts } from "$lib/storage";
 
   let user = $state<User | null>(null);
   // Top-level view: record review (default), knowledge-graph review, or curation.
@@ -347,6 +347,15 @@
       // own draft needs to fit into. Never prune on a failed/empty fetch - see
       // pruneOrphanedDrafts's own guard for why.
       const liveHashes = new Set(ingests.map((i) => i.content_hash));
+      // Shrink pre-patch drafts for records still in the corpus. They are not
+      // orphans, so the prune below leaves them, and each one is a whole copy
+      // of a record the reviewer is not currently looking at.
+      const legacy = compactLegacyDrafts();
+      if (legacy.compacted > 0) {
+        console.log(
+          `[storage] compacted ${legacy.compacted} pre-patch draft(s), freed ${Math.round(legacy.freedBytes / 1024)}KB`,
+        );
+      }
       const { removed, freedBytes } = pruneOrphanedDrafts(liveHashes);
       if (removed > 0) {
         console.info(
