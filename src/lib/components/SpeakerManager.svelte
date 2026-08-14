@@ -9,6 +9,9 @@
     segments,
     rows = null,
     externalRows = [],
+    externalPassages = [],
+    onexternaledit,
+    onexternalremove,
     namedSpeakers,
     selectedSpeakers,
     filteredSpeakers,
@@ -31,6 +34,12 @@
      *  not this record's participants and not the reviewer's unnamed backlog -
      *  but hiding them entirely loses the fact that the clips are there. */
     externalRows?: { id: string; total: number }[];
+    /** Every quoted passage in the record, so the reviewer can see at a glance
+     *  which ones say where they came from - and fix the ones that do not -
+     *  without hunting through the transcript for them. */
+    externalPassages?: { id: string; words: number; description: string; target?: string }[];
+    onexternaledit?: (id: string) => void;
+    onexternalremove?: (id: string) => void;
     namedSpeakers: string[];
     selectedSpeakers: Set<string>;
     filteredSpeakers: Set<string>;
@@ -610,13 +619,59 @@
   </div>
 {/if}
 
-{#if externalRows.length > 0}
+{#if externalPassages.length > 0 || externalRows.length > 0}
   <div class="mt-3">
     <div class="flex items-center gap-2 px-2 py-1 mb-1">
       <span class="text-xs font-ui font-medium text-on-surface-muted uppercase flex-1"
-        >External ({externalRows.length})</span
+        >External ({externalPassages.length || externalRows.length})</span
       >
     </div>
+
+    {#each externalPassages as p (p.id)}
+      <div class="group flex items-start gap-2 px-2 py-1.5 rounded text-sm hover:bg-surface-alt">
+        <span
+          class="flex-none mt-1 w-2.5 h-2.5 rounded-full border border-current opacity-40 text-on-surface-muted"
+          aria-hidden="true"
+        ></span>
+        <span class="flex-1 min-w-0">
+          {#if p.description}
+            <span class="block truncate text-on-surface-muted">{p.description}</span>
+          {:else}
+            <!-- The state worth seeing: a passage nobody said where it came
+                 from. It still marks the words as quoted, which is the part
+                 that matters for corroboration, but it cannot be pinned to a
+                 record and cannot be gone back to later. -->
+            <span class="block truncate text-warning/80 italic">No source noted</span>
+          {/if}
+          <span class="block text-[10px] font-ui text-on-surface-muted/50">
+            {p.words} words{p.target ? " - pinned to a record" : ""}
+          </span>
+        </span>
+        <span class="flex-none flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button
+            onclick={() => onexternaledit?.(p.id)}
+            title="Change where this came from"
+            aria-label="Change where this came from"
+            class="p-1 rounded cursor-pointer text-on-surface-muted hover:text-primary hover:bg-primary/10"
+          >
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M16.86 3.99a1.88 1.88 0 012.66 2.65L7.6 18.56l-3.54.89.89-3.54L16.86 3.99z" />
+            </svg>
+          </button>
+          <button
+            onclick={() => onexternalremove?.(p.id)}
+            title="These words are this recording's own after all"
+            aria-label="Remove the external mark"
+            class="p-1 rounded cursor-pointer text-on-surface-muted hover:text-error hover:bg-error/10"
+          >
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </span>
+      </div>
+    {/each}
+
     {#each externalRows as row}
       <div class="flex items-center gap-2 px-2 py-1.5 rounded text-sm text-on-surface-muted/70">
         <span

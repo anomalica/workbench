@@ -241,6 +241,28 @@
   );
   /** Voices that occur only inside quoted passages - listed in their own
    *  sidebar section rather than among this record's speakers. */
+  /** The record's quoted passages, for the sidebar list: what each says it is,
+   *  and whether it names a record. */
+  let externalPassages = $derived(
+    (parsedWords?.externals ?? []).map((e) => ({
+      id: e.id,
+      words: e.toWord - e.fromWord + 1,
+      description: e.description,
+      target: e.target,
+    })),
+  );
+
+  /** Reopen the dialog on an existing passage: same question, prefilled, and
+   *  confirming replaces the old marker rather than nesting a second one. */
+  function editExternal(id: string) {
+    const e = parsedWords?.externals.find((x) => x.id === id);
+    if (!e) return;
+    doc.removeWordExternal(id);
+    externalPicker = { from: e.fromWord, to: e.toWord };
+    externalWhere = e.target ? (linkTitles.get(e.target.replace(/^sha256:/, "")) ?? "") : e.description;
+    externalTargetHash = e.target ? e.target.replace(/^sha256:/, "") : null;
+  }
+
   let quotedSpeakerRows = $derived(
     parsedWords ? quotedSpeakerCounts(parsedWords.runs, parsedWords.externals) : [],
   );
@@ -3677,6 +3699,9 @@
             {segments}
             rows={wordSpeakerRows}
             externalRows={quotedSpeakerRows}
+            {externalPassages}
+            onexternaledit={editExternal}
+            onexternalremove={(id) => doc.removeWordExternal(id)}
             {namedSpeakers}
             {selectedSpeakers}
             {filteredSpeakers}
