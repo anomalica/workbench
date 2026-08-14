@@ -1316,13 +1316,11 @@
   // also names link targets in the side list (linkTitles).
   let linkPicker = $state<{ from: number; to: number } | null>(null);
   let linkSearch = $state("");
-  let linkQuote = $state("");
   let linkTargetHash = $state<string | null>(null);
   let allRecords = $state<IngestSummary[] | null>(null);
   async function openLinkPicker(from: number, to: number) {
     linkPicker = { from, to };
     linkSearch = "";
-    linkQuote = "";
     linkTargetHash = null;
     if (allRecords === null) {
       try {
@@ -1351,7 +1349,9 @@
   );
   function confirmLink() {
     if (!linkPicker || !linkTargetHash) return;
-    doc.addWordLink(linkPicker.from, linkPicker.to, linkTargetHash, linkQuote);
+    // No passage anchor: a record-level link. The grammar keeps the quote
+    // optional, and an absent one is honest where a mistyped one is not.
+    doc.addWordLink(linkPicker.from, linkPicker.to, linkTargetHash, "");
     linkPicker = null;
   }
   // markupMode persists globally, but only word records have a markup surface.
@@ -3230,7 +3230,8 @@
         <h3 class="font-ui font-semibold text-on-surface mb-1">Refer to another source</h3>
         <p class="text-xs text-on-surface-muted mb-3">
           Link the selected words to the record they refer to. The link pins that
-          record permanently; the quote (optional) points at the exact passage.
+          record by its content hash, so it survives the file being renamed,
+          re-filed, or superseded.
         </p>
         <input
           type="text"
@@ -3245,30 +3246,52 @@
             <p class="p-3 text-xs text-on-surface-muted">No records match.</p>
           {:else}
             {#each linkChoices as r (r.content_hash)}
+              {@const chosen = linkTargetHash === r.content_hash}
+              <!-- A chooser has to LOOK like one. The selected row was a 30%
+                   tint and nothing else, which in a dark theme is invisible -
+                   so the reviewer could not tell whether their click had
+                   registered, or what the Link button was about to act on. -->
               <button
                 onclick={() => (linkTargetHash = r.content_hash)}
-                class="w-full text-left px-3 py-2 border-b border-border last:border-b-0 cursor-pointer
-                  {linkTargetHash === r.content_hash ? 'bg-primary-container/30' : 'hover:bg-surface-alt'}"
+                ondblclick={() => { linkTargetHash = r.content_hash; confirmLink(); }}
+                aria-pressed={chosen}
+                class="w-full text-left pl-2 pr-3 py-2 border-b border-border last:border-b-0 cursor-pointer
+                  flex items-start gap-2 border-l-2
+                  {chosen ? 'bg-primary-container/50 border-l-primary' : 'border-l-transparent hover:bg-surface-alt'}"
               >
-                <span class="block text-sm text-on-surface truncate">{r.title}</span>
-                <span class="block text-xs text-on-surface-muted">
-                  {r.source_type}{r.date ? ` - ${r.date}` : ""}
+                <span class="flex-none mt-0.5 w-4 h-4 rounded-full border flex items-center justify-center
+                  {chosen ? 'border-primary bg-primary' : 'border-border'}">
+                  {#if chosen}
+                    <svg class="w-3 h-3 text-on-primary" fill="none" stroke="currentColor" stroke-width="3" viewBox="0 0 24 24" aria-hidden="true">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+                    </svg>
+                  {/if}
+                </span>
+                <span class="min-w-0 flex-1">
+                  <span class="block text-sm truncate {chosen ? 'text-on-surface font-medium' : 'text-on-surface'}">{r.title}</span>
+                  <span class="block text-xs text-on-surface-muted">
+                    {r.source_type}{r.date ? ` - ${r.date}` : ""}
+                  </span>
                 </span>
               </button>
             {/each}
           {/if}
         </div>
-        <label class="block text-xs font-ui text-on-surface-secondary mb-1" for="link-quote">
-          Passage in that record (optional) - paste the exact words
-        </label>
-        <textarea
-          id="link-quote"
-          bind:value={linkQuote}
-          rows="2"
-          placeholder={'e.g. "unidentified anomalous phenomena remain unexplained"'}
-          class="w-full px-3 py-1.5 mb-4 text-sm bg-surface-alt border border-border rounded outline-none focus:border-primary resize-none"
-        ></textarea>
-        <div class="flex justify-end gap-2">
+        <!-- The free-text passage box is gone. A quote only anchors if it
+             matches the target's text exactly; typed or half-remembered, it
+             silently resolves to nothing and the link looks fine while
+             pointing at no passage. Choosing a record is a choice the reviewer
+             can see; typing a quote from memory is not. A passage picker that
+             selects from the target's own words can come later. -->
+        <div class="flex items-center justify-between gap-2">
+          <p class="text-xs text-on-surface-muted min-w-0 truncate">
+            {#if linkTargetHash}
+              Linking to <span class="text-on-surface">{linkTitles.get(linkTargetHash)}</span>
+            {:else}
+              Choose the record these words refer to
+            {/if}
+          </p>
+          <div class="flex justify-end gap-2 flex-none">
           <button
             onclick={() => (linkPicker = null)}
             class="px-3 py-1.5 text-sm font-ui text-on-surface-secondary hover:text-on-surface cursor-pointer"
@@ -3281,6 +3304,7 @@
                 ? 'bg-primary text-on-primary cursor-pointer hover:opacity-90'
                 : 'bg-surface-alt text-on-surface-muted/50 cursor-default'}"
           >Link</button>
+          </div>
         </div>
       </div>
     </div>
@@ -3724,7 +3748,15 @@
               <!-- The archived capture isn't served here (web originals live at
                    their source URL); link out so the reviewer can check the
                    extraction against the live page. -->
-              <p class="text-on-surface-secondary">The original isn't archived here.</p>
+                <p class="text-on-surface-secondary">
+                  <!-- Two situations, and naming the wrong one sends the reviewer
+                       off to debug an ingest that is fine. A GATED record's
+                       original usually IS archived - the viewer just never asks
+                       for it, since the auto-load is behind `isPublic`. -->
+                  {isPublic
+                    ? "The original isn't archived here."
+                    : "The original is archived - this record is gated, so unlock it on the right to view it."}
+                </p>
               <a
                 href={ingest.frontmatter.source_url}
                 target="_blank"
