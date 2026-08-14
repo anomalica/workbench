@@ -1318,17 +1318,22 @@
   let linkSearch = $state("");
   let linkTargetHash = $state<string | null>(null);
   let allRecords = $state<IngestSummary[] | null>(null);
+  /** The corpus listing, fetched at most once. Needed both to CHOOSE a link
+   *  target and to NAME one this record already has. */
+  async function loadAllRecords() {
+    if (allRecords !== null) return;
+    try {
+      allRecords = await fetchIngests();
+    } catch {
+      allRecords = [];
+    }
+  }
+
   async function openLinkPicker(from: number, to: number) {
     linkPicker = { from, to };
     linkSearch = "";
     linkTargetHash = null;
-    if (allRecords === null) {
-      try {
-        allRecords = await fetchIngests();
-      } catch {
-        allRecords = [];
-      }
-    }
+    await loadAllRecords();
   }
   // Candidate targets: every OTHER record, filtered by the search text over
   // title and creators. A record never links to itself.
@@ -1347,6 +1352,13 @@
   let linkTitles = $derived(
     new Map((allRecords ?? []).map((r) => [r.content_hash, r.title])),
   );
+  $effect(() => {
+    // Titles for links this record already carries. Same lazy fetch the picker
+    // uses - without it an existing link can only show its hash, which tells
+    // the reviewer nothing about what they linked.
+    if (allRecords === null && /\{\{link-start:/.test(doc.current)) void loadAllRecords();
+  });
+
   function confirmLink() {
     if (!linkPicker || !linkTargetHash) return;
     // No passage anchor: a record-level link. The grammar keeps the quote
@@ -4304,6 +4316,7 @@
               armCeilingFrom(t);
             }}
             onlinksource={openLinkPicker}
+            linkTitles={linkTitles}
             onpause={() => {
               // A markup drag pauses playback in place - no seek, just stop, so
               // the reviewer can line up a highlight without audio running on.

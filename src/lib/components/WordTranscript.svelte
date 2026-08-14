@@ -93,6 +93,7 @@
     onhighlightcontextremove,
     onselectiontext,
     onlinksource,
+    linkTitles,
     onseek,
     onpause,
     onplayceiling,
@@ -208,6 +209,10 @@
      *  its record picker (this component has no record list) and calls
      *  doc.addWordLink on confirm. Markup-mode action. */
     onlinksource?: (from: number, to: number) => void;
+    /** Titles of the records this one links to, by content hash. A link is
+     *  stored as a hash, which tells the reviewer nothing on its own - without
+     *  a title the underline says "this refers to something" and stops. */
+    linkTitles?: Map<string, string>;
     /** While the selection editor is open, playback must not run past the
      *  selection. Reports the ceiling in seconds - the start of the word AFTER
      *  the selection, the one timestamp the editor refuses to move - or null
@@ -283,6 +288,22 @@
     const s = new Set<number>();
     for (const l of parsed.links) for (let g = l.fromWord; g <= l.toWord; g++) s.add(g);
     return s;
+  });
+
+  /** What each linked word points at, for its tooltip. Falls back to the hash
+   *  when the target is not in the corpus listing - an unresolvable link is
+   *  worth seeing as such rather than showing nothing. */
+  let linkLabelByWord = $derived.by(() => {
+    const m = new Map<number, string>();
+    for (const l of parsed.links) {
+      const hash = l.target.replace(/^sha256:/, "");
+      const title = linkTitles?.get(hash) ?? linkTitles?.get(l.target);
+      const label = title
+        ? `Refers to: ${title}`
+        : `Refers to another record (${hash.slice(0, 12)}) - not found in this corpus`;
+      for (let g = l.fromWord; g <= l.toWord; g++) m.set(g, label);
+    }
+    return m;
   });
 
   /** The ids this highlight needs for context, and whether each still exists.
@@ -1249,6 +1270,11 @@
     c.toggle("wt-markup-focus", focusWordSet.has(g));
     c.toggle("wt-chain", hoverChainWords.has(g));
     c.toggle("wt-linkspan", linkWordSet.has(g));
+    // Native tooltip rather than a hover card: it costs no layout, survives
+    // the content-visibility skipping, and is what a reader tries first.
+    const linkLabel = linkLabelByWord.get(g);
+    if (linkLabel) el.title = linkLabel;
+    else if (el.title) el.removeAttribute("title");
   }
 
   function reapplyAll() {
@@ -1391,6 +1417,7 @@
     void spanNoteWordSet; // re-apply tint when a span note is added/cleared/re-ranged
     void focusWordSet; // re-apply markup focus flash
     void linkWordSet; // re-apply the link underline when a link is added/removed
+    void linkLabelByWord; // and its tooltip when the titles arrive
     const el = scrollEl;
     untrack(() => {
       if (!el) return;
