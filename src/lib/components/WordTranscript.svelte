@@ -7,7 +7,7 @@
     shouldPersistScroll,
   } from "$lib/scroll-anchor";
   import { foldTurns, parseWords, wordsInTimeRange, wordActiveAt } from "$lib/transcript-words";
-  import type { SpeakerRun } from "$lib/transcript-words";
+  import type { SpeakerRun, WordExternal } from "$lib/transcript-words";
   import { buildContextIndex } from "$lib/highlight-context";
   import { pointerMoved } from "$lib/drag-intent";
   import { EVENT_NOTE_PRESETS } from "$lib/transcript";
@@ -348,6 +348,52 @@
     }
     return s;
   });
+
+  /** A turn broken at every quoted boundary: prose, clip, prose. The clip
+   *  becomes its own block with its own header, which is the only way the
+   *  reviewer can see where it starts, where it ends, and what it is. */
+  function turnSegments(turn: { parts: { run: SpeakerRun; cut: boolean }[] }) {
+    type Seg =
+      | { kind: "words"; key: string; gs: number[] }
+      | { kind: "external"; key: string; gs: number[]; external: WordExternal }
+      | { kind: "cut"; key: string; from: number; to: number };
+    const out: Seg[] = [];
+    for (const part of turn.parts) {
+      if (part.cut) {
+        out.push({ kind: "cut", key: `c${part.run.startWord}`, from: part.run.startWord, to: part.run.endWord });
+        continue;
+      }
+      let run: { gs: number[]; ext: WordExternal | null } | null = null;
+      const flush = () => {
+        if (!run || run.gs.length === 0) return;
+        out.push(
+          run.ext
+            ? { kind: "external", key: `e${run.ext.id}-${run.gs[0]}`, gs: run.gs, external: run.ext }
+            : { kind: "words", key: `w${run.gs[0]}`, gs: run.gs },
+        );
+        run = null;
+      };
+      for (let g = part.run.startWord; g <= part.run.endWord; g++) {
+        if (showObservedOnly && !observedVisible.has(g)) continue;
+        const ext = parsed.externals.find((e) => g >= e.fromWord && g <= e.toWord) ?? null;
+        if (!run || run.ext !== ext) {
+          flush();
+          run = { gs: [], ext };
+        }
+        run.gs.push(g);
+      }
+      flush();
+    }
+    return out;
+  }
+
+  /** The words a cut removed, by range - the segment form does not carry the
+   *  run the old markup read it from. */
+  function cutTextRange(from: number, to: number): string {
+    const out: string[] = [];
+    for (let g = from; g <= to; g++) out.push(words[g]?.text ?? "");
+    return `Marked irrelevant - not sent for extraction:\n\n${out.join(" ").trim()}`;
+  }
 
   let externalAtSelection = $derived.by(() => {
     const r = range;
@@ -2533,18 +2579,74 @@
         <!-- leading-[1.75]: a touch more than relaxed so highlight underline
              bands sit in real leading below a wrapped line, never reaching the
              text below. -->
-        <p class="pl-6 text-sm text-on-surface leading-[1.75]">
-          {#each turn.parts as part (part.run.startWord)}{#if part.cut}<span
-                class="wt-cut {activeWord >= part.run.startWord && activeWord <= part.run.endWord
-                  ? 'wt-cut-active'
-                  : ''}"
-                title={cutText(part.run)}
+        <!-- A turn is drawn as SEGMENTS, not as one paragraph, because a clip
+             inside it has to become its own block: text, then the quotation
+             stepped out with its own header, then the text resuming. Painting
+             the words differently was never enough - the reviewer could not see
+             where the clip began or what it was. -->
+        {#each turnSegments(turn) as seg (seg.key)}
+          {#if seg.kind === "external"}
+            <div class="wt-quoted-turn my-2 py-1.5">
+              <div class="group/ext flex items-center gap-2 pb-1 text-[11px] font-ui">
+                <span class="text-on-surface-muted/50 uppercase tracking-wide flex-none">External</span>
+                {#if seg.external.description}
+                  <span class="text-on-surface-muted/80 truncate">{seg.external.description}</span>
+                {:else if seg.external.target}
+                  <span class="text-on-surface-muted/80 truncate">a record in this corpus</span>
+                {:else}
+                  <span class="text-warning/70 italic truncate">no source noted</span>
+                {/if}
+                <span class="flex-1"></span>
+                <button
+                  onclick={() => onexternaledit?.(seg.external.id)}
+                  class="flex-none px-1 rounded cursor-pointer text-on-surface-muted/60 hover:text-primary opacity-0 group-hover/ext:opacity-100 transition-opacity"
+                  title="Change where this came from">edit</button>
+                <button
+                  onclick={() => onexternalremove?.(seg.external.id)}
+                  class="flex-none px-1 rounded cursor-pointer text-on-surface-muted/60 hover:text-error opacity-0 group-hover/ext:opacity-100 transition-opacity"
+                  title="These words are this recording's own after all">remove</button>
+              </div>
+              <p class="pl-2 text-sm leading-[1.75]">{@render wordSpans(seg.gs)}</p>
+            </div>
+          {:else if seg.kind === "cut"}
+            <p class="pl-6 text-sm text-on-surface leading-[1.75]">
+              <span
+                class="wt-cut {activeWord >= seg.from && activeWord <= seg.to ? 'wt-cut-active' : ''}"
+                title={cutTextRange(seg.from, seg.to)}
                 aria-label="Content marked irrelevant"
-              ></span>{" "}{:else}{@const runGs = Array.from(
-                { length: part.run.endWord - part.run.startWord + 1 },
-                (_, k) => part.run.startWord + k,
-              ).filter((g) => !showObservedOnly || observedVisible.has(g))}
-          {#each runGs as g (g)}<span
+              ></span>
+            </p>
+          {:else}
+            <p class="pl-6 text-sm text-on-surface leading-[1.75]">{@render wordSpans(seg.gs)}</p>
+          {/if}
+        {/each}
+      </div>
+    {/each}
+  </div>
+
+  {#if editingSelection && range && selectionInfo}
+    <EditSelectionDialog
+      words={selectionInfo.words}
+      prevStart={selectionInfo.prevStart}
+      nextStart={selectionInfo.nextStart}
+      speaker={selectionInfo.speaker}
+      {sourceHash}
+      {mediaDuration}
+      {copyrightStatus}
+      {currentTime}
+      onseek={(t) => onseek?.(t)}
+      oncancel={() => { editingSelection = false; }}
+      onsave={(newWords) => {
+        if (range) onreplaceselection?.(range.from, range.to, newWords);
+        editingSelection = false;
+        range = null;
+      }}
+    />
+  {/if}
+</div>
+
+{#snippet wordSpans(gs: number[])}
+          {#each gs as g (g)}<span
               data-word-index={g}
               class="wt-word">{words[g].text}</span>{" "}
             <!-- Committed event notes on this word: first-class annotation
@@ -2711,29 +2813,5 @@
             {#if composeSpanNote?.from === g}
               {@render spanNoteCompose()}
             {/if}
-          {/each}{/if}{/each}
-        </p>
-      </div>
-    {/each}
-  </div>
-
-  {#if editingSelection && range && selectionInfo}
-    <EditSelectionDialog
-      words={selectionInfo.words}
-      prevStart={selectionInfo.prevStart}
-      nextStart={selectionInfo.nextStart}
-      speaker={selectionInfo.speaker}
-      {sourceHash}
-      {mediaDuration}
-      {copyrightStatus}
-      {currentTime}
-      onseek={(t) => onseek?.(t)}
-      oncancel={() => { editingSelection = false; }}
-      onsave={(newWords) => {
-        if (range) onreplaceselection?.(range.from, range.to, newWords);
-        editingSelection = false;
-        range = null;
-      }}
-    />
-  {/if}
-</div>
+  {/each}
+{/snippet}
