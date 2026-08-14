@@ -522,6 +522,9 @@
   }
   let dragging = $state(false);
   let pickerOpen = $state(false);
+  /** The markup menu, closed by default and by every gesture that ends the
+   *  selection it acts on. */
+  let markupOpen = $state(false);
   // startWord of the run whose header picker is open (header click reassigns
   // the whole turn), or null.
   let headerPicker = $state<number | null>(null);
@@ -1620,6 +1623,7 @@
   }
 
   function clearSelection() {
+    markupOpen = false;
     anchor = null;
     range = null;
     pickerOpen = false;
@@ -1965,109 +1969,140 @@
         >
           {caseLabel}
         </button>
-        <div class="w-px h-4 bg-border" aria-hidden="true"></div>
-        <button
-          onclick={() => { if (range) { onhighlight?.(range.from, range.to); clearSelection(); } }}
-          aria-label="Highlight"
-          class="text-primary cursor-pointer p-1 rounded hover:bg-primary/10 transition-colors"
-          title="Highlight these words (highlights may overlap)"
-        >
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
-            <path stroke-linecap="round" stroke-linejoin="round"
-              d="M14.5 3.5l6 6-7.5 7.5H7.5l-1.5-4 8.5-9.5z" />
-            <path stroke-linecap="round" stroke-width="3.5" d="M5.5 21h13" />
-          </svg>
-        </button>
-        {#if range && highlightAtWord(range.from)}
-          {@const hit = highlightAtWord(range.from)}
-          <div class="w-px h-4 bg-border" aria-hidden="true"></div>
+        <div class="relative">
+          <!-- Markup lives behind one button rather than four in a row.
+               Highlight, note, link and external footage are each used less
+               often than assigning a speaker or fixing a word, and four more
+               icons made the common jobs harder to find than the rare ones. -->
           <button
-            onclick={() => { contextFor = hit; clearSelection(); }}
-            class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
-            title="This highlight needs an earlier one to make sense (e.g. it says 'he' - link the highlight that names him). Click it next."
+            onclick={(e) => { e.stopPropagation(); markupOpen = !markupOpen; }}
+            aria-label="Markup"
+            aria-expanded={markupOpen}
+            class="flex items-center gap-0.5 p-1 rounded transition-colors cursor-pointer
+              {markupOpen || selectionHasMarkup || linkAtSelection
+                ? 'text-primary bg-primary/10'
+                : 'text-primary hover:bg-primary/10'}"
+            title="Highlight, note, link to a source, mark as external footage"
           >
-            Needs context
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M14.5 3.5l6 6-7.5 7.5H7.5l-1.5-4 8.5-9.5z" />
+              <path stroke-linecap="round" stroke-width="3.5" d="M5.5 21h13" />
+            </svg>
+            <svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+            </svg>
           </button>
-        {/if}
-        <div class="w-px h-4 bg-border" aria-hidden="true"></div>
-        <button
-          onclick={startSpanNote}
-          aria-label="Note"
-          class="text-primary cursor-pointer p-1 rounded hover:bg-primary/10 transition-colors"
-          title="Attach a note over these words - what's on screen, context the words miss"
-        >
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
-            <path stroke-linecap="round" stroke-linejoin="round"
-              d="M4 5.5A1.5 1.5 0 015.5 4h13A1.5 1.5 0 0120 5.5v9a1.5 1.5 0 01-1.5 1.5H9l-5 4V5.5zM8 8h8M8 11.5h5" />
-          </svg>
-        </button>
-        {#if linkAtSelection}
-          <!-- These words are ALREADY linked, so the bar stops offering to
-               link them and offers what can be done with the link instead:
-               follow it, point it somewhere else, or take it off. Editing from
-               the same selection that authored it means there is no second
-               gesture to learn. -->
-          <span class="text-on-surface-muted/60 text-xs" aria-hidden="true">/</span>
+          {#if markupOpen}
+            <div
+              class="absolute left-0 top-full mt-1 z-40 min-w-44 rounded border border-border
+                bg-surface-raised shadow-xl py-1 flex flex-col items-stretch"
+            >
           <button
-            onclick={() => onlinkopen?.(linkAtSelection.target)}
-            aria-label="Open the linked record"
-            class="text-primary cursor-pointer p-1 rounded hover:bg-primary/10 transition-colors"
-            title={linkLabelByWord.get(linkAtSelection.fromWord) ?? "Open the linked record"}
+            onclick={() => { if (range) { onhighlight?.(range.from, range.to); clearSelection(); } }}
+            aria-label="Highlight"
+            class="flex items-center gap-2 w-full text-left px-3 py-1.5 text-xs font-ui cursor-pointer transition-colors hover:bg-primary-container/30 text-on-surface"
+            title="Highlight these words (highlights may overlap)"
           >
             <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
               <path stroke-linecap="round" stroke-linejoin="round"
-                d="M14 4h6v6M20 4l-8.5 8.5M18 14v5.5A1.5 1.5 0 0116.5 21h-11A1.5 1.5 0 014 19.5v-11A1.5 1.5 0 015.5 7H11" />
+                d="M14.5 3.5l6 6-7.5 7.5H7.5l-1.5-4 8.5-9.5z" />
+              <path stroke-linecap="round" stroke-width="3.5" d="M5.5 21h13" />
             </svg>
+              <span>Highlight</span>
           </button>
+          {#if range && highlightAtWord(range.from)}
+            {@const hit = highlightAtWord(range.from)}
+            <button
+              onclick={() => { contextFor = hit; clearSelection(); }}
+              class="flex items-center gap-2 w-full text-left px-3 py-1.5 text-xs font-ui cursor-pointer transition-colors hover:bg-primary-container/30 text-on-surface"
+              title="This highlight needs an earlier one to make sense (e.g. it says 'he' - link the highlight that names him). Click it next."
+            >
+              Needs context
+            </button>
+          {/if}
           <button
-            onclick={() => { if (range) { onlinksource?.(range.from, range.to); clearSelection(); } }}
-            aria-label="Change the linked record"
-            class="text-primary cursor-pointer p-1 rounded hover:bg-primary/10 transition-colors"
-            title="Point these words at a different record"
+            onclick={startSpanNote}
+            aria-label="Note"
+            class="flex items-center gap-2 w-full text-left px-3 py-1.5 text-xs font-ui cursor-pointer transition-colors hover:bg-primary-container/30 text-on-surface"
+            title="Attach a note over these words - what's on screen, context the words miss"
           >
             <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
               <path stroke-linecap="round" stroke-linejoin="round"
-                d="M16.86 3.99a1.88 1.88 0 012.66 2.65L7.6 18.56l-3.54.89.89-3.54L16.86 3.99z" />
+                d="M4 5.5A1.5 1.5 0 015.5 4h13A1.5 1.5 0 0120 5.5v9a1.5 1.5 0 01-1.5 1.5H9l-5 4V5.5zM8 8h8M8 11.5h5" />
             </svg>
+              <span>Add a note</span>
           </button>
-          <button
-            onclick={() => { onlinkremove?.(linkAtSelection.id); clearSelection(); }}
-            aria-label="Remove the link"
-            class="text-on-surface-muted hover:text-error cursor-pointer p-1 rounded hover:bg-error/10 transition-colors"
-            title="Remove this link - the words stay, the reference goes"
-          >
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
-              <path stroke-linecap="round" stroke-linejoin="round"
-                d="M10.5 13.5a4 4 0 005.66 0l2-2M13.5 10.5a4 4 0 00-5.66 0l-2 2M4 4l16 16" />
-            </svg>
-          </button>
-        {:else if onlinksource}
-          <!-- A source reference IS a note - a note whose body is another
-               record rather than typed text - so it sits with Note rather than
-               as a separate verb in the bar. -->
-          <span class="text-on-surface-muted/60 text-xs" aria-hidden="true">/</span>
-          <button
-            onclick={() => { if (range) { onlinksource?.(range.from, range.to); clearSelection(); } }}
-            aria-label="Link to a source"
-            class="text-primary cursor-pointer p-1 rounded hover:bg-primary/10 transition-colors"
-            title="A note whose body is another record: these words refer to an ingested source - link them to it"
-          >
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
-              <path stroke-linecap="round" stroke-linejoin="round"
-                d="M10.5 13.5a4 4 0 005.66 0l3-3a4 4 0 10-5.66-5.66l-1 1M13.5 10.5a4 4 0 00-5.66 0l-3 3a4 4 0 105.66 5.66l1-1" />
-            </svg>
-          </button>
-        {/if}
-        {#if selectionHasMarkup}
-          <div class="w-px h-4 bg-border" aria-hidden="true"></div>
-          <button
-            onclick={clearMarkupUnderSelection}
-            class="text-xs font-ui font-medium text-on-surface-secondary cursor-pointer hover:underline"
-            title="Remove the highlight(s)/note(s) over these words"
-          >
-            Clear
-          </button>
-        {/if}
+          {#if linkAtSelection}
+            <!-- These words are ALREADY linked, so the bar stops offering to
+                 link them and offers what can be done with the link instead:
+                 follow it, point it somewhere else, or take it off. Editing from
+                 the same selection that authored it means there is no second
+                 gesture to learn. -->
+                        <button
+              onclick={() => onlinkopen?.(linkAtSelection.target)}
+              aria-label="Open the linked record"
+              class="flex items-center gap-2 w-full text-left px-3 py-1.5 text-xs font-ui cursor-pointer transition-colors hover:bg-primary-container/30 text-on-surface"
+              title={linkLabelByWord.get(linkAtSelection.fromWord) ?? "Open the linked record"}
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round"
+                  d="M14 4h6v6M20 4l-8.5 8.5M18 14v5.5A1.5 1.5 0 0116.5 21h-11A1.5 1.5 0 014 19.5v-11A1.5 1.5 0 015.5 7H11" />
+              </svg>
+              <span>Open the linked record</span>
+            </button>
+            <button
+              onclick={() => { if (range) { onlinksource?.(range.from, range.to); clearSelection(); } }}
+              aria-label="Change the linked record"
+              class="flex items-center gap-2 w-full text-left px-3 py-1.5 text-xs font-ui cursor-pointer transition-colors hover:bg-primary-container/30 text-on-surface"
+              title="Point these words at a different record"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round"
+                  d="M16.86 3.99a1.88 1.88 0 012.66 2.65L7.6 18.56l-3.54.89.89-3.54L16.86 3.99z" />
+              </svg>
+              <span>Point at a different record</span>
+            </button>
+            <button
+              onclick={() => { onlinkremove?.(linkAtSelection.id); clearSelection(); }}
+              aria-label="Remove the link"
+              class="flex items-center gap-2 w-full text-left px-3 py-1.5 text-xs font-ui cursor-pointer transition-colors hover:bg-primary-container/30 text-on-surface-muted hover:text-error"
+              title="Remove this link - the words stay, the reference goes"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round"
+                  d="M10.5 13.5a4 4 0 005.66 0l2-2M13.5 10.5a4 4 0 00-5.66 0l-2 2M4 4l16 16" />
+              </svg>
+              <span>Remove the link</span>
+            </button>
+          {:else if onlinksource}
+            <!-- A source reference IS a note - a note whose body is another
+                 record rather than typed text - so it sits with Note rather than
+                 as a separate verb in the bar. -->
+                        <button
+              onclick={() => { if (range) { onlinksource?.(range.from, range.to); clearSelection(); } }}
+              aria-label="Link to a source"
+              class="flex items-center gap-2 w-full text-left px-3 py-1.5 text-xs font-ui cursor-pointer transition-colors hover:bg-primary-container/30 text-on-surface"
+              title="A note whose body is another record: these words refer to an ingested source - link them to it"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round"
+                  d="M10.5 13.5a4 4 0 005.66 0l3-3a4 4 0 10-5.66-5.66l-1 1M13.5 10.5a4 4 0 00-5.66 0l-3 3a4 4 0 105.66 5.66l1-1" />
+              </svg>
+              <span>Link to a source</span>
+            </button>
+          {/if}
+          {#if selectionHasMarkup}
+            <button
+              onclick={clearMarkupUnderSelection}
+              class="flex items-center gap-2 w-full text-left px-3 py-1.5 text-xs font-ui cursor-pointer transition-colors hover:bg-primary-container/30 text-on-surface-muted"
+              title="Remove the highlight(s)/note(s) over these words"
+            >
+              Clear
+            </button>
+          {/if}
+            </div>
+          {/if}
+        </div>
       <button
         onclick={clearSelection}
         class="p-0.5 rounded cursor-pointer text-on-surface-muted/60 hover:text-on-surface hover:bg-surface-alt transition-colors"
