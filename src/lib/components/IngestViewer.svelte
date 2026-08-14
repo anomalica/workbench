@@ -73,7 +73,6 @@
     hasNext = false,
     hasPrev = false,
     onnext,
-    onopenrecord,
     onprev,
     onreviewedchange,
     onback,
@@ -93,8 +92,6 @@
     hasNext?: boolean;
     hasPrev?: boolean;
     onnext?: () => void;
-    /** Open another record by content hash - following a cross-record link. */
-    onopenrecord?: (contentHash: string) => void;
     onprev?: () => void;
     onreviewedchange?: (hash: string, reviewed: boolean) => void;
     onback: () => void;
@@ -1361,6 +1358,18 @@
     // the reviewer nothing about what they linked.
     if (allRecords === null && /\{\{link-start:/.test(doc.current)) void loadAllRecords();
   });
+
+  /** Follow a link in a NEW TAB. The reviewer is reading this record and
+   *  checking what it refers to; replacing the view would cost them their
+   *  place, their scroll position and their playback. The route is by public
+   *  hash, taken from the listing rather than derived, so it stays right if
+   *  the truncation ever changes. */
+  function openLinkedRecord(target: string) {
+    const contentHash = target.replace(/^sha256:/, "");
+    const record = (allRecords ?? []).find((r) => r.content_hash === contentHash);
+    const publicHash = record?.public_hash ?? contentHash.slice(0, 56);
+    window.open(`/${publicHash}`, "_blank", "noopener");
+  }
 
   function confirmLink() {
     if (!linkPicker || !linkTargetHash) return;
@@ -4320,7 +4329,7 @@
             }}
             onlinksource={openLinkPicker}
             linkTitles={linkTitles}
-            onlinkopen={(target) => onopenrecord?.(target.replace(/^sha256:/, ""))}
+            onlinkopen={openLinkedRecord}
             onlinkremove={(id) => doc.removeWordLink(id)}
             onpause={() => {
               // A markup drag pauses playback in place - no seek, just stop, so

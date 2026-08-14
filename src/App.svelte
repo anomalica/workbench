@@ -784,7 +784,6 @@
         {hasPrev}
         onnext={goNext}
         onprev={goPrev}
-        onopenrecord={(hash) => selectIngest(hash)}
         onreviewedchange={(hash, reviewed) => {
           setReviewed(hash, reviewed);
           if (reviewed) trackEvent("review-submitted");
