@@ -64,6 +64,19 @@ export interface WordLink {
   quote?: string;
 }
 
+/** A passage that is a clip from elsewhere. `description` is what it is
+ *  ("Larry King Live, 1996"); `target` is the ingested record it came from,
+ *  when there is one - that hash is what lets the assimilator collapse the
+ *  same clip quoted by three records into one piece of evidence instead of
+ *  three independent ones. */
+export interface WordExternal {
+  id: string;
+  fromWord: number;
+  toWord: number;
+  description: string;
+  target?: string;
+}
+
 /** A context edge: `of` needs the earlier highlights in `needs` to be understood
  *  ("he said" -> who). One-directional and backwards by construction. An id in
  *  `needs` with no matching highlight is DANGLING and is kept, not dropped - the
@@ -85,6 +98,7 @@ export interface ParsedWords {
   spanNotes: WordSpanNote[];
   /** Cross-record links as inclusive word ranges + target, in start order. */
   links: WordLink[];
+  externals: WordExternal[];
   /** Context edges between highlights, in document order. */
   highlightContexts: HighlightContext[];
   /** Everything in the body before the first `<!-- speaker -->` comment (the
@@ -128,6 +142,14 @@ const NOTE_END_MARKER = /\{\{note-end:\s*([A-Za-z0-9_-]+)\s*\}\}/g;
 const LINK_START_MARKER =
   /\{\{link-start:\s*\[\s*([A-Za-z0-9_-]+)\s*,\s*"((?:[^"\\]|\\.)*)"\s*(?:,\s*"((?:[^"\\]|\\.)*)"\s*)?\]\s*\}\}/g;
 const LINK_END_MARKER = /\{\{link-end:\s*([A-Za-z0-9_-]+)\s*\}\}/g;
+// External passages: a run of words that is a clip from somewhere else - the
+// speaker is still the person, the provenance belongs to the passage
+// (ingest-format.md, "External passages"). Three positions, deliberately not a
+// union slot: id, description, optional content hash of the record the clip
+// came from when that record is itself ingested.
+const EXTERNAL_START_MARKER =
+  /\{\{external-start:\s*\[\s*([A-Za-z0-9_-]+)\s*,\s*"((?:[^"\\]|\\.)*)"\s*(?:,\s*"((?:[^"\\]|\\.)*)"\s*)?\]\s*\}\}/g;
+const EXTERNAL_END_MARKER = /\{\{external-end:\s*([A-Za-z0-9_-]+)\s*\}\}/g;
 // {{highlight-context: [later, earlier, ...]}} - a STANDALONE annotation, not a
 // payload on highlight-start (which stays a bare scalar id). First id is the
 // highlight that NEEDS context; the rest are the earlier highlights it depends
@@ -140,7 +162,7 @@ const HL_CONTEXT_MARKER =
 /** A pulled paired-marker. `family` selects which resolver (highlight vs span
  *  note) it feeds; `text` is present only on a span-note start. */
 interface SpanMarker {
-  family: "hl" | "note" | "link";
+  family: "hl" | "note" | "link" | "external";
   dir: "start" | "end";
   id: string;
   text?: string;
@@ -186,6 +208,20 @@ function extractSpanMarkers(s: string): { rest: string; markers: SpanMarker[] } 
       target: unescapeNoteText(target),
       ...(quote !== undefined ? { quote: unescapeNoteText(quote) } : {}),
     });
+    return "";
+  });
+  rest = rest.replace(EXTERNAL_START_MARKER, (_m, id, description, target) => {
+    markers.push({
+      family: "external",
+      dir: "start",
+      id,
+      text: unescapeNoteText(description),
+      ...(target !== undefined ? { target: unescapeNoteText(target) } : {}),
+    });
+    return "";
+  });
+  rest = rest.replace(EXTERNAL_END_MARKER, (_m, id) => {
+    markers.push({ family: "external", dir: "end", id });
     return "";
   });
   rest = rest.replace(LINK_END_MARKER, (_m, id) => {
@@ -287,6 +323,7 @@ export function parseWords(body: string): ParsedWords {
   const hlR = mkResolver();
   const noteR = mkResolver();
   const linkR = mkResolver();
+  const extR = mkResolver();
   let lastEmitted = -1;
 
   const payloadOf = ({ text, target, quote }: SpanPayload): SpanPayload => ({
@@ -320,6 +357,7 @@ export function parseWords(body: string): ParsedWords {
     [hlR, "hl"],
     [noteR, "note"],
     [linkR, "link"],
+    [extR, "external"],
   ];
   const applyBoth = (markers: SpanMarker[], closeTarget: number) => {
     for (const [r, family] of resolvers) {
@@ -331,7 +369,7 @@ export function parseWords(body: string): ParsedWords {
     }
   };
   const endRun = () => {
-    for (const r of [hlR, noteR, linkR]) {
+    for (const r of [hlR, noteR, linkR, extR]) {
       for (const [id, o] of r.open)
         if (lastEmitted >= o.from)
           r.out.push({ id, fromWord: o.from, toWord: lastEmitted, ...payloadOf(o) });
@@ -387,6 +425,7 @@ export function parseWords(body: string): ParsedWords {
         flushPending(hlR, gIndex);
         flushPending(noteR, gIndex);
         flushPending(linkR, gIndex);
+        flushPending(extR, gIndex);
         applyBoth(markers, gIndex);
 
         lastEmitted = gIndex;
@@ -426,7 +465,26 @@ export function parseWords(body: string): ParsedWords {
       target: target ?? "",
       ...(quote !== undefined ? { quote } : {}),
     }));
-  return { words, runs, lineEndWords, highlights, spanNotes, links, highlightContexts, preamble };
+  const externals: WordExternal[] = extR.out
+    .sort(bySpan)
+    .map(({ id, fromWord, toWord, text, target }) => ({
+      id,
+      fromWord,
+      toWord,
+      description: text ?? "",
+      ...(target !== undefined && target !== "" ? { target } : {}),
+    }));
+  return {
+    words,
+    runs,
+    lineEndWords,
+    highlights,
+    spanNotes,
+    links,
+    externals,
+    highlightContexts,
+    preamble,
+  };
 }
 
 /** The gIndex of the word a inline event note anchors ONTO for time `at`:
@@ -459,6 +517,7 @@ export function serializeWords(
   spanNotes: WordSpanNote[] = [],
   highlightContexts: HighlightContext[] = [],
   links: WordLink[] = [],
+  externals: WordExternal[] = [],
 ): string {
   const speakerByWord = new Array<string>(words.length);
   for (const run of runs) {
@@ -487,6 +546,12 @@ export function serializeWords(
     (linkStartsAt.get(l.fromWord) ?? linkStartsAt.set(l.fromWord, []).get(l.fromWord)!).push(l);
     (linkEndsAt.get(l.toWord) ?? linkEndsAt.set(l.toWord, []).get(l.toWord)!).push(l.id);
   }
+  const extStartsAt = new Map<number, WordExternal[]>();
+  const extEndsAt = new Map<number, string[]>();
+  for (const e of externals) {
+    (extStartsAt.get(e.fromWord) ?? extStartsAt.set(e.fromWord, []).get(e.fromWord)!).push(e);
+    (extEndsAt.get(e.toWord) ?? extEndsAt.set(e.toWord, []).get(e.toWord)!).push(e.id);
+  }
   // Highlight starts before note starts; note ends before highlight ends. Order
   // within a slot is cosmetic (parse is order-agnostic there); this keeps a
   // highlight-only body byte-identical to before span notes existed.
@@ -502,8 +567,19 @@ export function serializeWords(
             l.quote !== undefined ? `, "${escapeNoteText(l.quote)}"` : ""
           }]}}`,
       )
+      .join("") +
+    // Outermost of the four: an external region contains whatever markup the
+    // reviewer put inside it, not the other way round.
+    (extStartsAt.get(i) ?? [])
+      .map(
+        (e) =>
+          `{{external-start: [${e.id}, "${escapeNoteText(e.description)}"${
+            e.target !== undefined ? `, "${escapeNoteText(e.target)}"` : ""
+          }]}}`,
+      )
       .join("");
   const endMarkers = (i: number) =>
+    (extEndsAt.get(i) ?? []).map((id) => `{{external-end: ${id}}}`).join("") +
     (linkEndsAt.get(i) ?? []).map((id) => `{{link-end: ${id}}}`).join("") +
     (noteEndsAt.get(i) ?? []).map((id) => `{{note-end: ${id}}}`).join("") +
     (hlEndsAt.get(i) ?? []).map((id) => `{{highlight-end: ${id}}}`).join("");
@@ -585,8 +661,17 @@ export function splitWord(
   pieces: string[],
   mediaDuration?: number,
 ): ParsedWords {
-  const { words, runs, lineEndWords, highlights, spanNotes, links, highlightContexts, preamble } =
-    parsed;
+  const {
+    words,
+    runs,
+    lineEndWords,
+    highlights,
+    spanNotes,
+    links,
+    externals,
+    highlightContexts,
+    preamble,
+  } = parsed;
   if (gIndex < 0 || gIndex >= words.length) return parsed;
   if (pieces.length <= 1) {
     if (pieces.length === 1 && words[gIndex].text !== pieces[0]) {
@@ -640,12 +725,14 @@ export function splitWord(
   const newHighlights = remapSpans(highlights, mapFrom, mapTo);
   const newSpanNotes = remapSpans(spanNotes, mapFrom, mapTo);
   const newLinks = remapSpans(links, mapFrom, mapTo);
+  const newExternals = remapSpans(externals, mapFrom, mapTo);
 
   return {
     words: newWords,
     runs: newRuns,
     lineEndWords: newLineEndWords,
     highlights: newHighlights,
+    externals: newExternals,
     spanNotes: newSpanNotes,
     links: newLinks,
     // Unchanged by design: a context edge names ids, so moving words cannot
@@ -670,8 +757,17 @@ export function replaceWordRange(
   to: number,
   newWords: { text: string; start: number }[],
 ): ParsedWords {
-  const { words, runs, lineEndWords, highlights, spanNotes, links, highlightContexts, preamble } =
-    parsed;
+  const {
+    words,
+    runs,
+    lineEndWords,
+    highlights,
+    spanNotes,
+    links,
+    externals,
+    highlightContexts,
+    preamble,
+  } = parsed;
   if (from < 0 || to >= words.length || from > to) return parsed;
   const clean = newWords
     .map((w) => ({ text: w.text.trim(), start: w.start }))
@@ -730,12 +826,14 @@ export function replaceWordRange(
   const newHighlights = remapSpans(highlights, mapFrom, mapTo);
   const newSpanNotes = remapSpans(spanNotes, mapFrom, mapTo);
   const newLinks = remapSpans(links, mapFrom, mapTo);
+  const newExternals = remapSpans(externals, mapFrom, mapTo);
 
   return {
     words: out,
     runs: mergeAdjacentRuns(newRuns),
     lineEndWords: newLineEndWords,
     highlights: newHighlights,
+    externals: newExternals,
     spanNotes: newSpanNotes,
     links: newLinks,
     // Unchanged by design: a context edge names ids, so moving words cannot

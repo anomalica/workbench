@@ -231,6 +231,7 @@ export class DocumentStore {
       parsed.spanNotes,
       parsed.highlightContexts,
       parsed.links,
+      parsed.externals,
     );
     // Reconcile the frontmatter speakers: KEEP real names the reviewer curated,
     // even when they have no body occurrences (a name added before assigning,
@@ -335,6 +336,7 @@ export class DocumentStore {
       next.spanNotes,
       next.highlightContexts,
       next.links,
+      next.externals,
     );
     const result = fm + newBody;
     if (result !== this.current) this.pushEdit(result);
@@ -361,6 +363,7 @@ export class DocumentStore {
       parsed.spanNotes,
       parsed.highlightContexts,
       parsed.links,
+      parsed.externals,
     );
     const result = fm + newBody;
     if (result !== this.current) this.pushEdit(result);
@@ -384,6 +387,7 @@ export class DocumentStore {
       next.spanNotes,
       next.highlightContexts,
       next.links,
+      next.externals,
     );
     // Reconcile frontmatter speakers to those still present (mirrors
     // serialiseWithReconcile): keep curated named speakers, drop default
@@ -424,6 +428,7 @@ export class DocumentStore {
         parsed.spanNotes,
         parsed.highlightContexts,
         parsed.links,
+        parsed.externals,
       ),
     );
   }
@@ -453,6 +458,7 @@ export class DocumentStore {
         parsed.spanNotes,
         parsed.highlightContexts,
         parsed.links,
+        parsed.externals,
       ),
     );
   }
@@ -489,6 +495,7 @@ export class DocumentStore {
         parsed.spanNotes,
         parsed.highlightContexts,
         parsed.links,
+        parsed.externals,
       );
     if (result !== this.current) this.pushEdit(result);
   }
@@ -510,6 +517,7 @@ export class DocumentStore {
         parsed.spanNotes,
         parsed.highlightContexts,
         parsed.links,
+        parsed.externals,
       );
     if (result !== this.current) this.pushEdit(result);
   }
@@ -564,6 +572,7 @@ export class DocumentStore {
         parsed.spanNotes,
         highlightContexts,
         parsed.links,
+        parsed.externals,
       );
     if (result !== this.current) this.pushEdit(result);
   }
@@ -588,6 +597,7 @@ export class DocumentStore {
         parsed.spanNotes,
         parsed.highlightContexts,
         parsed.links,
+        parsed.externals,
       );
     if (result !== this.current) this.pushEdit(result);
   }
@@ -624,6 +634,7 @@ export class DocumentStore {
         spanNotes,
         parsed.highlightContexts,
         parsed.links,
+        parsed.externals,
       );
     if (result !== this.current) this.pushEdit(result);
   }
@@ -649,6 +660,7 @@ export class DocumentStore {
         spanNotes,
         parsed.highlightContexts,
         parsed.links,
+        parsed.externals,
       );
     if (result !== this.current) this.pushEdit(result);
   }
@@ -694,6 +706,7 @@ export class DocumentStore {
         parsed.spanNotes,
         parsed.highlightContexts,
         links,
+        parsed.externals,
       );
     if (result !== this.current) this.pushEdit(result);
   }
@@ -714,6 +727,7 @@ export class DocumentStore {
         parsed.spanNotes,
         parsed.highlightContexts,
         links,
+        parsed.externals,
       );
     if (result !== this.current) this.pushEdit(result);
   }
@@ -741,6 +755,7 @@ export class DocumentStore {
         spanNotes,
         parsed.highlightContexts,
         parsed.links,
+        parsed.externals,
       );
     if (result !== this.current) this.pushEdit(result);
   }
