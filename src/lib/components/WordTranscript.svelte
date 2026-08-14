@@ -95,6 +95,8 @@
     onlinksource,
     onlinkopen,
     onlinkremove,
+    onexternal,
+    onexternalremove,
     linkTitles,
     onseek,
     onpause,
@@ -214,6 +216,9 @@
     /** Open the linked record. */
     onlinkopen?: (target: string) => void;
     onlinkremove?: (id: string) => void;
+    /** Mark the range as a passage from elsewhere. */
+    onexternal?: (from: number, to: number) => void;
+    onexternalremove?: (id: string) => void;
     /** Titles of the records this one links to, by content hash. A link is
      *  stored as a hash, which tells the reviewer nothing on its own - without
      *  a title the underline says "this refers to something" and stops. */
@@ -293,6 +298,26 @@
     const s = new Set<number>();
     for (const l of parsed.links) for (let g = l.fromWord; g <= l.toWord; g++) s.add(g);
     return s;
+  });
+
+  /** Words inside a passage marked as coming from elsewhere, and what each
+   *  one says it is - the tint tells the reviewer at a glance that this is
+   *  quoted rather than spoken here. */
+  let externalWordSet = $derived.by(() => {
+    const m = new Map<number, string>();
+    for (const e of parsed.externals) {
+      const label = e.description
+        ? `From elsewhere: ${e.description}`
+        : "From elsewhere - a clip played in this recording";
+      for (let g = e.fromWord; g <= e.toWord; g++) m.set(g, label);
+    }
+    return m;
+  });
+
+  let externalAtSelection = $derived.by(() => {
+    const r = range;
+    if (!r) return null;
+    return parsed.externals.find((e) => e.fromWord <= r.to && e.toWord >= r.from) ?? null;
   });
 
   /** The link the current selection sits on, if any - what "open it", "change
@@ -1287,10 +1312,13 @@
     c.toggle("wt-markup-focus", focusWordSet.has(g));
     c.toggle("wt-chain", hoverChainWords.has(g));
     c.toggle("wt-linkspan", linkWordSet.has(g));
+    c.toggle("wt-external", externalWordSet.has(g));
     // Native tooltip rather than a hover card: it costs no layout, survives
     // the content-visibility skipping, and is what a reader tries first.
     const linkLabel = linkLabelByWord.get(g);
-    if (linkLabel) el.title = linkLabel;
+    const extLabel = externalWordSet.get(g);
+    const label = [extLabel, linkLabel].filter(Boolean).join("\n");
+    if (label) el.title = label;
     else if (el.title) el.removeAttribute("title");
   }
 
@@ -1435,6 +1463,7 @@
     void focusWordSet; // re-apply markup focus flash
     void linkWordSet; // re-apply the link underline when a link is added/removed
     void linkLabelByWord; // and its tooltip when the titles arrive
+    void externalWordSet; // and the tint when a passage is marked as quoted
     const el = scrollEl;
     untrack(() => {
       if (!el) return;
@@ -2089,6 +2118,37 @@
                   d="M10.5 13.5a4 4 0 005.66 0l3-3a4 4 0 10-5.66-5.66l-1 1M13.5 10.5a4 4 0 00-5.66 0l-3 3a4 4 0 105.66 5.66l1-1" />
               </svg>
               <span>Link to a source</span>
+            </button>
+          {/if}
+          {#if externalAtSelection}
+            <button
+              onclick={() => { onexternalremove?.(externalAtSelection.id); clearSelection(); }}
+              aria-label="Not from elsewhere"
+              class="flex items-center gap-2 w-full text-left px-3 py-1.5 text-xs font-ui cursor-pointer transition-colors hover:bg-primary-container/30 text-on-surface-muted hover:text-error"
+              title="These words are spoken here after all - remove the external mark"
+            >
+              <svg class="w-4 h-4 flex-none" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="3" y="5" width="18" height="13" rx="2" />
+                <path stroke-linecap="round" d="M4 4l16 16" />
+              </svg>
+              <span>Not from elsewhere</span>
+            </button>
+          {:else if onexternal}
+            <!-- The speaker is NOT changed by this. The person in a clip is
+                 still the person who said it; what came from elsewhere is the
+                 passage. Naming them "X (External Footage)" is what gave the
+                 corpus four spellings of one man. -->
+            <button
+              onclick={() => { if (range) onexternal?.(range.from, range.to); }}
+              aria-label="From elsewhere"
+              class="flex items-center gap-2 w-full text-left px-3 py-1.5 text-xs font-ui cursor-pointer transition-colors hover:bg-primary-container/30 text-on-surface"
+              title="These words came from another recording or document - a clip played here, not spoken here"
+            >
+              <svg class="w-4 h-4 flex-none" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="2" y="6" width="14" height="10" rx="2" />
+                <path stroke-linecap="round" stroke-linejoin="round" d="M22 8l-6 4 6 4V8z" />
+              </svg>
+              <span>From elsewhere</span>
             </button>
           {/if}
           {#if selectionHasMarkup}

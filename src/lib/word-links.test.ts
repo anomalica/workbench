@@ -141,6 +141,13 @@ describe("every write path carries links", () => {
       src.indexOf("function readOverlayNextId"),
     );
     expect(helper).toContain("parsed.links.map((l) => l.id)");
-    expect(src.match(/mintOverlayId\(\s*overlayIdsOf\(parsed\)/g)?.length).toBe(3);
+    expect(helper).toContain("parsed.externals.map((e) => e.id)");
+    // EVERY mint goes through the collector - asserted as a rule rather than a
+    // count, because a count fails on the next marker family added and teaches
+    // whoever fixes it to bump a number rather than check the invariant.
+    const mints = src.match(/mintOverlayId\(/g)?.length ?? 0;
+    const throughCollector = src.match(/mintOverlayId\(\s*overlayIdsOf\(parsed\)/g)?.length ?? 0;
+    expect(mints).toBeGreaterThan(0);
+    expect(throughCollector).toBe(mints);
   });
 });

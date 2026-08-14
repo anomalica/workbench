@@ -711,6 +711,72 @@ export class DocumentStore {
     if (result !== this.current) this.pushEdit(result);
   }
 
+  /** Mark the inclusive word range [from, to] as a passage that came from
+   *  somewhere else - a clip played inside this recording, a block quote from
+   *  another document.
+   *
+   *  The speaker is untouched: the person in the clip is still the person who
+   *  said it, and that is the whole point of marking the passage rather than
+   *  renaming them. `description` is what the clip is; `targetHash` is the
+   *  record it came from, when that record has itself been ingested - which is
+   *  what lets the assimilator recognise two records quoting the same clip as
+   *  one utterance rather than two independent ones. Both are optional: often
+   *  the original exists only inside this video. */
+  addWordExternal(from: number, to: number, description: string, targetHash = "") {
+    const [fm, body] = splitFrontmatter(this.current);
+    const parsed = parseWords(body);
+    const lo = Math.min(from, to);
+    const hi = Math.max(from, to);
+    if (lo < 0 || hi >= parsed.words.length) return;
+    const target = targetHash.trim().replace(/^sha256:/, "");
+    const { id, nextId } = mintOverlayId(overlayIdsOf(parsed), readOverlayNextId(fm));
+    const fmOut = rewriteFrontmatterFields(fm, { overlay_next_id: nextId });
+    const externals = [
+      ...parsed.externals,
+      {
+        id,
+        fromWord: lo,
+        toWord: hi,
+        description: sanitiseNoteText(description),
+        ...(target ? { target: `sha256:${target}` } : {}),
+      },
+    ];
+    const result =
+      fmOut +
+      serializeWords(
+        parsed.words,
+        parsed.runs,
+        parsed.lineEndWords,
+        parsed.preamble,
+        parsed.highlights,
+        parsed.spanNotes,
+        parsed.highlightContexts,
+        parsed.links,
+        externals,
+      );
+    if (result !== this.current) this.pushEdit(result);
+  }
+
+  removeWordExternal(id: string) {
+    const [fm, body] = splitFrontmatter(this.current);
+    const parsed = parseWords(body);
+    if (!parsed.externals.some((e) => e.id === id)) return;
+    const result =
+      fm +
+      serializeWords(
+        parsed.words,
+        parsed.runs,
+        parsed.lineEndWords,
+        parsed.preamble,
+        parsed.highlights,
+        parsed.spanNotes,
+        parsed.highlightContexts,
+        parsed.links,
+        parsed.externals.filter((e) => e.id !== id),
+      );
+    if (result !== this.current) this.pushEdit(result);
+  }
+
   removeWordLink(id: string) {
     const [fm, body] = splitFrontmatter(this.current);
     const parsed = parseWords(body);
@@ -1004,6 +1070,7 @@ function overlayIdsOf(parsed: ReturnType<typeof parseWords>): string[] {
     ...parsed.highlights.map((h) => h.id),
     ...parsed.spanNotes.map((n) => n.id),
     ...parsed.links.map((l) => l.id),
+    ...parsed.externals.map((e) => e.id),
     ...parsed.highlightContexts.flatMap((c) => [c.of, ...c.needs]),
   ];
 }

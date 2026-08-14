@@ -1371,6 +1371,46 @@
     window.open(`/${publicHash}`, "_blank", "noopener");
   }
 
+  /** Marking a passage as coming from elsewhere. The description is what the
+   *  clip IS; the record is where it came from, and is genuinely optional -
+   *  the original often exists only inside this video. */
+  let externalPicker = $state<{ from: number; to: number } | null>(null);
+  let externalDescription = $state("");
+  let externalTargetHash = $state<string | null>(null);
+  let externalSearch = $state("");
+
+  async function openExternalPicker(from: number, to: number) {
+    externalPicker = { from, to };
+    externalDescription = "";
+    externalTargetHash = null;
+    externalSearch = "";
+    await loadAllRecords();
+  }
+
+  let externalChoices = $derived.by(() => {
+    const q = externalSearch.trim().toLowerCase();
+    if (!q) return [];
+    return (allRecords ?? [])
+      .filter((r) => r.content_hash !== ingest.content_hash)
+      .filter(
+        (r) =>
+          r.title.toLowerCase().includes(q) ||
+          (r.creators ?? []).some((c) => c.toLowerCase().includes(q)),
+      )
+      .slice(0, 6);
+  });
+
+  function confirmExternal() {
+    if (!externalPicker) return;
+    doc.addWordExternal(
+      externalPicker.from,
+      externalPicker.to,
+      externalDescription,
+      externalTargetHash ?? "",
+    );
+    externalPicker = null;
+  }
+
   function confirmLink() {
     if (!linkPicker || !linkTargetHash) return;
     // No passage anchor: a record-level link. The grammar keeps the quote
@@ -3334,6 +3374,87 @@
     </div>
   {/if}
 
+  {#if externalPicker}
+    <div
+      class="fixed inset-0 bg-ink/50 z-50 flex items-center justify-center p-4"
+      onclick={(e) => { if (e.target === e.currentTarget) externalPicker = null; }}
+      onkeydown={(e) => { if (e.key === 'Escape') externalPicker = null; }}
+      role="dialog"
+      aria-modal="true"
+      aria-label="From elsewhere"
+      tabindex="-1"
+    >
+      <div class="bg-surface rounded-lg shadow-lg max-w-lg w-full p-6">
+        <h3 class="font-ui font-semibold text-on-surface mb-1">These words came from elsewhere</h3>
+        <p class="text-xs text-on-surface-muted mb-4">
+          A clip played inside this recording, or a passage quoted from another
+          document. The speaker stays as they are - the person in the clip is
+          still the person who said it.
+        </p>
+
+        <label class="block text-xs font-ui text-on-surface-secondary mb-1" for="external-desc">
+          What is it? (optional)
+        </label>
+        <input
+          id="external-desc"
+          type="text"
+          bind:value={externalDescription}
+          placeholder="e.g. Larry King Live, 1996"
+          class="w-full px-3 py-1.5 mb-4 text-sm bg-surface-alt border border-border rounded outline-none focus:border-primary"
+        />
+
+        <!-- Optional on purpose: the original often exists only inside this
+             video. When it HAS been ingested, naming it is what lets the same
+             clip quoted by three records count as one piece of evidence
+             instead of three. -->
+        <label class="block text-xs font-ui text-on-surface-secondary mb-1" for="external-search">
+          Have we ingested the original? (optional)
+        </label>
+        <input
+          id="external-search"
+          type="text"
+          bind:value={externalSearch}
+          placeholder="Search records..."
+          class="w-full px-3 py-1.5 text-sm bg-surface-alt border border-border rounded outline-none focus:border-primary"
+        />
+        {#if externalTargetHash}
+          <p class="mt-2 text-xs text-on-surface flex items-center gap-2">
+            <span class="flex-1 truncate">From: {linkTitles.get(externalTargetHash)}</span>
+            <button
+              onclick={() => { externalTargetHash = null; externalSearch = ""; }}
+              class="text-on-surface-muted hover:text-error cursor-pointer flex-none"
+            >clear</button>
+          </p>
+        {:else if externalChoices.length > 0}
+          <ul class="mt-1 border border-border rounded overflow-hidden max-h-40 overflow-y-auto">
+            {#each externalChoices as r (r.content_hash)}
+              <li>
+                <button
+                  onclick={() => { externalTargetHash = r.content_hash; }}
+                  class="w-full text-left px-3 py-1.5 text-xs cursor-pointer hover:bg-primary-container/30 border-b border-border last:border-b-0"
+                >
+                  <span class="block text-on-surface truncate">{r.title}</span>
+                  <span class="block text-on-surface-muted">{r.source_type}{r.date ? ` - ${r.date}` : ""}</span>
+                </button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+
+        <div class="flex justify-end gap-2 mt-5">
+          <button
+            onclick={() => (externalPicker = null)}
+            class="px-3 py-1.5 text-sm font-ui text-on-surface-secondary hover:text-on-surface cursor-pointer"
+          >Cancel</button>
+          <button
+            onclick={confirmExternal}
+            class="px-3 py-1.5 text-sm font-ui font-medium rounded bg-primary text-on-primary cursor-pointer hover:opacity-90"
+          >Mark as from elsewhere</button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
   <!-- Submit review modal -->
   {#if showSubmitForm}
     <div
@@ -4330,6 +4451,8 @@
             onlinksource={openLinkPicker}
             linkTitles={linkTitles}
             onlinkopen={openLinkedRecord}
+            onexternal={openExternalPicker}
+            onexternalremove={(id) => doc.removeWordExternal(id)}
             onlinkremove={(id) => doc.removeWordLink(id)}
             onpause={() => {
               // A markup drag pauses playback in place - no seek, just stop, so
