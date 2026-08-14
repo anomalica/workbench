@@ -98,6 +98,7 @@
     onlinkremove,
     onexternal,
     onexternalremove,
+    onexternaledit,
     linkTitles,
     onseek,
     onpause,
@@ -220,6 +221,8 @@
     /** Mark the range as external content - played or quoted here. */
     onexternal?: (from: number, to: number) => void;
     onexternalremove?: (id: string) => void;
+    /** Reopen the source question on an existing passage. */
+    onexternaledit?: (id: string) => void;
     /** Titles of the records this one links to, by content hash. A link is
      *  stored as a hash, which tells the reviewer nothing on its own - without
      *  a title the underline says "this refers to something" and stops. */
@@ -324,6 +327,18 @@
    *  is already unique within the record, so `Speaker 8` stays `Speaker 8`, and
    *  a named one keeps their name. What marks it as a clip is the block it sits
    *  in, not a rewritten label. */
+  /** The quoted passage a turn OPENS, if any - so its source is shown once at
+   *  the top of the passage rather than repeated on every turn inside it. A
+   *  clip that cuts between two voices is one clip, and one source. */
+  let externalOpensAt = $derived.by(() => {
+    const m = new Map<number, (typeof parsed.externals)[number]>();
+    for (const e of parsed.externals) {
+      const first = runs.find((r) => r.startWord >= e.fromWord && r.endWord <= e.toWord);
+      if (first) m.set(first.startWord, e);
+    }
+    return m;
+  });
+
   let quotedRuns = $derived.by(() => {
     const s = new Set<number>();
     for (const e of parsed.externals) {
@@ -2397,6 +2412,7 @@
     {#each turns as turn (turn.lead.startWord)}
       {@const run = turn.lead}
       {@const quotedLabel = quotedRuns.has(run.startWord)}
+      {@const opensExternal = externalOpensAt.get(run.startWord)}
       {@const spoken = turn.parts.filter((p) => !p.cut)}
       {@const obs = spoken.reduce((n, p) => n + observedInRun(p.run), 0)}
       {@const total = spoken.reduce((n, p) => n + p.run.endWord - p.run.startWord + 1, 0)}
@@ -2413,6 +2429,33 @@
           ? 'visible'
           : 'auto'};contain-intrinsic-size:auto {runIntrinsic(run)}px"
       >
+        {#if opensExternal}
+          <!-- The passage's own header: what this clip is, said once at the
+               top of it. It belongs to the passage, not to the speakers inside
+               it - a clip cutting between two voices is still one clip from
+               one place. -->
+          <div class="group/ext flex items-center gap-2 pb-1.5 -mt-1 text-[11px] font-ui">
+            <span class="text-on-surface-muted/50 uppercase tracking-wide flex-none">External</span>
+            {#if opensExternal.description}
+              <span class="text-on-surface-muted/80 truncate">{opensExternal.description}</span>
+            {:else if opensExternal.target}
+              <span class="text-on-surface-muted/80 truncate">a record in this corpus</span>
+            {:else}
+              <span class="text-warning/70 italic truncate">no source noted</span>
+            {/if}
+            <span class="flex-1"></span>
+            <button
+              onclick={() => onexternaledit?.(opensExternal.id)}
+              class="flex-none px-1 rounded cursor-pointer text-on-surface-muted/60 hover:text-primary opacity-0 group-hover/ext:opacity-100 transition-opacity"
+              title="Change where this came from"
+            >edit</button>
+            <button
+              onclick={() => onexternalremove?.(opensExternal.id)}
+              class="flex-none px-1 rounded cursor-pointer text-on-surface-muted/60 hover:text-error opacity-0 group-hover/ext:opacity-100 transition-opacity"
+              title="These words are this recording's own after all"
+            >remove</button>
+          </div>
+        {/if}
         <div class="flex items-center justify-between gap-2 pb-1">
           {#if quotedLabel}
             <!-- Still a picker: a reviewer who knows whose clip this is should
@@ -2424,14 +2467,17 @@
                 class="group flex items-center gap-2 cursor-pointer rounded px-1 -mx-1 hover:bg-primary-container/20 transition-colors"
                 title="Whose voice is this in the clip?"
               >
-                <svg class="w-3.5 h-3.5 flex-none text-on-surface-muted/60" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
-                  <rect x="2" y="6" width="14" height="10" rx="2" />
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M22 8l-6 4 6 4V8z" />
-                </svg>
+                <!-- No icon: the block's own header two lines up already says
+                     EXTERNAL, and a camera here repeats it in a second
+                     vocabulary. A hollow dot keeps the row aligned with every
+                     other speaker row. -->
+                <span
+                  class="flex-none w-2.5 h-2.5 rounded-full border border-current opacity-40"
+                  aria-hidden="true"
+                ></span>
                 <span class="text-xs font-ui text-on-surface-muted/80 group-hover:underline">
                   {run.speaker}
                 </span>
-                <span class="text-[10px] font-ui uppercase tracking-wide text-on-surface-muted/40">external</span>
               </button>
               {#if headerPicker === run.startWord}
                 {@render speakerMenu(run.speaker, (name) => chooseRunSpeaker(run, name))}

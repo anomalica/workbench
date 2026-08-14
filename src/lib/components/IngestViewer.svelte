@@ -241,6 +241,19 @@
   );
   /** Voices that occur only inside quoted passages - listed in their own
    *  sidebar section rather than among this record's speakers. */
+  /** Reopen the source question on an existing passage: same dialog,
+   *  prefilled, replacing the marker rather than nesting a second one. */
+  function editExternal(id: string) {
+    const e = parsedWords?.externals.find((x) => x.id === id);
+    if (!e) return;
+    doc.removeWordExternal(id);
+    externalPicker = { from: e.fromWord, to: e.toWord };
+    externalWhere = e.target
+      ? (linkTitles.get(e.target.replace(/^sha256:/, "")) ?? "")
+      : e.description;
+    externalTargetHash = e.target ? e.target.replace(/^sha256:/, "") : null;
+  }
+
   let quotedSpeakerRows = $derived(
     parsedWords ? quotedSpeakerCounts(parsedWords.runs, parsedWords.externals) : [],
   );
@@ -4506,6 +4519,7 @@
             onlinkopen={openLinkedRecord}
             onexternal={openExternalPicker}
             onexternalremove={(id) => doc.removeWordExternal(id)}
+            onexternaledit={editExternal}
             onlinkremove={(id) => doc.removeWordLink(id)}
             onpause={() => {
               // A markup drag pauses playback in place - no seek, just stop, so
