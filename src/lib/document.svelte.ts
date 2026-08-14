@@ -747,8 +747,17 @@ export class DocumentStore {
         ...(target ? { target: `sha256:${target}` } : {}),
       },
     ];
+    // Marking a passage can empty a speaker: if everything they said is now
+    // quoted, they are no longer a participant of this recording and their name
+    // has to leave `speakers:` with it. Without this the name sat in Named at
+    // zero words until some unrelated speaker edit happened to reconcile it.
+    const quotedOnly = new Set(quotedSpeakerCounts(parsed.runs, externals).map((r) => r.id));
+    const listed = extractFrontmatterSpeakers(fmOut);
+    const stillHere = listed.filter((n) => !quotedOnly.has(n));
+    const fmFinal =
+      stillHere.length === listed.length ? fmOut : rewriteFrontmatterSpeakers(fmOut, stillHere);
     const result =
-      fmOut +
+      fmFinal +
       serializeWords(
         parsed.words,
         parsed.runs,
