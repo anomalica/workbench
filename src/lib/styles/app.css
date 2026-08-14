@@ -174,7 +174,17 @@ body {
 .wt-word.wt-external,
 .wt-word.wt-external.wt-observed {
   color: color-mix(in srgb, var(--color-on-surface) 58%, transparent);
-  box-shadow: 0 1px 0 0 color-mix(in srgb, var(--color-on-surface) 22%, transparent);
+  background: color-mix(in srgb, var(--color-on-surface) 3%, transparent);
+}
+/* The run's edges, so a stretch inside a sentence still shows where the clip
+   starts and stops - the vertical rule a whole-turn block gets, laid on its
+   side. Same palette either way: a clip is a clip whether it is a turn or six
+   words, and two different looks for one fact is what made it read as a
+   different kind of thing. */
+.wt-word.wt-external:first-of-type,
+.wt-word:not(.wt-external) + .wt-external {
+  border-left: 2px solid color-mix(in srgb, var(--color-on-surface) 18%, transparent);
+  padding-left: 3px;
 }
 /* Playback still lights the word being spoken - a clip plays like anything
    else, and losing the karaoke would make it unreadable to follow. */
