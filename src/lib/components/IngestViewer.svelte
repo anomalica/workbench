@@ -1371,7 +1371,7 @@
     window.open(`/${publicHash}`, "_blank", "noopener");
   }
 
-  /** Marking a passage as coming from elsewhere. The description is what the
+  /** Marking a passage as external content. The description is what the
    *  clip IS; the record is where it came from, and is genuinely optional -
    *  the original often exists only inside this video. */
   let externalPicker = $state<{ from: number; to: number } | null>(null);
@@ -3381,15 +3381,15 @@
       onkeydown={(e) => { if (e.key === 'Escape') externalPicker = null; }}
       role="dialog"
       aria-modal="true"
-      aria-label="From elsewhere"
+      aria-label="Mark as external"
       tabindex="-1"
     >
       <div class="bg-surface rounded-lg shadow-lg max-w-lg w-full p-6">
-        <h3 class="font-ui font-semibold text-on-surface mb-1">These words came from elsewhere</h3>
+        <h3 class="font-ui font-semibold text-on-surface mb-1">Mark as external content</h3>
         <p class="text-xs text-on-surface-muted mb-4">
           A clip played inside this recording, or a passage quoted from another
-          document. The speaker stays as they are - the person in the clip is
-          still the person who said it.
+          document - shown here, not said here. The speaker stays as they are:
+          the person in the clip is still the person who said it.
         </p>
 
         <label class="block text-xs font-ui text-on-surface-secondary mb-1" for="external-desc">
@@ -3419,7 +3419,7 @@
         />
         {#if externalTargetHash}
           <p class="mt-2 text-xs text-on-surface flex items-center gap-2">
-            <span class="flex-1 truncate">From: {linkTitles.get(externalTargetHash)}</span>
+            <span class="flex-1 truncate">Original: {linkTitles.get(externalTargetHash)}</span>
             <button
               onclick={() => { externalTargetHash = null; externalSearch = ""; }}
               class="text-on-surface-muted hover:text-error cursor-pointer flex-none"
@@ -3449,7 +3449,7 @@
           <button
             onclick={confirmExternal}
             class="px-3 py-1.5 text-sm font-ui font-medium rounded bg-primary text-on-primary cursor-pointer hover:opacity-90"
-          >Mark as from elsewhere</button>
+          >Mark as external</button>
         </div>
       </div>
     </div>

@@ -216,7 +216,7 @@
     /** Open the linked record. */
     onlinkopen?: (target: string) => void;
     onlinkremove?: (id: string) => void;
-    /** Mark the range as a passage from elsewhere. */
+    /** Mark the range as external content - played or quoted here. */
     onexternal?: (from: number, to: number) => void;
     onexternalremove?: (id: string) => void;
     /** Titles of the records this one links to, by content hash. A link is
@@ -300,15 +300,15 @@
     return s;
   });
 
-  /** Words inside a passage marked as coming from elsewhere, and what each
-   *  one says it is - the tint tells the reviewer at a glance that this is
-   *  quoted rather than spoken here. */
+  /** Words inside a passage marked as external content, and what each one says
+   *  it is - the tint tells the reviewer at a glance that this was played or
+   *  quoted here rather than said here. */
   let externalWordSet = $derived.by(() => {
     const m = new Map<number, string>();
     for (const e of parsed.externals) {
       const label = e.description
-        ? `From elsewhere: ${e.description}`
-        : "From elsewhere - a clip played in this recording";
+        ? `External content: ${e.description}`
+        : "External content - played or quoted here, not said here";
       for (let g = e.fromWord; g <= e.toWord; g++) m.set(g, label);
     }
     return m;
@@ -2011,7 +2011,7 @@
               {markupOpen || selectionHasMarkup || linkAtSelection
                 ? 'text-primary bg-primary/10'
                 : 'text-primary hover:bg-primary/10'}"
-            title="Highlight, note, link to a source, mark as external footage"
+            title="Highlight, add note, link external source, mark as external"
           >
             <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
               <path stroke-linecap="round" stroke-linejoin="round" d="M14.5 3.5l6 6-7.5 7.5H7.5l-1.5-4 8.5-9.5z" />
@@ -2059,7 +2059,7 @@
               <path stroke-linecap="round" stroke-linejoin="round"
                 d="M4 5.5A1.5 1.5 0 015.5 4h13A1.5 1.5 0 0120 5.5v9a1.5 1.5 0 01-1.5 1.5H9l-5 4V5.5zM8 8h8M8 11.5h5" />
             </svg>
-              <span>Add a note</span>
+              <span>Add note</span>
           </button>
           {#if linkAtSelection}
             <!-- These words are ALREADY linked, so the bar stops offering to
@@ -2109,7 +2109,7 @@
                  as a separate verb in the bar. -->
                         <button
               onclick={() => { if (range) { onlinksource?.(range.from, range.to); clearSelection(); } }}
-              aria-label="Link to a source"
+              aria-label="Link external source"
               class="flex items-center gap-2 w-full text-left px-3 py-1.5 text-xs font-ui cursor-pointer transition-colors hover:bg-primary-container/30 text-on-surface"
               title="A note whose body is another record: these words refer to an ingested source - link them to it"
             >
@@ -2117,30 +2117,30 @@
                 <path stroke-linecap="round" stroke-linejoin="round"
                   d="M10.5 13.5a4 4 0 005.66 0l3-3a4 4 0 10-5.66-5.66l-1 1M13.5 10.5a4 4 0 00-5.66 0l-3 3a4 4 0 105.66 5.66l1-1" />
               </svg>
-              <span>Link to a source</span>
+              <span>Link external source</span>
             </button>
           {/if}
           {#if externalAtSelection}
             <button
               onclick={() => { onexternalremove?.(externalAtSelection.id); clearSelection(); }}
-              aria-label="Not from elsewhere"
+              aria-label="Remove external mark"
               class="flex items-center gap-2 w-full text-left px-3 py-1.5 text-xs font-ui cursor-pointer transition-colors hover:bg-primary-container/30 text-on-surface-muted hover:text-error"
-              title="These words are spoken here after all - remove the external mark"
+              title="These words are this recording's own after all - remove the external mark"
             >
               <svg class="w-4 h-4 flex-none" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
                 <rect x="3" y="5" width="18" height="13" rx="2" />
                 <path stroke-linecap="round" d="M4 4l16 16" />
               </svg>
-              <span>Not from elsewhere</span>
+              <span>Remove external mark</span>
             </button>
           {:else if onexternal}
             <!-- The speaker is NOT changed by this. The person in a clip is
-                 still the person who said it; what came from elsewhere is the
+                 still the person who said it; what is external is the
                  passage. Naming them "X (External Footage)" is what gave the
                  corpus four spellings of one man. -->
             <button
               onclick={() => { if (range) onexternal?.(range.from, range.to); }}
-              aria-label="From elsewhere"
+              aria-label="Mark as external"
               class="flex items-center gap-2 w-full text-left px-3 py-1.5 text-xs font-ui cursor-pointer transition-colors hover:bg-primary-container/30 text-on-surface"
               title="These words came from another recording or document - a clip played here, not spoken here"
             >
@@ -2148,7 +2148,7 @@
                 <rect x="2" y="6" width="14" height="10" rx="2" />
                 <path stroke-linecap="round" stroke-linejoin="round" d="M22 8l-6 4 6 4V8z" />
               </svg>
-              <span>From elsewhere</span>
+              <span>Mark as external</span>
             </button>
           {/if}
           {#if selectionHasMarkup}
