@@ -240,8 +240,13 @@ export class DocumentStore {
     // are auto-removable). ADD real names now present in the body. Rewrite only
     // when the list actually changes, so unaffected edits stay byte-for-byte.
     const currentNamed = extractFrontmatterSpeakers(fm);
-    const bodyNamed = namedSpeakersInOrder(newRuns);
-    const kept = currentNamed.filter((n) => !isDefaultSpeakerName(n));
+    // A voice heard only inside a quoted passage is NOT added: they were never
+    // in this recording, and adding them made the record claim them as a
+    // participant. It also fought the reviewer - deleting the name from the
+    // list put it straight back on the next edit, over and over.
+    const quotedOnly = new Set(quotedSpeakerCounts(newRuns, parsed.externals).map((r) => r.id));
+    const bodyNamed = namedSpeakersInOrder(newRuns).filter((n) => !quotedOnly.has(n));
+    const kept = currentNamed.filter((n) => !isDefaultSpeakerName(n) && !quotedOnly.has(n));
     const merged = [...kept, ...bodyNamed.filter((n) => !kept.includes(n))];
     const same =
       merged.length === currentNamed.length && merged.every((n, i) => n === currentNamed[i]);
@@ -393,8 +398,9 @@ export class DocumentStore {
     // serialiseWithReconcile): keep curated named speakers, drop default
     // "Speaker N" entries, add any new names, rewrite only on change.
     const currentNamed = extractFrontmatterSpeakers(fm);
-    const bodyNamed = namedSpeakersInOrder(next.runs);
-    const kept = currentNamed.filter((n) => !isDefaultSpeakerName(n));
+    const quotedOnly = new Set(quotedSpeakerCounts(next.runs, next.externals).map((r) => r.id));
+    const bodyNamed = namedSpeakersInOrder(next.runs).filter((n) => !quotedOnly.has(n));
+    const kept = currentNamed.filter((n) => !isDefaultSpeakerName(n) && !quotedOnly.has(n));
     const merged = [...kept, ...bodyNamed.filter((n) => !kept.includes(n))];
     const same =
       merged.length === currentNamed.length && merged.every((n, i) => n === currentNamed[i]);
@@ -1019,6 +1025,7 @@ import {
   reassignSpeaker,
   renameSpeakerInRuns,
   namedSpeakersInOrder,
+  quotedSpeakerCounts,
   splitWord,
   replaceWordRange,
   eventNoteAnchorIndex,
