@@ -1375,21 +1375,30 @@
    *  clip IS; the record is where it came from, and is genuinely optional -
    *  the original often exists only inside this video. */
   let externalPicker = $state<{ from: number; to: number } | null>(null);
-  let externalDescription = $state("");
+  let externalWhere = $state("");
   let externalTargetHash = $state<string | null>(null);
-  let externalSearch = $state("");
 
   async function openExternalPicker(from: number, to: number) {
     externalPicker = { from, to };
-    externalDescription = "";
+    externalWhere = "";
     externalTargetHash = null;
-    externalSearch = "";
     await loadAllRecords();
   }
 
+  /** One field, four ways to answer it. A reviewer knows where a clip came
+   *  from in whatever form they happen to have - the name of the programme, a
+   *  YouTube link, a record's id, or the record itself sitting in this corpus -
+   *  and being asked which KIND of answer they hold is the workbench's problem
+   *  leaking out. A hash (or a record chosen from the list) fills the marker's
+   *  target so the assimilator can collapse two records quoting one clip; a URL
+   *  or a title is kept as the description, which is also the note that says
+   *  "this is fetchable, we just have not fetched it". */
+  const HASH_RE = /^(?:sha256:)?([0-9a-f]{56,64})$/i;
+  let externalHashTyped = $derived(HASH_RE.exec(externalWhere.trim())?.[1] ?? null);
+
   let externalChoices = $derived.by(() => {
-    const q = externalSearch.trim().toLowerCase();
-    if (!q) return [];
+    const q = externalWhere.trim().toLowerCase();
+    if (!q || externalTargetHash || externalHashTyped || /^https?:\/\//i.test(q)) return [];
     return (allRecords ?? [])
       .filter((r) => r.content_hash !== ingest.content_hash)
       .filter(
@@ -1402,12 +1411,15 @@
 
   function confirmExternal() {
     if (!externalPicker) return;
-    doc.addWordExternal(
-      externalPicker.from,
-      externalPicker.to,
-      externalDescription,
-      externalTargetHash ?? "",
-    );
+    // A chosen record wins, then a typed hash; anything else - a URL, a
+    // programme name, nothing at all - is the description.
+    const hash = externalTargetHash ?? externalHashTyped ?? "";
+    const description = externalTargetHash
+      ? (linkTitles.get(externalTargetHash) ?? "")
+      : externalHashTyped
+        ? ""
+        : externalWhere.trim();
+    doc.addWordExternal(externalPicker.from, externalPicker.to, description, hash);
     externalPicker = null;
   }
 
@@ -3415,45 +3427,46 @@
       tabindex="-1"
     >
       <div class="bg-surface rounded-lg shadow-lg max-w-lg w-full p-6">
-        <h3 class="font-ui font-semibold text-on-surface mb-1">Quoted from a source</h3>
+        <h3 class="font-ui font-semibold text-on-surface mb-1">Set as external content</h3>
         <p class="text-xs text-on-surface-muted mb-4">
           These words are not this speaker's own - a clip played here, or a
           passage read out from somewhere else. The name on the turn stays as
           it is: whoever is in the clip still said it.
         </p>
 
-        <label class="block text-xs font-ui text-on-surface-secondary mb-1" for="external-desc">
+        <label class="block text-xs font-ui text-on-surface-secondary mb-1" for="external-where">
           Where is it from? (optional)
         </label>
         <input
-          id="external-desc"
+          id="external-where"
           type="text"
-          bind:value={externalDescription}
-          placeholder="e.g. Larry King Live, 1996 - or leave blank if you don't know"
-          class="w-full px-3 py-1.5 mb-4 text-sm bg-surface-alt border border-border rounded outline-none focus:border-primary"
-        />
-
-        <!-- Optional on purpose: the original often exists only inside this
-             video. When it HAS been ingested, naming it is what lets the same
-             clip quoted by three records count as one piece of evidence
-             instead of three. -->
-        <label class="block text-xs font-ui text-on-surface-secondary mb-1" for="external-search">
-          ...and if that source is itself a record here, name it
-        </label>
-        <input
-          id="external-search"
-          type="text"
-          bind:value={externalSearch}
-          placeholder="Search records..."
+          bind:value={externalWhere}
+          placeholder="A programme name, a YouTube link, a record id - or search this corpus"
           class="w-full px-3 py-1.5 text-sm bg-surface-alt border border-border rounded outline-none focus:border-primary"
         />
+        <!-- Whatever the reviewer has to hand. A record chosen here or a hash
+             typed here fills the marker's target, which is what lets two
+             records quoting one clip collapse into a single piece of evidence;
+             a URL or a name is kept as the description, and doubles as the note
+             that this is fetchable but not yet fetched. -->
         {#if externalTargetHash}
           <p class="mt-2 text-xs text-on-surface flex items-center gap-2">
-            <span class="flex-1 truncate">Original: {linkTitles.get(externalTargetHash)}</span>
+            <svg class="w-3.5 h-3.5 flex-none text-primary" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+            </svg>
+            <span class="flex-1 truncate">{linkTitles.get(externalTargetHash)}</span>
             <button
-              onclick={() => { externalTargetHash = null; externalSearch = ""; }}
+              onclick={() => { externalTargetHash = null; externalWhere = ""; }}
               class="text-on-surface-muted hover:text-error cursor-pointer flex-none"
-            >clear</button>
+            >change</button>
+          </p>
+        {:else if externalHashTyped}
+          <p class="mt-2 text-xs text-on-surface-muted">
+            Read as a record id - the clip will be pinned to it.
+          </p>
+        {:else if /^https?:\/\//i.test(externalWhere.trim())}
+          <p class="mt-2 text-xs text-on-surface-muted">
+            Kept as a link to fetch later. Ingest it and come back to pin the record itself.
           </p>
         {:else if externalChoices.length > 0}
           <ul class="mt-1 border border-border rounded overflow-hidden max-h-40 overflow-y-auto">
@@ -3479,7 +3492,7 @@
           <button
             onclick={confirmExternal}
             class="px-3 py-1.5 text-sm font-ui font-medium rounded bg-primary text-on-primary cursor-pointer hover:opacity-90"
-          >Mark as quoted</button>
+          >Set as external</button>
         </div>
       </div>
     </div>

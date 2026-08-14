@@ -12,6 +12,7 @@
   import { pointerMoved } from "$lib/drag-intent";
   import { EVENT_NOTE_PRESETS } from "$lib/transcript";
   import {
+    assignableSpecialSpeakers,
     orderedNamedSpeakers,
     isSpecialSpeaker,
     nextSpeakerName,
@@ -323,6 +324,14 @@
   /** The link the current selection sits on, if any - what "open it", "change
    *  it" and "remove it" act upon. A link is authored from a selection, so it
    *  is edited from one too, rather than needing a second gesture to learn. */
+  /** The turn a header dropdown was opened on, so "set as external content"
+   *  reached from there marks that whole turn when no words are selected. */
+  let currentRunRange = $derived.by(() => {
+    if (headerPicker === null) return null;
+    const run = runs.find((r) => r.startWord === headerPicker);
+    return run ? { from: run.startWord, to: run.endWord } : null;
+  });
+
   let linkAtSelection = $derived.by(() => {
     const r = range;
     if (!r) return null;
@@ -1786,12 +1795,7 @@
 
 {#snippet speakerMenu(currentSpeaker: string | null, onChoose: (name: string) => void)}
   {@const named = namedSpeakersOrdered.filter((s) => s !== currentSpeaker)}
-  {@const special = [
-    SPEAKER_IRRELEVANT,
-    SPEAKER_NARRATOR,
-    SPEAKER_EXTERNAL_FOOTAGE,
-    SPEAKER_GROUP,
-  ].filter((s) => s !== currentSpeaker)}
+  {@const special = assignableSpecialSpeakers(currentSpeaker ?? undefined)}
   {@const other = allSpeakerNames.filter(
     (s) => s !== currentSpeaker && !namedSpeakers.includes(s) && !isSpecialSpeaker(s),
   )}
@@ -1835,6 +1839,25 @@
           {name}
         </button>
       {/each}
+    {/if}
+    {#if onexternal}
+      <!-- Reached from here because this is where the reviewer already is when
+           they notice a turn is a clip: they opened this menu to ask "who is
+           this". It marks the PASSAGE, so whoever is in the clip keeps their
+           name - which is what the old [external footage] speaker threw away. -->
+      <div class="border-t border-border mt-1 pt-1">
+        <button
+          onclick={() => {
+            const r = range ?? currentRunRange;
+            headerPicker = null;
+            pickerOpen = false;
+            if (r) onexternal?.(r.from, r.to);
+          }}
+          class="block w-full text-left px-3 py-1.5 text-sm font-ui cursor-pointer hover:bg-primary-container/30 text-on-surface"
+        >
+          Set as external content
+        </button>
+      </div>
     {/if}
     <div class="border-t border-border mt-1 pt-1">
       <button
@@ -2011,7 +2034,7 @@
               {markupOpen || selectionHasMarkup || linkAtSelection
                 ? 'text-primary bg-primary/10'
                 : 'text-primary hover:bg-primary/10'}"
-            title="Highlight, add note, refers to a source, quoted from a source"
+            title="Highlight, add note, link to a source, set as external content"
           >
             <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
               <path stroke-linecap="round" stroke-linejoin="round" d="M14.5 3.5l6 6-7.5 7.5H7.5l-1.5-4 8.5-9.5z" />
@@ -2117,7 +2140,7 @@
                 <path stroke-linecap="round" stroke-linejoin="round"
                   d="M10.5 13.5a4 4 0 005.66 0l3-3a4 4 0 10-5.66-5.66l-1 1M13.5 10.5a4 4 0 00-5.66 0l-3 3a4 4 0 105.66 5.66l1-1" />
               </svg>
-              <span>Refers to a source</span>
+              <span>Link to a source</span>
             </button>
           {/if}
           {#if externalAtSelection}
@@ -2131,7 +2154,7 @@
                 <rect x="3" y="5" width="18" height="13" rx="2" />
                 <path stroke-linecap="round" d="M4 4l16 16" />
               </svg>
-              <span>Not quoted after all</span>
+              <span>Not external after all</span>
             </button>
           {:else if onexternal}
             <!-- The speaker is NOT changed by this. The person in a clip is
@@ -2148,7 +2171,7 @@
                 <rect x="2" y="6" width="14" height="10" rx="2" />
                 <path stroke-linecap="round" stroke-linejoin="round" d="M22 8l-6 4 6 4V8z" />
               </svg>
-              <span>Quoted from a source</span>
+              <span>Set as external content</span>
             </button>
           {/if}
           {#if selectionHasMarkup}
