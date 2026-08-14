@@ -552,25 +552,6 @@
           </button>
         {/if}
 
-{#if externalRows.length > 0}
-  <div class="mt-3">
-    <div class="flex items-center gap-2 px-2 py-1 mb-1">
-      <span class="text-xs font-ui font-medium text-on-surface-muted uppercase flex-1"
-        >External ({externalRows.length})</span
-      >
-    </div>
-    {#each externalRows as row}
-      <div class="flex items-center gap-2 px-2 py-1.5 rounded text-sm text-on-surface-muted/70">
-        <span
-          class="flex-none w-2.5 h-2.5 rounded-full border border-current opacity-50"
-          aria-hidden="true"
-        ></span>
-        <span class="flex-1 min-w-0 truncate">{row.id}</span>
-        <span class="flex-none text-[10px] font-mono tabular-nums text-on-surface-muted/50">{row.total}</span>
-      </div>
-    {/each}
-  </div>
-{/if}
 
         <!-- Assign to named speaker -->
         <div class="relative">
@@ -624,6 +605,26 @@
               : 'text-on-surface-muted hover:bg-surface hover:text-on-surface'}"
           title="Click to filter to this speaker; click others to add them (several at once)"
         >{row.total}</button>
+      </div>
+    {/each}
+  </div>
+{/if}
+
+{#if externalRows.length > 0}
+  <div class="mt-3">
+    <div class="flex items-center gap-2 px-2 py-1 mb-1">
+      <span class="text-xs font-ui font-medium text-on-surface-muted uppercase flex-1"
+        >External ({externalRows.length})</span
+      >
+    </div>
+    {#each externalRows as row}
+      <div class="flex items-center gap-2 px-2 py-1.5 rounded text-sm text-on-surface-muted/70">
+        <span
+          class="flex-none w-2.5 h-2.5 rounded-full border border-current opacity-50"
+          aria-hidden="true"
+        ></span>
+        <span class="flex-1 min-w-0 truncate">{row.id}</span>
+        <span class="flex-none text-[10px] font-mono tabular-nums text-on-surface-muted/50">{row.total}</span>
       </div>
     {/each}
   </div>
