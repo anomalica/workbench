@@ -497,12 +497,23 @@
   // Word indices inside `[irrelevant]` turns. Excluded from coverage entirely:
   // not observed, not counted in the denominator. Marking a block irrelevant is
   // a deliberate "this doesn't need reviewing" signal.
+  /** Words that are not the reviewer's to observe: cut content, and anything
+   *  inside a quoted passage.
+   *
+   *  A clip has no observation state - its turns carry no "mark seen" control,
+   *  because seeing a clip is not reviewing this record's transcript. Leaving
+   *  those words in the denominator meant coverage could never reach 100%, and
+   *  "jump to unobserved" walked the reviewer into a clip it would then walk
+   *  them into again, forever. */
   let irrelevantWords = $derived.by(() => {
     const s = new Set<number>();
     for (const run of runs) {
       if (run.speaker === SPEAKER_IRRELEVANT) {
         for (let g = run.startWord; g <= run.endWord; g++) s.add(g);
       }
+    }
+    for (const e of parsed.externals) {
+      for (let g = e.fromWord; g <= e.toWord; g++) s.add(g);
     }
     return s;
   });
