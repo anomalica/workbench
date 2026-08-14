@@ -315,6 +315,37 @@
     return m;
   });
 
+  /** Turns that lie wholly inside a quoted passage, and the letter each is
+   *  labelled with.
+   *
+   *  A clip's voices are relabelled A, B, C for display only. `Speaker 7` and
+   *  `Speaker 4` read as this record's own unnamed speakers - the reviewer's
+   *  outstanding work - when they are neither: they are voices in somebody
+   *  else's recording, and nothing here will ever identify them. Letters say
+   *  "a different voice in this clip" and claim nothing more. The record still
+   *  holds the original name, so unsetting the passage brings it straight
+   *  back. */
+  let quotedRunLabel = $derived.by(() => {
+    const m = new Map<number, string>();
+    for (const e of parsed.externals) {
+      let n = 0;
+      const seen = new Map<string, string>();
+      for (const r of runs) {
+        if (r.startWord < e.fromWord || r.endWord > e.toWord) continue;
+        const already = seen.get(r.speaker);
+        if (already) {
+          m.set(r.startWord, already);
+          continue;
+        }
+        const letter = String.fromCharCode(65 + (n % 26));
+        n++;
+        seen.set(r.speaker, letter);
+        m.set(r.startWord, letter);
+      }
+    }
+    return m;
+  });
+
   let externalAtSelection = $derived.by(() => {
     const r = range;
     if (!r) return null;
@@ -2352,6 +2383,7 @@
     {/if}
     {#each turns as turn (turn.lead.startWord)}
       {@const run = turn.lead}
+      {@const quotedLabel = quotedRunLabel.get(run.startWord)}
       {@const spoken = turn.parts.filter((p) => !p.cut)}
       {@const obs = spoken.reduce((n, p) => n + observedInRun(p.run), 0)}
       {@const total = spoken.reduce((n, p) => n + p.run.endWord - p.run.startWord + 1, 0)}
@@ -2361,14 +2393,23 @@
            which would cut off this run's speaker dropdown, so the run with an
            open header picker switches to visible. -->
       <div
-        class="border-b border-border/50 px-4 pt-3 pb-2"
+        class="border-b border-border/50 px-4 pt-3 pb-2 {quotedLabel
+          ? 'wt-quoted-turn'
+          : ''}"
         style="content-visibility:{headerPicker === run.startWord
           ? 'visible'
           : 'auto'};contain-intrinsic-size:auto {runIntrinsic(run)}px"
       >
         <div class="flex items-center justify-between gap-2 pb-1">
-          {#if false}
-            <div></div>
+          {#if quotedLabel}
+            <span class="flex items-center gap-2 text-xs font-ui text-on-surface-muted/70">
+              <svg class="w-3.5 h-3.5 flex-none" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="2" y="6" width="14" height="10" rx="2" />
+                <path stroke-linecap="round" stroke-linejoin="round" d="M22 8l-6 4 6 4V8z" />
+              </svg>
+              Voice {quotedLabel}
+              <span class="text-on-surface-muted/40">quoted</span>
+            </span>
           {:else}
             <!-- Clickable speaker chip: reassigns the whole turn. -->
             <div class="relative inline-block">

@@ -151,22 +151,28 @@ body {
 }
 
 /* A passage played or quoted from somewhere else.
-   Read as a quoted block, the way an email quotes a reply: set in a dimmer
-   colour so the eye passes over it as somebody else's words, with a rule down
-   the left edge marking its extent. No underline - that read as emphasis, and
-   this claims none - and no white text, because the full-strength colour is
-   what says "this record's own voice". Still legible, because it IS extracted:
-   unlike a cut it reaches the model, and it is often the best evidence here. */
+   The point is to leave the flow, the way a quoted reply leaves the flow of an
+   email: stepped in behind a rule, and set in the muted foreground so the eye
+   slides past it unless it is looking for it. Deliberately NOT a colour - a
+   coloured run reads as a category worth attending to, and the whole message
+   here is "this is not this record's own voice". Still legible, because unlike
+   a cut it does reach the model and is often the strongest evidence present. */
+.wt-quoted-turn {
+  border-left: 2px solid color-mix(in srgb, var(--color-on-surface) 18%, transparent);
+  background: color-mix(in srgb, var(--color-on-surface) 3%, transparent);
+  padding-left: 1.25rem;
+}
+.wt-quoted-turn .wt-word,
+.wt-quoted-turn .wt-word.wt-observed {
+  color: color-mix(in srgb, var(--color-on-surface) 58%, transparent);
+}
 .wt-external {
-  color: color-mix(in srgb, var(--color-secondary, #7a6ff0) 72%, var(--color-on-surface) 28%);
+  color: color-mix(in srgb, var(--color-on-surface) 58%, transparent);
 }
-.wt-word.wt-external.wt-observed {
-  color: color-mix(in srgb, var(--color-secondary, #7a6ff0) 72%, var(--color-on-surface) 28%);
-}
-/* The whole quoted run lights when the pointer is anywhere in it, so its
-   extent is obvious before the reviewer acts on it. */
-p:has(.wt-external:hover) .wt-external {
-  background: color-mix(in srgb, var(--color-secondary, #7a6ff0) 12%, transparent);
+/* Playback still lights the word being spoken - a clip plays like anything
+   else, and losing the karaoke would make it unreadable to follow. */
+.wt-quoted-turn .wt-word.wt-active {
+  color: var(--color-on-surface);
 }
 
 /* A cut in a transcript: words the reviewer marked irrelevant, which the
