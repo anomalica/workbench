@@ -166,8 +166,15 @@ body {
 .wt-quoted-turn .wt-word.wt-observed {
   color: color-mix(in srgb, var(--color-on-surface) 58%, transparent);
 }
-.wt-external {
+/* Two classes, because `.wt-word.wt-observed` is also two and sets the full
+   colour - a single-class rule lost to it, so a quoted stretch inside a turn
+   the reviewer had already observed rendered as ordinary text. That is every
+   mid-turn clip, which is the common case: the mark was written and nothing
+   changed on screen. */
+.wt-word.wt-external,
+.wt-word.wt-external.wt-observed {
   color: color-mix(in srgb, var(--color-on-surface) 58%, transparent);
+  box-shadow: 0 1px 0 0 color-mix(in srgb, var(--color-on-surface) 22%, transparent);
 }
 /* Playback still lights the word being spoken - a clip plays like anything
    else, and losing the karaoke would make it unreadable to follow. */
