@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """_hash_to_digest_path resolves v2 records to their (unsuffixed) digest YAML.
 
-The ingester's records/ symlinks carry a version suffix for v2+ records
+The ingester's by-name/ symlinks carry a version suffix for v2+ records
 (``<name>.v2.md``) but the digester writes ``<name>.yaml`` with no suffix.
 Before the fix the resolver derived ``<name>.v2.yaml`` and 404'd for every v2
 audio/video record, which broke claim deep-links into the video review path.

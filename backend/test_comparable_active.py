@@ -2,16 +2,15 @@
 """The comparable/Digests list offers only records in the ACTIVE corpus.
 
 The bug this pins: Mark archived pantex (ingests d4cd610 - the record moves to
-store/v1/ and its records/ symlink is deleted) while its variant digests stayed
+store/v1/ and its by-name/ symlink is deleted) while its variant digests stayed
 on disk. The list walks the variants directory, so it kept advertising the
 record; opening it then 404'd, because the audit resolves a record by NAME
-through records/ - and the symlink is precisely what archiving removes.
+through by-name/ - and the symlink is precisely what archiving removes.
 
 So the rule is: resolve by CONTENT HASH against store/, never by directory name.
 A variants directory is named for a record and keeps that name after the record
 is archived out from under it.
 """
-
 
 import pytest
 

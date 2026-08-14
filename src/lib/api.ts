@@ -111,9 +111,20 @@ function readPath(apiPath: string): string {
   return STATIC_READS ? `${apiPath}.json` : apiPath;
 }
 
+import type { KnownSpeaker } from "$lib/speaker-suggest";
+
 export async function fetchIngests(): Promise<IngestSummary[]> {
   const res = await fetch(readPath("/api/ingests"));
   if (!res.ok) throw new Error(`Failed to fetch ingests: ${res.status}`);
+  return res.json();
+}
+
+/** Speaker names already used anywhere in the corpus, commonest first. Fetched
+ *  once and offered while a new name is typed, so the same person does not end
+ *  up spelled two ways. */
+export async function fetchSpeakers(): Promise<KnownSpeaker[]> {
+  const res = await fetch(readPath("/api/speakers"));
+  if (!res.ok) throw new Error(`Failed to fetch speakers: ${res.status}`);
   return res.json();
 }
 

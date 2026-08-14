@@ -2,6 +2,8 @@
   import type { Segment } from "$lib/transcript";
   import { isDefaultSpeakerName, isSpecialSpeaker, SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE, SPEAKER_GROUP } from "$lib/transcript";
   import SpeakerDot from "./SpeakerDot.svelte";
+  import { fetchSpeakers } from "$lib/api";
+  import { type KnownSpeaker, suggestSpeakers } from "$lib/speaker-suggest";
 
   let {
     segments,
@@ -80,6 +82,28 @@
   // New speaker input
   let newSpeakerName = $state("");
   let showNewInput = $state(false);
+
+  /** Names the corpus already uses. Fetched once, when the reviewer first opens
+   *  the input - there is no point paying for it on every record load when
+   *  most sessions never name anyone. */
+  let known = $state<KnownSpeaker[]>([]);
+  let knownLoaded = false;
+  function loadKnown() {
+    if (knownLoaded) return;
+    knownLoaded = true;
+    fetchSpeakers()
+      .then((s) => (known = s))
+      // A suggestion list is a convenience; failing to get one must never
+      // stand between the reviewer and naming a speaker.
+      .catch(() => {});
+  }
+
+  let suggestions = $derived(suggestSpeakers(known, newSpeakerName, namedSpeakers));
+
+  function takeSuggestion(name: string) {
+    newSpeakerName = name;
+    addSpeaker();
+  }
 
   function addSpeaker() {
     const name = newSpeakerName.trim();
@@ -327,7 +351,8 @@
 
   <!-- Add new named speaker -->
   {#if showNewInput}
-    <form class="flex items-center gap-2 px-2 py-1 mt-1" onsubmit={(e) => { e.preventDefault(); addSpeaker(); }}>
+    <form class="px-2 py-1 mt-1" onsubmit={(e) => { e.preventDefault(); addSpeaker(); }}>
+      <div class="flex items-center gap-2">
       <input
         type="text"
         bind:value={newSpeakerName}
@@ -339,10 +364,32 @@
       <button type="submit" class="text-xs font-ui font-medium px-2 py-1 bg-primary text-on-primary rounded cursor-pointer hover:bg-primary-hover">
         Add
       </button>
+      </div>
+      {#if suggestions.length > 0}
+        <!-- Names already in the corpus. The point is the SPELLING: the same
+             person gets written two ways across records and nothing downstream
+             can tell them apart afterwards, so the existing form is shown
+             while the next one is being typed. -->
+        <ul class="mt-1 border border-border rounded bg-surface overflow-hidden">
+          {#each suggestions as s (s.name)}
+            <li>
+              <button
+                type="button"
+                onclick={() => takeSuggestion(s.name)}
+                class="w-full text-left px-2 py-1 text-xs font-ui cursor-pointer flex items-baseline gap-2 hover:bg-primary-container/30"
+                title="Use this spelling - already in {s.ingests} ingest{s.ingests === 1 ? '' : 's'}"
+              >
+                <span class="text-on-surface flex-1 truncate">{s.name}</span>
+                <span class="text-[10px] tabular-nums text-on-surface-muted flex-none">{s.ingests}</span>
+              </button>
+            </li>
+          {/each}
+        </ul>
+      {/if}
     </form>
   {:else}
     <button
-      onclick={() => { showNewInput = true; }}
+      onclick={() => { showNewInput = true; loadKnown(); }}
       class="text-xs font-ui text-primary cursor-pointer hover:underline px-2 py-1 mt-0.5"
     >
       + Add new speaker

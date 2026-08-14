@@ -224,6 +224,10 @@ def _date_sort_key(value: str | None) -> float:
         return float("-inf")
 
 
+# `Speaker 3` from diarisation: a cluster id, not a person's name.
+_DEFAULT_SPEAKER = re.compile(r"^Speaker\s+\d+$", re.IGNORECASE)
+
+
 class IngestSource(ABC):
     """Abstract source of ingest records. Concrete implementations
     read from a local git clone or from the GitHub API."""
@@ -345,7 +349,7 @@ class LocalIngestSource(IngestSource):
 
     def _digested_content_hashes(self) -> set[str]:
         """content_hashes that have a digest. The digest YAML is named by the
-        friendly records/ symlink slug, so walk the symlinks once and only read
+        friendly by-name/ symlink slug, so walk the symlinks once and only read
         a record's frontmatter when its digest actually exists."""
         digested: set[str] = set()
         records_dir = self.store.parent / "by-name"
@@ -466,7 +470,7 @@ class LocalIngestSource(IngestSource):
         return ingests
 
     def _symlink_for_hash(self, full_hash: str) -> Path | None:
-        """Find the records/ symlink pointing at store/{hash}.md, if any."""
+        """Find the by-name/ symlink pointing at store/{hash}.md, if any."""
         records_dir = self.store.parent / "by-name"
         if not records_dir.exists():
             return None
@@ -542,7 +546,7 @@ class LocalIngestSource(IngestSource):
 
     def archive_ingest(self, full_hash: str, user: dict) -> bool:
         """Move a record from store/ to store/v1/, stamp the decision into its
-        frontmatter, and remove its records/ symlink.
+        frontmatter, and remove its by-name/ symlink.
 
         The stamp is not bookkeeping. `store/v1/` means "archived" here and
         "intake queue" to the scheduler's ingest lane, so the folder Mark
@@ -617,6 +621,42 @@ class LocalIngestSource(IngestSource):
             author_email=user.get("email", "workbench@anomalica.com"),
         )
         return True
+
+    def known_speakers(self) -> list[dict]:
+        """Every speaker name the corpus already uses, with how many ingests
+        each appears in.
+
+        Exists so a reviewer naming a speaker can see what they (or a past
+        session) already wrote for the same person. The recurring problem is
+        not misspelling, it is FORMAT - whether a nickname goes in quotes, in
+        brackets, or not at all - and the only cure is showing the existing
+        spelling at the moment the next one is typed.
+
+        Reads the cached frontmatter index, so it costs no file reads beyond
+        the ones the listing already does."""
+        counts: dict[str, int] = {}
+        for _hash, (_path, frontmatter) in self._scan().items():
+            if frontmatter.get("superseded_by"):
+                continue
+            speakers = frontmatter.get("speakers") or []
+            if not isinstance(speakers, list):
+                continue
+            for name in speakers:
+                if not isinstance(name, str):
+                    continue
+                name = name.strip()
+                # `Speaker 3` is a diarisation cluster id, not a person, and
+                # `[irrelevant]` and friends are markers. Neither is a name
+                # anyone should be offered.
+                if not name or name.startswith("[") or _DEFAULT_SPEAKER.match(name):
+                    continue
+                counts[name] = counts.get(name, 0) + 1
+        return [
+            {"name": name, "ingests": n}
+            for name, n in sorted(
+                counts.items(), key=lambda kv: (-kv[1], kv[0].lower())
+            )
+        ]
 
     def list_ingests(self) -> list[dict]:
         ingests: list[dict] = []
@@ -1256,7 +1296,7 @@ class LocalIngestSource(IngestSource):
 
 
 def record_slug(symlink_name: str) -> str:
-    """The digest's name for a record, from its records/ symlink.
+    """The digest's name for a record, from its by-name/ symlink.
 
     The ingester now writes `{slug}.v2.md` alongside the older `{slug}.md`, but
     a digest is still named `{slug}.yaml` - so `Path.stem` yields `{slug}.v2`
@@ -1477,6 +1517,12 @@ def remove_role(login: str, request: Request) -> JSONResponse:
     return JSONResponse({"roles": updated})
 
 
+@app.get("/api/speakers")
+def list_speakers() -> list[dict]:
+    """Speaker names already in use across the corpus, commonest first."""
+    return source.known_speakers()
+
+
 @app.get("/api/ingests")
 def list_ingests() -> list[dict]:
     """Return summary metadata for every available ingest.
@@ -1667,7 +1713,7 @@ def _hash_to_digest_path(full_hash: str) -> Path | None:
     The digester writes per-record YAML at ``digests/<name>.yaml``
     where ``<name>`` is the friendly filename used by the ingester's records/
     symlinks (e.g. ``2024-08-19-ebook-imminent-...``). To bridge the two we
-    walk the ingest records/ symlinks, resolve each to its store/{hash}.md
+    walk the ingest by-name/ symlinks, resolve each to its store/{hash}.md
     target, read the content_hash from frontmatter, and return the matching
     digest path.
     """
@@ -1683,7 +1729,7 @@ def _hash_to_digest_path(full_hash: str) -> Path | None:
             continue
         content_hash = normalise_hash(frontmatter.get("content_hash"))
         if content_hash == full_hash:
-            # The ingester's records/ symlinks carry a version suffix for v2+
+            # The ingester's by-name/ symlinks carry a version suffix for v2+
             # records (``<name>.v2.md`` -> stem ``<name>.v2``), but the digester
             # writes ``<name>.yaml`` with no suffix. Strip it so v2 audio/video
             # records resolve to their digest instead of 404ing.

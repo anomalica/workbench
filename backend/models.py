@@ -108,8 +108,8 @@ def _content_hash(v: dict) -> str:
 
 def _store_dir() -> Path:
     """The ACTIVE record store. Archiving moves a record to store/v1/ and deletes
-    its records/ symlink, so presence here is what "in the active corpus" means -
-    and a name-based lookup through records/ cannot tell you, because the symlink
+    its by-name/ symlink, so presence here is what "in the active corpus" means -
+    and a name-based lookup through by-name/ cannot tell you, because the symlink
     is exactly what archiving removes."""
     return (
         Path(
@@ -187,7 +187,7 @@ def list_comparable() -> list[dict]:
         first = variants[0][1]
         # Archived records are not offered. Mark archived pantex while its
         # variants stayed on disk, so the list kept advertising it and opening it
-        # 404'd - the audit resolves a record by name through records/, and
+        # 404'd - the audit resolves a record by name through by-name/, and
         # archiving deletes that symlink. Choosing a model for a record that has
         # been dropped from the corpus is wasted grading either way.
         if not _is_active(_content_hash(first)):

@@ -172,7 +172,7 @@ def prerender(out: Path | None = None) -> dict:
 
 def _build_digest_map(server) -> dict:
     """{content_hash: digest_yaml_path} for every record with a digest, in one
-    pass over the records/ symlinks (vs _hash_to_digest_path's per-call O(n) walk)."""
+    pass over the by-name/ symlinks (vs _hash_to_digest_path's per-call O(n) walk)."""
     out: dict[str, Path] = {}
     records_dir = server.ingests_path / "by-name"
     if not records_dir.exists():

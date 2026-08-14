@@ -48,7 +48,7 @@ def _variants_repo(tmp_path, monkeypatch, active=True):
 
     The record matters: the comparable list only offers records in the ACTIVE
     corpus, resolved by content hash against store/. Archiving moves a record to
-    store/v1/ and deletes its records/ symlink, so a variants directory can
+    store/v1/ and deletes its by-name/ symlink, so a variants directory can
     outlive the record it is named for - and offering it produces a list entry
     that 404s when opened. `active=False` models that archived state.
     """

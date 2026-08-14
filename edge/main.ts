@@ -140,7 +140,7 @@ function authorOf(user: User): Author {
 }
 
 // The canonical record body file: v2 records keep it in {hash}.v2.md (preferred
-// by the workbench's _scan + records/ symlink), else {hash}.md. Reviews write it
+// by the workbench's _scan + by-name/ symlink), else {hash}.md. Reviews write it
 // and the history reads it.
 async function resolveBodyPath(env: Env, deps: Deps, hash: string): Promise<string> {
   const v2 = `store/${hash}.v2.md`;
