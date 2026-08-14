@@ -395,6 +395,56 @@
     return `Marked irrelevant - not sent for extraction:\n\n${out.join(" ").trim()}`;
   }
 
+  /** The transcript as a flat list of blocks, where a quoted region is ONE
+   *  block containing whatever it covers - including the speaker changes
+   *  inside it.
+   *
+   *  Grouping per turn could never do this: a clip that runs from the middle of
+   *  one turn, through a whole answer by someone else, into the start of a
+   *  third is one quotation, and drawing it as three stacked blocks with three
+   *  headers said it was three. The speakers inside it become labels within the
+   *  block rather than turns of their own. */
+  let renderBlocks = $derived.by(() => {
+    type Item = { speaker: string | null; seg: ReturnType<typeof turnSegments>[number] };
+    type Block =
+      | { kind: "turn"; key: string; turn: (typeof turns)[number]; segs: ReturnType<typeof turnSegments> }
+      | { kind: "external"; key: string; external: WordExternal; items: Item[] };
+    const out: Block[] = [];
+    let open: Extract<Block, { kind: "external" }> | null = null;
+
+    for (const turn of turns) {
+      const segs = turnSegments(turn);
+      let ownSegs: typeof segs = [];
+      const flushTurn = () => {
+        if (ownSegs.length === 0) return;
+        out.push({ kind: "turn", key: `t${turn.lead.startWord}-${ownSegs[0].key}`, turn, segs: ownSegs });
+        ownSegs = [];
+      };
+      let lastSpeakerShown: string | null = null;
+      for (const seg of segs) {
+        if (seg.kind === "external") {
+          flushTurn();
+          if (!open || open.external.id !== seg.external.id) {
+            open = { kind: "external", key: `x${seg.external.id}`, external: seg.external, items: [] };
+            out.push(open);
+            lastSpeakerShown = null;
+          }
+          // Name the voice only when it changes, so a clip that stays with one
+          // person does not repeat their name every paragraph.
+          const label: string | null =
+            turn.lead.speaker !== lastSpeakerShown ? turn.lead.speaker : null;
+          if (label) lastSpeakerShown = label;
+          open.items.push({ speaker: label, seg });
+          continue;
+        }
+        open = null;
+        ownSegs.push(seg);
+      }
+      flushTurn();
+    }
+    return out;
+  });
+
   let externalAtSelection = $derived.by(() => {
     const r = range;
     if (!r) return null;
@@ -2455,7 +2505,45 @@
         observe some of it first.
       </p>
     {/if}
-    {#each turns as turn (turn.lead.startWord)}
+    {#each renderBlocks as block (block.key)}
+      {#if block.kind === "external"}
+        <!-- ONE quotation: one rule, one header, one strip - with the voices
+             inside it as labels rather than as turns of their own, because a
+             clip that cuts between two people is still one clip. -->
+        <div class="wt-quoted-turn border-b border-border/50 px-4 py-2">
+          <div class="group/ext flex items-center gap-2 pb-1 text-[11px] font-ui">
+            <span class="text-on-surface-muted/50 uppercase tracking-wide flex-none">External</span>
+            {#if block.external.description}
+              <span class="text-on-surface-muted/80 truncate">{block.external.description}</span>
+            {:else if block.external.target}
+              <span class="text-on-surface-muted/80 truncate">a record in this corpus</span>
+            {:else}
+              <span class="text-warning/70 italic truncate">no source noted</span>
+            {/if}
+            <span class="flex-1"></span>
+            <button
+              onclick={() => onexternaledit?.(block.external.id)}
+              class="flex-none px-1 rounded cursor-pointer text-on-surface-muted/60 hover:text-primary opacity-0 group-hover/ext:opacity-100 transition-opacity"
+              title="Change where this came from">edit</button>
+            <button
+              onclick={() => onexternalremove?.(block.external.id)}
+              class="flex-none px-1 rounded cursor-pointer text-on-surface-muted/60 hover:text-error opacity-0 group-hover/ext:opacity-100 transition-opacity"
+              title="These words are this recording's own after all">remove</button>
+          </div>
+          {#each block.items as item, i (i)}
+            {#if item.speaker}
+              <div class="flex items-center gap-2 pt-1 text-xs font-ui text-on-surface-muted/70">
+                <span class="flex-none w-2.5 h-2.5 rounded-full border border-current opacity-40" aria-hidden="true"></span>
+                {item.speaker}
+              </div>
+            {/if}
+            {#if item.seg.kind === "external"}
+              <p class="pl-4 text-sm leading-[1.75]">{@render wordSpans(item.seg.gs)}</p>
+            {/if}
+          {/each}
+        </div>
+      {:else}
+        {@const turn = block.turn}
       {@const run = turn.lead}
       {@const quotedLabel = quotedRuns.has(run.startWord)}
       {@const opensExternal = externalOpensAt.get(run.startWord)}
@@ -2584,7 +2672,7 @@
              stepped out with its own header, then the text resuming. Painting
              the words differently was never enough - the reviewer could not see
              where the clip began or what it was. -->
-        {#each turnSegments(turn) as seg (seg.key)}
+        {#each block.segs as seg (seg.key)}
           {#if seg.kind === "external"}
             {@const opens = seg.gs[0] === seg.external.fromWord}
             {@const closes = seg.gs[seg.gs.length - 1] === seg.external.toWord}
@@ -2633,6 +2721,7 @@
           {/if}
         {/each}
       </div>
+      {/if}
     {/each}
   </div>
 
