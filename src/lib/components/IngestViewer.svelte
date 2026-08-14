@@ -73,6 +73,7 @@
     hasNext = false,
     hasPrev = false,
     onnext,
+    onopenrecord,
     onprev,
     onreviewedchange,
     onback,
@@ -92,6 +93,8 @@
     hasNext?: boolean;
     hasPrev?: boolean;
     onnext?: () => void;
+    /** Open another record by content hash - following a cross-record link. */
+    onopenrecord?: (contentHash: string) => void;
     onprev?: () => void;
     onreviewedchange?: (hash: string, reviewed: boolean) => void;
     onback: () => void;
@@ -4317,6 +4320,8 @@
             }}
             onlinksource={openLinkPicker}
             linkTitles={linkTitles}
+            onlinkopen={(target) => onopenrecord?.(target.replace(/^sha256:/, ""))}
+            onlinkremove={(id) => doc.removeWordLink(id)}
             onpause={() => {
               // A markup drag pauses playback in place - no seek, just stop, so
               // the reviewer can line up a highlight without audio running on.

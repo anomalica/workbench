@@ -93,6 +93,8 @@
     onhighlightcontextremove,
     onselectiontext,
     onlinksource,
+    onlinkopen,
+    onlinkremove,
     linkTitles,
     onseek,
     onpause,
@@ -209,6 +211,9 @@
      *  its record picker (this component has no record list) and calls
      *  doc.addWordLink on confirm. Markup-mode action. */
     onlinksource?: (from: number, to: number) => void;
+    /** Open the linked record. */
+    onlinkopen?: (target: string) => void;
+    onlinkremove?: (id: string) => void;
     /** Titles of the records this one links to, by content hash. A link is
      *  stored as a hash, which tells the reviewer nothing on its own - without
      *  a title the underline says "this refers to something" and stops. */
@@ -288,6 +293,15 @@
     const s = new Set<number>();
     for (const l of parsed.links) for (let g = l.fromWord; g <= l.toWord; g++) s.add(g);
     return s;
+  });
+
+  /** The link the current selection sits on, if any - what "open it", "change
+   *  it" and "remove it" act upon. A link is authored from a selection, so it
+   *  is edited from one too, rather than needing a second gesture to learn. */
+  let linkAtSelection = $derived.by(() => {
+    const r = range;
+    if (!r) return null;
+    return parsed.links.find((l) => l.fromWord <= r.to && l.toWord >= r.from) ?? null;
   });
 
   /** What each linked word points at, for its tooltip. Falls back to the hash
@@ -1987,7 +2001,47 @@
               d="M4 5.5A1.5 1.5 0 015.5 4h13A1.5 1.5 0 0120 5.5v9a1.5 1.5 0 01-1.5 1.5H9l-5 4V5.5zM8 8h8M8 11.5h5" />
           </svg>
         </button>
-        {#if onlinksource}
+        {#if linkAtSelection}
+          <!-- These words are ALREADY linked, so the bar stops offering to
+               link them and offers what can be done with the link instead:
+               follow it, point it somewhere else, or take it off. Editing from
+               the same selection that authored it means there is no second
+               gesture to learn. -->
+          <span class="text-on-surface-muted/60 text-xs" aria-hidden="true">/</span>
+          <button
+            onclick={() => onlinkopen?.(linkAtSelection.target)}
+            aria-label="Open the linked record"
+            class="text-primary cursor-pointer p-1 rounded hover:bg-primary/10 transition-colors"
+            title={linkLabelByWord.get(linkAtSelection.fromWord) ?? "Open the linked record"}
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round"
+                d="M14 4h6v6M20 4l-8.5 8.5M18 14v5.5A1.5 1.5 0 0116.5 21h-11A1.5 1.5 0 014 19.5v-11A1.5 1.5 0 015.5 7H11" />
+            </svg>
+          </button>
+          <button
+            onclick={() => { if (range) { onlinksource?.(range.from, range.to); clearSelection(); } }}
+            aria-label="Change the linked record"
+            class="text-primary cursor-pointer p-1 rounded hover:bg-primary/10 transition-colors"
+            title="Point these words at a different record"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round"
+                d="M16.86 3.99a1.88 1.88 0 012.66 2.65L7.6 18.56l-3.54.89.89-3.54L16.86 3.99z" />
+            </svg>
+          </button>
+          <button
+            onclick={() => { onlinkremove?.(linkAtSelection.id); clearSelection(); }}
+            aria-label="Remove the link"
+            class="text-on-surface-muted hover:text-error cursor-pointer p-1 rounded hover:bg-error/10 transition-colors"
+            title="Remove this link - the words stay, the reference goes"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round"
+                d="M10.5 13.5a4 4 0 005.66 0l2-2M13.5 10.5a4 4 0 00-5.66 0l-2 2M4 4l16 16" />
+            </svg>
+          </button>
+        {:else if onlinksource}
           <!-- A source reference IS a note - a note whose body is another
                record rather than typed text - so it sits with Note rather than
                as a separate verb in the bar. -->
@@ -1996,7 +2050,7 @@
             onclick={() => { if (range) { onlinksource?.(range.from, range.to); clearSelection(); } }}
             aria-label="Link to a source"
             class="text-primary cursor-pointer p-1 rounded hover:bg-primary/10 transition-colors"
-            title="A note whose body is another record: these words refer to an ingested source - link them to it (optionally to an exact passage in it)"
+            title="A note whose body is another record: these words refer to an ingested source - link them to it"
           >
             <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
               <path stroke-linecap="round" stroke-linejoin="round"
