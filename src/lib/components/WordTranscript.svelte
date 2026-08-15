@@ -2087,25 +2087,18 @@
      checked. Rendered INSIDE the sentence - a book before the title, a cross
      after it - because the title is already the prose, and a card on its own
      line broke the paragraph in half to repeat what the underline says. -->
-{#snippet citedWorkOpen(text: string)}
-  <span
-    class="inline-flex items-center align-baseline mr-1 px-1 py-0.5 rounded cursor-help
-      bg-surface-alt text-on-surface-muted/70"
-    title={text.replace(/^unheld source \(book\):\s*/, "")}
+{#snippet citedWorkOpen(id: string, text: string)}
+  <button
+    onclick={() => startSpanNoteEdit(id, text)}
+    class="inline-flex items-center align-baseline mr-1 cursor-pointer
+      text-on-surface-muted/45 hover:text-primary"
+    title="{text.replace(/^unheld source \(book\):\s*/, '')} - click to change or remove"
   >
     <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
       <path stroke-linecap="round" stroke-linejoin="round" d="M4 5.5A1.5 1.5 0 015.5 4H19v14H5.5A1.5 1.5 0 004 19.5v-14zM19 18v2H5.5" />
     </svg>
-  </span>
+  </button>
 {/snippet}
-
-{#snippet citedWorkClose(id: string)}<button
-    onclick={() => onspannoteremove?.(id)}
-    class="inline-flex items-center align-baseline ml-1 px-1 py-0.5 rounded cursor-pointer
-      bg-surface-alt text-on-surface-muted/50 hover:text-error"
-    title="Remove this cited work"
-    aria-label="Remove this cited work"
-  ><svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" d="M6 18L18 6M6 6l12 12" /></svg></button>{/snippet}
 
 {#snippet spanNoteCard(id: string, text: string, count: number)}
   <span
@@ -2838,7 +2831,7 @@
 </div>
 
 {#snippet wordSpans(gs: number[])}
-          {#each gs as g (g)}{#each citedStartingAt.get(g) ?? [] as sn (sn.id)}{@render citedWorkOpen(sn.text)}{/each}<span
+          {#each gs as g (g)}{#each citedStartingAt.get(g) ?? [] as sn (sn.id)}{@render citedWorkOpen(sn.id, sn.text)}{/each}<span
               data-word-index={g}
               class="wt-word">{words[g].text}</span>{" "}
             <!-- Committed event notes on this word: first-class annotation
@@ -2999,9 +2992,11 @@
             <!-- Span notes starting at this word: free text over a word range,
                  shown as a card at the range's first word. The tinted words
                  (.wt-spannote) show its extent. -->
-            {#each spanNotesEndingAt.get(g) ?? [] as sn (sn.id)}{@render citedWorkClose(sn.id)}{/each}
             {#each spanNotesByStartWord.get(g) ?? [] as sn (sn.id)}
-              {#if !sn.text.startsWith("unheld source (book):")}
+              <!-- A cited work shows only its book in the prose; the card
+                   appears while it is being edited, which is where changing or
+                   clearing it happens. -->
+              {#if !sn.text.startsWith("unheld source (book):") || editingSpanNoteId === sn.id}
                 {@render spanNoteCard(sn.id, sn.text, sn.toWord - sn.fromWord + 1)}
               {/if}
             {/each}
