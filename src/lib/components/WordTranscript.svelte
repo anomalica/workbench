@@ -2196,6 +2196,21 @@
             onclick={() => (editingSpanNoteId = null)}
             class="text-xs font-ui text-on-surface-muted cursor-pointer hover:text-on-surface"
           >Close</button>
+          <span class="flex-1"></span>
+          <!-- Deleting was "clear the box and save", which only the placeholder
+               told you. The same bin the cited-work form has, in the same
+               place, so one gesture works on both. -->
+          <button
+            onmousedown={(e) => e.preventDefault()}
+            onclick={() => { editingSpanNoteId = null; onspannoteremove?.(id); }}
+            class="p-1 rounded cursor-pointer text-error/70 hover:text-error hover:bg-error/10"
+            title="Delete this note"
+            aria-label="Delete this note"
+          >
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 7h16M9 7V5.5A1.5 1.5 0 0110.5 4h3A1.5 1.5 0 0115 5.5V7M6 7l1 13h10l1-13M10 11v6M14 11v6" />
+            </svg>
+          </button>
         </span>
       </span>
     {:else}
