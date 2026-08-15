@@ -48,6 +48,11 @@ function props(over: Record<string, unknown> = {}) {
     storageKey: "workbench:observed:markup-pointer-test",
     serverObserved: [],
     currentTime: 0,
+    // Every test here but the hold one is asserting CLICK behaviour, and the
+    // suite's own scheduling can put 400ms between a press and its release -
+    // which used to turn those clicks into holds and made the file fail at
+    // random. The gesture is stated, not timed.
+    holdMs: 1_000_000,
     onreassign: () => {},
     ...over,
   };
@@ -245,15 +250,15 @@ describe("holding a word, without dragging", () => {
   });
 
   it("pauses and stays paused when the press is held", async () => {
+    // holdMs 0: every release is a hold, which is the gesture under test.
     // A drag pauses because the reviewer is selecting. A hold means the same
     // thing without the movement - they want the audio to stop - so releasing
     // must not play from that word and undo it.
     const onseek = vi.fn();
     const onpause = vi.fn();
-    render(WordTranscript, { props: props({ onseek, onpause }) });
+    render(WordTranscript, { props: props({ onseek, onpause, holdMs: 0 }) });
     await settle();
     await fireEvent.pointerDown(word(2), { button: 0, clientX: 100, clientY: 100 });
-    await new Promise((r) => setTimeout(r, 420));
     await fireEvent.pointerUp(window, { button: 0, clientX: 100, clientY: 100 });
     await settle();
     expect(onpause).toHaveBeenCalledTimes(1);

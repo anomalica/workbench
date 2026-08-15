@@ -100,6 +100,7 @@
     onexternalremove,
     onexternaledit,
     linkTitles,
+    holdMs = 350,
     onseek,
     onpause,
     onplayceiling,
@@ -227,6 +228,11 @@
      *  stored as a hash, which tells the reviewer nothing on its own - without
      *  a title the underline says "this refers to something" and stops. */
     linkTitles?: Map<string, string>;
+    /** How long a press has to last to count as a hold rather than a click.
+     *  A prop so a test can state which gesture it is making instead of
+     *  racing the clock - the suite's own scheduling was deciding it, and the
+     *  same test passed alone and failed in the run. */
+    holdMs?: number;
     /** While the selection editor is open, playback must not run past the
      *  selection. Reports the ceiling in seconds - the start of the word AFTER
      *  the selection, the one timestamp the editor refuses to move - or null
@@ -1814,7 +1820,11 @@
     const pickingContext = contextFor !== null;
     selectWord(g, false);
     dragging = true;
-    pressedAt = performance.now();
+    // The EVENT's clock, not the wall clock: the gap that matters is between
+    // the press and the release, and measuring it with performance.now() also
+    // measured however long the machine took to get round to the handler - so
+    // a quick click on a busy machine read as a hold.
+    pressedAt = e.timeStamp || performance.now();
     pressOrigin = { x: e.clientX, y: e.clientY };
     if (!selectOnly && !pickingContext && onseek && words[g]) {
       // Playback is deferred to pointerup so a drag can cancel it: a bare click
@@ -1868,10 +1878,10 @@
    *  or looking at something - and playing on release would undo the one thing
    *  they asked for. Same outcome as a drag, without having to move. */
   let pressedAt = 0;
-  const HOLD_MS = 350;
 
-  function stopDrag() {
-    const held = pressedAt > 0 && performance.now() - pressedAt >= HOLD_MS;
+  function stopDrag(e?: PointerEvent) {
+    const now = e?.timeStamp || performance.now();
+    const held = pressedAt > 0 && now - pressedAt >= holdMs;
     pausedForDrag = false;
     pressedAt = 0;
     if (pendingSeek !== null) {
