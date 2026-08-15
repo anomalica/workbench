@@ -690,6 +690,15 @@
             bind:value={editingDescription.text}
             rows="5"
             autofocus
+            onkeydown={(e) => {
+              // Ctrl/Cmd-Enter saves an image description too: it is a note by
+              // another name, and reaching for the mouse to keep one sentence
+              // is what makes describing images not worth doing.
+              if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                saveDescription();
+              }
+            }}
             placeholder="e.g. Tweet by @user, 3 May 2023: The Pentagon confirmed the 2004 Nimitz object remains unidentified."
             class="w-full rounded border border-border bg-surface-alt px-3 py-2 text-sm text-on-surface
               placeholder:text-on-surface-muted focus:outline-none focus:ring-1 focus:ring-primary resize-y"

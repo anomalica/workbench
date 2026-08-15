@@ -1189,6 +1189,16 @@
   }
 
   /** Commit the compose draft to a real span note (no-op on empty text). */
+  /** Ctrl/Cmd-Enter saves whatever note is being written.
+   *
+   *  A plain Enter has to stay a newline - a note about what is on screen often
+   *  runs to two lines - and Escape reads as "throw this away" even where it
+   *  saves. So the deliberate save gets the shortcut every editor uses for it,
+   *  and the reviewer never has to reach for the mouse to keep two words. */
+  function isSaveKey(e: KeyboardEvent): boolean {
+    return e.key === "Enter" && (e.ctrlKey || e.metaKey);
+  }
+
   function commitSpanNote() {
     const c = composeSpanNote;
     composeSpanNote = null;
@@ -2043,7 +2053,11 @@
           bind:this={spanNoteInputEl}
           bind:value={editingSpanNoteText}
           onblur={() => saveSpanNoteEdit(id)}
-          onkeydown={(e) => { blockBrackets(e); if (e.key === "Escape") { e.preventDefault(); saveSpanNoteEdit(id); } }}
+          onkeydown={(e) => {
+            blockBrackets(e);
+            if (isSaveKey(e)) { e.preventDefault(); saveSpanNoteEdit(id); return; }
+            if (e.key === "Escape") { e.preventDefault(); saveSpanNoteEdit(id); }
+          }}
           rows="2"
           placeholder="What the words miss here - on-screen text, an image, context... (empty removes the note)"
           class="w-full bg-surface border border-primary rounded px-1.5 py-1 text-xs text-on-surface outline-none resize-y"
@@ -2095,6 +2109,7 @@
         onblur={commitSpanNote}
         onkeydown={(e) => {
           blockBrackets(e);
+          if (isSaveKey(e)) { e.preventDefault(); commitSpanNote(); return; }
           if (e.key === "Escape") { e.preventDefault(); cancelSpanNote(); }
         }}
         rows="2"

@@ -172,7 +172,10 @@
         class="w-80 text-xs font-ui bg-surface border border-border rounded px-2 py-1
           text-on-surface placeholder:text-on-surface-muted resize-none"
         onkeydown={(e) => {
-          if (e.key === "Enter" && !e.shiftKey) {
+          // Ctrl/Cmd-Enter saves, and plain Enter does too here because this
+          // note is a single line by design - but the shortcut works either
+          // way, so it is the same keystroke as everywhere else.
+          if (e.key === "Enter" && (!e.shiftKey || e.ctrlKey || e.metaKey)) {
             e.preventDefault();
             saveNote();
           }
