@@ -252,6 +252,7 @@
     // with nothing to search. Typing a title that plainly exists returned
     // nothing, which reads as a broken search rather than an unloaded list.
     void loadAllRecords();
+    externalEditing = true;
     doc.removeWordExternal(id);
     externalPicker = { from: e.fromWord, to: e.toWord };
     externalWhere = e.target
@@ -1481,12 +1482,18 @@
    *  the original often exists only inside this video. */
   let externalPicker = $state<{ from: number; to: number } | null>(null);
   let externalWhere = $state("");
+  /** True when the dialog was opened on an EXISTING passage. The words are
+   *  already marked; what is being changed is where they came from, and a
+   *  button reading "set as external" invites the reviewer to wonder what it
+   *  is about to set. */
+  let externalEditing = $state(false);
   let externalTargetHash = $state<string | null>(null);
 
   async function openExternalPicker(from: number, to: number) {
     externalPicker = { from, to };
     externalWhere = "";
     externalTargetHash = null;
+    externalEditing = false;
     await loadAllRecords();
   }
 
@@ -3448,6 +3455,7 @@
         <input
           type="text"
           bind:value={linkSearch}
+          autocomplete="off"
           placeholder="Search records by title or creator..."
           class="w-full px-3 py-1.5 mb-2 text-sm bg-surface-alt border border-border rounded outline-none focus:border-primary"
         />
@@ -3506,13 +3514,15 @@
               <input
                 type="text"
                 bind:value={wantedTitle}
-                placeholder="Book title"
+                autocomplete="off"
+          placeholder="Book title"
                 class="w-full px-3 py-1.5 text-sm bg-surface-alt border border-border rounded outline-none focus:border-primary"
               />
               <input
                 type="text"
                 bind:value={wantedAuthor}
-                placeholder="Author (optional)"
+                autocomplete="off"
+          placeholder="Author (optional)"
                 class="w-full px-3 py-1.5 text-sm bg-surface-alt border border-border rounded outline-none focus:border-primary"
                 onkeydown={(e) => { if (e.key === "Enter") { e.preventDefault(); saveWanted(); } }}
               />
@@ -3576,7 +3586,9 @@
       tabindex="-1"
     >
       <div class="bg-surface rounded-lg shadow-lg max-w-lg w-full p-6">
-        <h3 class="font-ui font-semibold text-on-surface mb-1">Set as external content</h3>
+        <h3 class="font-ui font-semibold text-on-surface mb-1">
+          {externalEditing ? "Where is this clip from?" : "Set as external content"}
+        </h3>
         <p class="text-xs text-on-surface-muted mb-4">
           These words are not this speaker's own - a clip played here, or a
           passage read out from somewhere else. The name on the turn stays as
@@ -3590,6 +3602,7 @@
           id="external-where"
           type="text"
           bind:value={externalWhere}
+          autocomplete="off"
           placeholder="A programme name, a YouTube link, a record id - or search this corpus"
           class="w-full px-3 py-1.5 text-sm bg-surface-alt border border-border rounded outline-none focus:border-primary"
         />
@@ -3607,7 +3620,7 @@
             <button
               onclick={() => { externalTargetHash = null; externalWhere = ""; }}
               class="text-on-surface-muted hover:text-error cursor-pointer flex-none"
-            >change</button>
+            >pick another</button>
           </p>
         {:else if externalHashTyped}
           <p class="mt-2 text-xs text-on-surface-muted">
@@ -3622,7 +3635,10 @@
             {#each externalChoices as r (r.content_hash)}
               <li>
                 <button
-                  onclick={() => { externalTargetHash = r.content_hash; }}
+                  onclick={() => {
+                    externalTargetHash = r.content_hash;
+                    externalWhere = r.title;
+                  }}
                   class="w-full text-left px-3 py-1.5 text-xs cursor-pointer hover:bg-primary-container/30 border-b border-border last:border-b-0"
                 >
                   <span class="block text-on-surface truncate">{r.title}</span>
@@ -3641,7 +3657,7 @@
           <button
             onclick={confirmExternal}
             class="px-3 py-1.5 text-sm font-ui font-medium rounded bg-primary text-on-primary cursor-pointer hover:opacity-90"
-          >Set as external</button>
+          >{externalEditing ? "Save source" : "Set as external"}</button>
         </div>
       </div>
     </div>
@@ -3666,6 +3682,7 @@
         <input
           id="cited-title"
           type="text"
+          autocomplete="off"
           bind:value={citedEdit.title}
           class="w-full px-3 py-1.5 mb-3 text-sm bg-surface-alt border border-border rounded outline-none focus:border-primary"
         />
@@ -3673,6 +3690,7 @@
         <input
           id="cited-author"
           type="text"
+          autocomplete="off"
           bind:value={citedEdit.author}
           onkeydown={(e) => { if (e.key === "Enter") { e.preventDefault(); saveCitedEdit(); } }}
           class="w-full px-3 py-1.5 mb-5 text-sm bg-surface-alt border border-border rounded outline-none focus:border-primary"
