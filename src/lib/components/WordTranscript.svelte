@@ -447,6 +447,24 @@
 
   /** Words covered by a cited-work note, which render as an underlined title
    *  rather than as annotated prose. */
+  let citedStartingAt = $derived.by(() => {
+    const m = new Map<number, typeof parsed.spanNotes>();
+    for (const n of parsed.spanNotes) {
+      if (!n.text.startsWith("unheld source (book):")) continue;
+      m.set(n.fromWord, [...(m.get(n.fromWord) ?? []), n]);
+    }
+    return m;
+  });
+
+  let spanNotesEndingAt = $derived.by(() => {
+    const m = new Map<number, typeof parsed.spanNotes>();
+    for (const n of parsed.spanNotes) {
+      if (!n.text.startsWith("unheld source (book):")) continue;
+      m.set(n.toWord, [...(m.get(n.toWord) ?? []), n]);
+    }
+    return m;
+  });
+
   let citedWorkWords = $derived.by(() => {
     const set = new Set<number>();
     for (const n of parsed.spanNotes) {
@@ -2066,30 +2084,28 @@
      context, not an in-flow beat. -->
 <!-- A work the speaker named that the corpus does not hold. INFRASTRUCTURE,
      not domain: it says nothing about the subject, only about what can be
-     checked - so it must not look like a note, which is always about what the
-     words miss. A line of type with a book on it, not a card. -->
-{#snippet citedWorkCard(id: string, text: string)}
+     checked. Rendered INSIDE the sentence - a book before the title, a cross
+     after it - because the title is already the prose, and a card on its own
+     line broke the paragraph in half to repeat what the underline says. -->
+{#snippet citedWorkOpen(text: string)}
   <span
-    style="display:flex"
-    class="my-1 items-center gap-1.5 text-xs text-on-surface-muted/80 not-italic"
+    class="inline-flex items-center align-baseline mr-1 px-1 py-0.5 rounded cursor-help
+      bg-surface-alt text-on-surface-muted/70"
+    title={text.replace(/^unheld source \(book\):\s*/, "")}
   >
-    <svg class="w-3.5 h-3.5 flex-none opacity-70" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
+    <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
       <path stroke-linecap="round" stroke-linejoin="round" d="M4 5.5A1.5 1.5 0 015.5 4H19v14H5.5A1.5 1.5 0 004 19.5v-14zM19 18v2H5.5" />
     </svg>
-    <span class="flex-1 min-w-0 truncate">{text.replace(/^unheld source \(book\):\s*/, "")}</span>
-    <span class="flex-none text-[10px] uppercase tracking-wide text-on-surface-muted/40">not held</span>
-    <button
-      onclick={() => onspannoteremove?.(id)}
-      class="flex-none p-0.5 rounded cursor-pointer text-on-surface-muted/50 hover:text-error"
-      title="Remove this cited work"
-      aria-label="Remove this cited work"
-    >
-      <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
-      </svg>
-    </button>
   </span>
 {/snippet}
+
+{#snippet citedWorkClose(id: string)}<button
+    onclick={() => onspannoteremove?.(id)}
+    class="inline-flex items-center align-baseline ml-1 px-1 py-0.5 rounded cursor-pointer
+      bg-surface-alt text-on-surface-muted/50 hover:text-error"
+    title="Remove this cited work"
+    aria-label="Remove this cited work"
+  ><svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" d="M6 18L18 6M6 6l12 12" /></svg></button>{/snippet}
 
 {#snippet spanNoteCard(id: string, text: string, count: number)}
   <span
@@ -2822,7 +2838,7 @@
 </div>
 
 {#snippet wordSpans(gs: number[])}
-          {#each gs as g (g)}<span
+          {#each gs as g (g)}{#each citedStartingAt.get(g) ?? [] as sn (sn.id)}{@render citedWorkOpen(sn.text)}{/each}<span
               data-word-index={g}
               class="wt-word">{words[g].text}</span>{" "}
             <!-- Committed event notes on this word: first-class annotation
@@ -2983,10 +2999,9 @@
             <!-- Span notes starting at this word: free text over a word range,
                  shown as a card at the range's first word. The tinted words
                  (.wt-spannote) show its extent. -->
+            {#each spanNotesEndingAt.get(g) ?? [] as sn (sn.id)}{@render citedWorkClose(sn.id)}{/each}
             {#each spanNotesByStartWord.get(g) ?? [] as sn (sn.id)}
-              {#if sn.text.startsWith("unheld source (book):")}
-                {@render citedWorkCard(sn.id, sn.text)}
-              {:else}
+              {#if !sn.text.startsWith("unheld source (book):")}
                 {@render spanNoteCard(sn.id, sn.text, sn.toWord - sn.fromWord + 1)}
               {/if}
             {/each}

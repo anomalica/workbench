@@ -78,9 +78,13 @@ body {
 /* A work the speaker named: underlined like a title, not tinted like an
    annotation. The tint says "a reviewer wrote something about this stretch";
    this stretch IS the thing. */
+/* Underline, not a background. A pill has to be ONE element to look like one,
+   and a word run is many - the gaps between the words fall outside every span,
+   so a shared ground comes out striped. Grouping the run into a single wrapper
+   is the fix and is a change to how words render, not to how they are painted;
+   until then the title is underlined, which needs no continuous surface. */
 .wt-word.wt-cited {
   text-decoration: underline;
-  text-decoration-style: solid;
   text-decoration-thickness: 1px;
   text-underline-offset: 3px;
   text-decoration-color: color-mix(in srgb, var(--color-on-surface) 35%, transparent);
