@@ -204,27 +204,28 @@ export function secondsToTimecode(s: number): string {
   return `${pad(h)}:${pad(m)}:${pad(sec)}.${tenth}`;
 }
 
+// Ordered so that CONSECUTIVE entries contrast: hue jumps roughly across the
+// wheel each step, so the first two speakers in a record - which is most
+// records - are never near-neighbours. The old list ran teal, orange, green,
+// purple, red... and paired with a hash that could land two speakers on
+// `#7B4DAA` and `#6E4A8B`, which is two purples.
 const SPEAKER_COLOURS = [
-  "#0B6E6E",
-  "#B35A28",
-  "#2D7D46",
-  "#7B4DAA",
-  "#C4543B",
-  "#3B7FC4",
-  "#8B6914",
-  "#C44B8B",
-  "#4A8B6E",
-  "#6E4A8B",
-  "#8B4A6E",
-  "#4A6E8B",
-  "#6E8B4A",
-  "#8B6E4A",
-  "#4A8B8B",
-  "#8B4A4A",
+  "#0B6E6E", // teal
+  "#B35A28", // burnt orange
+  "#3B7FC4", // blue
+  "#C44B8B", // magenta
+  "#2D7D46", // green
+  "#7B4DAA", // purple
+  "#8B6914", // ochre
+  "#C4543B", // red
+  "#4A8B6E", // sea green
+  "#6E4A8B", // violet
+  "#8B4A6E", // plum
+  "#4A6E8B", // steel
+  "#6E8B4A", // olive
+  "#8B6E4A", // tan
 ];
 
-/** Deterministic colour for a speaker name. Uses a simple string hash
- *  so that renamed speakers get a consistent but distinct colour. */
 export function speakerColour(speaker: string): string {
   let hash = 0;
   for (let i = 0; i < speaker.length; i++) {

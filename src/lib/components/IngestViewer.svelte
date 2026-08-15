@@ -41,6 +41,7 @@
   import { savePlayhead, loadPlayhead, shouldPersist } from "$lib/playhead";
   import type { Segment } from "$lib/transcript";
   import SpeakerManager from "./SpeakerManager.svelte";
+  import { setSpeakerOrder } from "$lib/speaker-colour.svelte";
   import SplitEditor from "./SplitEditor.svelte";
   import EditSegmentDialog from "./EditSegmentDialog.svelte";
   import SpeakerDot from "./SpeakerDot.svelte";
@@ -257,6 +258,14 @@
   let quotedSpeakerRows = $derived(
     parsedWords ? quotedSpeakerCounts(parsedWords.runs, parsedWords.externals) : [],
   );
+
+  // Colour by order of appearance in THIS record, so the first two speakers are
+  // always the two most different colours rather than two rolls of a hash.
+  $effect(() => {
+    const rows = wordSpeakerRows ?? [];
+    const quoted = quotedSpeakerRows;
+    setSpeakerOrder([...rows.map((r) => r.id), ...quoted.map((r) => r.id)]);
+  });
   // Latest observation verdict reported by the word editor (word-index spans +
   // coverage fraction + digestible + total words), persisted on review submit.
   let wordVerdict = $state<{
@@ -350,6 +359,11 @@
   // Markup list navigation: clicking a mark scrolls the transcript to its word
   // range and flashes it; `seq` re-triggers a repeat click. `focusedMarkId`
   // highlights the active row in the list.
+  /** Show quoted passages only: everything the record itself said is hidden and
+   *  what it quoted remains. The one view the speaker filter could not express,
+   *  because a clip is a property of a PASSAGE, not of who is speaking. */
+  let externalOnly = $state(false);
+
   let markupFocus = $state<{ from: number; to: number; seq: number } | null>(null);
   let focusedMarkId = $state<string | null>(null);
   let markupFocusSeq = 0;
@@ -364,6 +378,24 @@
     markupFocusSeq += 1;
     markupFocus = { from, to, seq: markupFocusSeq };
     focusedMarkId = id;
+  }
+
+  /** Take the reviewer to a quoted voice: the first run they speak inside an
+   *  external passage, scrolled to and cued for playback. Filtering to them
+   *  re-rendered the whole transcript and landed nowhere, which is what made
+   *  clicking the row feel like a hang. */
+  function goToQuotedVoice(speaker: string) {
+    const parsed = parsedWords;
+    if (!parsed) return;
+    const run = parsed.runs.find(
+      (r) =>
+        r.speaker === speaker &&
+        parsed.externals.some((e) => r.startWord >= e.fromWord && r.endWord <= e.toWord),
+    );
+    if (!run) return;
+    focusMark(run.startWord, run.endWord, `quoted:${speaker}`);
+    const word = parsed.words[run.startWord];
+    if (word) mediaSeek(Math.max(0, word.start), false);
   }
 
   function clearMarkFocus() {
@@ -3844,6 +3876,9 @@
             {segments}
             rows={wordSpeakerRows}
             externalRows={quotedSpeakerRows}
+            onexternalgo={goToQuotedVoice}
+            {externalOnly}
+            onexternalonly={(on) => (externalOnly = on)}
             {namedSpeakers}
             {selectedSpeakers}
             {filteredSpeakers}
@@ -4675,6 +4710,7 @@
             onexternalremove={(id) => doc.removeWordExternal(id)}
             onexternaledit={editExternal}
             oncitededit={openCitedEdit}
+            {externalOnly}
             onlinkremove={(id) => doc.removeWordLink(id)}
             onpause={() => {
               // A markup drag pauses playback in place - no seek, just stop, so

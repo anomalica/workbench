@@ -114,10 +114,28 @@ class SyncManager:
             self.checked_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             return self.status()
 
+    def on_default_branch(self) -> bool:
+        """Whether this clone is on the branch the watcher will push."""
+        branch = self._run("symbolic-ref", "--short", "HEAD").stdout.strip()
+        if not branch:
+            return True
+        head = self._run(
+            "symbolic-ref", "--short", "refs/remotes/origin/HEAD"
+        ).stdout.strip()
+        default = head.rsplit("/", 1)[-1] if head else "main"
+        return branch == default
+
     def wait_for_push(self, timeout_seconds: float = 12.0) -> tuple[bool, str]:
         """Observe the auto-push watcher landing local commits on origin:
         poll the ahead count until it reaches 0 or the timeout passes.
-        Never pushes - the watcher owns that."""
+        Never pushes - the watcher owns that.
+
+        On a working branch there is nothing to wait for: the watcher pushes
+        only the default branch, so polling for an ahead count that will never
+        fall reported a review as a failed push when it had committed cleanly.
+        A checked-out branch means the reviewer is keeping the work local."""
+        if not self.on_default_branch():
+            return True, "kept local - this clone is on a working branch"
         deadline = datetime.now(timezone.utc).timestamp() + timeout_seconds
         while True:
             ahead, _ = self.counts()

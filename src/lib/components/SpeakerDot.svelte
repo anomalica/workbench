@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { colourFor } from "$lib/speaker-colour.svelte";
   import { speakerColour, isDefaultSpeakerName } from "$lib/transcript";
 
   let {
@@ -20,7 +21,7 @@
     {inline ? 'mr-2 align-middle' : 'flex-none'}
     {isDefaultSpeakerName(speaker) ? 'opacity-50' : ''}
     {ring ? 'ring-2 ring-primary' : ''}"
-  style="background-color: {speakerColour(speaker)}"
+  style="background-color: {colourFor(speaker)}"
   data-testid="speaker-dot"
   data-speaker={speaker}
 ></span>

@@ -100,6 +100,7 @@
     onexternal,
     onexternalremove,
     onexternaledit,
+    externalOnly = false,
     linkTitles,
     holdMs = 350,
     onseek,
@@ -229,6 +230,8 @@
     onexternalremove?: (id: string) => void;
     /** Reopen the source question on an existing passage. */
     onexternaledit?: (id: string) => void;
+    /** Draw only the passages that came from elsewhere. */
+    externalOnly?: boolean;
     /** Titles of the records this one links to, by content hash. A link is
      *  stored as a hash, which tells the reviewer nothing on its own - without
      *  a title the underline says "this refers to something" and stops. */
@@ -636,6 +639,11 @@
   // chooses between the marker and the words behind it.
   let visibleRuns = $derived(
     runs.filter((r) => {
+      if (
+        externalOnly &&
+        !parsed.externals.some((e) => r.endWord >= e.fromWord && r.startWord <= e.toWord)
+      )
+        return false;
       if (filteredSpeakers.size > 0 && !filteredSpeakers.has(r.speaker)) return false;
       return true;
     }),

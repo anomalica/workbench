@@ -9,6 +9,9 @@
     segments,
     rows = null,
     externalRows = [],
+    onexternalgo,
+    externalOnly = false,
+    onexternalonly,
     namedSpeakers,
     selectedSpeakers,
     filteredSpeakers,
@@ -31,6 +34,13 @@
      *  not this record's participants and not the reviewer's unnamed backlog -
      *  but hiding them entirely loses the fact that the clips are there. */
     externalRows?: { id: string; total: number }[];
+    /** Go to a quoted voice's first passage. Filtering to them is the wrong
+     *  verb: there is one thing to look at, and the reviewer wants to be taken
+     *  to it. */
+    onexternalgo?: (speaker: string) => void;
+    /** Whether the transcript is showing quoted passages only. */
+    externalOnly?: boolean;
+    onexternalonly?: (on: boolean) => void;
     namedSpeakers: string[];
     selectedSpeakers: Set<string>;
     filteredSpeakers: Set<string>;
@@ -619,12 +629,12 @@
         >External ({externalRows.length})</span
       >
       <button
-        onclick={() => toggleSectionFilter(externalIds, externalFilterActive)}
+        onclick={() => onexternalonly?.(!externalOnly)}
         class="p-0.5 rounded cursor-pointer transition-colors
-          {externalFilterActive
+          {externalOnly
             ? 'bg-primary/20 text-primary'
             : 'text-on-surface-muted/50 hover:text-on-surface hover:bg-surface'}"
-        title={externalFilterActive ? "Clear filter" : "Show only quoted voices"}
+        title={externalOnly ? "Show the whole transcript" : "Show quoted passages only"}
       >
         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
           <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
@@ -635,12 +645,12 @@
     {#each externalRows as row}
       {@const isSelected = filteredSpeakers.has(row.id)}
       <button
-        onclick={() => onfilter(row.id)}
+        onclick={() => onexternalgo?.(row.id)}
         class="w-full flex items-center gap-2 px-2 py-1.5 rounded text-sm text-left cursor-pointer transition-colors
           {isSelected
             ? 'bg-primary-container/30 ring-1 ring-primary/30 text-on-surface'
             : 'text-on-surface-muted/70 hover:bg-surface-alt'}"
-        title="Click to filter to this voice; click others to add them"
+        title="Go to this voice's first quoted passage"
       >
         <span
           class="flex-none w-2.5 h-2.5 rounded-full border border-current opacity-50"
