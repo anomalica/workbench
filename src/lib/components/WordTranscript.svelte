@@ -2589,18 +2589,17 @@
         <div class="wt-quoted-turn border-b border-border/50 px-4 py-2">
           <div class="group/ext flex items-center gap-2 pb-1 text-[11px] font-ui">
             <span class="text-on-surface-muted/50 uppercase tracking-wide flex-none">External</span>
-            {#if block.external.description}
-              <span class="text-on-surface-muted/80 truncate">{block.external.description}</span>
-            {:else if block.external.target}
-              <span class="text-on-surface-muted/80 truncate">a record in this corpus</span>
-            {:else}
-              <span class="text-warning/70 italic truncate">no source noted</span>
-            {/if}
-            <span class="flex-1"></span>
             <button
               onclick={() => onexternaledit?.(block.external.id)}
-              class="flex-none px-1 rounded cursor-pointer text-on-surface-muted/60 hover:text-primary opacity-0 group-hover/ext:opacity-100 transition-opacity"
-              title="Change where this came from">edit</button>
+              class="min-w-0 flex-1 text-left truncate cursor-pointer hover:underline
+                {block.external.description || block.external.target
+                  ? 'text-on-surface-muted/80'
+                  : 'text-warning/70 italic'}"
+              title="Change where this came from"
+            >
+              {block.external.description ||
+                (block.external.target ? "a record in this corpus" : "no source")}
+            </button>
             <button
               onclick={() => onexternalremove?.(block.external.id)}
               class="flex-none px-1 rounded cursor-pointer text-on-surface-muted/60 hover:text-error opacity-0 group-hover/ext:opacity-100 transition-opacity"
