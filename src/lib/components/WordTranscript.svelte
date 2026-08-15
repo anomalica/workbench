@@ -687,6 +687,16 @@
   });
   let selectionHasMarkup = $derived(selectionHasHighlight || spanNotesInSelection.length > 0);
 
+  /** "Clear" alone made the reviewer open the menu to find out what it would
+   *  take away. It says which. */
+  let clearLabel = $derived(
+    selectionHasHighlight && spanNotesInSelection.length > 0
+      ? "Clear highlight and note"
+      : selectionHasHighlight
+        ? "Clear highlight"
+        : "Clear note",
+  );
+
   /** Markup Clear: strip every highlight AND span note overlapping the
    *  selection, then drop the selection. */
   function clearMarkupUnderSelection() {
@@ -700,6 +710,9 @@
   /** The markup menu, closed by default and by every gesture that ends the
    *  selection it acts on. */
   let markupOpen = $state(false);
+  /** Whether the markup menu opens leftwards, because opening rightwards would
+   *  take it past the edge of the window. */
+  let menuFlipped = $state(false);
   // startWord of the run whose header picker is open (header click reassigns
   // the whole turn), or null.
   let headerPicker = $state<number | null>(null);
@@ -2197,7 +2210,15 @@
                often than assigning a speaker or fixing a word, and four more
                icons made the common jobs harder to find than the rare ones. -->
           <button
-            onclick={(e) => { e.stopPropagation(); markupOpen = !markupOpen; }}
+            onclick={(e) => {
+              e.stopPropagation();
+              // Flip the menu to the right edge when opening it at the far side
+              // of the pane would push it off screen - a menu the reviewer has
+              // to scroll sideways to read is one they cannot use.
+              const box = (e.currentTarget as HTMLElement).getBoundingClientRect();
+              menuFlipped = box.left + 220 > window.innerWidth;
+              markupOpen = !markupOpen;
+            }}
             aria-label="Markup"
             aria-expanded={markupOpen}
             class="flex items-center gap-0.5 p-1 rounded transition-colors cursor-pointer
@@ -2216,7 +2237,7 @@
           </button>
           {#if markupOpen}
             <div
-              class="absolute left-0 top-full mt-1 z-40 min-w-44 rounded border border-border
+              class="absolute {menuFlipped ? 'right-0' : 'left-0'} top-full mt-1 z-40 min-w-44 rounded border border-border
                 bg-surface-raised shadow-xl py-1 flex flex-col items-stretch"
             >
           <button
@@ -2350,7 +2371,7 @@
               class="flex items-center gap-2 w-full text-left px-3 py-1.5 text-xs font-ui cursor-pointer transition-colors hover:bg-primary-container/30 text-on-surface-muted"
               title="Remove the highlight(s)/note(s) over these words"
             >
-              Clear
+              {clearLabel}
             </button>
           {/if}
             </div>
