@@ -3390,6 +3390,7 @@
           record by its content hash, so it survives the file being renamed,
           re-filed, or superseded.
         </p>
+        {#if !wantedOpen}
         <input
           type="text"
           bind:value={linkSearch}
@@ -3440,6 +3441,7 @@
              pointing at no passage. Choosing a record is a choice the reviewer
              can see; typing a quote from memory is not. A passage picker that
              selects from the target's own words can come later. -->
+        {/if}
         <!-- The other answer to "which record?": the corpus does not hold it.
              Kept as a note rather than a link, because a link pins a content
              hash and there is no record to pin - but the reference is the
@@ -3460,27 +3462,16 @@
                 class="w-full px-3 py-1.5 text-sm bg-surface-alt border border-border rounded outline-none focus:border-primary"
                 onkeydown={(e) => { if (e.key === "Enter") { e.preventDefault(); saveWanted(); } }}
               />
-              <div class="flex items-center gap-2">
-                <button
-                  onclick={saveWanted}
-                  disabled={!wantedTitle.trim()}
-                  class="px-3 py-1.5 text-sm font-ui font-medium rounded
-                    {wantedTitle.trim()
-                      ? 'bg-primary text-on-primary cursor-pointer hover:opacity-90'
-                      : 'bg-surface-alt text-on-surface-muted/50 cursor-default'}"
-                >Record the reference</button>
-                <button
-                  onclick={() => (wantedOpen = false)}
-                  class="text-xs font-ui text-on-surface-muted hover:text-on-surface cursor-pointer"
-                >back</button>
-              </div>
             </div>
           {:else}
-            <span class="text-xs text-on-surface-muted mr-2">Can't find the material?</span>
-            <button
-              onclick={() => (wantedOpen = true)}
-              class="text-xs font-ui text-primary cursor-pointer hover:underline"
-            >Unheld book</button>
+            <div class="flex items-center gap-2">
+              <span class="text-xs text-on-surface-muted flex-1">Not in the corpus?</span>
+              <button
+                onclick={() => (wantedOpen = true)}
+                class="px-3 py-1.5 text-sm font-ui font-medium rounded border border-border
+                  text-on-surface cursor-pointer hover:border-primary hover:text-primary"
+              >Unheld book</button>
+            </div>
           {/if}
         </div>
 
@@ -3495,14 +3486,25 @@
             onclick={() => (linkPicker = null)}
             class="px-3 py-1.5 text-sm font-ui text-on-surface-secondary hover:text-on-surface cursor-pointer"
           >Cancel</button>
-          <button
-            onclick={confirmLink}
-            disabled={!linkTargetHash}
-            class="px-3 py-1.5 text-sm font-ui font-medium rounded
-              {linkTargetHash
-                ? 'bg-primary text-on-primary cursor-pointer hover:opacity-90'
-                : 'bg-surface-alt text-on-surface-muted/50 cursor-default'}"
-          >Link</button>
+          {#if wantedOpen}
+            <button
+              onclick={saveWanted}
+              disabled={!wantedTitle.trim()}
+              class="px-3 py-1.5 text-sm font-ui font-medium rounded
+                {wantedTitle.trim()
+                  ? 'bg-primary text-on-primary cursor-pointer hover:opacity-90'
+                  : 'bg-surface-alt text-on-surface-muted/50 cursor-default'}"
+            >Record book</button>
+          {:else}
+            <button
+              onclick={confirmLink}
+              disabled={!linkTargetHash}
+              class="px-3 py-1.5 text-sm font-ui font-medium rounded
+                {linkTargetHash
+                  ? 'bg-primary text-on-primary cursor-pointer hover:opacity-90'
+                  : 'bg-surface-alt text-on-surface-muted/50 cursor-default'}"
+            >Link</button>
+          {/if}
           </div>
         </div>
       </div>
