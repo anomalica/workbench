@@ -244,9 +244,14 @@
    *  sidebar section rather than among this record's speakers. */
   /** Reopen the source question on an existing passage: same dialog,
    *  prefilled, replacing the marker rather than nesting a second one. */
-  function editExternal(id: string) {
+  async function editExternal(id: string) {
     const e = parsedWords?.externals.find((x) => x.id === id);
     if (!e) return;
+    // The listing is fetched lazily, and only openExternalPicker was doing it -
+    // so reaching this dialog by EDITING an existing passage left the search
+    // with nothing to search. Typing a title that plainly exists returned
+    // nothing, which reads as a broken search rather than an unloaded list.
+    void loadAllRecords();
     doc.removeWordExternal(id);
     externalPicker = { from: e.fromWord, to: e.toWord };
     externalWhere = e.target
