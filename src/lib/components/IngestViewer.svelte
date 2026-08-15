@@ -1337,11 +1337,12 @@
   let linkPicker = $state<{ from: number; to: number } | null>(null);
   let linkSearch = $state("");
   let linkTargetHash = $state<string | null>(null);
-  /** Recording a source we do NOT have. A link pins a content hash, so it
-   *  cannot point at a book nobody has bought yet - but the reference is worth
-   *  keeping: it is how the wanted list gets built, and how a reader later
-   *  learns which claims rest on material no one here can check. Written as a
-   *  span note, which already carries text and reaches the model as context. */
+  /** Recording a work the corpus does not hold. A link pins a content hash, so
+   *  it cannot point at a book that has not been obtained - but the reference
+   *  is worth keeping: it is what a later acquisition list is built from, and
+   *  what tells a reader which claims rest on material that cannot yet be
+   *  checked. Written as a span note, which already carries text and reaches
+   *  the model as context. */
   let wantedOpen = $state(false);
   let wantedTitle = $state("");
   let wantedAuthor = $state("");
@@ -1352,7 +1353,10 @@
     doc.addWordSpanNote(
       linkPicker.from,
       linkPicker.to,
-      `wanted book: ${wantedTitle.trim()}${author ? ` - ${author}` : ""}`,
+      // Neutral and machine-readable: this text travels into the pre-digest
+      // and can reach a reader, so it states the fact rather than the
+      // reviewer's relationship to it.
+      `unheld source (book): ${wantedTitle.trim()}${author ? ` - ${author}` : ""}`,
     );
     linkPicker = null;
     wantedOpen = false;
@@ -3436,10 +3440,10 @@
              pointing at no passage. Choosing a record is a choice the reviewer
              can see; typing a quote from memory is not. A passage picker that
              selects from the target's own words can come later. -->
-        <!-- The other answer to "which record?": we do not have it. Kept as a
-             note rather than a link, because a link pins a content hash and
-             there is no record to pin - but the reference is the point, so it
-             is recorded rather than lost. -->
+        <!-- The other answer to "which record?": the corpus does not hold it.
+             Kept as a note rather than a link, because a link pins a content
+             hash and there is no record to pin - but the reference is the
+             point, so it is recorded rather than lost. -->
         <div class="border-t border-border pt-3 mb-3">
           {#if wantedOpen}
             <div class="flex flex-col gap-2">
@@ -3464,7 +3468,7 @@
                     {wantedTitle.trim()
                       ? 'bg-primary text-on-primary cursor-pointer hover:opacity-90'
                       : 'bg-surface-alt text-on-surface-muted/50 cursor-default'}"
-                >Record it as wanted</button>
+                >Record the reference</button>
                 <button
                   onclick={() => (wantedOpen = false)}
                   class="text-xs font-ui text-on-surface-muted hover:text-on-surface cursor-pointer"
@@ -3475,7 +3479,7 @@
             <button
               onclick={() => (wantedOpen = true)}
               class="text-xs font-ui text-primary cursor-pointer hover:underline"
-            >We don't have it - a book to get</button>
+            >Record a work not held</button>
           {/if}
         </div>
 
