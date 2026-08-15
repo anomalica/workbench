@@ -194,6 +194,8 @@
 
   let namedFilterActive = $derived(sectionFilterActive(namedIds));
   let unnamedFilterActive = $derived(sectionFilterActive(unnamedIds));
+  let externalIds = $derived(externalRows.map((r) => r.id));
+  let externalFilterActive = $derived(sectionFilterActive(externalIds));
 
   function toggleSectionFilter(ids: string[], active: boolean) {
     if (active) onsetfilter([]);
@@ -616,16 +618,37 @@
       <span class="text-xs font-ui font-medium text-on-surface-muted uppercase flex-1"
         >External ({externalRows.length})</span
       >
+      <button
+        onclick={() => toggleSectionFilter(externalIds, externalFilterActive)}
+        class="p-0.5 rounded cursor-pointer transition-colors
+          {externalFilterActive
+            ? 'bg-primary/20 text-primary'
+            : 'text-on-surface-muted/50 hover:text-on-surface hover:bg-surface'}"
+        title={externalFilterActive ? "Clear filter" : "Show only quoted voices"}
+      >
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+          <circle cx="12" cy="12" r="3" />
+        </svg>
+      </button>
     </div>
     {#each externalRows as row}
-      <div class="flex items-center gap-2 px-2 py-1.5 rounded text-sm text-on-surface-muted/70">
+      {@const isSelected = filteredSpeakers.has(row.id)}
+      <button
+        onclick={() => onfilter(row.id)}
+        class="w-full flex items-center gap-2 px-2 py-1.5 rounded text-sm text-left cursor-pointer transition-colors
+          {isSelected
+            ? 'bg-primary-container/30 ring-1 ring-primary/30 text-on-surface'
+            : 'text-on-surface-muted/70 hover:bg-surface-alt'}"
+        title="Click to filter to this voice; click others to add them"
+      >
         <span
           class="flex-none w-2.5 h-2.5 rounded-full border border-current opacity-50"
           aria-hidden="true"
         ></span>
         <span class="flex-1 min-w-0 truncate">{row.id}</span>
         <span class="flex-none text-[10px] font-mono tabular-nums text-on-surface-muted/50">{row.total}</span>
-      </div>
+      </button>
     {/each}
   </div>
 {/if}
