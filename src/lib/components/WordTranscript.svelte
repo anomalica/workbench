@@ -449,10 +449,7 @@
    *  rather than as annotated prose. */
   let citedStartingAt = $derived.by(() => {
     const m = new Map<number, typeof parsed.spanNotes>();
-    for (const n of parsed.spanNotes) {
-      if (!n.text.startsWith("unheld source (book):")) continue;
-      m.set(n.fromWord, [...(m.get(n.fromWord) ?? []), n]);
-    }
+    for (const n of parsed.spanNotes) m.set(n.fromWord, [...(m.get(n.fromWord) ?? []), n]);
     return m;
   });
 
@@ -1510,8 +1507,7 @@
     const subtle = false;
     applyWordHighlight(el, subtle && cols?.length ? [SUBTLE_HL] : cols, subtle);
     c.toggle("wt-highlight", cols !== undefined);
-    c.toggle("wt-spannote", spanNoteWordSet.has(g) && !citedWorkWords.has(g));
-    c.toggle("wt-cited", citedWorkWords.has(g));
+    c.toggle("wt-cited", spanNoteWordSet.has(g) || citedWorkWords.has(g));
     c.toggle("wt-markup-focus", focusWordSet.has(g));
     c.toggle("wt-chain", hoverChainWords.has(g));
     c.toggle("wt-linkspan", linkWordSet.has(g));
@@ -2087,6 +2083,27 @@
      checked. Rendered INSIDE the sentence - a book before the title, a cross
      after it - because the title is already the prose, and a card on its own
      line broke the paragraph in half to repeat what the underline says. -->
+<!-- One shape for every annotation on a word run: an icon before it, the run
+     underlined, the detail on hover. A note used to be a card with a word count
+     in it, which broke the paragraph to say something the underline already
+     said, and made a note look like a different kind of thing from a cited work
+     when they are the same kind of thing - something a reviewer attached to a
+     stretch of prose. Only the ICON is clickable: clicking a word still plays
+     from it, which is the one gesture that must not change. -->
+{#snippet spanNoteIcon(id: string, text: string)}
+  <button
+    onclick={() => startSpanNoteEdit(id, text)}
+    class="inline-flex items-center align-baseline mr-1 cursor-pointer
+      text-on-surface-muted/45 hover:text-primary"
+    title="{text} - click to change or remove"
+  >
+    <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
+      <path stroke-linecap="round" stroke-linejoin="round"
+        d="M4 5.5A1.5 1.5 0 015.5 4h13A1.5 1.5 0 0120 5.5v9a1.5 1.5 0 01-1.5 1.5H9l-5 4V5.5z" />
+    </svg>
+  </button>
+{/snippet}
+
 {#snippet citedWorkOpen(id: string, text: string)}
   <button
     onclick={() => startSpanNoteEdit(id, text)}
@@ -2831,7 +2848,7 @@
 </div>
 
 {#snippet wordSpans(gs: number[])}
-          {#each gs as g (g)}{#each citedStartingAt.get(g) ?? [] as sn (sn.id)}{@render citedWorkOpen(sn.id, sn.text)}{/each}<span
+          {#each gs as g (g)}{#each citedStartingAt.get(g) ?? [] as sn (sn.id)}{#if sn.text.startsWith("unheld source (book):")}{@render citedWorkOpen(sn.id, sn.text)}{:else}{@render spanNoteIcon(sn.id, sn.text)}{/if}{/each}<span
               data-word-index={g}
               class="wt-word">{words[g].text}</span>{" "}
             <!-- Committed event notes on this word: first-class annotation
@@ -2996,7 +3013,7 @@
               <!-- A cited work shows only its book in the prose; the card
                    appears while it is being edited, which is where changing or
                    clearing it happens. -->
-              {#if !sn.text.startsWith("unheld source (book):") || editingSpanNoteId === sn.id}
+              {#if editingSpanNoteId === sn.id}
                 {@render spanNoteCard(sn.id, sn.text, sn.toWord - sn.fromWord + 1)}
               {/if}
             {/each}
