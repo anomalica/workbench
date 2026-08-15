@@ -1347,6 +1347,39 @@
   let wantedTitle = $state("");
   let wantedAuthor = $state("");
 
+  /** Editing a cited work: its stored text is a specification the pipeline
+   *  reads, so it is edited through the same two fields that wrote it rather
+   *  than as free text a reviewer can reshape by accident. */
+  let citedEdit = $state<{ id: string; title: string; author: string } | null>(null);
+
+  function openCitedEdit(id: string) {
+    const note = parsedWords?.spanNotes.find((n) => n.id === id);
+    if (!note) return;
+    const body = note.text.replace(/^unheld source \(book\):\s*/, "");
+    const dash = body.lastIndexOf(" - ");
+    citedEdit = {
+      id,
+      title: dash === -1 ? body : body.slice(0, dash),
+      author: dash === -1 ? "" : body.slice(dash + 3),
+    };
+  }
+
+  function saveCitedEdit() {
+    if (!citedEdit || !citedEdit.title.trim()) return;
+    const author = citedEdit.author.trim();
+    doc.editWordSpanNote(
+      citedEdit.id,
+      `unheld source (book): ${citedEdit.title.trim()}${author ? ` - ${author}` : ""}`,
+    );
+    citedEdit = null;
+  }
+
+  function deleteCited() {
+    if (!citedEdit) return;
+    doc.removeWordSpanNote(citedEdit.id);
+    citedEdit = null;
+  }
+
   function saveWanted() {
     if (!linkPicker || !wantedTitle.trim()) return;
     const author = wantedAuthor.trim();
@@ -3593,6 +3626,68 @@
     </div>
   {/if}
 
+  {#if citedEdit}
+    <div
+      class="fixed inset-0 bg-ink/50 z-50 flex items-center justify-center p-4"
+      onclick={(e) => { if (e.target === e.currentTarget) citedEdit = null; }}
+      onkeydown={(e) => { if (e.key === "Escape") citedEdit = null; }}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Cited work"
+      tabindex="-1"
+    >
+      <div class="bg-surface rounded-lg shadow-lg max-w-md w-full p-6">
+        <h3 class="font-ui font-semibold text-on-surface mb-1">Cited work</h3>
+        <p class="text-xs text-on-surface-muted mb-4">
+          A work named in this recording that the corpus does not hold.
+        </p>
+        <label class="block text-xs font-ui text-on-surface-secondary mb-1" for="cited-title">Title</label>
+        <input
+          id="cited-title"
+          type="text"
+          bind:value={citedEdit.title}
+          class="w-full px-3 py-1.5 mb-3 text-sm bg-surface-alt border border-border rounded outline-none focus:border-primary"
+        />
+        <label class="block text-xs font-ui text-on-surface-secondary mb-1" for="cited-author">Author</label>
+        <input
+          id="cited-author"
+          type="text"
+          bind:value={citedEdit.author}
+          onkeydown={(e) => { if (e.key === "Enter") { e.preventDefault(); saveCitedEdit(); } }}
+          class="w-full px-3 py-1.5 mb-5 text-sm bg-surface-alt border border-border rounded outline-none focus:border-primary"
+        />
+        <div class="flex items-center gap-2">
+          <!-- Deleting sits apart from saving, and is reached deliberately:
+               removing a citation loses the only record that the work was
+               mentioned at all. -->
+          <button
+            onclick={deleteCited}
+            class="p-1.5 rounded cursor-pointer text-error/70 hover:text-error hover:bg-error/10"
+            title="Remove this cited work"
+            aria-label="Remove this cited work"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 7h16M9 7V5.5A1.5 1.5 0 0110.5 4h3A1.5 1.5 0 0115 5.5V7M6 7l1 13h10l1-13M10 11v6M14 11v6" />
+            </svg>
+          </button>
+          <span class="flex-1"></span>
+          <button
+            onclick={() => (citedEdit = null)}
+            class="px-3 py-1.5 text-sm font-ui text-on-surface-secondary hover:text-on-surface cursor-pointer"
+          >Cancel</button>
+          <button
+            onclick={saveCitedEdit}
+            disabled={!citedEdit.title.trim()}
+            class="px-3 py-1.5 text-sm font-ui font-medium rounded
+              {citedEdit.title.trim()
+                ? 'bg-primary text-on-primary cursor-pointer hover:opacity-90'
+                : 'bg-surface-alt text-on-surface-muted/50 cursor-default'}"
+          >Save</button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
   <!-- Submit review modal -->
   {#if showSubmitForm}
     <div
@@ -4595,6 +4690,7 @@
             onexternal={openExternalPicker}
             onexternalremove={(id) => doc.removeWordExternal(id)}
             onexternaledit={editExternal}
+            oncitededit={openCitedEdit}
             onlinkremove={(id) => doc.removeWordLink(id)}
             onpause={() => {
               // A markup drag pauses playback in place - no seek, just stop, so

@@ -90,6 +90,7 @@
     onspannote,
     onspannoteedit,
     onspannoteremove,
+    oncitededit,
     onhighlightcontext,
     onhighlightcontextremove,
     onselectiontext,
@@ -201,6 +202,10 @@
     onspannoteedit?: (id: string, text: string) => void;
     /** Remove a span note by id. */
     onspannoteremove?: (id: string) => void;
+    /** Edit a cited work through its own form. Its text is a specification -
+     *  "unheld source (book): Title - Author" - and a reviewer editing that as
+     *  free text can break the shape that makes it machine-readable. */
+    oncitededit?: (id: string) => void;
     /** Report the selected words as plain text whenever the selection changes.
      *  The transcript is `select-none` with a custom word range, so the host
      *  cannot read this selection from `window.getSelection()` - Ctrl+F seeds
@@ -2149,7 +2154,7 @@
 
 {#snippet citedWorkOpen(id: string, text: string)}
   <button
-    onclick={() => startSpanNoteEdit(id, text)}
+    onclick={() => oncitededit?.(id)}
     class="inline-flex items-center align-baseline mr-1 cursor-pointer
       text-on-surface-muted/45 hover:text-primary"
     title="{text.replace(/^unheld source \(book\):\s*/, '')} - click to change or remove"
@@ -3063,7 +3068,7 @@
               <!-- A cited work shows only its book in the prose; the card
                    appears while it is being edited, which is where changing or
                    clearing it happens. -->
-              {#if editingSpanNoteId === sn.id}
+              {#if editingSpanNoteId === sn.id && !sn.text.startsWith("unheld source (book):")}
                 {@render spanNoteCard(sn.id, sn.text, sn.toWord - sn.fromWord + 1)}
               {/if}
             {/each}
