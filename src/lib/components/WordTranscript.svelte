@@ -445,6 +445,17 @@
     return out;
   });
 
+  /** Words covered by a cited-work note, which render as an underlined title
+   *  rather than as annotated prose. */
+  let citedWorkWords = $derived.by(() => {
+    const set = new Set<number>();
+    for (const n of parsed.spanNotes) {
+      if (!n.text.startsWith("unheld source (book):")) continue;
+      for (let g = n.fromWord; g <= n.toWord; g++) set.add(g);
+    }
+    return set;
+  });
+
   let externalAtSelection = $derived.by(() => {
     const r = range;
     if (!r) return null;
@@ -1481,7 +1492,8 @@
     const subtle = false;
     applyWordHighlight(el, subtle && cols?.length ? [SUBTLE_HL] : cols, subtle);
     c.toggle("wt-highlight", cols !== undefined);
-    c.toggle("wt-spannote", spanNoteWordSet.has(g));
+    c.toggle("wt-spannote", spanNoteWordSet.has(g) && !citedWorkWords.has(g));
+    c.toggle("wt-cited", citedWorkWords.has(g));
     c.toggle("wt-markup-focus", focusWordSet.has(g));
     c.toggle("wt-chain", hoverChainWords.has(g));
     c.toggle("wt-linkspan", linkWordSet.has(g));
@@ -1633,6 +1645,7 @@
     void styleEpoch;
     void highlightColorsByWord; // re-apply bands when a highlight is added/cleared
     void spanNoteWordSet; // re-apply tint when a span note is added/cleared/re-ranged
+    void citedWorkWords; // and the cited-title underline
     void focusWordSet; // re-apply markup focus flash
     void linkWordSet; // re-apply the link underline when a link is added/removed
     void linkLabelByWord; // and its tooltip when the titles arrive
@@ -2051,6 +2064,33 @@
 <!-- A span-note card: shown inline at the range's first word. Distinct from the
      amber point-note cards (primary-tinted, monitor icon) to read as range
      context, not an in-flow beat. -->
+<!-- A work the speaker named that the corpus does not hold. INFRASTRUCTURE,
+     not domain: it says nothing about the subject, only about what can be
+     checked - so it must not look like a note, which is always about what the
+     words miss. A line of type with a book on it, not a card. -->
+{#snippet citedWorkCard(id: string, text: string)}
+  <span
+    style="display:flex"
+    class="my-1 items-center gap-1.5 text-xs text-on-surface-muted/80 not-italic"
+  >
+    <svg class="w-3.5 h-3.5 flex-none opacity-70" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M4 5.5A1.5 1.5 0 015.5 4H19v14H5.5A1.5 1.5 0 004 19.5v-14zM19 18v2H5.5" />
+    </svg>
+    <span class="flex-1 min-w-0 truncate">{text.replace(/^unheld source \(book\):\s*/, "")}</span>
+    <span class="flex-none text-[10px] uppercase tracking-wide text-on-surface-muted/40">not held</span>
+    <button
+      onclick={() => onspannoteremove?.(id)}
+      class="flex-none p-0.5 rounded cursor-pointer text-on-surface-muted/50 hover:text-error"
+      title="Remove this cited work"
+      aria-label="Remove this cited work"
+    >
+      <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+      </svg>
+    </button>
+  </span>
+{/snippet}
+
 {#snippet spanNoteCard(id: string, text: string, count: number)}
   <span
     style="display:flex"
@@ -2945,7 +2985,11 @@
                  shown as a card at the range's first word. The tinted words
                  (.wt-spannote) show its extent. -->
             {#each spanNotesByStartWord.get(g) ?? [] as sn (sn.id)}
-              {@render spanNoteCard(sn.id, sn.text, sn.toWord - sn.fromWord + 1)}
+              {#if sn.text.startsWith("unheld source (book):")}
+                {@render citedWorkCard(sn.id, sn.text)}
+              {:else}
+                {@render spanNoteCard(sn.id, sn.text, sn.toWord - sn.fromWord + 1)}
+              {/if}
             {/each}
             {#if composeSpanNote?.from === g}
               {@render spanNoteCompose()}

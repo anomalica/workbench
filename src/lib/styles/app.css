@@ -75,6 +75,17 @@ body {
    transient states below so a selection / active / claim / resume word takes
    over its background during interaction; it coexists with the highlight
    underline bands, which paint the bottom padding rather than the background. */
+/* A work the speaker named: underlined like a title, not tinted like an
+   annotation. The tint says "a reviewer wrote something about this stretch";
+   this stretch IS the thing. */
+.wt-word.wt-cited {
+  text-decoration: underline;
+  text-decoration-style: solid;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  text-decoration-color: color-mix(in srgb, var(--color-on-surface) 35%, transparent);
+}
+
 .wt-word.wt-spannote {
   background-color: color-mix(in srgb, var(--color-primary) 12%, transparent);
 }
