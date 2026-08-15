@@ -470,6 +470,12 @@
     return m;
   });
 
+  let citedWorksAt = $derived.by(() => {
+    const m = new Map<number, typeof parsed.citedWorks>();
+    for (const c of parsed.citedWorks) m.set(c.fromWord, [...(m.get(c.fromWord) ?? []), c]);
+    return m;
+  });
+
   let spanNotesEndingAt = $derived.by(() => {
     const m = new Map<number, typeof parsed.spanNotes>();
     for (const n of parsed.spanNotes) {
@@ -483,18 +489,18 @@
   let spanNoteTextByWord = $derived.by(() => {
     const m = new Map<number, string>();
     for (const n of parsed.spanNotes) {
-      const label = n.text.replace(/^unheld source \(book\):\s*/, "Cited work: ");
-      for (let g = n.fromWord; g <= n.toWord; g++) m.set(g, label);
+      for (let g = n.fromWord; g <= n.toWord; g++) m.set(g, n.text);
+    }
+    for (const c of parsed.citedWorks) {
+      const label = `Cited work: ${c.title}${c.creator ? ` - ${c.creator}` : ""}`;
+      for (let g = c.fromWord; g <= c.toWord; g++) m.set(g, label);
     }
     return m;
   });
 
   let citedWorkWords = $derived.by(() => {
     const set = new Set<number>();
-    for (const n of parsed.spanNotes) {
-      if (!n.text.startsWith("unheld source (book):")) continue;
-      for (let g = n.fromWord; g <= n.toWord; g++) set.add(g);
-    }
+    for (const c of parsed.citedWorks) for (let g = c.fromWord; g <= c.toWord; g++) set.add(g);
     return set;
   });
 
@@ -2918,7 +2924,7 @@
 </div>
 
 {#snippet wordSpans(gs: number[])}
-          {#each gs as g (g)}{#each linksStartingAt.get(g) ?? [] as l (l.id)}{@render linkIcon(l.target, linkLabelByWord.get(l.fromWord) ?? "Linked record")}{/each}{#each citedStartingAt.get(g) ?? [] as sn (sn.id)}{#if sn.text.startsWith("unheld source (book):")}{@render citedWorkOpen(sn.id, sn.text)}{:else}{@render spanNoteIcon(sn.id, sn.text)}{/if}{/each}<span
+          {#each gs as g (g)}{#each linksStartingAt.get(g) ?? [] as l (l.id)}{@render linkIcon(l.target, linkLabelByWord.get(l.fromWord) ?? "Linked record")}{/each}{#each citedWorksAt.get(g) ?? [] as c (c.id)}{@render citedWorkOpen(c.id, c.creator ? `${c.title} - ${c.creator}` : c.title)}{/each}{#each citedStartingAt.get(g) ?? [] as sn (sn.id)}{@render spanNoteIcon(sn.id, sn.text)}{/each}<span
               data-word-index={g}
               class="wt-word">{words[g].text}</span>{" "}
             <!-- Committed event notes on this word: first-class annotation
@@ -3083,7 +3089,7 @@
               <!-- A cited work shows only its book in the prose; the card
                    appears while it is being edited, which is where changing or
                    clearing it happens. -->
-              {#if editingSpanNoteId === sn.id && !sn.text.startsWith("unheld source (book):")}
+              {#if editingSpanNoteId === sn.id}
                 {@render spanNoteCard(sn.id, sn.text, sn.toWord - sn.fromWord + 1)}
               {/if}
             {/each}

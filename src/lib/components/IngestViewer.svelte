@@ -1353,44 +1353,28 @@
   let citedEdit = $state<{ id: string; title: string; author: string } | null>(null);
 
   function openCitedEdit(id: string) {
-    const note = parsedWords?.spanNotes.find((n) => n.id === id);
-    if (!note) return;
-    const body = note.text.replace(/^unheld source \(book\):\s*/, "");
-    const dash = body.lastIndexOf(" - ");
-    citedEdit = {
-      id,
-      title: dash === -1 ? body : body.slice(0, dash),
-      author: dash === -1 ? "" : body.slice(dash + 3),
-    };
+    const cited = parsedWords?.citedWorks.find((c) => c.id === id);
+    if (!cited) return;
+    citedEdit = { id, title: cited.title, author: cited.creator ?? "" };
   }
 
   function saveCitedEdit() {
     if (!citedEdit || !citedEdit.title.trim()) return;
     const author = citedEdit.author.trim();
-    doc.editWordSpanNote(
-      citedEdit.id,
-      `unheld source (book): ${citedEdit.title.trim()}${author ? ` - ${author}` : ""}`,
-    );
+    doc.editWordCitedWork(citedEdit.id, citedEdit.title, author);
     citedEdit = null;
   }
 
   function deleteCited() {
     if (!citedEdit) return;
-    doc.removeWordSpanNote(citedEdit.id);
+    doc.removeWordCitedWork(citedEdit.id);
     citedEdit = null;
   }
 
   function saveWanted() {
     if (!linkPicker || !wantedTitle.trim()) return;
     const author = wantedAuthor.trim();
-    doc.addWordSpanNote(
-      linkPicker.from,
-      linkPicker.to,
-      // Neutral and machine-readable: this text travels into the pre-digest
-      // and can reach a reader, so it states the fact rather than the
-      // reviewer's relationship to it.
-      `unheld source (book): ${wantedTitle.trim()}${author ? ` - ${author}` : ""}`,
-    );
+    doc.addWordCitedWork(linkPicker.from, linkPicker.to, wantedTitle, author);
     linkPicker = null;
     wantedOpen = false;
     wantedTitle = "";

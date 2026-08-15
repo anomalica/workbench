@@ -69,6 +69,17 @@ export interface WordLink {
  *  when there is one - that hash is what lets the assimilator collapse the
  *  same clip quoted by three records into one piece of evidence instead of
  *  three independent ones. */
+/** A work the speaker named. `kind` is a closed set, currently `book`. */
+export interface WordCitedWork {
+  id: string;
+  fromWord: number;
+  toWord: number;
+  kind: string;
+  title: string;
+  creator?: string;
+  target?: string;
+}
+
 export interface WordExternal {
   id: string;
   fromWord: number;
@@ -99,6 +110,7 @@ export interface ParsedWords {
   /** Cross-record links as inclusive word ranges + target, in start order. */
   links: WordLink[];
   externals: WordExternal[];
+  citedWorks: WordCitedWork[];
   /** Context edges between highlights, in document order. */
   highlightContexts: HighlightContext[];
   /** Everything in the body before the first `<!-- speaker -->` comment (the
@@ -150,6 +162,13 @@ const LINK_END_MARKER = /\{\{link-end:\s*([A-Za-z0-9_-]+)\s*\}\}/g;
 const EXTERNAL_START_MARKER =
   /\{\{external-start:\s*\[\s*([A-Za-z0-9_-]+)\s*,\s*"((?:[^"\\]|\\.)*)"\s*(?:,\s*"((?:[^"\\]|\\.)*)"\s*)?\]\s*\}\}/g;
 const EXTERNAL_END_MARKER = /\{\{external-end:\s*([A-Za-z0-9_-]+)\s*\}\}/g;
+// Cited works: the speaker NAMED a work (ingest-format.md, "Cited works").
+// Positions: id, kind, title, optional creator, optional sha256 once ingested.
+// It records the citation, never whether the corpus holds the work - that is a
+// query, because held-ness changes and a marker cannot.
+const CITES_START_MARKER =
+  /\{\{cites-start:\s*\[\s*([A-Za-z0-9_-]+)\s*,\s*"((?:[^"\\]|\\.)*)"\s*,\s*"((?:[^"\\]|\\.)*)"\s*(?:,\s*"((?:[^"\\]|\\.)*)"\s*)?(?:,\s*"((?:[^"\\]|\\.)*)"\s*)?\]\s*\}\}/g;
+const CITES_END_MARKER = /\{\{cites-end:\s*([A-Za-z0-9_-]+)\s*\}\}/g;
 // {{highlight-context: [later, earlier, ...]}} - a STANDALONE annotation, not a
 // payload on highlight-start (which stays a bare scalar id). First id is the
 // highlight that NEEDS context; the rest are the earlier highlights it depends
@@ -162,12 +181,14 @@ const HL_CONTEXT_MARKER =
 /** A pulled paired-marker. `family` selects which resolver (highlight vs span
  *  note) it feeds; `text` is present only on a span-note start. */
 interface SpanMarker {
-  family: "hl" | "note" | "link" | "external";
+  family: "hl" | "note" | "link" | "external" | "cites";
   dir: "start" | "end";
   id: string;
   text?: string;
   target?: string;
   quote?: string;
+  kind?: string;
+  creator?: string;
 }
 
 /** Reverse the escaping escapeNoteText applies (\" -> ", \\ -> \). */
@@ -208,6 +229,22 @@ function extractSpanMarkers(s: string): { rest: string; markers: SpanMarker[] } 
       target: unescapeNoteText(target),
       ...(quote !== undefined ? { quote: unescapeNoteText(quote) } : {}),
     });
+    return "";
+  });
+  rest = rest.replace(CITES_START_MARKER, (_m, id, kind, title, creator, target) => {
+    markers.push({
+      family: "cites",
+      dir: "start",
+      id,
+      text: unescapeNoteText(title),
+      kind: unescapeNoteText(kind),
+      ...(creator !== undefined ? { creator: unescapeNoteText(creator) } : {}),
+      ...(target !== undefined ? { target: unescapeNoteText(target) } : {}),
+    });
+    return "";
+  });
+  rest = rest.replace(CITES_END_MARKER, (_m, id) => {
+    markers.push({ family: "cites", dir: "end", id });
     return "";
   });
   rest = rest.replace(EXTERNAL_START_MARKER, (_m, id, description, target) => {
@@ -308,6 +345,8 @@ export function parseWords(body: string): ParsedWords {
     text?: string;
     target?: string;
     quote?: string;
+    kind?: string;
+    creator?: string;
   }
   interface ResolvedSpan extends SpanPayload {
     id: string;
@@ -324,12 +363,15 @@ export function parseWords(body: string): ParsedWords {
   const noteR = mkResolver();
   const linkR = mkResolver();
   const extR = mkResolver();
+  const citesR = mkResolver();
   let lastEmitted = -1;
 
-  const payloadOf = ({ text, target, quote }: SpanPayload): SpanPayload => ({
+  const payloadOf = ({ text, target, quote, kind, creator }: SpanPayload): SpanPayload => ({
     ...(text !== undefined ? { text } : {}),
     ...(target !== undefined ? { target } : {}),
     ...(quote !== undefined ? { quote } : {}),
+    ...(kind !== undefined ? { kind } : {}),
+    ...(creator !== undefined ? { creator } : {}),
   });
   const openAt = (r: SpanResolver, id: string, g: number, payload: SpanPayload) => {
     const prev = r.open.get(id);
@@ -358,6 +400,7 @@ export function parseWords(body: string): ParsedWords {
     [noteR, "note"],
     [linkR, "link"],
     [extR, "external"],
+    [citesR, "cites"],
   ];
   const applyBoth = (markers: SpanMarker[], closeTarget: number) => {
     for (const [r, family] of resolvers) {
@@ -369,7 +412,7 @@ export function parseWords(body: string): ParsedWords {
     }
   };
   const endRun = () => {
-    for (const r of [hlR, noteR, linkR, extR]) {
+    for (const r of [hlR, noteR, linkR, extR, citesR]) {
       for (const [id, o] of r.open)
         if (lastEmitted >= o.from)
           r.out.push({ id, fromWord: o.from, toWord: lastEmitted, ...payloadOf(o) });
@@ -426,6 +469,7 @@ export function parseWords(body: string): ParsedWords {
         flushPending(noteR, gIndex);
         flushPending(linkR, gIndex);
         flushPending(extR, gIndex);
+        flushPending(citesR, gIndex);
         applyBoth(markers, gIndex);
 
         lastEmitted = gIndex;
@@ -465,6 +509,17 @@ export function parseWords(body: string): ParsedWords {
       target: target ?? "",
       ...(quote !== undefined ? { quote } : {}),
     }));
+  const citedWorks: WordCitedWork[] = citesR.out
+    .sort(bySpan)
+    .map(({ id, fromWord, toWord, text, kind, creator, target }) => ({
+      id,
+      fromWord,
+      toWord,
+      kind: kind ?? "book",
+      title: text ?? "",
+      ...(creator ? { creator } : {}),
+      ...(target ? { target } : {}),
+    }));
   const externals: WordExternal[] = extR.out
     .sort(bySpan)
     .map(({ id, fromWord, toWord, text, target }) => ({
@@ -482,6 +537,7 @@ export function parseWords(body: string): ParsedWords {
     spanNotes,
     links,
     externals,
+    citedWorks,
     highlightContexts,
     preamble,
   };
@@ -518,6 +574,7 @@ export function serializeWords(
   highlightContexts: HighlightContext[] = [],
   links: WordLink[] = [],
   externals: WordExternal[] = [],
+  citedWorks: WordCitedWork[] = [],
 ): string {
   const speakerByWord = new Array<string>(words.length);
   for (const run of runs) {
@@ -546,6 +603,12 @@ export function serializeWords(
     (linkStartsAt.get(l.fromWord) ?? linkStartsAt.set(l.fromWord, []).get(l.fromWord)!).push(l);
     (linkEndsAt.get(l.toWord) ?? linkEndsAt.set(l.toWord, []).get(l.toWord)!).push(l.id);
   }
+  const citesStartsAt = new Map<number, WordCitedWork[]>();
+  const citesEndsAt = new Map<number, string[]>();
+  for (const c of citedWorks) {
+    (citesStartsAt.get(c.fromWord) ?? citesStartsAt.set(c.fromWord, []).get(c.fromWord)!).push(c);
+    (citesEndsAt.get(c.toWord) ?? citesEndsAt.set(c.toWord, []).get(c.toWord)!).push(c.id);
+  }
   const extStartsAt = new Map<number, WordExternal[]>();
   const extEndsAt = new Map<number, string[]>();
   for (const e of externals) {
@@ -570,6 +633,14 @@ export function serializeWords(
       .join("") +
     // Outermost of the four: an external region contains whatever markup the
     // reviewer put inside it, not the other way round.
+    (citesStartsAt.get(i) ?? [])
+      .map(
+        (c) =>
+          `{{cites-start: [${c.id}, "${escapeNoteText(c.kind)}", "${escapeNoteText(c.title)}"${
+            c.creator !== undefined ? `, "${escapeNoteText(c.creator)}"` : ""
+          }${c.target !== undefined ? `, "${escapeNoteText(c.target)}"` : ""}]}}`,
+      )
+      .join("") +
     (extStartsAt.get(i) ?? [])
       .map(
         (e) =>
@@ -579,6 +650,7 @@ export function serializeWords(
       )
       .join("");
   const endMarkers = (i: number) =>
+    (citesEndsAt.get(i) ?? []).map((id) => `{{cites-end: ${id}}}`).join("") +
     (extEndsAt.get(i) ?? []).map((id) => `{{external-end: ${id}}}`).join("") +
     (linkEndsAt.get(i) ?? []).map((id) => `{{link-end: ${id}}}`).join("") +
     (noteEndsAt.get(i) ?? []).map((id) => `{{note-end: ${id}}}`).join("") +
@@ -669,6 +741,7 @@ export function splitWord(
     spanNotes,
     links,
     externals,
+    citedWorks,
     highlightContexts,
     preamble,
   } = parsed;
@@ -726,6 +799,7 @@ export function splitWord(
   const newSpanNotes = remapSpans(spanNotes, mapFrom, mapTo);
   const newLinks = remapSpans(links, mapFrom, mapTo);
   const newExternals = remapSpans(externals, mapFrom, mapTo);
+  const newCitedWorks = remapSpans(citedWorks, mapFrom, mapTo);
 
   return {
     words: newWords,
@@ -733,6 +807,7 @@ export function splitWord(
     lineEndWords: newLineEndWords,
     highlights: newHighlights,
     externals: newExternals,
+    citedWorks: newCitedWorks,
     spanNotes: newSpanNotes,
     links: newLinks,
     // Unchanged by design: a context edge names ids, so moving words cannot
@@ -765,6 +840,7 @@ export function replaceWordRange(
     spanNotes,
     links,
     externals,
+    citedWorks,
     highlightContexts,
     preamble,
   } = parsed;
@@ -827,6 +903,7 @@ export function replaceWordRange(
   const newSpanNotes = remapSpans(spanNotes, mapFrom, mapTo);
   const newLinks = remapSpans(links, mapFrom, mapTo);
   const newExternals = remapSpans(externals, mapFrom, mapTo);
+  const newCitedWorks = remapSpans(citedWorks, mapFrom, mapTo);
 
   return {
     words: out,
@@ -834,6 +911,7 @@ export function replaceWordRange(
     lineEndWords: newLineEndWords,
     highlights: newHighlights,
     externals: newExternals,
+    citedWorks: newCitedWorks,
     spanNotes: newSpanNotes,
     links: newLinks,
     // Unchanged by design: a context edge names ids, so moving words cannot

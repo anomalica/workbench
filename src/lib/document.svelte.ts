@@ -232,6 +232,7 @@ export class DocumentStore {
       parsed.highlightContexts,
       parsed.links,
       parsed.externals,
+      parsed.citedWorks,
     );
     // Reconcile the frontmatter speakers: KEEP real names the reviewer curated,
     // even when they have no body occurrences (a name added before assigning,
@@ -342,6 +343,7 @@ export class DocumentStore {
       next.highlightContexts,
       next.links,
       next.externals,
+      next.citedWorks,
     );
     const result = fm + newBody;
     if (result !== this.current) this.pushEdit(result);
@@ -369,6 +371,7 @@ export class DocumentStore {
       parsed.highlightContexts,
       parsed.links,
       parsed.externals,
+      parsed.citedWorks,
     );
     const result = fm + newBody;
     if (result !== this.current) this.pushEdit(result);
@@ -393,6 +396,7 @@ export class DocumentStore {
       next.highlightContexts,
       next.links,
       next.externals,
+      next.citedWorks,
     );
     // Reconcile frontmatter speakers to those still present (mirrors
     // serialiseWithReconcile): keep curated named speakers, drop default
@@ -435,6 +439,7 @@ export class DocumentStore {
         parsed.highlightContexts,
         parsed.links,
         parsed.externals,
+        parsed.citedWorks,
       ),
     );
   }
@@ -465,6 +470,7 @@ export class DocumentStore {
         parsed.highlightContexts,
         parsed.links,
         parsed.externals,
+        parsed.citedWorks,
       ),
     );
   }
@@ -502,6 +508,7 @@ export class DocumentStore {
         parsed.highlightContexts,
         parsed.links,
         parsed.externals,
+        parsed.citedWorks,
       );
     if (result !== this.current) this.pushEdit(result);
   }
@@ -524,6 +531,7 @@ export class DocumentStore {
         parsed.highlightContexts,
         parsed.links,
         parsed.externals,
+        parsed.citedWorks,
       );
     if (result !== this.current) this.pushEdit(result);
   }
@@ -579,6 +587,7 @@ export class DocumentStore {
         highlightContexts,
         parsed.links,
         parsed.externals,
+        parsed.citedWorks,
       );
     if (result !== this.current) this.pushEdit(result);
   }
@@ -604,6 +613,7 @@ export class DocumentStore {
         parsed.highlightContexts,
         parsed.links,
         parsed.externals,
+        parsed.citedWorks,
       );
     if (result !== this.current) this.pushEdit(result);
   }
@@ -641,6 +651,7 @@ export class DocumentStore {
         parsed.highlightContexts,
         parsed.links,
         parsed.externals,
+        parsed.citedWorks,
       );
     if (result !== this.current) this.pushEdit(result);
   }
@@ -667,6 +678,7 @@ export class DocumentStore {
         parsed.highlightContexts,
         parsed.links,
         parsed.externals,
+        parsed.citedWorks,
       );
     if (result !== this.current) this.pushEdit(result);
   }
@@ -713,6 +725,7 @@ export class DocumentStore {
         parsed.highlightContexts,
         links,
         parsed.externals,
+        parsed.citedWorks,
       );
     if (result !== this.current) this.pushEdit(result);
   }
@@ -768,6 +781,92 @@ export class DocumentStore {
         parsed.highlightContexts,
         parsed.links,
         externals,
+        parsed.citedWorks,
+      );
+    if (result !== this.current) this.pushEdit(result);
+  }
+
+  /** Record that the speaker named a work (ingest-format.md, "Cited works").
+   *  It records the CITATION, never whether the corpus holds the work - that
+   *  is a query, because held-ness changes and a marker written into a body
+   *  cannot. */
+  addWordCitedWork(from: number, to: number, title: string, creator = "", kind = "book") {
+    const clean = sanitiseNoteText(title);
+    if (!clean) return;
+    const [fm, body] = splitFrontmatter(this.current);
+    const parsed = parseWords(body);
+    const lo = Math.min(from, to);
+    const hi = Math.max(from, to);
+    if (lo < 0 || hi >= parsed.words.length) return;
+    const { id, nextId } = mintOverlayId(overlayIdsOf(parsed), readOverlayNextId(fm));
+    const fmOut = rewriteFrontmatterFields(fm, { overlay_next_id: nextId });
+    const who = sanitiseNoteText(creator);
+    const citedWorks = [
+      ...parsed.citedWorks,
+      { id, fromWord: lo, toWord: hi, kind, title: clean, ...(who ? { creator: who } : {}) },
+    ];
+    const result =
+      fmOut +
+      serializeWords(
+        parsed.words,
+        parsed.runs,
+        parsed.lineEndWords,
+        parsed.preamble,
+        parsed.highlights,
+        parsed.spanNotes,
+        parsed.highlightContexts,
+        parsed.links,
+        parsed.externals,
+        citedWorks,
+      );
+    if (result !== this.current) this.pushEdit(result);
+  }
+
+  editWordCitedWork(id: string, title: string, creator = "") {
+    const [fm, body] = splitFrontmatter(this.current);
+    const parsed = parseWords(body);
+    const clean = sanitiseNoteText(title);
+    if (!clean || !parsed.citedWorks.some((c) => c.id === id)) return;
+    const who = sanitiseNoteText(creator);
+    const citedWorks = parsed.citedWorks.map((c) =>
+      c.id === id
+        ? { ...c, title: clean, ...(who ? { creator: who } : { creator: undefined }) }
+        : c,
+    );
+    const result =
+      fm +
+      serializeWords(
+        parsed.words,
+        parsed.runs,
+        parsed.lineEndWords,
+        parsed.preamble,
+        parsed.highlights,
+        parsed.spanNotes,
+        parsed.highlightContexts,
+        parsed.links,
+        parsed.externals,
+        citedWorks,
+      );
+    if (result !== this.current) this.pushEdit(result);
+  }
+
+  removeWordCitedWork(id: string) {
+    const [fm, body] = splitFrontmatter(this.current);
+    const parsed = parseWords(body);
+    if (!parsed.citedWorks.some((c) => c.id === id)) return;
+    const result =
+      fm +
+      serializeWords(
+        parsed.words,
+        parsed.runs,
+        parsed.lineEndWords,
+        parsed.preamble,
+        parsed.highlights,
+        parsed.spanNotes,
+        parsed.highlightContexts,
+        parsed.links,
+        parsed.externals,
+        parsed.citedWorks.filter((c) => c.id !== id),
       );
     if (result !== this.current) this.pushEdit(result);
   }
@@ -788,6 +887,7 @@ export class DocumentStore {
         parsed.highlightContexts,
         parsed.links,
         parsed.externals.filter((e) => e.id !== id),
+        parsed.citedWorks,
       );
     if (result !== this.current) this.pushEdit(result);
   }
@@ -809,6 +909,7 @@ export class DocumentStore {
         parsed.highlightContexts,
         links,
         parsed.externals,
+        parsed.citedWorks,
       );
     if (result !== this.current) this.pushEdit(result);
   }
@@ -837,6 +938,7 @@ export class DocumentStore {
         parsed.highlightContexts,
         parsed.links,
         parsed.externals,
+        parsed.citedWorks,
       );
     if (result !== this.current) this.pushEdit(result);
   }
@@ -1087,6 +1189,7 @@ function overlayIdsOf(parsed: ReturnType<typeof parseWords>): string[] {
     ...parsed.spanNotes.map((n) => n.id),
     ...parsed.links.map((l) => l.id),
     ...parsed.externals.map((e) => e.id),
+    ...parsed.citedWorks.map((c) => c.id),
     ...parsed.highlightContexts.flatMap((c) => [c.of, ...c.needs]),
   ];
 }
