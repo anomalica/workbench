@@ -1337,6 +1337,28 @@
   let linkPicker = $state<{ from: number; to: number } | null>(null);
   let linkSearch = $state("");
   let linkTargetHash = $state<string | null>(null);
+  /** Recording a source we do NOT have. A link pins a content hash, so it
+   *  cannot point at a book nobody has bought yet - but the reference is worth
+   *  keeping: it is how the wanted list gets built, and how a reader later
+   *  learns which claims rest on material no one here can check. Written as a
+   *  span note, which already carries text and reaches the model as context. */
+  let wantedOpen = $state(false);
+  let wantedTitle = $state("");
+  let wantedAuthor = $state("");
+
+  function saveWanted() {
+    if (!linkPicker || !wantedTitle.trim()) return;
+    const author = wantedAuthor.trim();
+    doc.addWordSpanNote(
+      linkPicker.from,
+      linkPicker.to,
+      `wanted book: ${wantedTitle.trim()}${author ? ` - ${author}` : ""}`,
+    );
+    linkPicker = null;
+    wantedOpen = false;
+    wantedTitle = "";
+    wantedAuthor = "";
+  }
   let allRecords = $state<IngestSummary[] | null>(null);
   /** The corpus listing, fetched at most once. Needed both to CHOOSE a link
    *  target and to NAME one this record already has. */
@@ -1353,6 +1375,9 @@
     linkPicker = { from, to };
     linkSearch = "";
     linkTargetHash = null;
+    wantedOpen = false;
+    wantedTitle = "";
+    wantedAuthor = "";
     await loadAllRecords();
   }
   // Candidate targets: every OTHER record, filtered by the search text over
@@ -1367,7 +1392,9 @@
           r.title.toLowerCase().includes(q) ||
           (r.creators ?? []).some((c) => c.toLowerCase().includes(q)),
       )
-      .slice(0, 30);
+      // Ten is enough to recognise the one you meant; thirty made the dialog
+      // tall enough to bury everything under it.
+      .slice(0, 10);
   });
   let linkTitles = $derived(
     new Map((allRecords ?? []).map((r) => [r.content_hash, r.title])),
@@ -3409,6 +3436,49 @@
              pointing at no passage. Choosing a record is a choice the reviewer
              can see; typing a quote from memory is not. A passage picker that
              selects from the target's own words can come later. -->
+        <!-- The other answer to "which record?": we do not have it. Kept as a
+             note rather than a link, because a link pins a content hash and
+             there is no record to pin - but the reference is the point, so it
+             is recorded rather than lost. -->
+        <div class="border-t border-border pt-3 mb-3">
+          {#if wantedOpen}
+            <div class="flex flex-col gap-2">
+              <input
+                type="text"
+                bind:value={wantedTitle}
+                placeholder="Book title"
+                class="w-full px-3 py-1.5 text-sm bg-surface-alt border border-border rounded outline-none focus:border-primary"
+              />
+              <input
+                type="text"
+                bind:value={wantedAuthor}
+                placeholder="Author (optional)"
+                class="w-full px-3 py-1.5 text-sm bg-surface-alt border border-border rounded outline-none focus:border-primary"
+                onkeydown={(e) => { if (e.key === "Enter") { e.preventDefault(); saveWanted(); } }}
+              />
+              <div class="flex items-center gap-2">
+                <button
+                  onclick={saveWanted}
+                  disabled={!wantedTitle.trim()}
+                  class="px-3 py-1.5 text-sm font-ui font-medium rounded
+                    {wantedTitle.trim()
+                      ? 'bg-primary text-on-primary cursor-pointer hover:opacity-90'
+                      : 'bg-surface-alt text-on-surface-muted/50 cursor-default'}"
+                >Record it as wanted</button>
+                <button
+                  onclick={() => (wantedOpen = false)}
+                  class="text-xs font-ui text-on-surface-muted hover:text-on-surface cursor-pointer"
+                >back</button>
+              </div>
+            </div>
+          {:else}
+            <button
+              onclick={() => (wantedOpen = true)}
+              class="text-xs font-ui text-primary cursor-pointer hover:underline"
+            >We don't have it - a book to get</button>
+          {/if}
+        </div>
+
         <div class="flex items-center justify-between gap-2">
           <p class="text-xs text-on-surface-muted min-w-0 truncate">
             {#if linkTargetHash}
