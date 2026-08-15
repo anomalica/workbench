@@ -3476,10 +3476,11 @@
               </div>
             </div>
           {:else}
+            <span class="text-xs text-on-surface-muted mr-2">Can't find the material?</span>
             <button
               onclick={() => (wantedOpen = true)}
               class="text-xs font-ui text-primary cursor-pointer hover:underline"
-            >Record a work not held</button>
+            >Unheld book</button>
           {/if}
         </div>
 
@@ -3487,8 +3488,6 @@
           <p class="text-xs text-on-surface-muted min-w-0 truncate">
             {#if linkTargetHash}
               Linking to <span class="text-on-surface">{linkTitles.get(linkTargetHash)}</span>
-            {:else}
-              Choose the record these words refer to
             {/if}
           </p>
           <div class="flex justify-end gap-2 flex-none">
