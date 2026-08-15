@@ -447,6 +447,12 @@
 
   /** Words covered by a cited-work note, which render as an underlined title
    *  rather than as annotated prose. */
+  let linksStartingAt = $derived.by(() => {
+    const m = new Map<number, typeof parsed.links>();
+    for (const l of parsed.links) m.set(l.fromWord, [...(m.get(l.fromWord) ?? []), l]);
+    return m;
+  });
+
   let citedStartingAt = $derived.by(() => {
     const m = new Map<number, typeof parsed.spanNotes>();
     for (const n of parsed.spanNotes) m.set(n.fromWord, [...(m.get(n.fromWord) ?? []), n]);
@@ -458,6 +464,16 @@
     for (const n of parsed.spanNotes) {
       if (!n.text.startsWith("unheld source (book):")) continue;
       m.set(n.toWord, [...(m.get(n.toWord) ?? []), n]);
+    }
+    return m;
+  });
+
+  /** Each noted word's text, so hovering the underline says what it means. */
+  let spanNoteTextByWord = $derived.by(() => {
+    const m = new Map<number, string>();
+    for (const n of parsed.spanNotes) {
+      const label = n.text.replace(/^unheld source \(book\):\s*/, "Cited work: ");
+      for (let g = n.fromWord; g <= n.toWord; g++) m.set(g, label);
     }
     return m;
   });
@@ -1516,7 +1532,8 @@
     // the content-visibility skipping, and is what a reader tries first.
     const linkLabel = linkLabelByWord.get(g);
     const extLabel = externalWordSet.get(g);
-    const label = [extLabel, linkLabel].filter(Boolean).join("\n");
+    const noteLabel = spanNoteTextByWord.get(g);
+    const label = [extLabel, linkLabel, noteLabel].filter(Boolean).join("\n");
     if (label) el.title = label;
     else if (el.title) el.removeAttribute("title");
   }
@@ -1659,6 +1676,7 @@
     void styleEpoch;
     void highlightColorsByWord; // re-apply bands when a highlight is added/cleared
     void spanNoteWordSet; // re-apply tint when a span note is added/cleared/re-ranged
+    void spanNoteTextByWord; // and the hover text when its words change
     void citedWorkWords; // and the cited-title underline
     void focusWordSet; // re-apply markup focus flash
     void linkWordSet; // re-apply the link underline when a link is added/removed
@@ -2090,6 +2108,20 @@
      when they are the same kind of thing - something a reviewer attached to a
      stretch of prose. Only the ICON is clickable: clicking a word still plays
      from it, which is the one gesture that must not change. -->
+{#snippet linkIcon(target: string, label: string)}
+  <button
+    onclick={() => onlinkopen?.(target)}
+    class="inline-flex items-center align-baseline mr-1 cursor-pointer
+      text-on-surface-muted/45 hover:text-primary"
+    title="{label} - click to open"
+  >
+    <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
+      <path stroke-linecap="round" stroke-linejoin="round"
+        d="M10.5 13.5a4 4 0 005.66 0l3-3a4 4 0 10-5.66-5.66l-1 1M13.5 10.5a4 4 0 00-5.66 0l-3 3a4 4 0 105.66 5.66l1-1" />
+    </svg>
+  </button>
+{/snippet}
+
 {#snippet spanNoteIcon(id: string, text: string)}
   <button
     onclick={() => startSpanNoteEdit(id, text)}
@@ -2099,7 +2131,8 @@
   >
     <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
       <path stroke-linecap="round" stroke-linejoin="round"
-        d="M4 5.5A1.5 1.5 0 015.5 4h13A1.5 1.5 0 0120 5.5v9a1.5 1.5 0 01-1.5 1.5H9l-5 4V5.5z" />
+        d="M14 3H6a1.5 1.5 0 00-1.5 1.5v15A1.5 1.5 0 006 21h12a1.5 1.5 0 001.5-1.5V8.5L14 3z" />
+      <path stroke-linecap="round" stroke-linejoin="round" d="M14 3v5.5h5.5M8 12.5h8M8 16h5" />
     </svg>
   </button>
 {/snippet}
@@ -2141,7 +2174,14 @@
           placeholder="What the words miss here - on-screen text, an image, context... (empty removes the note)"
           class="w-full bg-surface border border-primary rounded px-1.5 py-1 text-xs text-on-surface outline-none resize-y"
         ></textarea>
-        <button onclick={() => saveSpanNoteEdit(id)} class="self-start text-xs font-ui font-medium text-primary cursor-pointer hover:underline">Save</button>
+        <span style="display:flex" class="items-center gap-3">
+          <button onclick={() => saveSpanNoteEdit(id)} class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline">Save</button>
+          <button
+            onmousedown={(e) => e.preventDefault()}
+            onclick={() => (editingSpanNoteId = null)}
+            class="text-xs font-ui text-on-surface-muted cursor-pointer hover:text-on-surface"
+          >Close</button>
+        </span>
       </span>
     {:else}
       <span class="flex-none text-[10px] font-ui uppercase tracking-wide text-primary/70 mt-0.5 tabular-nums">
@@ -2848,7 +2888,7 @@
 </div>
 
 {#snippet wordSpans(gs: number[])}
-          {#each gs as g (g)}{#each citedStartingAt.get(g) ?? [] as sn (sn.id)}{#if sn.text.startsWith("unheld source (book):")}{@render citedWorkOpen(sn.id, sn.text)}{:else}{@render spanNoteIcon(sn.id, sn.text)}{/if}{/each}<span
+          {#each gs as g (g)}{#each linksStartingAt.get(g) ?? [] as l (l.id)}{@render linkIcon(l.target, linkLabelByWord.get(l.fromWord) ?? "Linked record")}{/each}{#each citedStartingAt.get(g) ?? [] as sn (sn.id)}{#if sn.text.startsWith("unheld source (book):")}{@render citedWorkOpen(sn.id, sn.text)}{:else}{@render spanNoteIcon(sn.id, sn.text)}{/if}{/each}<span
               data-word-index={g}
               class="wt-word">{words[g].text}</span>{" "}
             <!-- Committed event notes on this word: first-class annotation
