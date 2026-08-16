@@ -115,6 +115,14 @@
       .catch(() => {});
   }
 
+  // Fetched when the sidebar mounts, not when the input opens. Opening it and
+  // typing immediately beat the request, so the near-miss check ran against an
+  // empty list and accepted a misspelling in silence - which is the one thing
+  // it exists to stop.
+  $effect(() => {
+    loadKnown();
+  });
+
   let suggestions = $derived(suggestSpeakers(known, newSpeakerName, namedSpeakers));
 
 
