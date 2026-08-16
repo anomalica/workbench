@@ -247,13 +247,13 @@
   async function editExternal(id: string) {
     const e = parsedWords?.externals.find((x) => x.id === id);
     if (!e) return;
+    externalEditId = id;
     // The listing is fetched lazily, and only openExternalPicker was doing it -
     // so reaching this dialog by EDITING an existing passage left the search
     // with nothing to search. Typing a title that plainly exists returned
     // nothing, which reads as a broken search rather than an unloaded list.
     void loadAllRecords();
     externalEditing = true;
-    doc.removeWordExternal(id);
     externalPicker = { from: e.fromWord, to: e.toWord };
     externalWhere = e.target
       ? (linkTitles.get(e.target.replace(/^sha256:/, "")) ?? "")
@@ -1487,6 +1487,9 @@
    *  button reading "set as external" invites the reviewer to wonder what it
    *  is about to set. */
   let externalEditing = $state(false);
+  /** The passage being edited, so confirming changes it in place and cancelling
+   *  changes nothing at all. */
+  let externalEditId = $state<string | null>(null);
   let externalTargetHash = $state<string | null>(null);
 
   async function openExternalPicker(from: number, to: number) {
@@ -1494,6 +1497,7 @@
     externalWhere = "";
     externalTargetHash = null;
     externalEditing = false;
+    externalEditId = null;
     await loadAllRecords();
   }
 
@@ -1531,8 +1535,10 @@
       : externalHashTyped
         ? ""
         : externalWhere.trim();
-    doc.addWordExternal(externalPicker.from, externalPicker.to, description, hash);
+    if (externalEditId) doc.editWordExternal(externalEditId, description, hash);
+    else doc.addWordExternal(externalPicker.from, externalPicker.to, description, hash);
     externalPicker = null;
+    externalEditId = null;
   }
 
   function confirmLink() {
@@ -3578,8 +3584,8 @@
   {#if externalPicker}
     <div
       class="fixed inset-0 bg-ink/50 z-50 flex items-center justify-center p-4"
-      onclick={(e) => { if (e.target === e.currentTarget) externalPicker = null; }}
-      onkeydown={(e) => { if (e.key === 'Escape') externalPicker = null; }}
+      onclick={(e) => { if (e.target === e.currentTarget) { externalPicker = null; externalEditId = null; } }}
+      onkeydown={(e) => { if (e.key === 'Escape') { externalPicker = null; externalEditId = null; } }}
       role="dialog"
       aria-modal="true"
       aria-label="Mark as external"
@@ -3651,7 +3657,7 @@
 
         <div class="flex justify-end gap-2 mt-5">
           <button
-            onclick={() => (externalPicker = null)}
+            onclick={() => { externalPicker = null; externalEditId = null; }}
             class="px-3 py-1.5 text-sm font-ui text-on-surface-secondary hover:text-on-surface cursor-pointer"
           >Cancel</button>
           <button

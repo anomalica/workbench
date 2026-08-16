@@ -871,6 +871,41 @@ export class DocumentStore {
     if (result !== this.current) this.pushEdit(result);
   }
 
+  /** Change where an existing external passage came from, in place. Removing
+   *  it and re-adding on confirm meant Cancel left it removed - the reviewer
+   *  opened the dialog to look, backed out, and the passage had silently
+   *  stopped being external. */
+  editWordExternal(id: string, description: string, targetHash = "") {
+    const [fm, body] = splitFrontmatter(this.current);
+    const parsed = parseWords(body);
+    if (!parsed.externals.some((e) => e.id === id)) return;
+    const target = targetHash.trim().replace(/^sha256:/, "");
+    const externals = parsed.externals.map((e) =>
+      e.id === id
+        ? {
+            ...e,
+            description: sanitiseNoteText(description),
+            ...(target ? { target: `sha256:${target}` } : { target: undefined }),
+          }
+        : e,
+    );
+    const result =
+      fm +
+      serializeWords(
+        parsed.words,
+        parsed.runs,
+        parsed.lineEndWords,
+        parsed.preamble,
+        parsed.highlights,
+        parsed.spanNotes,
+        parsed.highlightContexts,
+        parsed.links,
+        externals,
+        parsed.citedWorks,
+      );
+    if (result !== this.current) this.pushEdit(result);
+  }
+
   removeWordExternal(id: string) {
     const [fm, body] = splitFrontmatter(this.current);
     const parsed = parseWords(body);
