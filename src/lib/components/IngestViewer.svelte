@@ -3775,6 +3775,16 @@
             bind:value={reviewNotes}
             placeholder="What did you change and why?"
             rows="3"
+            onkeydown={(e) => {
+              // Ctrl/Cmd-Enter submits, the same keystroke that saves a note
+              // and the word editor. Plain Enter stays a newline: the box is
+              // for a sentence about what changed.
+              if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !submitting) {
+                e.preventDefault();
+                submitAndAdvance = false;
+                handleSubmit();
+              }
+            }}
             class="w-full text-sm bg-surface border border-border rounded px-3 py-2
               text-on-surface outline-none focus:border-primary placeholder:text-on-surface-muted/50 resize-none"
           ></textarea>

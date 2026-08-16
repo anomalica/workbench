@@ -806,13 +806,31 @@
         <!-- Search and filter bar -->
         <div class="px-6 py-3 border-b border-border bg-surface-alt flex items-center gap-3 flex-none">
           {#if !showArchived}
-            <input
-              type="search"
-              placeholder="Search ingests..."
-              bind:value={searchQuery}
-              class="flex-1 max-w-md text-sm bg-surface border border-border rounded px-3 py-1.5
-                text-on-surface outline-none focus:border-primary placeholder:text-on-surface-muted/50"
-            />
+            <!-- type="text" with our own clear: type="search" draws the
+                 browser's cancel button, which Chromium paints its own blue and
+                 no stylesheet of ours reaches. -->
+            <div class="relative flex-1 max-w-md">
+              <input
+                type="text"
+                placeholder="Search ingests..."
+                bind:value={searchQuery}
+                class="w-full text-sm bg-surface border border-border rounded pl-3 pr-8 py-1.5
+                  text-on-surface outline-none focus:border-primary placeholder:text-on-surface-muted/50"
+              />
+              {#if searchQuery}
+                <button
+                  onclick={() => (searchQuery = "")}
+                  class="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded cursor-pointer
+                    text-on-surface-muted/60 hover:text-on-surface hover:bg-surface-alt"
+                  title="Clear search"
+                  aria-label="Clear search"
+                >
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              {/if}
+            </div>
             <div class="flex items-center gap-1">
               <button
                 onclick={() => { filterType = "all"; }}
