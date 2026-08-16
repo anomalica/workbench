@@ -58,13 +58,35 @@ describe("cited works", () => {
   });
 
   it("carries the record's hash once the work has been ingested", () => {
-    // Acquisition ADDS a hash; it never has to invalidate an assertion, which
-    // is the whole reason the marker records the citation and not held-ness.
+    // Acquisition ADDS a locator; it never has to invalidate an assertion,
+    // which is the whole reason the marker records the citation and not
+    // held-ness.
     const b = body(
       `{{cites-start: [a3, "book", "Dimensions", "Jacques Vallee", "sha256:7bf2c20d"]}}${W("it", 0)}{{cites-end: a3}}`,
     );
-    expect(parseWords(b).citedWorks[0].target).toBe("sha256:7bf2c20d");
+    expect(parseWords(b).citedWorks[0].locators).toEqual(["sha256:7bf2c20d"]);
     expect(round(b)).toContain('"Jacques Vallee", "sha256:7bf2c20d"');
+  });
+
+  it("carries a web page's URL, and both locators once it is ingested", () => {
+    const b = body(
+      `{{cites-start: [a6, "web", "Glowing Auras", "New York Times", "https://nyt.com/x", "sha256:7bf2c20d"]}}${W("that", 0)}{{cites-end: a6}}`,
+    );
+    const c = parseWords(b).citedWorks[0];
+    expect(c.kind).toBe("web");
+    expect(c.locators).toEqual(["https://nyt.com/x", "sha256:7bf2c20d"]);
+    expect(parseWords(round(b)).citedWorks).toEqual(parseWords(b).citedWorks);
+  });
+
+  it("does not read a URL in the TITLE as a locator", () => {
+    // Locators start at position 5. A title that happens to contain a URL is
+    // still a title.
+    const b = body(
+      `{{cites-start: [a7, "web", "Why https://example.com matters"]}}${W("this", 0)}{{cites-end: a7}}`,
+    );
+    const c = parseWords(b).citedWorks[0];
+    expect(c.title).toBe("Why https://example.com matters");
+    expect(c.locators).toBeUndefined();
   });
 
   it("auto-closes a half-deleted pair rather than corrupting the record", () => {

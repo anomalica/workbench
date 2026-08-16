@@ -77,7 +77,10 @@ export interface WordCitedWork {
   kind: string;
   title: string;
   creator?: string;
-  target?: string;
+  /** Zero or more self-identifying locators: `https://...` where it lives on
+   *  the web, `sha256:...` the record for it here. A work carries the ones it
+   *  has, in any order, and absence is absence rather than an empty slot. */
+  locators?: string[];
 }
 
 export interface WordExternal {
@@ -166,8 +169,11 @@ const EXTERNAL_END_MARKER = /\{\{external-end:\s*([A-Za-z0-9_-]+)\s*\}\}/g;
 // Positions: id, kind, title, optional creator, optional sha256 once ingested.
 // It records the citation, never whether the corpus holds the work - that is a
 // query, because held-ness changes and a marker cannot.
-const CITES_START_MARKER =
-  /\{\{cites-start:\s*\[\s*([A-Za-z0-9_-]+)\s*,\s*"((?:[^"\\]|\\.)*)"\s*,\s*"((?:[^"\\]|\\.)*)"\s*(?:,\s*"((?:[^"\\]|\\.)*)"\s*)?(?:,\s*"((?:[^"\\]|\\.)*)"\s*)?\]\s*\}\}/g;
+// id, kind, title, creator?, then zero or more LOCATORS, each self-identifying
+// by prefix (`https://`, `sha256:`). Matched as a whole list and split in code
+// rather than by arity, because the count is open-ended.
+const CITES_START_MARKER = /\{\{cites-start:\s*\[([^\]]*)\]\s*\}\}/g;
+const QUOTED = /"((?:[^"\\]|\\.)*)"/g;
 const CITES_END_MARKER = /\{\{cites-end:\s*([A-Za-z0-9_-]+)\s*\}\}/g;
 // {{highlight-context: [later, earlier, ...]}} - a STANDALONE annotation, not a
 // payload on highlight-start (which stays a bare scalar id). First id is the
@@ -189,6 +195,7 @@ interface SpanMarker {
   quote?: string;
   kind?: string;
   creator?: string;
+  locators?: string[];
 }
 
 /** Reverse the escaping escapeNoteText applies (\" -> ", \\ -> \). */
@@ -231,15 +238,24 @@ function extractSpanMarkers(s: string): { rest: string; markers: SpanMarker[] } 
     });
     return "";
   });
-  rest = rest.replace(CITES_START_MARKER, (_m, id, kind, title, creator, target) => {
+  rest = rest.replace(CITES_START_MARKER, (_m, inner: string) => {
+    const id = inner.split(",")[0].trim();
+    if (!/^[A-Za-z0-9_-]+$/.test(id)) return "";
+    QUOTED.lastIndex = 0;
+    const parts: string[] = [];
+    for (let m = QUOTED.exec(inner); m; m = QUOTED.exec(inner)) parts.push(unescapeNoteText(m[1]));
+    const [kind, title, creator, ...locators] = parts;
+    if (!kind || title === undefined) return "";
     markers.push({
       family: "cites",
       dir: "start",
       id,
-      text: unescapeNoteText(title),
-      kind: unescapeNoteText(kind),
-      ...(creator !== undefined ? { creator: unescapeNoteText(creator) } : {}),
-      ...(target !== undefined ? { target: unescapeNoteText(target) } : {}),
+      text: title,
+      kind,
+      ...(creator !== undefined ? { creator } : {}),
+      // Locators start at position 5, so a title containing "https://" is
+      // never mistaken for one.
+      ...(locators.length ? { locators } : {}),
     });
     return "";
   });
@@ -347,6 +363,7 @@ export function parseWords(body: string): ParsedWords {
     quote?: string;
     kind?: string;
     creator?: string;
+    locators?: string[];
   }
   interface ResolvedSpan extends SpanPayload {
     id: string;
@@ -366,12 +383,20 @@ export function parseWords(body: string): ParsedWords {
   const citesR = mkResolver();
   let lastEmitted = -1;
 
-  const payloadOf = ({ text, target, quote, kind, creator }: SpanPayload): SpanPayload => ({
+  const payloadOf = ({
+    text,
+    target,
+    quote,
+    kind,
+    creator,
+    locators,
+  }: SpanPayload): SpanPayload => ({
     ...(text !== undefined ? { text } : {}),
     ...(target !== undefined ? { target } : {}),
     ...(quote !== undefined ? { quote } : {}),
     ...(kind !== undefined ? { kind } : {}),
     ...(creator !== undefined ? { creator } : {}),
+    ...(locators !== undefined ? { locators } : {}),
   });
   const openAt = (r: SpanResolver, id: string, g: number, payload: SpanPayload) => {
     const prev = r.open.get(id);
@@ -511,14 +536,14 @@ export function parseWords(body: string): ParsedWords {
     }));
   const citedWorks: WordCitedWork[] = citesR.out
     .sort(bySpan)
-    .map(({ id, fromWord, toWord, text, kind, creator, target }) => ({
+    .map(({ id, fromWord, toWord, text, kind, creator, locators }) => ({
       id,
       fromWord,
       toWord,
       kind: kind ?? "book",
       title: text ?? "",
       ...(creator ? { creator } : {}),
-      ...(target ? { target } : {}),
+      ...(locators?.length ? { locators } : {}),
     }));
   const externals: WordExternal[] = extR.out
     .sort(bySpan)
@@ -638,7 +663,7 @@ export function serializeWords(
         (c) =>
           `{{cites-start: [${c.id}, "${escapeNoteText(c.kind)}", "${escapeNoteText(c.title)}"${
             c.creator !== undefined ? `, "${escapeNoteText(c.creator)}"` : ""
-          }${c.target !== undefined ? `, "${escapeNoteText(c.target)}"` : ""}]}}`,
+          }${(c.locators ?? []).map((l) => `, "${escapeNoteText(l)}"`).join("")}]}}`,
       )
       .join("") +
     (extStartsAt.get(i) ?? [])

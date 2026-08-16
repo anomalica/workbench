@@ -1384,6 +1384,11 @@
   let wantedOpen = $state(false);
   let wantedTitle = $state("");
   let wantedAuthor = $state("");
+  /** What sort of work the speaker named. A book takes a creator; a web page
+   *  takes a URL, which is also what makes it fetchable - ingest it later and
+   *  the record's hash joins the URL without invalidating anything. */
+  let wantedKind = $state<"book" | "web">("book");
+  let wantedUrl = $state("");
 
   /** Editing a cited work: its stored text is a specification the pipeline
    *  reads, so it is edited through the same two fields that wrote it rather
@@ -1412,11 +1417,21 @@
   function saveWanted() {
     if (!linkPicker || !wantedTitle.trim()) return;
     const author = wantedAuthor.trim();
-    doc.addWordCitedWork(linkPicker.from, linkPicker.to, wantedTitle, author);
+    const url = wantedUrl.trim();
+    doc.addWordCitedWork(
+      linkPicker.from,
+      linkPicker.to,
+      wantedTitle,
+      author,
+      wantedKind,
+      url ? [url] : [],
+    );
     linkPicker = null;
     wantedOpen = false;
     wantedTitle = "";
     wantedAuthor = "";
+    wantedUrl = "";
+    wantedKind = "book";
   }
   let allRecords = $state<IngestSummary[] | null>(null);
   /** The corpus listing, fetched at most once. Needed both to CHOOSE a link
@@ -3544,21 +3559,45 @@
         <div class="border-t border-border pt-3 mb-3">
           {#if wantedOpen}
             <div class="flex flex-col gap-2">
+              <!-- The kind decides the fields: a book is identified by its
+                   author, a page by its URL. -->
+              <select
+                bind:value={wantedKind}
+                class="w-full px-3 py-1.5 text-sm bg-surface-alt border border-border rounded outline-none focus:border-primary"
+              >
+                <option value="book">Book</option>
+                <option value="web">Web page</option>
+              </select>
               <input
                 type="text"
                 bind:value={wantedTitle}
                 autocomplete="off"
-          placeholder="Book title"
+                placeholder={wantedKind === "web" ? "Page title" : "Book title"}
                 class="w-full px-3 py-1.5 text-sm bg-surface-alt border border-border rounded outline-none focus:border-primary"
               />
               <input
                 type="text"
                 bind:value={wantedAuthor}
                 autocomplete="off"
-          placeholder="Author (optional)"
+                placeholder={wantedKind === "web"
+                  ? "Publication or author (optional)"
+                  : "Author (optional)"}
                 class="w-full px-3 py-1.5 text-sm bg-surface-alt border border-border rounded outline-none focus:border-primary"
                 onkeydown={(e) => { if (e.key === "Enter") { e.preventDefault(); saveWanted(); } }}
               />
+              {#if wantedKind === "web"}
+                <!-- A URL is what makes a cited page fetchable: ingest it later
+                     and the record's hash joins the URL, with nothing already
+                     written becoming wrong. -->
+                <input
+                  type="text"
+                  bind:value={wantedUrl}
+                  autocomplete="off"
+                  placeholder="https://... (optional)"
+                  class="w-full px-3 py-1.5 text-sm bg-surface-alt border border-border rounded outline-none focus:border-primary"
+                  onkeydown={(e) => { if (e.key === "Enter") { e.preventDefault(); saveWanted(); } }}
+                />
+              {/if}
             </div>
           {:else}
             <div class="flex items-center gap-2">
@@ -3567,7 +3606,7 @@
                 onclick={() => (wantedOpen = true)}
                 class="px-3 py-1.5 text-sm font-ui font-medium rounded border border-border
                   text-on-surface cursor-pointer hover:border-primary hover:text-primary"
-              >Unheld book</button>
+              >Cite a work</button>
             </div>
           {/if}
         </div>
@@ -3591,7 +3630,7 @@
                 {wantedTitle.trim()
                   ? 'bg-primary text-on-primary cursor-pointer hover:opacity-90'
                   : 'bg-surface-alt text-on-surface-muted/50 cursor-default'}"
-            >Record book</button>
+            >Record citation</button>
           {:else}
             <button
               onclick={confirmLink}

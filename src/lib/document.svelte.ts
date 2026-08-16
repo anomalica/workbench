@@ -790,7 +790,14 @@ export class DocumentStore {
    *  It records the CITATION, never whether the corpus holds the work - that
    *  is a query, because held-ness changes and a marker written into a body
    *  cannot. */
-  addWordCitedWork(from: number, to: number, title: string, creator = "", kind = "book") {
+  addWordCitedWork(
+    from: number,
+    to: number,
+    title: string,
+    creator = "",
+    kind = "book",
+    locators: string[] = [],
+  ) {
     const clean = sanitiseNoteText(title);
     if (!clean) return;
     const [fm, body] = splitFrontmatter(this.current);
@@ -803,7 +810,15 @@ export class DocumentStore {
     const who = sanitiseNoteText(creator);
     const citedWorks = [
       ...parsed.citedWorks,
-      { id, fromWord: lo, toWord: hi, kind, title: clean, ...(who ? { creator: who } : {}) },
+      {
+        id,
+        fromWord: lo,
+        toWord: hi,
+        kind,
+        title: clean,
+        ...(who ? { creator: who } : {}),
+        ...(locators.length ? { locators: locators.map((l) => sanitiseNoteText(l)) } : {}),
+      },
     ];
     const result =
       fmOut +
@@ -822,7 +837,7 @@ export class DocumentStore {
     if (result !== this.current) this.pushEdit(result);
   }
 
-  editWordCitedWork(id: string, title: string, creator = "") {
+  editWordCitedWork(id: string, title: string, creator = "", locators?: string[]) {
     const [fm, body] = splitFrontmatter(this.current);
     const parsed = parseWords(body);
     const clean = sanitiseNoteText(title);
