@@ -4,6 +4,7 @@
   import SpeakerDot from "./SpeakerDot.svelte";
   import { fetchSpeakers } from "$lib/api";
   import { type KnownSpeaker, suggestSpeakers } from "$lib/speaker-suggest";
+  import { nearMiss } from "$lib/near-miss";
 
   let {
     segments,
@@ -122,12 +123,25 @@
     addSpeaker();
   }
 
+  /** A name that is one slip from an existing one, held for confirmation. It
+   *  SUGGESTS: people with similar names exist, and rewriting silently is how
+   *  one person's words end up filed under another. */
+  let pendingNear = $state<{ typed: string; existing: string } | null>(null);
+
   function addSpeaker() {
     const name = newSpeakerName.trim();
+    if (name && !pendingNear) {
+      const near = nearMiss(name, [...known.map((k) => k.name), ...namedSpeakers]);
+      if (near) {
+        pendingNear = { typed: name, existing: near };
+        return;
+      }
+    }
     if (name && !namedSpeakers.includes(name)) {
       onaddnamed(name);
       newSpeakerName = "";
       showNewInput = false;
+      pendingNear = null;
     }
   }
 
@@ -407,7 +421,26 @@
         Add
       </button>
       </div>
-      {#if suggestions.length > 0}
+      {#if pendingNear}
+        <!-- Ask, never rewrite: "Ross Couthart" is a slip, but two people can
+             genuinely have names a character apart. -->
+        <div class="mt-1 rounded border border-warning/60 bg-warning/10 px-2 py-1.5 text-xs font-ui">
+          <p class="text-on-surface mb-1.5">
+            Close to <span class="font-medium">{pendingNear.existing}</span>, which the corpus
+            already uses. Same person?
+          </p>
+          <div class="flex items-center gap-3">
+            <button
+              onclick={() => { newSpeakerName = pendingNear!.existing; pendingNear = null; addSpeaker(); }}
+              class="font-medium text-primary cursor-pointer hover:underline"
+            >Use {pendingNear.existing}</button>
+            <button
+              onclick={() => { const t = pendingNear!.typed; pendingNear = null; newSpeakerName = t; addSpeaker(); }}
+              class="text-on-surface-muted cursor-pointer hover:text-on-surface"
+            >Keep {pendingNear.typed}</button>
+          </div>
+        </div>
+      {:else if suggestions.length > 0}
         <!-- Names already in the corpus. The point is the SPELLING: the same
              person gets written two ways across records and nothing downstream
              can tell them apart afterwards, so the existing form is shown
