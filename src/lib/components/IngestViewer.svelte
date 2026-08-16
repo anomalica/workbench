@@ -2367,6 +2367,21 @@
   // Still informational for labels/titles, but no longer disables submit:
   // a reviewed record can take a fresh zero-edit submission carrying
   // coverage spans ("looked, all fine").
+  /** Lines differing from the submitted version. Cheap: a line-count delta
+   *  plus changed lines, not a real diff - the point is the ORDER of
+   *  magnitude, and computing a proper diff on every keystroke is the very
+   *  cost being warned about. */
+  const BIG_DIFF_LINES = 500;
+  let pendingLines = $derived.by(() => {
+    if (!doc.dirty) return 0;
+    const a = doc.original.split("\n");
+    const b = doc.current.split("\n");
+    let same = 0;
+    const n = Math.min(a.length, b.length);
+    for (let i = 0; i < n; i++) if (a[i] === b[i]) same++;
+    return Math.max(a.length, b.length) - same;
+  });
+
   let alreadyApproved = $derived(!doc.dirty && reviewed);
   // The toolbar button's disabled state. When logged out it must stay
   // CLICKABLE - its click navigates to the login page, so disabling it
@@ -3299,6 +3314,18 @@
             class="text-warning font-medium underline decoration-dotted underline-offset-2 hover:decoration-solid cursor-pointer"
             title="View what changed (diff)"
           >unsaved changes</button>
+          {#if pendingLines >= BIG_DIFF_LINES}
+            <!-- A speaker rename can rewrite thousands of lines, and the whole
+                 diff is recomputed and re-rendered on every keystroke after
+                 that. Submitting resets the baseline, so the sluggishness has a
+                 cure the reviewer would not otherwise connect to the cause. -->
+            <span
+              class="text-warning/80"
+              title="Every edit re-renders this diff. Submitting resets the baseline and the editor becomes responsive again."
+            >
+              - {pendingLines.toLocaleString()} lines changed, consider submitting
+            </span>
+          {/if}
         {/if}
       </div>
     </div>
