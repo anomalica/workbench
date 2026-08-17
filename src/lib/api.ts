@@ -1292,6 +1292,9 @@ export interface InfrastructureSummary {
   works_held: number;
   by_type: { type: string; count: number }[];
   suspect: number;
+  /** Works the graph lists under more than one name, so the counts above
+   *  report them twice. */
+  works_double_listed: number;
 }
 
 export interface InfrastructureEntity {
@@ -1308,6 +1311,8 @@ export interface InfrastructureEntityDetail {
   name: string;
   kind: string;
   held: boolean;
+  /** Other names this same work is listed under, unmerged. */
+  also_listed_as: string[];
   aliases: string[];
   claims: InfrastructureClaim[];
   connected: { id: string; name: string; kind: string; shared: number }[];

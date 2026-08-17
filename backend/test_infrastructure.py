@@ -90,6 +90,41 @@ def test_title_keys_covers_both_directions_of_the_convention():
     assert "hair of the alien deoxyribonucleic acid dna and other evidence" in keys
 
 
+def test_a_lower_case_parenthetical_is_a_disambiguator_not_an_acronym():
+    # Matching case-insensitively reduced every "X (book)" to the key "book",
+    # so eight unrelated books collided and any record titled "... (book)"
+    # would have marked all of them held.
+    assert not (title_keys("Moon Shot (book)") & title_keys("Seeing Red (book)"))
+    assert "moon shot" in title_keys("Moon Shot (book)")
+    # The ALL-CAPS form still folds, which is the case this exists for.
+    assert "ufo danger zone" in title_keys(
+        "Unidentified Flying Object (UFO) Danger Zone"
+    )
+
+
+def test_a_work_listed_under_two_names_says_so(db):
+    # Two nodes for one work, which the counts report twice. The assimilator's
+    # merge ledger would fold them, but its replay is only ever passed the
+    # domain database, so they are unreachable rather than merely unmerged.
+    con = sqlite3.connect(db)
+    con.execute(
+        "INSERT INTO nodes VALUES ('w4','document','American Cosmic (Pasulka book)')"
+    )
+    con.execute("INSERT INTO claim_node_refs VALUES (4,'w4')")
+    con.commit()
+    con.close()
+    assert entity("w1", db)["also_listed_as"] == ["American Cosmic (Pasulka book)"]
+    assert entity("w4", db)["also_listed_as"] == ["American Cosmic"]
+    assert summary(db)["works_double_listed"] == 2
+    # A person is not a work; the shelf and its duplicates are a works concern.
+    assert entity("p1", db)["also_listed_as"] == []
+
+
+def test_a_work_named_once_is_not_reported_as_a_duplicate(db):
+    assert entity("w2", db)["also_listed_as"] == []
+    assert summary(db)["works_double_listed"] == 0
+
+
 def test_entities_are_ranked_by_how_often_the_corpus_returns_to_them(db):
     works = entities(db, kind="document")
     assert [w["name"] for w in works][0] == "American Cosmic"

@@ -22,6 +22,7 @@ const summary: api.InfrastructureSummary = {
     { type: "testimony", count: 1 },
   ],
   suspect: 2,
+  works_double_listed: 0,
 };
 
 const works: api.InfrastructureEntity[] = [

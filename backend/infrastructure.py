@@ -69,7 +69,12 @@ def _open(db_path: str | Path | None = None) -> sqlite3.Connection | None:
 
 # --- Matching a named work against the records the corpus actually holds ---
 
-_ACRONYM = re.compile(r"\b[\w'\-]+(?:\s+[\w'\-]+){0,5}\s+\(([a-z]{2,10})\)")
+# Case is the whole signal here: an ALL-CAPS tail is an acronym for the words
+# before it, a lower-case one is a disambiguator. Matching case-insensitively
+# reduced every "X (book)" title to the single key "book", so eight unrelated
+# books collided with each other and any record titled "... (book)" would have
+# marked all of them held.
+_ACRONYM = re.compile(r"\b[\w'\-]+(?:\s+[\w'\-]+){0,5}\s+\(([A-Z0-9][A-Z0-9\-]{1,9})\)")
 _PARENTHETICAL = re.compile(r"\s*\([^)]*\)")
 _LOOSE = re.compile(r"[^a-z0-9]+")
 
@@ -81,9 +86,19 @@ def title_keys(title: str | None) -> set[str]:
     (UFO)" - so the same work is `Messengers of Deception: UFO Contacts and
     Cults` in one place and carries the expansion in another. Matching the
     literal string finds 8 held works of 800; matching all three forms finds 18.
+
+    The third form drops any parenthetical, which is how `Communion (Whitley
+    Strieber book)` reaches `Communion`. That one is deliberately loose: it is
+    what a reader would call the same work, and it costs nothing here because a
+    false pairing only means a shelf-check hit on a title the corpus does hold.
     """
-    t = (title or "").lower()
-    forms = {t, _ACRONYM.sub(r"\1", t), _PARENTHETICAL.sub("", t)}
+    raw = title or ""
+    t = raw.lower()
+    forms = {
+        t,
+        _ACRONYM.sub(lambda m: m.group(1), raw).lower(),
+        _PARENTHETICAL.sub("", t),
+    }
     return {k for k in (_LOOSE.sub(" ", f).strip() for f in forms) if k}
 
 
@@ -160,9 +175,33 @@ def summary(db_path: str | Path | None = None, held_titles=None) -> dict | None:
             "works_named": len(works),
             "by_type": by_type,
             "suspect": sum(t["count"] for t in by_type if t["type"] != ADMINISTRATIVE),
+            "works_double_listed": len(_same_work_names(con)),
         }
     finally:
         con.close()
+
+
+def _same_work_names(con: sqlite3.Connection) -> dict[str, list[str]]:
+    """Works listed under more than one name, keyed by each of those names.
+
+    `Communion` and `Communion (Whitley Strieber book)` are two nodes, so the
+    corpus counts them as two works. The assimilator's merge ledger would fold
+    them, but replay is only ever passed the domain connection - it has never
+    reached this database, and a merge recorded today still would not. Until
+    that changes the duplicates are unreachable, so the view names them rather
+    than quietly reporting one work as two.
+    """
+    by_key: dict[str, set[str]] = {}
+    for row in _work_rows(con):
+        for k in title_keys(row["name"]):
+            by_key.setdefault(k, set()).add(row["name"])
+    out: dict[str, set[str]] = {}
+    for names in by_key.values():
+        if len(names) < 2:
+            continue
+        for n in names:
+            out.setdefault(n, set()).update(names - {n})
+    return {n: sorted(others) for n, others in out.items()}
 
 
 def _with_own_records(con: sqlite3.Connection, titles):
@@ -320,6 +359,11 @@ def entity(
             "name": node["name"],
             "kind": node["node_type"],
             "held": bool(held_titles) and held_by(node["name"]),
+            "also_listed_as": (
+                _same_work_names(con).get(node["name"], [])
+                if node["node_type"] == "document"
+                else []
+            ),
             "aliases": [
                 r["alias"]
                 for r in con.execute(

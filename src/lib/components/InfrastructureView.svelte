@@ -385,6 +385,15 @@
                   : "Not in the corpus - named by the material, not held."}
               </p>
             {/if}
+            {#if selected.also_listed_as.length}
+              <!-- Two nodes for one work. The assimilator's merge ledger would
+                   fold these, but its replay is only ever handed the domain
+                   database, so they are unreachable rather than unmerged. -->
+              <p class="text-xs font-ui text-amber-600 dark:text-amber-400 mt-1">
+                Also listed separately as {selected.also_listed_as.join("; ")} - counted
+                more than once.
+              </p>
+            {/if}
             {#if selected.aliases.length}
               <p class="text-xs font-ui text-on-surface-muted mt-1">
                 Also written as {selected.aliases.join(", ")}
@@ -490,6 +499,14 @@
                   </li>
                 {/each}
               </ul>
+              {#if summary.works_double_listed}
+                <p class="text-[11px] font-ui text-on-surface-muted leading-relaxed">
+                  {summary.works_double_listed} of the works are listed under more than one
+                  name ("Communion" and "Communion (Whitley Strieber book)"), so the counts
+                  above report them twice. Merging is the assimilator's, and its replay has
+                  never been pointed at this database.
+                </p>
+              {/if}
               <p class="text-[11px] font-ui text-on-surface-muted leading-relaxed">
                 <span class="text-on-surface-secondary">administrative</span> is what a
                 bibliography is made of. The other {summary.suspect} were typed as things
