@@ -214,3 +214,74 @@ describe("prior coverage realigns across a mark-irrelevant insert", () => {
     expect(unitsInSpans(newBlocks, prev)).toBeLessThan(totalUnits(newBlocks));
   });
 });
+
+describe("a page boundary stated twice", () => {
+  // A scanned PDF says both: sheet 6 of the file is page 2 of the document.
+  const body = [
+    "Prose before the boundary.",
+    "",
+    "<!-- file_page: 6 -->",
+    "",
+    "<!-- printed_page: 2 -->",
+    "",
+    "Prose after it.",
+  ].join("\n");
+
+  it("is one block, not two", () => {
+    // Two blocks means two dividers - "PAGE 6" directly above "PAGE 2" with
+    // nothing between them, a page that does not exist.
+    const blocks = parseTextBlocks(body);
+    expect(blocks).toHaveLength(3);
+    expect(blocks[1].source).toContain("file_page: 6");
+    expect(blocks[1].source).toContain("printed_page: 2");
+  });
+
+  it("keeps both numbers, because both are used", () => {
+    // The printed page labels the divider; the file page is what the source
+    // pane scrolls to.
+    const [, marker] = parseTextBlocks(body);
+    expect(marker.source).toMatch(/file_page:\s*6/);
+    expect(marker.source).toMatch(/printed_page:\s*2/);
+  });
+
+  it("spans the lines of both markers", () => {
+    const [, marker] = parseTextBlocks(body);
+    expect(marker.lineFrom).toBe(2);
+    expect(marker.lineTo).toBe(4);
+  });
+
+  it("renumbers what follows, with no gap", () => {
+    const blocks = parseTextBlocks(body);
+    expect(blocks.map((b) => b.index)).toEqual([0, 1, 2]);
+  });
+
+  it("leaves a lone marker of either kind alone", () => {
+    // An EPUB pagebreak has no file page; a PDF with no printed number has no
+    // printed page. Both still render one divider.
+    expect(parseTextBlocks("a\n\n<!-- printed_page: xiv -->\n\nb")).toHaveLength(3);
+    expect(parseTextBlocks("a\n\n<!-- file_page: 3 -->\n\nb")).toHaveLength(3);
+  });
+
+  it("does not merge across a change in relevance", () => {
+    // The second marker is inside a cut region and the first is not; folding
+    // them would drag a live boundary into the cut.
+    const split = [
+      "<!-- file_page: 6 -->",
+      "",
+      "<!-- irrelevant: start -->",
+      "",
+      "<!-- printed_page: 2 -->",
+      "",
+      "<!-- irrelevant: end -->",
+    ].join("\n");
+    const blocks = parseTextBlocks(split);
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0].irrelevant).toBe(false);
+    expect(blocks[1].irrelevant).toBe(true);
+  });
+
+  it("does not merge two markers separated by prose", () => {
+    const apart = "<!-- file_page: 6 -->\n\nSome prose.\n\n<!-- printed_page: 2 -->";
+    expect(parseTextBlocks(apart)).toHaveLength(3);
+  });
+});

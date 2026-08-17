@@ -135,7 +135,54 @@ export function parseTextBlocks(body: string): TextBlock[] {
       irrelevant: inIrrelevant,
     });
   }
-  return blocks;
+  return mergePageMarkerPairs(blocks, lines);
+}
+
+const FILE_PAGE_ONLY = /^<!--\s*file_page:\s*\d+\s*-->$/;
+const PRINTED_PAGE_ONLY = /^<!--\s*printed_page:\s*[A-Za-z0-9]+\s*-->$/;
+
+/**
+ * One page boundary is one block, even when the record states it twice.
+ *
+ * A scanned PDF carries both numbers because they are different facts: sheet 6
+ * of the file is page 2 of the document. The ingester emits them as adjacent
+ * markers, and the renderer already collapses the pair into a single divider
+ * labelled with the printed page - but it works on one block's source at a
+ * time, and a blank line between the two markers puts them in separate blocks.
+ * The collapse then never sees a pair, and the reader gets "PAGE 6" directly
+ * above "PAGE 2" with nothing between them: a page that does not exist.
+ *
+ * Merging is right rather than picking one, because both numbers are used -
+ * the printed one is what the divider says, the file one is what the source
+ * pane scrolls to. Neither is dropped; they just stop being two places.
+ *
+ * Coverage is unaffected: it is counted over line numbers, which do not move,
+ * and a marker line is not a content line in the first place.
+ */
+function mergePageMarkerPairs(blocks: TextBlock[], lines: string[]): TextBlock[] {
+  const merged: TextBlock[] = [];
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i];
+    const next = blocks[i + 1];
+    const pair =
+      next !== undefined &&
+      block.irrelevant === next.irrelevant &&
+      FILE_PAGE_ONLY.test(block.source.trim()) &&
+      PRINTED_PAGE_ONLY.test(next.source.trim());
+    if (pair) {
+      merged.push({
+        ...block,
+        index: merged.length,
+        lineTo: next.lineTo,
+        source: lines.slice(block.lineFrom, next.lineTo + 1).join("\n"),
+        contentLines: [...block.contentLines, ...next.contentLines],
+      });
+      i++;
+      continue;
+    }
+    merged.push(block.index === merged.length ? block : { ...block, index: merged.length });
+  }
+  return merged;
 }
 
 /** Wrap the inclusive line range in irrelevant markers, each on its own

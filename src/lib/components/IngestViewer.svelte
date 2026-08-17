@@ -1309,6 +1309,11 @@
       (isEbook && !localSourceFile),
   );
 
+  /** Does this record state its own page numbers anywhere? A scan whose sheets
+   *  carry no printed numbers reads perfectly well with the file page called
+   *  "Page"; one that carries both must not use the same word for each. */
+  let hasPrintedPages = $derived(/<!--\s*printed_page:/.test(currentBody()));
+
   // Column visibility: user toggles which of source/ingest/digest are shown.
   // Persists to localStorage. The Source column is auto-suppressed for
   // record types that have nothing to display there (see singleColumn).
@@ -1716,7 +1721,7 @@
     body = body.replace(
       /<!--\s*file_page:\s*(\d+)\s*-->\s*\n\s*<!--\s*printed_page:\s*([A-Za-z0-9]+)\s*-->/g,
       (_, filePage, printedPage) =>
-        `\n\n<div class="page-marker" data-file-page="${filePage}"><span class="page-label">Page ${printedPage}</span></div>\n\n`,
+        `\n\n<div class="page-marker" data-file-page="${filePage}" title="Sheet ${filePage} of the file"><span class="page-label">Page ${printedPage}</span></div>\n\n`,
     );
     return body.replace(
       /<!--\s*([\s\S]*?)-->/g,
@@ -1728,12 +1733,17 @@
         const inner = messageInner(trimmed);
         if (inner !== null) return messageHeaderHtml(parseMessage(inner));
 
-        // Page marker (PDFs)
+        // Page marker (PDFs) with no printed number beside it.
         const pageMatch = trimmed.match(/^file_page:\s*(\d+)/);
         if (pageMatch) {
+          // In a record that numbers its pages, calling this one "Page 7"
+          // puts a sheet number in the same word as its neighbours' printed
+          // numbers, and the sequence reads 2, 7, 3. It is a sheet - the
+          // extractor found no printed number on it - so it says so.
+          const label = hasPrintedPages ? `Sheet ${pageMatch[1]}` : `Page ${pageMatch[1]}`;
           // Blank lines around the raw div, or CommonMark's HTML block runs
           // to the next blank line and swallows an adjacent heading.
-          return `\n\n<div class="page-marker" data-file-page="${pageMatch[1]}"><span class="page-label">Page ${pageMatch[1]}</span></div>\n\n`;
+          return `\n\n<div class="page-marker" data-file-page="${pageMatch[1]}"><span class="page-label">${label}</span></div>\n\n`;
         }
         // Page marker (ebooks): printed_page stands alone - EPUB pagebreaks
         // have no file_page - and must render as a visible divider.
