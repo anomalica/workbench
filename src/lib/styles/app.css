@@ -319,9 +319,9 @@ body {
   white-space: nowrap;
 }
 
-/* The file's page number sits beside the document's, quieter, so the eye
-   lands on the number printed on the paper. */
-.page-marker .page-label-file {
+/* The number printed on the paper, set quieter beside the file's count so the
+   run of dividers still reads as a straight sequence. */
+.page-marker .page-label-printed {
   font-weight: 400;
   text-transform: none;
   letter-spacing: 0;

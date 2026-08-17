@@ -1309,11 +1309,6 @@
       (isEbook && !localSourceFile),
   );
 
-  /** Does this record state its own page numbers anywhere? A scan whose sheets
-   *  carry no printed numbers reads perfectly well with the file page called
-   *  "Page"; one that carries both must not use the same word for each. */
-  let hasPrintedPages = $derived(/<!--\s*printed_page:/.test(currentBody()));
-
   // Column visibility: user toggles which of source/ingest/digest are shown.
   // Persists to localStorage. The Source column is auto-suppressed for
   // record types that have nothing to display there (see singleColumn).
@@ -1721,16 +1716,18 @@
     body = body.replace(
       /<!--\s*file_page:\s*(\d+)\s*-->\s*\n\s*<!--\s*printed_page:\s*([A-Za-z0-9]+)\s*-->/g,
       (_, filePage, printedPage) => {
-        // Both numbers say "page" because both ARE pages - one of the document,
-        // one of the file it was scanned into. Naming only the printed one
-        // leaves a reader wondering why page 2 follows page 5; naming only the
-        // file one hides the number actually on the paper. When they agree
-        // there is nothing to disambiguate, so it says it once.
-        const also =
+        // The divider counts the FILE, always, because that is what the reader
+        // is scrolling and it never skips: 1, 2, 3, 4. Leading with the printed
+        // number instead makes the sequence jump - page 5, page 2, page 7 - and
+        // the dividers stop working as a way of knowing where you are.
+        //
+        // The number printed on the paper is the more meaningful one, so it is
+        // still here, in brackets and named, wherever it differs.
+        const printed =
           filePage === printedPage
             ? ""
-            : `<span class="page-label page-label-file">file page ${filePage}</span>`;
-        return `\n\n<div class="page-marker" data-file-page="${filePage}"><span class="page-label">Page ${printedPage}</span>${also}</div>\n\n`;
+            : `<span class="page-label page-label-printed">(document page ${printedPage})</span>`;
+        return `\n\n<div class="page-marker" data-file-page="${filePage}"><span class="page-label">Page ${filePage}</span>${printed}</div>\n\n`;
       },
     );
     return body.replace(
@@ -1746,18 +1743,12 @@
         // Page marker (PDFs) with no printed number beside it.
         const pageMatch = trimmed.match(/^file_page:\s*(\d+)/);
         if (pageMatch) {
-          // Nothing was printed on this one. In a record whose other pages
-          // ARE numbered, calling the file's number "Page 7" puts it in the
-          // same words as its neighbours' printed numbers and the sequence
-          // reads 2, 7, 3 - so it says which number it is. Where the record
-          // has no printed numbers at all there is nothing to confuse it
-          // with, and "Page N" is the only numbering that record has.
-          const label = hasPrintedPages
-            ? `file page ${pageMatch[1]}`
-            : `Page ${pageMatch[1]}`;
+          // Nothing printed on this one, so the file's count is all there is
+          // to say - and it is the same count its neighbours lead with, so the
+          // run stays unbroken.
           // Blank lines around the raw div, or CommonMark's HTML block runs
           // to the next blank line and swallows an adjacent heading.
-          return `\n\n<div class="page-marker" data-file-page="${pageMatch[1]}"><span class="page-label">${label}</span></div>\n\n`;
+          return `\n\n<div class="page-marker" data-file-page="${pageMatch[1]}"><span class="page-label">Page ${pageMatch[1]}</span></div>\n\n`;
         }
         // Page marker (ebooks): printed_page stands alone - EPUB pagebreaks
         // have no file_page - and must render as a visible divider.
