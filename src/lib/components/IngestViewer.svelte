@@ -50,6 +50,7 @@
   import FindReplaceView from "./FindReplaceView.svelte";
   import AuditView from "./AuditView.svelte";
   import EpubViewer from "./EpubViewer.svelte";
+  import PdfViewer from "./PdfViewer.svelte";
   import ProseMarkup from "./ProseMarkup.svelte";
   import WordTranscript from "./WordTranscript.svelte";
   import MarkupList from "./MarkupList.svelte";
@@ -1646,13 +1647,9 @@
     view = "diff";
   }
 
-  // PDF page sync
+  // PDF page sync. Just a number now: the viewer scrolls to it, so moving
+  // between pages costs a scroll rather than a reload of the whole file.
   let pdfPage = $state(1);
-  let pdfSrc = $derived(
-    localSourceUrl && isPdf
-      ? `${localSourceUrl}#toolbar=0&navpanes=0&page=${pdfPage}`
-      : null,
-  );
 
   function escapeHtml(s: string): string {
     return s.replace(/[&<>"']/g, (c) => ({
@@ -1858,7 +1855,6 @@
     );
   }
 
-  let pdfNavTimer: ReturnType<typeof setTimeout> | null = null;
 
   /** Render {{redacted: ~N words}} and {{illegible}} markers as styled
    *  inline blocks. Each redacted word is shown as a fixed-width bar. */
@@ -1964,16 +1960,9 @@
 
   function navigatePdfToPage(page: number) {
     if (!sourceBlob || page === pdfPage) return;
-    if (pdfNavTimer) clearTimeout(pdfNavTimer);
-    pdfNavTimer = setTimeout(() => {
-      pdfPage = page;
-      // A fresh URL, because a PDF viewer in an iframe ignores a change to the
-      // #page fragment alone. Minting one is cheap - it is a new handle on the
-      // same bytes, not a copy - but the old handle has to go or every jump
-      // leaks the whole file.
-      if (localSourceUrl) URL.revokeObjectURL(localSourceUrl);
-      localSourceUrl = URL.createObjectURL(sourceBlob!);
-    }, 300);
+    // No debounce: setting the page is now a scroll in a viewer that is
+    // already open, so there is nothing to protect against firing often.
+    pdfPage = page;
   }
 
   // Prose container ref for page sync
@@ -4125,24 +4114,15 @@
           {/if}
         </div>
 
-        {#if pdfSrc && isPdf}
-          {#if loadingFile}
-            <div class="flex-1 flex items-center justify-center text-on-surface-muted">
-              <div class="text-center">
-                <svg class="w-6 h-6 mx-auto mb-2 animate-spin text-primary" fill="none" viewBox="0 0 24 24">
-                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-                </svg>
-                <p class="text-xs font-ui">Loading PDF...</p>
-              </div>
-            </div>
-          {/if}
-          <iframe
-            src={pdfSrc}
-            class="flex-1 w-full border-none {loadingFile ? 'hidden' : ''}"
-            title="Source PDF"
-            onload={() => { loadingFile = false; }}
-          ></iframe>
+        {#if isPdf && sourceBlob}
+          <!-- Rendered here rather than by the browser: its viewer has no way
+               to be moved to a page except by reloading the file. -->
+          <PdfViewer
+            blob={sourceBlob}
+            page={pdfPage}
+            onpagechange={(n) => (pdfPage = n)}
+            class="flex-1 min-h-0"
+          />
         {:else if ytId}
           <!-- Container reshapes between modes; #yt-player keeps the exact
                same classes and parent across the toggle so the YouTube
