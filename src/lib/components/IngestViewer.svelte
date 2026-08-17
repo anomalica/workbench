@@ -1720,8 +1720,18 @@
     // (xiv, I10), so match alphanumerics, not just digits.
     body = body.replace(
       /<!--\s*file_page:\s*(\d+)\s*-->\s*\n\s*<!--\s*printed_page:\s*([A-Za-z0-9]+)\s*-->/g,
-      (_, filePage, printedPage) =>
-        `\n\n<div class="page-marker" data-file-page="${filePage}" title="Sheet ${filePage} of the file"><span class="page-label">Page ${printedPage}</span></div>\n\n`,
+      (_, filePage, printedPage) => {
+        // Both numbers say "page" because both ARE pages - one of the document,
+        // one of the file it was scanned into. Naming only the printed one
+        // leaves a reader wondering why page 2 follows page 5; naming only the
+        // file one hides the number actually on the paper. When they agree
+        // there is nothing to disambiguate, so it says it once.
+        const also =
+          filePage === printedPage
+            ? ""
+            : `<span class="page-label page-label-file">file page ${filePage}</span>`;
+        return `\n\n<div class="page-marker" data-file-page="${filePage}"><span class="page-label">Page ${printedPage}</span>${also}</div>\n\n`;
+      },
     );
     return body.replace(
       /<!--\s*([\s\S]*?)-->/g,
@@ -1736,15 +1746,18 @@
         // Page marker (PDFs) with no printed number beside it.
         const pageMatch = trimmed.match(/^file_page:\s*(\d+)/);
         if (pageMatch) {
-          // In a record that numbers its own pages, printing the file's
-          // number here would read as a page number, and the sequence goes
-          // 2, 7, 3. There is no page number for this one, so the divider
-          // carries none - the break is still shown, and the file number
-          // stays on the element for the source pane to scroll by.
-          const label = hasPrintedPages ? "" : `Page ${pageMatch[1]}`;
+          // Nothing was printed on this one. In a record whose other pages
+          // ARE numbered, calling the file's number "Page 7" puts it in the
+          // same words as its neighbours' printed numbers and the sequence
+          // reads 2, 7, 3 - so it says which number it is. Where the record
+          // has no printed numbers at all there is nothing to confuse it
+          // with, and "Page N" is the only numbering that record has.
+          const label = hasPrintedPages
+            ? `file page ${pageMatch[1]}`
+            : `Page ${pageMatch[1]}`;
           // Blank lines around the raw div, or CommonMark's HTML block runs
           // to the next blank line and swallows an adjacent heading.
-          return `\n\n<div class="page-marker" data-file-page="${pageMatch[1]}"${label ? "" : ' title="Page break - this page carries no printed number"'}>${label ? `<span class="page-label">${label}</span>` : ""}</div>\n\n`;
+          return `\n\n<div class="page-marker" data-file-page="${pageMatch[1]}"><span class="page-label">${label}</span></div>\n\n`;
         }
         // Page marker (ebooks): printed_page stands alone - EPUB pagebreaks
         // have no file_page - and must render as a visible divider.

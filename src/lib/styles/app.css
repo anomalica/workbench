@@ -319,6 +319,15 @@ body {
   white-space: nowrap;
 }
 
+/* The file's page number sits beside the document's, quieter, so the eye
+   lands on the number printed on the paper. */
+.page-marker .page-label-file {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  opacity: 0.6;
+}
+
 .ingest-figure {
   margin: 1.5rem auto;
   text-align: center;
