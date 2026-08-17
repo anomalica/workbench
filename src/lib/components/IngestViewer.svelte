@@ -1046,10 +1046,17 @@
   }
   let localSourceUrl = $state<string | null>(null);
   let loadingFile = $state(false);
+  /** The original's bytes, however they arrived - dropped by the reviewer or
+   *  fetched from the archive. Page navigation needs to mint a fresh object
+   *  URL to make the PDF viewer move, and only the auto-loaded path used to
+   *  keep anything to mint one FROM: clicking a page divider on a record whose
+   *  original had been fetched did nothing at all. */
+  let sourceBlob = $state<Blob | null>(null);
 
   // Create/revoke blob URL when file changes
   $effect(() => {
     if (localSourceFile) {
+      sourceBlob = localSourceFile;
       const url = URL.createObjectURL(localSourceFile);
       localSourceUrl = url;
       return () => URL.revokeObjectURL(url);
@@ -1236,6 +1243,7 @@
         })
         .then((blob) => {
           if (blob && blob.size > 0) {
+            sourceBlob = blob;
             const url = URL.createObjectURL(blob);
             localSourceUrl = url;
             accessGranted = true;
@@ -1955,14 +1963,16 @@
   }
 
   function navigatePdfToPage(page: number) {
-    if (!localSourceFile || page === pdfPage) return;
+    if (!sourceBlob || page === pdfPage) return;
     if (pdfNavTimer) clearTimeout(pdfNavTimer);
     pdfNavTimer = setTimeout(() => {
       pdfPage = page;
-      // Create fresh URL to force reload. Don't set loadingFile -
-      // the old PDF stays visible until the new one loads over it.
+      // A fresh URL, because a PDF viewer in an iframe ignores a change to the
+      // #page fragment alone. Minting one is cheap - it is a new handle on the
+      // same bytes, not a copy - but the old handle has to go or every jump
+      // leaks the whole file.
       if (localSourceUrl) URL.revokeObjectURL(localSourceUrl);
-      localSourceUrl = URL.createObjectURL(localSourceFile!);
+      localSourceUrl = URL.createObjectURL(sourceBlob!);
     }, 300);
   }
 
@@ -1975,7 +1985,7 @@
   // Set up click handler and IntersectionObserver for page markers.
   // Runs as $effect so it re-initialises when content changes.
   $effect(() => {
-    if (!proseContainer || !isPdf || (!localSourceFile && !localSourceUrl)) return;
+    if (!proseContainer || !isPdf || !sourceBlob) return;
 
     // Wait a tick for {@html} to render into the DOM
     const timer = setTimeout(() => {
