@@ -194,24 +194,33 @@ def _same_work_names(con: sqlite3.Connection) -> dict[str, list[str]]:
     A shared key is not enough on its own. `Kirtland Air Force Base (UAP)
     Report` and `Vandenberg Air Force Base (UAP) Report` both reduce to `uap
     report` - two different documents agreeing on an acronym and a trailing
-    word. So a key only pairs names when one of them IS that key written out:
-    `UFO Danger Zone` is `ufo danger zone`, which is why it pairs with
-    `Unidentified Flying Object (UFO) Danger Zone`, while `uap report` is
-    neither document's name and pairs nothing.
+    word. So the pairing is asymmetric: names pair when one of them IS what the
+    other reduces to. `UFO Danger Zone` is `ufo danger zone`, which is why it
+    pairs with `Unidentified Flying Object (UFO) Danger Zone`; the two reports
+    agree only on a reduced form neither of them is called, so they pair
+    nothing.
+
+    Asymmetric per pair, not per key - the distinction collapses if a whole key
+    group is joined up whenever any one member anchors it. Add a third work
+    actually named `UAP Report` and a per-key test would re-admit the pair it
+    just excluded, through the anchor rather than through each other.
     """
-    plain: dict[str, set[str]] = {}
+    plain: dict[str, str] = {}
     by_key: dict[str, set[str]] = {}
     for row in _work_rows(con):
         name = row["name"]
-        plain.setdefault(_LOOSE.sub(" ", name.lower()).strip(), set()).add(name)
+        plain[name] = _LOOSE.sub(" ", name.lower()).strip()
         for k in title_keys(name):
             by_key.setdefault(k, set()).add(name)
     out: dict[str, set[str]] = {}
     for key, names in by_key.items():
-        if len(names) < 2 or key not in plain:
+        if len(names) < 2:
             continue
-        for n in names:
-            out.setdefault(n, set()).update(names - {n})
+        # Only a name the key spells out can pair, and only outward.
+        for anchor in (n for n in names if plain[n] == key):
+            for other in names - {anchor}:
+                out.setdefault(anchor, set()).add(other)
+                out.setdefault(other, set()).add(anchor)
     return {n: sorted(others) for n, others in out.items()}
 
 

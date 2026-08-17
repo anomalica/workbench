@@ -139,6 +139,30 @@ def test_two_documents_sharing_an_acronym_and_a_tail_are_not_one_work(db):
     assert summary(db)["works_double_listed"] == 0
 
 
+def test_a_third_work_that_spells_out_the_key_does_not_join_the_other_two(db):
+    # The pairing has to be per pair, not per key. "UAP Report" anchors the
+    # group, but that is a reason to pair it with each report - not a reason to
+    # pair the two reports with each other through it.
+    con = sqlite3.connect(db)
+    con.executescript(
+        """
+        INSERT INTO nodes VALUES
+          ('d1','document','Kirtland Air Force Base (UAP) Report'),
+          ('d2','document','Vandenberg Air Force Base (UAP) Report'),
+          ('d3','document','UAP Report');
+        INSERT INTO claim_node_refs VALUES (1,'d1'),(2,'d2'),(3,'d3');
+        """
+    )
+    con.commit()
+    con.close()
+    assert entity("d1", db)["also_listed_as"] == ["UAP Report"]
+    assert entity("d2", db)["also_listed_as"] == ["UAP Report"]
+    assert sorted(entity("d3", db)["also_listed_as"]) == [
+        "Kirtland Air Force Base (UAP) Report",
+        "Vandenberg Air Force Base (UAP) Report",
+    ]
+
+
 def test_an_acronym_written_out_in_full_is_the_same_work(db):
     # The other side of the same rule: one name IS the shared key, so the pair
     # is the corpus's own acronym convention rather than a coincidence.
