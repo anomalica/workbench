@@ -1736,14 +1736,15 @@
         // Page marker (PDFs) with no printed number beside it.
         const pageMatch = trimmed.match(/^file_page:\s*(\d+)/);
         if (pageMatch) {
-          // In a record that numbers its pages, calling this one "Page 7"
-          // puts a sheet number in the same word as its neighbours' printed
-          // numbers, and the sequence reads 2, 7, 3. It is a sheet - the
-          // extractor found no printed number on it - so it says so.
-          const label = hasPrintedPages ? `Sheet ${pageMatch[1]}` : `Page ${pageMatch[1]}`;
+          // In a record that numbers its own pages, printing the file's
+          // number here would read as a page number, and the sequence goes
+          // 2, 7, 3. There is no page number for this one, so the divider
+          // carries none - the break is still shown, and the file number
+          // stays on the element for the source pane to scroll by.
+          const label = hasPrintedPages ? "" : `Page ${pageMatch[1]}`;
           // Blank lines around the raw div, or CommonMark's HTML block runs
           // to the next blank line and swallows an adjacent heading.
-          return `\n\n<div class="page-marker" data-file-page="${pageMatch[1]}"><span class="page-label">${label}</span></div>\n\n`;
+          return `\n\n<div class="page-marker" data-file-page="${pageMatch[1]}"${label ? "" : ' title="Page break - this page carries no printed number"'}>${label ? `<span class="page-label">${label}</span>` : ""}</div>\n\n`;
         }
         // Page marker (ebooks): printed_page stands alone - EPUB pagebreaks
         // have no file_page - and must render as a visible divider.
