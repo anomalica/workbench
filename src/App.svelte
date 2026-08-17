@@ -26,6 +26,12 @@
   import TuningView from "$lib/components/TuningView.svelte";
   import GraphView from "$lib/components/GraphView.svelte";
   import CurationView from "$lib/components/CurationView.svelte";
+  import {
+    loadBrowsePrefs,
+    saveBrowsePrefs,
+    type DateField,
+    type SortKey,
+  } from "$lib/browse-prefs";
   import InfrastructureView from "$lib/components/InfrastructureView.svelte";
   import ArticlesView from "$lib/components/ArticlesView.svelte";
   import ReviewView from "$lib/components/ReviewView.svelte";
@@ -161,25 +167,22 @@
         .map((i) => i.content_hash),
     ),
   );
-  let sortBy = $state<
-    | "date"
-    | "title"
-    | "type"
-    | "version"
-    | "publisher"
-    | "creator"
-    | "digestible"
-    | "digested"
-    | "copyright"
-  >("date");
-  let sortAsc = $state(false);
+  // How the list is arranged is how a reviewer works, not a one-off action, so
+  // it is remembered across visits (browse-prefs.ts).
+  const browsePrefs = loadBrowsePrefs();
+  let sortBy = $state<SortKey>(browsePrefs.sortBy);
+  let sortAsc = $state(browsePrefs.sortAsc);
   // Which date the date column shows (and what "Date" sort uses).
   // Lives in the toolbar above the list as a separate selector;
   // the table's Date column header stays a plain sort-direction toggle.
-  let dateField = $state<"published" | "ingested" | "reviewed">("published");
+  let dateField = $state<DateField>(browsePrefs.dateField);
   let dateMenuOpen = $state(false);
 
-  const DATE_FIELD_LABELS: Record<typeof dateField, string> = {
+  $effect(() => {
+    saveBrowsePrefs({ sortBy, sortAsc, dateField });
+  });
+
+  const DATE_FIELD_LABELS: Record<DateField, string> = {
     published: "Published",
     ingested: "Ingested",
     reviewed: "Reviewed",
@@ -202,7 +205,7 @@
     return i.date || "";
   }
 
-  function pickDateField(f: typeof dateField) {
+  function pickDateField(f: DateField) {
     dateField = f;
     dateMenuOpen = false;
   }
