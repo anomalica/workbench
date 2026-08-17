@@ -1387,7 +1387,19 @@
   /** What sort of work the speaker named. A book takes a creator; a web page
    *  takes a URL, which is also what makes it fetchable - ingest it later and
    *  the record's hash joins the URL without invalidating anything. */
-  let wantedKind = $state<"book" | "web">("book");
+  /** What a speaker can name. Kept short and closed: a long list makes the
+   *  reviewer classify rather than record, and the kind only has to be enough
+   *  to know how the work is identified and whether it can be fetched. */
+  const CITED_KINDS = [
+    { value: "book", label: "Book" },
+    { value: "web", label: "Web page" },
+    { value: "film", label: "Film or documentary" },
+    { value: "paper", label: "Paper or report" },
+    { value: "broadcast", label: "Broadcast or podcast" },
+    { value: "other", label: "Other" },
+  ] as const;
+  type CitedKind = (typeof CITED_KINDS)[number]["value"];
+  let wantedKind = $state<CitedKind>("book");
   let wantedUrl = $state("");
 
   /** Editing a cited work: its stored text is a specification the pipeline
@@ -3561,31 +3573,44 @@
             <div class="flex flex-col gap-2">
               <!-- The kind decides the fields: a book is identified by its
                    author, a page by its URL. -->
-              <select
-                bind:value={wantedKind}
-                class="w-full px-3 py-1.5 text-sm bg-surface-alt border border-border rounded outline-none focus:border-primary"
-              >
-                <option value="book">Book</option>
-                <option value="web">Web page</option>
-              </select>
+              <!-- appearance-none and our own chevron: the native arrow sits
+                   hard against the border with no room around it, and its
+                   position is the browser's to decide, not ours. -->
+              <div class="relative">
+                <select
+                  bind:value={wantedKind}
+                  class="w-full appearance-none pl-3 pr-9 py-1.5 text-sm bg-surface-alt border border-border
+                    rounded outline-none focus:border-primary cursor-pointer"
+                >
+                  {#each CITED_KINDS as k (k.value)}
+                    <option value={k.value}>{k.label}</option>
+                  {/each}
+                </select>
+                <svg
+                  class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-on-surface-muted"
+                  fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"
+                >
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+                </svg>
+              </div>
               <input
                 type="text"
                 bind:value={wantedTitle}
                 autocomplete="off"
-                placeholder={wantedKind === "web" ? "Page title" : "Book title"}
+                placeholder={wantedKind === "book" ? "Book title" : "Title"}
                 class="w-full px-3 py-1.5 text-sm bg-surface-alt border border-border rounded outline-none focus:border-primary"
               />
               <input
                 type="text"
                 bind:value={wantedAuthor}
                 autocomplete="off"
-                placeholder={wantedKind === "web"
-                  ? "Publication or author (optional)"
-                  : "Author (optional)"}
+                placeholder={wantedKind === "book"
+                  ? "Author (optional)"
+                  : "Publication, author or maker (optional)"}
                 class="w-full px-3 py-1.5 text-sm bg-surface-alt border border-border rounded outline-none focus:border-primary"
                 onkeydown={(e) => { if (e.key === "Enter") { e.preventDefault(); saveWanted(); } }}
               />
-              {#if wantedKind === "web"}
+              {#if wantedKind !== "book"}
                 <!-- A URL is what makes a cited page fetchable: ingest it later
                      and the record's hash joins the URL, with nothing already
                      written becoming wrong. -->
@@ -3593,7 +3618,7 @@
                   type="text"
                   bind:value={wantedUrl}
                   autocomplete="off"
-                  placeholder="https://... (optional)"
+                  placeholder={wantedKind === "web" ? "https://... " : "https://... (if it is online)"}
                   class="w-full px-3 py-1.5 text-sm bg-surface-alt border border-border rounded outline-none focus:border-primary"
                   onkeydown={(e) => { if (e.key === "Enter") { e.preventDefault(); saveWanted(); } }}
                 />
