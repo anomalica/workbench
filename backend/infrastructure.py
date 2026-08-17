@@ -190,14 +190,25 @@ def _same_work_names(con: sqlite3.Connection) -> dict[str, list[str]]:
     reached this database, and a merge recorded today still would not. Until
     that changes the duplicates are unreachable, so the view names them rather
     than quietly reporting one work as two.
+
+    A shared key is not enough on its own. `Kirtland Air Force Base (UAP)
+    Report` and `Vandenberg Air Force Base (UAP) Report` both reduce to `uap
+    report` - two different documents agreeing on an acronym and a trailing
+    word. So a key only pairs names when one of them IS that key written out:
+    `UFO Danger Zone` is `ufo danger zone`, which is why it pairs with
+    `Unidentified Flying Object (UFO) Danger Zone`, while `uap report` is
+    neither document's name and pairs nothing.
     """
+    plain: dict[str, set[str]] = {}
     by_key: dict[str, set[str]] = {}
     for row in _work_rows(con):
-        for k in title_keys(row["name"]):
-            by_key.setdefault(k, set()).add(row["name"])
+        name = row["name"]
+        plain.setdefault(_LOOSE.sub(" ", name.lower()).strip(), set()).add(name)
+        for k in title_keys(name):
+            by_key.setdefault(k, set()).add(name)
     out: dict[str, set[str]] = {}
-    for names in by_key.values():
-        if len(names) < 2:
+    for key, names in by_key.items():
+        if len(names) < 2 or key not in plain:
             continue
         for n in names:
             out.setdefault(n, set()).update(names - {n})

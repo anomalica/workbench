@@ -120,6 +120,44 @@ def test_a_work_listed_under_two_names_says_so(db):
     assert entity("p1", db)["also_listed_as"] == []
 
 
+def test_two_documents_sharing_an_acronym_and_a_tail_are_not_one_work(db):
+    # "Kirtland ... (UAP) Report" and "Vandenberg ... (UAP) Report" both reduce
+    # to "uap report". A shared key alone would pair them; the key has to be one
+    # of the names written out, and "uap report" is neither.
+    con = sqlite3.connect(db)
+    con.executescript(
+        """
+        INSERT INTO nodes VALUES
+          ('d1','document','Kirtland Air Force Base (UAP) Report'),
+          ('d2','document','Vandenberg Air Force Base (UAP) Report');
+        INSERT INTO claim_node_refs VALUES (1,'d1'),(2,'d2');
+        """
+    )
+    con.commit()
+    con.close()
+    assert entity("d1", db)["also_listed_as"] == []
+    assert summary(db)["works_double_listed"] == 0
+
+
+def test_an_acronym_written_out_in_full_is_the_same_work(db):
+    # The other side of the same rule: one name IS the shared key, so the pair
+    # is the corpus's own acronym convention rather than a coincidence.
+    con = sqlite3.connect(db)
+    con.executescript(
+        """
+        INSERT INTO nodes VALUES
+          ('d1','document','UFO Danger Zone'),
+          ('d2','document','Unidentified Flying Object (UFO) Danger Zone');
+        INSERT INTO claim_node_refs VALUES (1,'d1'),(2,'d2');
+        """
+    )
+    con.commit()
+    con.close()
+    assert entity("d1", db)["also_listed_as"] == [
+        "Unidentified Flying Object (UFO) Danger Zone"
+    ]
+
+
 def test_a_work_named_once_is_not_reported_as_a_duplicate(db):
     assert entity("w2", db)["also_listed_as"] == []
     assert summary(db)["works_double_listed"] == 0
