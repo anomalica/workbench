@@ -61,7 +61,7 @@
   import { imageRefsInBody } from "$lib/image-captions";
   import { messageInner, parseMessage, messageHeaderHtml } from "$lib/email-thread";
   import { untrack } from "svelte";
-  import { marked } from "$lib/markdown";
+  import { marked, withMath } from "$lib/markdown";
   import yaml from "js-yaml";
 
   let {
@@ -4731,7 +4731,9 @@
 
             <!-- The model input itself, rendered like the ingest view. -->
             {@const predigestHtml = hardenLinks(
-              renderRedactions(marked.parse(preprocessAnnotations(predigest.body)) as string),
+              withMath(predigest.body, (text) =>
+                renderRedactions(marked.parse(preprocessAnnotations(text)) as string),
+              ),
             )}
             <div class="px-8 py-6 prose max-w-none text-on-surface prose-headings:text-on-surface prose-a:text-primary prose-img:rounded prose-img:max-w-full prose-hr:border-border">
               <!-- eslint-disable-next-line svelte/no-at-html-tags -->
@@ -5365,10 +5367,12 @@
           <ReadableText
             body={currentBody()}
             renderBlock={(src, lineFrom) =>
-              hardenLinks(
-                renderSpanMarkers(
-                  renderRedactions(
-                    marked.parse(preprocessAnnotations(src, !!user, lineFrom)) as string,
+              withMath(src, (text) =>
+                hardenLinks(
+                  renderSpanMarkers(
+                    renderRedactions(
+                      marked.parse(preprocessAnnotations(text, !!user, lineFrom)) as string,
+                    ),
                   ),
                 ),
               )}
@@ -5382,9 +5386,12 @@
           />
           </ProseMarkup>
         {:else}
-          {@const processedBody = preprocessAnnotations(currentBody())}
-          {@const renderedHtml = hardenLinks(
-            renderSpanMarkers(renderRedactions(marked.parse(processedBody) as string)),
+          {@const renderedHtml = withMath(currentBody(), (text) =>
+            hardenLinks(
+              renderSpanMarkers(
+                renderRedactions(marked.parse(preprocessAnnotations(text)) as string),
+              ),
+            ),
           )}
           <ProseMarkup
             bind:containerEl={proseContainer}

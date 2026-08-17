@@ -16,7 +16,7 @@
   // there; without the ingest beside it, "what did the models miss?" is
   // unanswerable, and that is the question this view exists to answer.
   import { onMount } from "svelte";
-  import { marked } from "$lib/markdown";
+  import { marked, withMath } from "$lib/markdown";
   import {
     fetchComparable,
     fetchComparison,
@@ -76,7 +76,9 @@
   let saving = $state(false);
   let saveNote = $state<string | null>(null);
 
-  let renderedBody = $derived(predigest ? marked.parse(predigest.body) : "");
+  let renderedBody = $derived(
+    predigest ? withMath(predigest.body, (text) => marked.parse(text) as string) : "",
+  );
 
   // --- linking a claim to the source it came from -----------------------------
   // The source pane is rendered as SEGMENTS - one span per stretch of text,

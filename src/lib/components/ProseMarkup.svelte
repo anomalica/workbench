@@ -9,7 +9,13 @@
    * The reviewer's gesture is the same one either side: select, then say what
    * the selection is.
    */
-  import { insertHighlight, insertSpanNote, locateSelection, mintId } from "$lib/prose-anchor";
+  import {
+    insertHighlight,
+    insertSpanNote,
+    locateSelection,
+    mintId,
+    rangeText,
+  } from "$lib/prose-anchor";
 
   interface Props {
   /** Rendered HTML of the body, when this renders its own prose. */
@@ -71,7 +77,9 @@
   }
   const range = sel.getRangeAt(0);
   if (!containerEl?.contains(range.commonAncestorContainer)) return;
-  const text = sel.toString();
+  // Not sel.toString(): a rendered equation's glyphs are nothing like its
+  // source, and including them makes the selection unanchorable.
+  const text = rangeText(range);
   if (!text.trim()) {
     picked = null;
     return;
@@ -83,7 +91,7 @@
   const host = containerEl.getBoundingClientRect();
   picked = {
     text,
-    before: lead.toString().slice(-LEAD),
+    before: rangeText(lead).slice(-LEAD),
     // Viewport coordinates: the prose may scroll in this element or in a
     // child that brings its own scroller, and fixed positioning is right
     // either way.

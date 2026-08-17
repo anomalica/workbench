@@ -49,6 +49,20 @@ export function indexBody(raw: string): AnchorIndex {
       skipTo(close === -1 ? raw.length : close + 3);
       continue;
     }
+    // An equation is dropped, exactly like a marker. It renders as glyphs that
+    // are nothing like its source, so it can never be matched by text - and
+    // dropping it means no offset ever points inside one, which is what stops
+    // a note's marker being spliced into the middle of the LaTeX. A selection
+    // spanning an equation anchors on the prose either side and the equation
+    // falls inside the span.
+    if (raw.startsWith("\\[", i) || raw.startsWith("\\(", i)) {
+      const closer = raw[i + 1] === "[" ? "\\]" : "\\)";
+      const close = raw.indexOf(closer, i + 2);
+      if (close !== -1) {
+        skipTo(close + 2);
+        continue;
+      }
+    }
     // Inline annotations are markers, not prose - including any note or
     // highlight already anchored here, so a second note can be placed over
     // words the first one already spans.
@@ -86,6 +100,20 @@ export function indexBody(raw: string): AnchorIndex {
     i++;
   }
   return { text, map };
+}
+
+/**
+ * The text of a range, with rendered equations left out.
+ *
+ * `range.toString()` reads what KaTeX drew - glyphs bearing no relation to the
+ * `\sqrt{\beta}` in the body - so a selection spanning an equation could
+ * never be matched back. `indexBody` drops equations for the same reason, and
+ * the two only agree if both do.
+ */
+export function rangeText(range: Range): string {
+  const clone = range.cloneContents();
+  for (const el of clone.querySelectorAll(".wb-math, .katex")) el.remove();
+  return clone.textContent ?? "";
 }
 
 /** Collapse a selection's text the same way, so the two can be compared. */

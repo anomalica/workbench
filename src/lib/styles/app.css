@@ -1,6 +1,9 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 @import "../../../../brand/css/tokens.css";
+/* KaTeX ships its own fonts; Vite fingerprints and bundles them, so nothing is
+   fetched from a CDN at runtime. */
+@import "katex/dist/katex.min.css";
 
 html {
   -webkit-font-smoothing: antialiased;
@@ -369,4 +372,23 @@ body {
 ::highlight(claim-quote) {
   background-color: color-mix(in srgb, var(--color-primary) 25%, transparent);
   color: inherit;
+}
+
+/* A display equation is its own paragraph and gets the space to say so; an
+   inline one sits in the line without disturbing it. */
+.wb-math-display {
+  display: block;
+  margin: 0.85rem 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* Unparseable LaTeX renders as its own source rather than blanking - readable,
+   still faithful, and visibly not an equation that rendered. */
+.wb-math .katex-error {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.9em;
+  color: var(--color-warning, #b45309);
+  border-bottom: 1px dotted currentColor;
+  cursor: help;
 }
