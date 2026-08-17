@@ -1269,3 +1269,99 @@ export async function fetchGraphNode(id: string): Promise<GraphNodeDetail | null
 
 // The schedule + processing-mode API moved to the local `scheduler` repo
 // (review-vs-orchestrate split). The workbench is review-only.
+
+/** A claim the extraction filed as infrastructure rather than domain. */
+export interface InfrastructureClaim {
+  content: string;
+  claim_type: string;
+  attestation: string | null;
+  location_in_record: string | null;
+  origin: string | null;
+  relay: string | null;
+  record_title: string | null;
+  record_hash: string | null;
+}
+
+export interface InfrastructureSummary {
+  claims: number;
+  records: number;
+  entities: { document: number; person: number; organisation: number };
+  connected: Record<string, number>;
+  /** Works named by the material, and how many of them the corpus holds. */
+  works_named: number;
+  works_held: number;
+  by_type: { type: string; count: number }[];
+  suspect: number;
+}
+
+export interface InfrastructureEntity {
+  id: string;
+  name: string;
+  mentions: number;
+  records: number;
+  /** Works only: whether the corpus holds this one. */
+  held: boolean;
+}
+
+export interface InfrastructureEntityDetail {
+  id: string;
+  name: string;
+  kind: string;
+  held: boolean;
+  aliases: string[];
+  claims: InfrastructureClaim[];
+  connected: { id: string; name: string; kind: string; shared: number }[];
+}
+
+// The infrastructure views read the assimilator's second database, which a
+// static build does not ship - hence no readPath fallback.
+export interface InfrastructureRecord {
+  title: string;
+  hash: string;
+  claims: number;
+}
+
+export async function fetchInfrastructure(): Promise<{
+  summary: InfrastructureSummary | null;
+  records: InfrastructureRecord[];
+}> {
+  const res = await fetch("/api/infrastructure");
+  if (res.status === 503 || res.status === 404) return { summary: null, records: [] };
+  if (!res.ok) throw new Error(`Failed to fetch infrastructure summary: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchInfrastructureEntities(
+  kind: string,
+  q = "",
+): Promise<InfrastructureEntity[]> {
+  const params = new URLSearchParams({ kind });
+  if (q.trim()) params.set("q", q.trim());
+  const res = await fetch(`/api/infrastructure/entities?${params}`);
+  if (!res.ok) throw new Error(`Failed to fetch infrastructure entities: ${res.status}`);
+  return (await res.json()).entities;
+}
+
+export async function fetchInfrastructureEntity(
+  nodeId: string,
+): Promise<InfrastructureEntityDetail | null> {
+  const res = await fetch(`/api/infrastructure/entities/${encodeURIComponent(nodeId)}`);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`Failed to fetch infrastructure entity: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchInfrastructureClaims(
+  claimType = "",
+  q = "",
+  // The whole set. A cap here would show "500 claims" beside a header saying
+  // 1,830 and give no sign which 1,330 were dropped.
+  limit = 2500,
+): Promise<InfrastructureClaim[]> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (claimType) params.set("claim_type", claimType);
+  if (q.trim()) params.set("q", q.trim());
+  const res = await fetch(`/api/infrastructure/claims?${params}`);
+  if (!res.ok) throw new Error(`Failed to fetch infrastructure claims: ${res.status}`);
+  return (await res.json()).claims;
+}

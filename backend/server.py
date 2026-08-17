@@ -42,7 +42,7 @@ from backend import (
     tuning,
     waveform,
 )
-from backend import archive_flag
+from backend import archive_flag, infrastructure
 from backend.auth import setup_auth
 from backend.sync import GIT_LOCK, SyncManager
 
@@ -1515,6 +1515,74 @@ def remove_role(login: str, request: Request) -> JSONResponse:
     if not source.save_roles(updated, admin.get("name", ""), admin.get("email", "")):
         raise HTTPException(status_code=404, detail="Role management unavailable here")
     return JSONResponse({"roles": updated})
+
+
+def _held_titles() -> list[str]:
+    """Titles of every record the corpus holds, for the shelf-check.
+
+    The infrastructure graph names ~800 works; the interesting question about
+    each is whether we have it. The comparison is by title because that is all
+    a citation gives us - the works are named in prose, not by hash.
+    """
+    return [r.get("title", "") for r in source.list_ingests()]
+
+
+@app.get("/api/infrastructure")
+def infrastructure_summary(request: Request) -> JSONResponse:
+    """What the infrastructure half of the corpus contains.
+
+    Nothing has read this database since it was created, so the tab's first job
+    is to say what is in it - see backend/infrastructure.py.
+    """
+    _require_user(request)
+    return JSONResponse(
+        {
+            "summary": infrastructure.summary(held_titles=_held_titles()),
+            "records": infrastructure.records(),
+        }
+    )
+
+
+@app.get("/api/infrastructure/entities")
+def infrastructure_entities(
+    request: Request, kind: str = "document", q: str = ""
+) -> JSONResponse:
+    """Works, people or organisations that infrastructure claims mention."""
+    _require_user(request)
+    if kind not in infrastructure.BROWSABLE:
+        raise HTTPException(status_code=404, detail="Not found")
+    held = _held_titles() if kind == "document" else None
+    return JSONResponse(
+        {"entities": infrastructure.entities(kind=kind, query=q, held_titles=held)}
+    )
+
+
+@app.get("/api/infrastructure/entities/{node_id}")
+def infrastructure_entity(request: Request, node_id: str) -> JSONResponse:
+    _require_user(request)
+    found = infrastructure.entity(node_id, held_titles=_held_titles())
+    if found is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return JSONResponse(found)
+
+
+@app.get("/api/infrastructure/claims")
+def infrastructure_claims(
+    request: Request,
+    claim_type: str | None = None,
+    q: str = "",
+    limit: int = 200,
+    offset: int = 0,
+) -> JSONResponse:
+    """The raw claims, non-administrative first."""
+    _require_user(request)
+    return JSONResponse(
+        {
+            "claims": infrastructure.claims(
+                claim_type=claim_type, query=q, limit=min(limit, 2500), offset=offset
+            )
+        }
+    )
 
 
 @app.get("/api/speakers")

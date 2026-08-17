@@ -26,6 +26,7 @@
   import TuningView from "$lib/components/TuningView.svelte";
   import GraphView from "$lib/components/GraphView.svelte";
   import CurationView from "$lib/components/CurationView.svelte";
+  import InfrastructureView from "$lib/components/InfrastructureView.svelte";
   import ArticlesView from "$lib/components/ArticlesView.svelte";
   import ReviewView from "$lib/components/ReviewView.svelte";
   import RolesView from "$lib/components/RolesView.svelte";
@@ -43,7 +44,7 @@
   // graph, since exploring and curating act on the same object. "articles" is
   // withdrawn until Assembly (briefs + content together) replaces it.
   let appMode = $state<
-    "records" | "graph" | "curate" | "inbox" | "roles" | "digests"
+    "records" | "graph" | "curate" | "inbox" | "roles" | "digests" | "infrastructure"
   >("records");
   // A node to open directly in the graph view (deep link /graph/<node_id>), so a
   // claim-count / any link can jump straight to that node's claims in context.
@@ -466,6 +467,11 @@
     history.pushState(null, "", "/curate");
   }
 
+  function showInfrastructure() {
+    appMode = "infrastructure";
+    history.pushState(null, "", "/infrastructure");
+  }
+
   function _removedShowArticles() {
     appMode = "records";
     history.pushState(null, "", "/articles");
@@ -516,6 +522,10 @@
       appMode = "inbox";
       loadIngests(); // ReviewView needs the record list for hash->title
       return;
+    }
+    if (path === "infrastructure" && !STATIC_READS) {
+      appMode = "infrastructure";
+      return; // InfrastructureView fetches its own data
     }
     if (path === "roles" && !STATIC_READS) {
       appMode = "roles";
@@ -608,6 +618,14 @@
           {appMode === 'graph' || appMode === 'curate' ? 'bg-bone/15 text-bone' : 'text-bone/50 hover:text-bone/80 hover:bg-bone/10'}"
         title="Explore and curate the assimilator's merged knowledge graph"
       >Knowledge Graph</button>
+      {#if liveBackend}
+        <button
+          onclick={showInfrastructure}
+          class="text-sm font-ui px-2.5 py-1 rounded cursor-pointer transition-colors
+            {appMode === 'infrastructure' ? 'bg-bone/15 text-bone' : 'text-bone/50 hover:text-bone/80 hover:bg-bone/10'}"
+          title="What the corpus's sources say about their own sources - works, authors, citations"
+        >Infrastructure</button>
+      {/if}
     </nav>
     <div class="flex-1"></div>
     {#if syncStatus}
@@ -733,6 +751,8 @@
   <main class="flex-1 flex flex-col min-h-0">
     {#if appMode === "digests"}
       <DigestsView />
+    {:else if appMode === "infrastructure"}
+      <InfrastructureView onopenrecord={openRecordByHash} />
     {:else if appMode === "roles"}
       <RolesView />
     {:else if appMode === "inbox"}
