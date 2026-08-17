@@ -467,16 +467,21 @@
              before, so that is the first useful thing the tab can do. -->
         <div class="px-6 py-6 flex gap-10 items-start flex-wrap">
           <div class="max-w-xl space-y-3">
+            <!-- The label says what these are. It does not say to click them:
+                 a list of rows has been clickable for thirty years, and a
+                 sentence explaining the interface to the person already using
+                 it is waste (editorial-style.md). -->
             <p class="text-sm font-ui text-on-surface-secondary leading-relaxed">
-              {TABS.find((t) => t.id === tab)?.blurb}. Choose one to read what the corpus
-              says about it.
+              {TABS.find((t) => t.id === tab)?.blurb}.
             </p>
             {#if summary}
-              <p class="text-sm font-ui text-on-surface-secondary leading-relaxed">
-                Of the {summary.works_named} works named across the material, {summary.works_held}
-                are ones we hold. The rest is a reading list the corpus assembled about
-                itself.
-              </p>
+              {#if tab === "document"}
+                <p class="text-sm font-ui text-on-surface-secondary leading-relaxed">
+                  Of the {summary.works_named} works named across the material, {summary.works_held}
+                  are ones we hold. The rest is a reading list the corpus assembled about
+                  itself.
+                </p>
+              {/if}
               <h3 class="text-xs font-ui font-medium text-on-surface-secondary pt-2">
                 What was extracted
               </h3>
@@ -499,7 +504,7 @@
                   </li>
                 {/each}
               </ul>
-              {#if summary.works_double_listed}
+              {#if summary.works_double_listed && tab === "document"}
                 <p class="text-[11px] font-ui text-on-surface-muted leading-relaxed">
                   {summary.works_double_listed} of the works are listed under more than one
                   name ("Communion" and "Communion (Whitley Strieber book)"), so the counts
