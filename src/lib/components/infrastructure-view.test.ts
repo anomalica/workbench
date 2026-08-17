@@ -23,12 +23,13 @@ const summary: api.InfrastructureSummary = {
   ],
   suspect: 2,
   works_double_listed: 0,
+  works_by_stage: { named: 2, queued: 0, ingested: 0, reviewed: 0, digested: 1 },
 };
 
 const works: api.InfrastructureEntity[] = [
-  { id: "w1", name: "American Cosmic", mentions: 30, records: 2, held: true },
-  { id: "w2", name: "Haunted Media", mentions: 3, records: 1, held: false },
-  { id: "w3", name: "Passport to Magonia", mentions: 2, records: 1, held: false },
+  { id: "w1", name: "American Cosmic", mentions: 30, records: 2, stage: "digested", stale: false },
+  { id: "w2", name: "Haunted Media", mentions: 3, records: 1, stage: "named", stale: false },
+  { id: "w3", name: "Passport to Magonia", mentions: 2, records: 1, stage: "named", stale: false },
 ];
 
 const claim = (over: Partial<api.InfrastructureClaim>): api.InfrastructureClaim => ({
@@ -51,11 +52,11 @@ beforeEach(() => {
 });
 
 describe("the shelf-check", () => {
-  it("counts works the corpus does not hold, and filters to them", async () => {
+  it("counts works we do not hold, and filters to them", async () => {
     render(InfrastructureView, {});
     // The headline number is the acquisition question: named minus held.
-    const missing = await screen.findByTitle(/Works the corpus names but does not hold/);
-    expect(missing.textContent?.replace(/\s+/g, " ").trim()).toBe("2 not in the corpus");
+    const missing = await screen.findByTitle(/Works our records name but we do not have/);
+    expect(missing.textContent?.replace(/\s+/g, " ").trim()).toBe("2 not held");
 
     await fireEvent.click(screen.getByText("Not held"));
     await waitFor(() => {
@@ -64,10 +65,17 @@ describe("the shelf-check", () => {
     });
   });
 
-  it("marks the held ones so the list reads as a shelf", async () => {
+  it("shows every work's pipeline stage on the same track", async () => {
+    // One indicator, filled as far as the work has got, on every row - so a
+    // reader compares works against each other rather than reading a sentence
+    // per work.
     const { container } = render(InfrastructureView, {});
     await screen.findByText("American Cosmic");
-    expect(container.querySelectorAll("span[title='The corpus holds this work']")).toHaveLength(1);
+    const rows = container.querySelectorAll(
+      "button span[title^='Named by'], button span[title^='Claims extracted']",
+    );
+    expect(rows).toHaveLength(3);
+    expect(container.querySelectorAll("button span[title^='Claims extracted']")).toHaveLength(1);
   });
 });
 

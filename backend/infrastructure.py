@@ -13,8 +13,8 @@ Fails." Following the claim-to-node references gives 800 works, 994 people and
 
 Two facts fall out of that and both drive the layout:
 
-  * Of the 800 works named, the corpus holds a handful. The rest is a reading
-    list the material assembled itself, which is why `held` is computed and
+  * Of the 800 works named, we hold 25. The rest is a reading list the material
+    assembled itself, which is why every work carries its pipeline stage and
     why works are the spine of the view rather than claims.
   * `administrative` (1,469 of 1,830) is the category working as intended - it
     is what a bibliography is made of. The other 361 are typed as observation,
@@ -103,12 +103,19 @@ def title_keys(title: str | None) -> set[str]:
 
 
 #: Below this, a prefix match is a coincidence rather than a truncation - see
-#: `_held_matcher`.
+#: `_matcher`.
 PREFIX_FLOOR = 20
 
 
-def _held_matcher(titles):
-    """Does the corpus hold the work with this name?
+#: How far a named work has got. A work is only a title in someone else's
+#: bibliography until it is acquired, and then it walks the same path as
+#: everything else: ingested, reviewed, digested. The order matters - the view
+#: renders it as a progress track.
+STAGES = ("named", "queued", "ingested", "reviewed", "digested")
+
+
+def _matcher(records):
+    """Find the held record a named work refers to, or None.
 
     Prefix as well as exact, because the record list truncates: the ingest
     titled `David Fravor: UFOs, Aliens, Fighter Jets, and Aerospace Engineering
@@ -116,29 +123,53 @@ def _held_matcher(titles):
     equality test calls that one unheld. Only from `PREFIX_FLOOR` characters up,
     so short titles still have to match outright.
     """
-    keys = set()
-    for t in titles or ():
-        keys |= title_keys(t)
-    long_keys = [k for k in keys if len(k) >= PREFIX_FLOOR]
+    by_key: dict[str, dict] = {}
+    for r in records or ():
+        for k in title_keys(r.get("title")):
+            by_key.setdefault(k, r)
+    long_keys = [k for k in by_key if len(k) >= PREFIX_FLOOR]
 
-    def held(name: str) -> bool:
+    def match(name: str) -> dict | None:
         mine = title_keys(name)
-        if mine & keys:
-            return True
-        return any(
-            (m.startswith(k) or k.startswith(m))
-            for k in long_keys
-            for m in mine
-            if len(m) >= PREFIX_FLOOR
-        )
+        for m in mine:
+            if m in by_key:
+                return by_key[m]
+        for m in mine:
+            if len(m) < PREFIX_FLOOR:
+                continue
+            for k in long_keys:
+                if m.startswith(k) or k.startswith(m):
+                    return by_key[k]
+        return None
 
-    return held
+    return match
+
+
+def _stage_of(record: dict | None) -> tuple[str, bool]:
+    """Which stage a matched record sits at, and whether it needs redoing.
+
+    Stale is the ingest's own generation, not the digest's: a record extracted
+    by an older version of the ingester says so in its frontmatter, and
+    everything downstream of it inherits the problem. A record that never
+    declared a generation is not stale, it is undeclared - no badge either way.
+    """
+    if record is None:
+        return "named", False
+    if record.get("queued"):
+        return "queued", False
+    version, current = record.get("pipeline_version"), record.get("pipeline_current")
+    stale = version is not None and current is not None and version < current
+    if record.get("digested"):
+        return "digested", stale
+    if record.get("digestible"):
+        return "reviewed", stale
+    return "ingested", stale
 
 
 # --- Reads ---
 
 
-def summary(db_path: str | Path | None = None, held_titles=None) -> dict | None:
+def summary(db_path: str | Path | None = None, records_held=None) -> dict | None:
     """What is in the database, in the terms the tab presents it.
 
     None when the database is absent, so the tab can say "the assimilator has
@@ -164,8 +195,12 @@ def summary(db_path: str | Path | None = None, held_titles=None) -> dict | None:
             )
         ]
         works = _work_rows(con)
-        held_by = _held_matcher(_with_own_records(con, held_titles))
-        held = sum(1 for w in works if held_by(w["name"])) if held_titles else 0
+        match = _matcher(_with_own_records(con, records_held))
+        stages = dict.fromkeys(STAGES, 0)
+        for w in works:
+            stage, _ = _stage_of(match(w["name"]))
+            stages[stage] += 1
+        held = len(works) - stages["named"] if records_held else 0
         return {
             "claims": con.execute("SELECT count(*) FROM claims").fetchone()[0],
             "records": con.execute("SELECT count(*) FROM records").fetchone()[0],
@@ -173,6 +208,7 @@ def summary(db_path: str | Path | None = None, held_titles=None) -> dict | None:
             "connected": {k: by_kind.get(k, 0) for k in by_kind},
             "works_held": held,
             "works_named": len(works),
+            "works_by_stage": stages if records_held else None,
             "by_type": by_type,
             "suspect": sum(t["count"] for t in by_type if t["type"] != ADMINISTRATIVE),
             "works_double_listed": len(_same_work_names(con)),
@@ -224,12 +260,19 @@ def _same_work_names(con: sqlite3.Connection) -> dict[str, list[str]]:
     return {n: sorted(others) for n, others in out.items()}
 
 
-def _with_own_records(con: sqlite3.Connection, titles):
-    """The caller's record titles, plus the records this database was built
-    from - a record that produced claims is held by definition, and its title
-    here is the untruncated one."""
-    own = [r["title"] for r in con.execute("SELECT title FROM records")]
-    return [*(titles or ()), *own]
+def _with_own_records(con: sqlite3.Connection, records):
+    """The caller's records, plus the ones this database was built from.
+
+    A record that produced infrastructure claims has been digested by
+    definition, and its title here is the untruncated one - the caller's list
+    may carry a display title cut short. Appended, so a caller's richer entry
+    for the same title wins the key.
+    """
+    own = [
+        {"title": r["title"], "digested": True, "content_hash": r["content_hash"]}
+        for r in con.execute("SELECT title, content_hash FROM records")
+    ]
+    return [*(records or ()), *own]
 
 
 def _work_rows(con: sqlite3.Connection) -> list[sqlite3.Row]:
@@ -274,7 +317,7 @@ def entities(
     *,
     kind: str = "document",
     query: str = "",
-    held_titles=None,
+    records_held=None,
     limit: int = ENTITY_LIMIT,
 ) -> list[dict]:
     """Entities of one kind that at least one infrastructure claim mentions.
@@ -309,17 +352,23 @@ def entities(
             """,
             [*args, limit],
         ).fetchall()
-        held_by = _held_matcher(_with_own_records(con, held_titles))
-        return [
-            {
-                "id": r["id"],
-                "name": r["name"],
-                "mentions": r["c"],
-                "records": r["records"],
-                "held": bool(held_titles) and held_by(r["name"]),
-            }
-            for r in rows
-        ]
+        match = _matcher(_with_own_records(con, records_held))
+        out = []
+        for r in rows:
+            stage, stale = (
+                _stage_of(match(r["name"])) if records_held else ("named", False)
+            )
+            out.append(
+                {
+                    "id": r["id"],
+                    "name": r["name"],
+                    "mentions": r["c"],
+                    "records": r["records"],
+                    "stage": stage,
+                    "stale": stale,
+                }
+            )
+        return out
     finally:
         con.close()
 
@@ -327,7 +376,7 @@ def entities(
 def entity(
     node_id: str,
     db_path: str | Path | None = None,
-    held_titles=None,
+    records_held=None,
     claim_limit: int = 200,
 ) -> dict | None:
     """One entity: what is said about it, and what it is said alongside.
@@ -373,12 +422,19 @@ def entity(
             """,
             (node_id, node_id),
         ).fetchall()
-        held_by = _held_matcher(_with_own_records(con, held_titles))
+        found = (
+            _matcher(_with_own_records(con, records_held))(node["name"])
+            if records_held and node["node_type"] == "document"
+            else None
+        )
+        stage, stale = _stage_of(found)
         return {
             "id": node["id"],
             "name": node["name"],
             "kind": node["node_type"],
-            "held": bool(held_titles) and held_by(node["name"]),
+            "stage": stage,
+            "stale": stale,
+            "record_hash": (found or {}).get("content_hash"),
             "also_listed_as": (
                 _same_work_names(con).get(node["name"], [])
                 if node["node_type"] == "document"

@@ -61,25 +61,78 @@ def test_counts_are_of_what_is_connected_not_what_is_stored(db):
     assert s["entities"] == {"document": 3, "person": 1, "organisation": 1}
 
 
-def test_the_shelf_check_counts_works_the_corpus_holds(db):
-    s = summary(db, held_titles=["American Cosmic"])
+def test_the_shelf_check_counts_works_we_hold(db):
+    s = summary(db, records_held=[{"title": "American Cosmic", "digested": True}])
     assert (s["works_held"], s["works_named"]) == (1, 3)
+    assert s["works_by_stage"]["digested"] == 1
+    assert s["works_by_stage"]["named"] == 2
     # Without a record list there is nothing to check against, and claiming
     # zero held would be a false statement rather than an unknown one.
     assert summary(db)["works_held"] == 0
+    assert summary(db)["works_by_stage"] is None
+
+
+def test_a_work_carries_how_far_along_the_pipeline_it_got(db):
+    # The same track for every work: a title in someone else's bibliography is
+    # "named", and acquiring it puts it on the path everything else walks.
+    held = [
+        {"title": "American Cosmic", "digested": True},
+        {"title": "Haunted Media", "digestible": True},
+        {"title": "Messengers of Deception: UFO Contacts and Cults"},
+    ]
+    stage = {
+        w["name"]: w["stage"] for w in entities(db, kind="document", records_held=held)
+    }
+    assert stage["American Cosmic"] == "digested"
+    assert stage["Haunted Media"] == "reviewed"
+    assert stage["Messengers of Deception: UFO Contacts and Cults"] == "ingested"
+
+
+def test_a_work_only_ingested_is_not_yet_reviewed(db):
+    held = [{"title": "American Cosmic"}]
+    got = entities(db, kind="document", records_held=held)[0]
+    assert (got["name"], got["stage"]) == ("American Cosmic", "ingested")
+
+
+def test_a_queued_record_sits_between_not_held_and_ingested(db):
+    # The ingester has produced it; it is not a record in the store yet.
+    held = [{"title": "Haunted Media", "queued": True}]
+    stage = {
+        w["name"]: w["stage"] for w in entities(db, kind="document", records_held=held)
+    }
+    assert stage["Haunted Media"] == "queued"
+
+
+def test_an_undeclared_generation_is_not_stale(db):
+    # A record extracted before the ingester declared generations says nothing
+    # about its own age. Absent is not behind.
+    old = [
+        {
+            "title": "American Cosmic",
+            "digested": True,
+            "pipeline_version": 1,
+            "pipeline_current": 3,
+        }
+    ]
+    silent = [{"title": "American Cosmic", "digested": True, "pipeline_current": 3}]
+    assert entity("w1", db, records_held=old)["stale"] is True
+    assert entity("w1", db, records_held=silent)["stale"] is False
 
 
 def test_a_title_matches_through_the_acronym_convention(db):
-    # The corpus writes "Unidentified Flying Object (UFO)" on first use, so the
+    # Our records write "Unidentified Flying Object (UFO)" on first use, so the
     # same work is named both ways. Literal matching misses half of them.
     held = [
-        "Messengers of Deception: Unidentified Flying Object (UFO) Contacts and Cults"
+        {
+            "title": "Messengers of Deception: Unidentified Flying Object (UFO) Contacts and Cults",
+            "digested": True,
+        }
     ]
-    named = {
-        w["name"]: w["held"] for w in entities(db, kind="document", held_titles=held)
+    stage = {
+        w["name"]: w["stage"] for w in entities(db, kind="document", records_held=held)
     }
-    assert named["Messengers of Deception: UFO Contacts and Cults"] is True
-    assert named["Haunted Media"] is False
+    assert stage["Messengers of Deception: UFO Contacts and Cults"] == "digested"
+    assert stage["Haunted Media"] == "named"
 
 
 def test_title_keys_covers_both_directions_of_the_convention():

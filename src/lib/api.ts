@@ -1290,6 +1290,9 @@ export interface InfrastructureSummary {
   /** Works named by the material, and how many of them the corpus holds. */
   works_named: number;
   works_held: number;
+  /** How many works sit at each pipeline stage, or null when there is no
+   *  record list to compare against. */
+  works_by_stage: Record<string, number> | null;
   by_type: { type: string; count: number }[];
   suspect: number;
   /** Works the graph lists under more than one name, so the counts above
@@ -1302,15 +1305,24 @@ export interface InfrastructureEntity {
   name: string;
   mentions: number;
   records: number;
-  /** Works only: whether the corpus holds this one. */
-  held: boolean;
+  /** Works only: how far along the pipeline this one has got. */
+  stage: PipelineStage;
+  /** Ingested by a superseded version of the ingester. */
+  stale: boolean;
 }
+
+/** Where a named work has got to. A work starts as a title in someone else's
+ *  bibliography and then walks the same path as everything else. */
+export type PipelineStage = "named" | "queued" | "ingested" | "reviewed" | "digested";
 
 export interface InfrastructureEntityDetail {
   id: string;
   name: string;
   kind: string;
-  held: boolean;
+  stage: PipelineStage;
+  stale: boolean;
+  /** The record we hold for this work, when we hold one. */
+  record_hash: string | null;
   /** Other names this same work is listed under, unmerged. */
   also_listed_as: string[];
   aliases: string[];

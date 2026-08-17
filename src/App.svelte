@@ -623,7 +623,7 @@
           onclick={showInfrastructure}
           class="text-sm font-ui px-2.5 py-1 rounded cursor-pointer transition-colors
             {appMode === 'infrastructure' ? 'bg-bone/15 text-bone' : 'text-bone/50 hover:text-bone/80 hover:bg-bone/10'}"
-          title="What the corpus's sources say about their own sources - works, authors, citations"
+          title="What our records say about their own sources - works, authors, citations"
         >Infrastructure</button>
       {/if}
     </nav>

@@ -24,6 +24,7 @@
     type InfrastructureEntityDetail,
     type InfrastructureClaim,
     type InfrastructureRecord,
+    type PipelineStage,
   } from "$lib/api";
 
   let { onopenrecord }: { onopenrecord?: (publicHash: string) => void } = $props();
@@ -53,6 +54,23 @@
   let selected = $state<InfrastructureEntityDetail | null>(null);
   let loadingDetail = $state(false);
 
+  /**
+   * The pipeline, as the one thing every work is measured against.
+   *
+   * A named work is a title in someone else's bibliography and nothing more.
+   * Acquiring it puts it on the same track as everything else in the corpus:
+   * ingested, reviewed, digested. `reach` is how many of the three segments
+   * are filled, so the same track renders a work, and would render a record,
+   * without either needing its own vocabulary.
+   */
+  const STAGE: Record<PipelineStage, { label: string; reach: number; note: string }> = {
+    named: { label: "Not held", reach: 0, note: "Named by the material. We do not have it." },
+    queued: { label: "In the queue", reach: 0, note: "Ingested, waiting to be promoted to a record." },
+    ingested: { label: "Ingested", reach: 1, note: "We have it as a record. Not reviewed enough to digest." },
+    reviewed: { label: "Reviewed", reach: 2, note: "Review complete. Waiting to be digested." },
+    digested: { label: "Digested", reach: 3, note: "Claims extracted. It is in the knowledge graph." },
+  };
+
   const KIND_LABEL: Record<string, string> = {
     document: "work",
     person: "person",
@@ -64,12 +82,14 @@
     project: "project",
   };
 
-  /** Works the corpus does not hold are the whole point of the shelf-check, so
-   *  the filter is on the browse list rather than buried in the detail. */
+  /** Works we do not have are the whole point of the shelf-check, so the
+   *  filter is on the browse list rather than buried in the detail. */
   let shown = $derived(
     heldFilter === "all"
       ? entities
-      : entities.filter((e) => (heldFilter === "held" ? e.held : !e.held)),
+      : entities.filter((e) =>
+          heldFilter === "held" ? e.stage !== "named" : e.stage === "named",
+        ),
   );
 
   let missingCount = $derived(summary ? summary.works_named - summary.works_held : 0);
@@ -177,6 +197,28 @@
   }
 </script>
 
+<!-- One track, used wherever a work appears. Three segments because "named"
+     is the absence of progress rather than a step: an empty track says we have
+     the title and nothing else. -->
+{#snippet track(stage: PipelineStage, stale: boolean)}
+  {@const reach = STAGE[stage].reach}
+  <span
+    class="inline-flex items-center gap-px align-middle"
+    title="{STAGE[stage].note}{stale ? ' Ingested by a superseded version of the ingester.' : ''}"
+  >
+    {#each [1, 2, 3] as step}
+      <span
+        class="w-2.5 h-1.5 first:rounded-l-sm last:rounded-r-sm
+          {step > reach
+          ? 'bg-on-surface-muted/15'
+          : stale
+            ? 'bg-amber-500/80'
+            : 'bg-success/80'}"
+      ></span>
+    {/each}
+  </span>
+{/snippet}
+
 {#if unavailable}
   <div class="flex-1 flex flex-col items-center justify-center gap-2 text-on-surface-muted px-6 text-center">
     <p class="text-sm font-ui">The infrastructure database hasn't been built yet.</p>
@@ -191,9 +233,8 @@
   {#if summary}
     <div class="px-6 py-3 border-b border-border bg-surface-alt flex-none">
       <p class="text-xs font-ui text-on-surface-secondary max-w-3xl leading-relaxed">
-        What the corpus's sources say about their own sources - who wrote what, who cited
-        whom. Extracted alongside every record and kept apart from the claims that become
-        articles.
+        What our records say about their own sources - who wrote what, who cited whom.
+        Pulled out of every record alongside the claims, and kept separate from them.
       </p>
       <div class="flex items-baseline gap-x-6 gap-y-1 flex-wrap mt-2.5">
         <div class="flex items-baseline gap-1.5">
@@ -203,10 +244,10 @@
         <button
           onclick={() => { switchTab("document"); heldFilter = "missing"; }}
           class="flex items-baseline gap-1.5 px-2 py-0.5 -mx-2 rounded cursor-pointer transition-colors hover:bg-surface"
-          title="Works the corpus names but does not hold - the reading list its own material assembled"
+          title="Works our records name but we do not have - the reading list the material assembled"
         >
           <span class="text-lg font-medium text-amber-600 dark:text-amber-400 tabular-nums">{missingCount}</span>
-          <span class="text-xs font-ui text-on-surface-secondary">not in the corpus</span>
+          <span class="text-xs font-ui text-on-surface-secondary">not held</span>
         </button>
         <div class="flex items-baseline gap-1.5">
           <span class="text-lg font-medium text-on-surface tabular-nums">{summary.entities.person}</span>
@@ -254,7 +295,7 @@
         />
         {#if tab === "document"}
           <div class="flex items-center gap-1">
-            {#each [["all", "All"], ["missing", "Not held"], ["held", "In the corpus"]] as [id, label]}
+            {#each [["all", "All"], ["missing", "Not held"], ["held", "Held"]] as [id, label]}
               <button
                 onclick={() => { heldFilter = id as typeof heldFilter; }}
                 class="text-[11px] px-2 py-0.5 rounded cursor-pointer font-ui transition-colors
@@ -315,12 +356,8 @@
             >
               <div class="flex items-baseline gap-2">
                 <span class="text-sm text-on-surface flex-1 min-w-0 truncate">{e.name}</span>
-                {#if tab === "document" && e.held}
-                  <span
-                    class="text-[10px] font-ui font-medium px-1.5 py-0.5 rounded flex-none
-                      bg-success/20 text-success"
-                    title="The corpus holds this work"
-                  >held</span>
+                {#if tab === "document"}
+                  {@render track(e.stage, e.stale)}
                 {/if}
               </div>
               <div class="flex items-center gap-2 mt-0.5 text-[11px] font-ui text-on-surface-muted tabular-nums">
@@ -374,16 +411,27 @@
           <div class="flex-1 min-w-0 max-w-[72ch]">
             <div class="flex items-baseline gap-3 flex-wrap">
               <h2 class="text-xl text-on-surface">{selected.name}</h2>
-              <span class="text-xs font-ui uppercase tracking-wide text-primary"
-                >{KIND_LABEL[selected.kind] ?? selected.kind}</span
-              >
+              <!-- The kind is only worth saying when it is not already the tab
+                   you are standing in. -->
+              {#if selected.kind !== tab}
+                <span class="text-xs font-ui uppercase tracking-wide text-primary"
+                  >{KIND_LABEL[selected.kind] ?? selected.kind}</span
+                >
+              {/if}
             </div>
             {#if selected.kind === "document"}
-              <p class="text-xs font-ui mt-1 {selected.held ? 'text-success' : 'text-amber-600 dark:text-amber-400'}">
-                {selected.held
-                  ? "In the corpus - this work has been ingested."
-                  : "Not in the corpus - named by the material, not held."}
-              </p>
+              <div class="flex items-center gap-2 mt-1.5">
+                {@render track(selected.stage, selected.stale)}
+                <span class="text-xs font-ui text-on-surface-secondary">
+                  {STAGE[selected.stage].label}{selected.stale ? " - ingest out of date" : ""}
+                </span>
+                {#if selected.record_hash}
+                  <button
+                    onclick={() => openRecord(selected?.record_hash ?? null)}
+                    class="text-xs font-ui text-primary hover:underline cursor-pointer"
+                  >Open the record</button>
+                {/if}
+              </div>
             {/if}
             {#if selected.also_listed_as.length}
               <!-- Two nodes for one work. The assimilator's merge ledger would
@@ -401,7 +449,7 @@
             {/if}
 
             <h3 class="text-xs font-ui font-medium text-on-surface-secondary mt-6 mb-2">
-              What the corpus says about it
+              What's said about it
             </h3>
             <ul class="space-y-3">
               {#each selected.claims as c}
@@ -477,10 +525,30 @@
             {#if summary}
               {#if tab === "document"}
                 <p class="text-sm font-ui text-on-surface-secondary leading-relaxed">
-                  Of the {summary.works_named} works named across the material, {summary.works_held}
-                  are ones we hold. The rest is a reading list the corpus assembled about
-                  itself.
+                  Of the {summary.works_named} works named across the material, we have
+                  {summary.works_held}. The rest is a reading list the material assembled
+                  about itself.
                 </p>
+                {#if summary.works_by_stage}
+                  <!-- The same track, totalled. It is where the 25 comes from,
+                       broken into the stages it is made of. -->
+                  <ul class="space-y-1 pt-1">
+                    {#each ["digested", "reviewed", "ingested", "queued"] as stage}
+                      {@const n = summary.works_by_stage[stage] ?? 0}
+                      {#if n}
+                        <li class="flex items-center gap-2">
+                          {@render track(stage as PipelineStage, false)}
+                          <span class="text-[11px] font-ui text-on-surface-muted tabular-nums"
+                            >{n}</span
+                          >
+                          <span class="text-[11px] font-ui text-on-surface-secondary"
+                            >{STAGE[stage as PipelineStage].label.toLowerCase()}</span
+                          >
+                        </li>
+                      {/if}
+                    {/each}
+                  </ul>
+                {/if}
               {/if}
               <h3 class="text-xs font-ui font-medium text-on-surface-secondary pt-2">
                 What was extracted

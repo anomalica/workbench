@@ -227,6 +227,10 @@ def _date_sort_key(value: str | None) -> float:
 # `Speaker 3` from diarisation: a cluster id, not a person's name.
 _DEFAULT_SPEAKER = re.compile(r"^Speaker\s+\d+$", re.IGNORECASE)
 
+# Far enough into a queued record to pass its frontmatter, not so far that a
+# body without a title is read in full.
+_QUEUE_HEAD_LINES = 40
+
 
 class IngestSource(ABC):
     """Abstract source of ingest records. Concrete implementations
@@ -235,6 +239,17 @@ class IngestSource(ABC):
     @abstractmethod
     def list_ingests(self) -> list[dict]:
         """Return a summary index of every available ingest."""
+
+    def queued_titles(self) -> list[str]:
+        """Titles of records ingested but not yet in the store.
+
+        A real stage between "we do not hold this" and "it is a record": the
+        ingester has produced it and it is waiting to be promoted. Only the
+        local clone can see the queue, so the default is empty rather than
+        abstract - a source without one is not broken, it just has nothing
+        in flight.
+        """
+        return []
 
     @abstractmethod
     def get_ingest(self, full_hash: str) -> dict | None:
@@ -657,6 +672,28 @@ class LocalIngestSource(IngestSource):
                 counts.items(), key=lambda kv: (-kv[1], kv[0].lower())
             )
         ]
+
+    def queued_titles(self) -> list[str]:
+        """Titles from `ingests/queue/*.md`, read from the frontmatter head.
+
+        Only the first lines of each file: the queue holds whole records and
+        this needs one field from each. Bounded rather than parsed, so a
+        malformed record costs its own title and nothing else.
+        """
+        titles: list[str] = []
+        for path in sorted(self.store.parent.glob("queue/*.md")):
+            try:
+                with path.open(errors="replace") as handle:
+                    for _ in range(_QUEUE_HEAD_LINES):
+                        line = handle.readline()
+                        if not line:
+                            break
+                        if line.startswith("title:"):
+                            titles.append(line[len("title:") :].strip().strip("'\""))
+                            break
+            except OSError:
+                continue
+        return titles
 
     def list_ingests(self) -> list[dict]:
         ingests: list[dict] = []
@@ -1517,14 +1554,30 @@ def remove_role(login: str, request: Request) -> JSONResponse:
     return JSONResponse({"roles": updated})
 
 
-def _held_titles() -> list[str]:
-    """Titles of every record the corpus holds, for the shelf-check.
+def _records_held() -> list[dict]:
+    """Every record we hold, with how far along the pipeline it is.
 
-    The infrastructure graph names ~800 works; the interesting question about
-    each is whether we have it. The comparison is by title because that is all
-    a citation gives us - the works are named in prose, not by hash.
+    The infrastructure graph names ~800 works and the question about each is
+    where it has got to: named by someone else's bibliography, acquired,
+    ingested, reviewed, digested. Matching is by title because that is all a
+    citation gives us - works are named in prose, not by hash.
+
+    Queued records are included: they have been acquired and ingested but are
+    not in the store yet, which is a real stage between "we do not have it" and
+    "it is in the corpus".
     """
-    return [r.get("title", "") for r in source.list_ingests()]
+    held = [
+        {
+            "title": r.get("title", ""),
+            "content_hash": r.get("content_hash"),
+            "digested": r.get("digested"),
+            "digestible": r.get("digestible"),
+            "pipeline_version": r.get("pipeline_version"),
+            "pipeline_current": r.get("pipeline_current"),
+        }
+        for r in source.list_ingests()
+    ]
+    return held + [{"title": t, "queued": True} for t in source.queued_titles()]
 
 
 @app.get("/api/infrastructure")
@@ -1537,7 +1590,7 @@ def infrastructure_summary(request: Request) -> JSONResponse:
     _require_user(request)
     return JSONResponse(
         {
-            "summary": infrastructure.summary(held_titles=_held_titles()),
+            "summary": infrastructure.summary(records_held=_records_held()),
             "records": infrastructure.records(),
         }
     )
@@ -1551,16 +1604,16 @@ def infrastructure_entities(
     _require_user(request)
     if kind not in infrastructure.BROWSABLE:
         raise HTTPException(status_code=404, detail="Not found")
-    held = _held_titles() if kind == "document" else None
+    held = _records_held() if kind == "document" else None
     return JSONResponse(
-        {"entities": infrastructure.entities(kind=kind, query=q, held_titles=held)}
+        {"entities": infrastructure.entities(kind=kind, query=q, records_held=held)}
     )
 
 
 @app.get("/api/infrastructure/entities/{node_id}")
 def infrastructure_entity(request: Request, node_id: str) -> JSONResponse:
     _require_user(request)
-    found = infrastructure.entity(node_id, held_titles=_held_titles())
+    found = infrastructure.entity(node_id, records_held=_records_held())
     if found is None:
         raise HTTPException(status_code=404, detail="Not found")
     return JSONResponse(found)
