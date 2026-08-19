@@ -45,6 +45,7 @@ from backend import (
 from backend import archive_flag, infrastructure
 from backend.auth import setup_auth
 from backend.sync import GIT_LOCK, SyncManager
+from anomalica_common import housekeeping as hk
 
 FULL_HASH_LENGTH = 64
 PUBLIC_HASH_LENGTH = 56
@@ -3706,4 +3707,115 @@ def verification_submit(full_hash: str, body: dict) -> JSONResponse:
             "score": correct,
             "needed": needed,
         }
+    )
+
+
+# --- Housekeeping decisions -------------------------------------------------
+# Approving a proposal is NOT a reuse of PUT /api/ingests/{hash}. That route
+# takes the whole record from the client, and a gated record's body never
+# reaches the browser - the snapshot blanks it. So the client sends decisions
+# only and the server, which can read the record, does the splicing.
+
+
+def _housekeeping_sidecar_path(full_hash: str) -> Path:
+    return ingests_path / "store" / f"{full_hash}.housekeeping.json"
+
+
+@app.get("/api/housekeeping")
+def housekeeping_queue() -> JSONResponse:
+    """Records with a housekeeping sidecar. Counts only - no field values - so it
+    carries nothing gated and is the same for every reader."""
+    rows = []
+    for s in source.list_ingests():
+        h = s["content_hash"]
+        sc = hk.load_sidecar_file(_housekeeping_sidecar_path(h))
+        if sc is None:
+            continue
+        rows.append(
+            {
+                "content_hash": h,
+                "title": s.get("title"),
+                "copyright_status": s.get("copyright_status"),
+                "checked_at": sc.checked_at,
+                "checker_version": sc.checker_version,
+                "proposed": sum(1 for i in sc.items if i.status == "proposed"),
+                "approved": sum(1 for i in sc.items if i.status == "approved"),
+                "rejected": sum(1 for i in sc.items if i.status == "rejected"),
+            }
+        )
+    rows.sort(key=lambda r: (-r["proposed"], r.get("title") or ""))
+    return JSONResponse({"queue": rows})
+
+
+@app.get("/api/ingests/{full_hash}/housekeeping")
+def housekeeping_sidecar(full_hash: str) -> JSONResponse:
+    p = _housekeeping_sidecar_path(full_hash)
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="No housekeeping sidecar")
+    return JSONResponse(json.loads(p.read_text()))
+
+
+@app.post("/api/ingests/{full_hash}/housekeeping/decide")
+async def housekeeping_decide(full_hash: str, request: Request) -> JSONResponse:
+    """Record per-item decisions and apply the approved ones.
+
+    One commit carrying the record and the sidecar together: the record edit and
+    the decision that authorised it are the same fact, and splitting them lets a
+    reader find an unexplained frontmatter change."""
+    user = _require_role(request, "reviewer")
+    payload = await request.json()
+    decisions = {
+        d["item_id"]: d["status"]
+        for d in (payload.get("decisions") or [])
+        if d.get("status") in ("approved", "rejected")
+    }
+    if not decisions:
+        raise HTTPException(status_code=400, detail="No decisions given")
+
+    p = _housekeeping_sidecar_path(full_hash)
+    sc = hk.load_sidecar_file(p)
+    if sc is None:
+        raise HTTPException(status_code=404, detail="No housekeeping sidecar")
+
+    unknown = set(decisions) - {i.id for i in sc.items}
+    if unknown:
+        raise HTTPException(
+            status_code=400, detail=f"Unknown item(s): {sorted(unknown)}"
+        )
+
+    for item in sc.items:
+        if item.id in decisions:
+            # A decision on an already-decided item is refused rather than
+            # silently re-applied: the record has already moved underneath it.
+            if item.status != "proposed":
+                raise HTTPException(
+                    status_code=409, detail=f"{item.id} is already {item.status}"
+                )
+            item.status = decisions[item.id]
+
+    approved = [i for i in sc.items if i.id in decisions and i.status == "approved"]
+    entry = source._scan().get(full_hash) if hasattr(source, "_scan") else None
+    if approved:
+        if entry is None:
+            raise HTTPException(status_code=404, detail="Record not found")
+        md_path, _ = entry
+        try:
+            updated = hk.apply_items(md_path, approved)
+        except hk.BodyChanged as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        except hk.MultilineField as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if not source.save_ingest(full_hash, updated):
+            raise HTTPException(status_code=404, detail="Record not found")
+
+    hk.write_sidecar_file(p, sc)
+    source.commit_review(
+        full_hash=full_hash,
+        author_name=user["name"],
+        author_email=user["email"],
+        notes=f"housekeeping: {len(approved)} applied, "
+        f"{len(decisions) - len(approved)} rejected",
+    )
+    return JSONResponse(
+        {"applied": len(approved), "rejected": len(decisions) - len(approved)}
     )
