@@ -2146,6 +2146,33 @@ def _filter_digest(digest: dict) -> dict:
     the knowledge graph agree."""
     codenames, doc_acronyms = _wb_build_terminology_enforcers(digest.get("terminology"))
 
+    # Compiled once per digest, not once per claim. These patterns depend only
+    # on the document's acronym table, and rebuilding them inside the per-claim
+    # loop cost 1.15M re.escape calls and 700k searches on a book-length digest
+    # - most of the eleven seconds the endpoint took to answer.
+    #
+    # Longest acronym first, so "AATIP" is matched before "ATIP" would eat it.
+    acronym_rules = []
+    for acro in sorted(doc_acronyms, key=len, reverse=True):
+        full = doc_acronyms[acro]  # form: "Full Form (ACRONYM)"
+        full_no_paren = full[: full.rfind("(")].strip()
+        # Any case variant of the full form, with hyphens and spaces treated
+        # alike, but the parenthetical acronym matched exactly.
+        case_insensitive_full = (
+            re.escape(full_no_paren).replace(r"\ ", r"[-\s]")
+            + rf"\s*\({re.escape(acro)}\)"
+        )
+        acronym_rules.append(
+            (
+                acro,
+                full,
+                re.compile(case_insensitive_full, re.IGNORECASE),
+                # A bare acronym: not already inside parens, not part of a
+                # hyphenated designator.
+                re.compile(rf"(?<!\(){re.escape(acro)}(?![\)\w-])"),
+            )
+        )
+
     # Normalise the terminology block too so the header strip shows the same
     # cleaned-up names the body claims use.
     term = digest.get("terminology")
@@ -2295,33 +2322,20 @@ def _filter_digest(digest: dict) -> dict:
             return text
         out = text
 
-        for acro in sorted(doc_acronyms, key=len, reverse=True):
-            full = doc_acronyms[acro]  # form: "Full Form (ACRONYM)"
-
-            # Pattern that matches ANY case variant of "Full Form (ACRONYM)"
-            # so "Forward Looking Infrared (FLIR)" and "forward-looking
-            # infrared (FLIR)" are treated as the same expansion. The
-            # parenthetical acronym must match exact case.
-            full_no_paren = full[: full.rfind("(")].strip()
-            case_insensitive_full = (
-                re.escape(full_no_paren).replace(r"\ ", r"[-\s]")
-                + rf"\s*\({re.escape(acro)}\)"
-            )
-
+        for acro, full, full_re, bare_re in acronym_rules:
             # Step A - find the first BARE acronym (not already in parens,
             # not part of hyphen designator). If it comes before any
             # full-form occurrence (any case), expand it.
-            bare_pattern = rf"(?<!\(){re.escape(acro)}(?![\)\w-])"
-            first_full = re.search(case_insensitive_full, out, flags=re.IGNORECASE)
+            first_full = full_re.search(out)
             first_full_pos = first_full.start() if first_full else -1
-            m = re.search(bare_pattern, out)
+            m = bare_re.search(out)
             if m and (first_full_pos == -1 or m.start() < first_full_pos):
                 out = out[: m.start()] + full + out[m.end() :]
 
             # Step B - dedupe case-insensitively. Walk all matches of the
             # case-insensitive "Full Form (ACRONYM)" pattern; keep the first,
             # reduce each subsequent occurrence to just the bare ACRONYM.
-            matches = list(re.finditer(case_insensitive_full, out, flags=re.IGNORECASE))
+            matches = list(full_re.finditer(out))
             for m in reversed(matches[1:]):
                 out = out[: m.start()] + acro + out[m.end() :]
 
@@ -2383,16 +2397,52 @@ def get_digest(full_hash: str) -> JSONResponse:
         raise HTTPException(status_code=404, detail="No digest for record")
 
     try:
-        import yaml as _yaml
-
-        with open(yaml_path) as f:
-            digest = _yaml.safe_load(f) or {}
+        return JSONResponse(_read_digest(yaml_path))
     except Exception as exc:
         raise HTTPException(
             status_code=500, detail=f"Failed to parse digest: {exc}"
         ) from exc
 
-    return JSONResponse(_filter_digest(digest))
+
+#: Filtered digests, keyed by path and invalidated by the file's own mtime and
+#: size. A book-length digest is 3.5MB of YAML and the same reviewer opens the
+#: same one repeatedly - re-reading and re-filtering it each time is seconds of
+#: work to produce a byte-identical answer. Small, because a handful of records
+#: are in play at once and each entry is a parsed document.
+_DIGEST_CACHE: OrderedDict[tuple, dict] = OrderedDict()
+_DIGEST_CACHE_MAX = 8
+
+
+def _read_digest(yaml_path) -> dict:
+    """Parse and filter one digest, reusing the last result while the file on
+    disk is unchanged.
+
+    The C YAML loader where libyaml is available: it parses the largest digest
+    in 0.8s against 5.4s for the pure-Python one, which is most of the wait
+    before anything appears on screen. It is the same parser semantically -
+    `safe_load` with a faster scanner - and falls back when absent.
+    """
+    stat = os.stat(yaml_path)
+    key = (str(yaml_path), stat.st_mtime_ns, stat.st_size)
+    cached = _DIGEST_CACHE.get(key)
+    if cached is not None:
+        _DIGEST_CACHE.move_to_end(key)
+        return cached
+
+    import yaml as _yaml
+
+    try:
+        loader = _yaml.CSafeLoader
+    except AttributeError:
+        loader = _yaml.SafeLoader
+    with open(yaml_path) as f:
+        digest = _yaml.load(f, Loader=loader) or {}
+
+    filtered = _filter_digest(digest)
+    _DIGEST_CACHE[key] = filtered
+    while len(_DIGEST_CACHE) > _DIGEST_CACHE_MAX:
+        _DIGEST_CACHE.popitem(last=False)
+    return filtered
 
 
 def _hash_to_friendly_name(full_hash: str) -> str | None:

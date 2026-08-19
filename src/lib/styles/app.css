@@ -411,3 +411,18 @@ body {
   border-bottom: 1px dotted currentColor;
   cursor: help;
 }
+
+/* A book-length digest is nearly four thousand claim cards - fifty thousand DOM
+   nodes, five seconds of layout before anything appears, on a column the
+   reviewer reads a screen at a time. `content-visibility` lets the browser skip
+   layout and paint for the cards that are off screen; `contain-intrinsic-size`
+   gives it a height to reserve for each so the scrollbar is right and does not
+   jump as they are realised.
+
+   The estimate is a typical card: three lines of claim, a quote, a chip row.
+   Wrong for the longest and shortest, which is why it is `auto` - once a card
+   has been laid out the browser remembers its real height. */
+.claim-card {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 8.5rem;
+}
