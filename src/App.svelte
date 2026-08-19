@@ -34,6 +34,7 @@
     type SortKey,
   } from "$lib/browse-prefs";
   import InfrastructureView from "$lib/components/InfrastructureView.svelte";
+  import HousekeepingView from "$lib/components/HousekeepingView.svelte";
   import ArticlesView from "$lib/components/ArticlesView.svelte";
   import ReviewView from "$lib/components/ReviewView.svelte";
   import RolesView from "$lib/components/RolesView.svelte";
@@ -51,7 +52,14 @@
   // graph, since exploring and curating act on the same object. "articles" is
   // withdrawn until Assembly (briefs + content together) replaces it.
   let appMode = $state<
-    "records" | "graph" | "curate" | "inbox" | "roles" | "digests" | "infrastructure"
+    | "records"
+    | "graph"
+    | "curate"
+    | "inbox"
+    | "roles"
+    | "digests"
+    | "infrastructure"
+    | "housekeeping"
   >("records");
   // A node to open directly in the graph view (deep link /graph/<node_id>), so a
   // claim-count / any link can jump straight to that node's claims in context.
@@ -79,6 +87,13 @@
     liveBackend && (myRole === "reviewer" || myRole === "editor" || myRole === "admin"),
   );
   let canManageRoles = $derived(liveBackend && myRole === "admin");
+  // Deliberately NOT canReview, which requires liveBackend and so is always false
+  // online. Housekeeping reads from the snapshot, so the tab must be reachable in
+  // the deployed workbench - that is the whole point of it. Only the decide POST
+  // needs a live writer, and the view hides its buttons when it has none.
+  let canHousekeep = $derived(
+    myRole === "reviewer" || myRole === "editor" || myRole === "admin",
+  );
 
   async function reloadPending() {
     if (!canReview) {
@@ -517,6 +532,11 @@
     history.pushState(null, "", "/models");
   }
 
+  function showHousekeeping() {
+    appMode = "housekeeping";
+    history.pushState(null, "", "/housekeeping");
+  }
+
   // Open a record in the workbench review view by its public hash (the 56-char
   // record_hash an Articles record-page carries). Mirrors the deep-link path so
   // a not-yet-reviewable record surfaces the same friendly notice.
@@ -535,6 +555,12 @@
 
   async function checkUrlHash() {
     const path = window.location.pathname.slice(1);
+    // No `&& !STATIC_READS` guard, unlike the local-only tabs: housekeeping reads
+    // from the snapshot, so /housekeeping must resolve in the deployed workbench.
+    if (path === "housekeeping") {
+      appMode = "housekeeping";
+      return; // HousekeepingView fetches its own queue
+    }
     if (path === "curate") {
       appMode = "curate";
       return; // CurationView fetches its own data + reads its URL query
@@ -641,6 +667,14 @@
             {appMode === 'digests' ? 'bg-bone/15 text-bone' : 'text-bone/50 hover:text-bone/80 hover:bg-bone/10'}"
           title="See what each model made of a record, chunk by chunk, and choose between them"
         >Digests</button>
+      {/if}
+      {#if canHousekeep}
+        <button
+          onclick={showHousekeeping}
+          class="text-sm font-ui px-2.5 py-1 rounded cursor-pointer transition-colors
+            {appMode === 'housekeeping' ? 'bg-bone/15 text-bone' : 'text-bone/50 hover:text-bone/80 hover:bg-bone/10'}"
+          title="Proposed frontmatter corrections awaiting approval, one item at a time"
+        >Housekeeping</button>
       {/if}
       <button
         onclick={showGraph}
@@ -781,6 +815,8 @@
   <main class="flex-1 flex flex-col min-h-0">
     {#if appMode === "digests"}
       <DigestsView />
+    {:else if appMode === "housekeeping"}
+      <HousekeepingView canDecide={liveBackend && canHousekeep} />
     {:else if appMode === "infrastructure"}
       <InfrastructureView onopenrecord={openRecordByHash} />
     {:else if appMode === "roles"}

@@ -1382,3 +1382,70 @@ export async function fetchInfrastructureClaims(
   if (!res.ok) throw new Error(`Failed to fetch infrastructure claims: ${res.status}`);
   return (await res.json()).claims;
 }
+
+// --- Housekeeping ----------------------------------------------------------
+// Proposed frontmatter corrections awaiting a human decision, per item. See
+// anomalica/architecture/housekeeping.md.
+
+export interface HousekeepingRow {
+  content_hash: string;
+  title: string | null;
+  copyright_status: string | null;
+  checked_at: string | null;
+  checker_version: number;
+  proposed: number;
+  approved: number;
+  rejected: number;
+}
+
+export interface HousekeepingItem {
+  id: string;
+  check: string;
+  field: string;
+  to_field?: string;
+  operation: "set" | "clear" | "move";
+  current: unknown;
+  proposed: unknown;
+  confidence: "high" | "medium" | "low";
+  evidence: { reasoning: string; sources: string[]; record_spans: string[] };
+  status: "proposed" | "approved" | "rejected";
+}
+
+export interface HousekeepingSidecar {
+  content_hash: string;
+  checked_at: string;
+  checker_version: number;
+  items: HousekeepingItem[];
+  /** True when the copyright allow-list withheld items about gated fields. */
+  gated?: boolean;
+}
+
+export async function fetchHousekeepingQueue(): Promise<HousekeepingRow[]> {
+  const res = await fetch(readPath("/api/housekeeping"));
+  if (res.status === 404) return [];
+  if (!res.ok) throw new Error(`Failed to fetch housekeeping queue: ${res.status}`);
+  return (await res.json()).queue ?? [];
+}
+
+export async function fetchHousekeeping(contentHash: string): Promise<HousekeepingSidecar | null> {
+  const h = contentHash.replace(/^sha256:/, "");
+  const res = await fetch(readPath(`/api/ingests/${h}/housekeeping`));
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`Failed to fetch housekeeping: ${res.status}`);
+  return res.json();
+}
+
+/** Record per-item decisions. Never readPath: this is always a live write. */
+export async function decideHousekeeping(
+  contentHash: string,
+  decisions: { item_id: string; status: "approved" | "rejected" }[],
+): Promise<{ applied: number; rejected: number }> {
+  const h = contentHash.replace(/^sha256:/, "");
+  const res = await fetch(`/api/ingests/${h}/housekeeping/decide`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ decisions }),
+  });
+  if (!res.ok) throw new Error(`Failed to record decisions: ${res.status}`);
+  return res.json();
+}
