@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { highlightDisplay } from "$lib/highlight-display.svelte";
   import type { IngestDetail, DigestDocument, IngestSummary, User } from "$lib/api";
   import {
     fetchIngests,
@@ -1317,6 +1318,11 @@
     (isWeb && !localSourceFile && !localSourceUrl && !ingest.frontmatter.source_url) ||
       (isEbook && !localSourceFile),
   );
+
+  /** Does this record carry any reviewer highlight at all? The colour toggle
+   *  is meaningless without one, and an always-present control for a thing
+   *  most records do not have is just another thing to read past. */
+  let hasHighlights = $derived(/\{\{highlight-start:/.test(currentBody()));
 
   // Column visibility: user toggles which of source/ingest/digest are shown.
   // Persists to localStorage. The Source column is auto-suppressed for
@@ -4387,6 +4393,27 @@
         </button>
 
         <div class="ml-auto flex items-center gap-1">
+          <!-- Highlight colours. Off by default: while reading, a highlight
+               only has to register as present, and the palette competes with
+               the words on every line that carries one. -->
+          {#if view === "ingest" && hasHighlights}
+            <button
+              onclick={() => highlightDisplay.toggle()}
+              class="flex items-center gap-1 cursor-pointer px-1.5 py-0.5 rounded-full transition-colors text-xs font-ui font-medium
+                {highlightDisplay.subtle
+                  ? 'text-on-surface-muted hover:text-on-surface hover:bg-surface'
+                  : 'bg-primary/10 text-primary'}"
+              title={highlightDisplay.subtle
+                ? "Highlights are shown as a hairline. Click to colour them."
+                : "Highlights are coloured, one band per overlap. Click to quieten them."}
+            >
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M14.5 3.5l6 6-7.5 7.5H7.5l-1.5-4 8.5-9.5z" />
+                <path stroke-linecap="round" stroke-width="3" d="M5.5 21h13" />
+              </svg>
+              Highlight colours
+            </button>
+          {/if}
           <!-- Follow in source: block clicks jump the source pane to the
                block's page. Off by default. -->
           {#if view === "ingest" && !inMarkup && isTextRecord && canFollowSource}

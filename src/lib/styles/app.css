@@ -255,6 +255,16 @@ body {
   border-radius: 2px;
 }
 
+/* Reading, rather than working on the markup: a highlight only has to register
+   as present. A filled run competes with the words on every line that carries
+   one, so it becomes a hairline in the text's own colour - visible when looked
+   for, invisible when reading past. Same switch as the transcript's bands. */
+:root.highlights-subtle .prose-highlight {
+  background-color: transparent;
+  border-radius: 0;
+  border-bottom: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+}
+
 .segment-irrelevant {
   background: var(--color-surface-alt) !important;
   color: var(--color-on-surface-muted) !important;

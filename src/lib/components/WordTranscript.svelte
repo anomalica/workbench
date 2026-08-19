@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { highlightDisplay } from "$lib/highlight-display.svelte";
   import { untrack, onMount } from "svelte";
   import {
     saveScrollAnchor,
@@ -1543,9 +1544,10 @@
     // Reviewer-highlight underline bands: sparse, so paint straight onto the
     // word rather than carry a class per possible band count.
     const cols = highlightColorsByWord.get(g);
-    // Ingest collapses any number of overlapping highlights to ONE faint band:
-    // the signal there is "this is highlighted", not which one it is.
-    const subtle = false;
+    // Reading collapses any number of overlapping highlights to ONE hairline:
+    // the signal is "this is highlighted", not which one it is. Asking for the
+    // colours restores the per-highlight bands.
+    const subtle = highlightDisplay.subtle;
     applyWordHighlight(el, subtle && cols?.length ? [SUBTLE_HL] : cols, subtle);
     c.toggle("wt-highlight", cols !== undefined);
     c.toggle("wt-cited", spanNoteWordSet.has(g) || citedWorkWords.has(g));
@@ -1700,6 +1702,7 @@
     void observedVisible; // the observed-only filter hides words; restyle when that set moves
     void styleEpoch;
     void highlightColorsByWord; // re-apply bands when a highlight is added/cleared
+    void highlightDisplay.subtle; // ...and when the reviewer asks for colours
     void spanNoteWordSet; // re-apply tint when a span note is added/cleared/re-ranged
     void spanNoteTextByWord; // and the hover text when its words change
     void citedWorkWords; // and the cited-title underline

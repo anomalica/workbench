@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { highlightDisplay } from "$lib/highlight-display.svelte";
   import {
     fetchIngests,
     fetchArchivedIngests,
@@ -600,6 +601,12 @@
     return /^#claim-/i.test(window.location.hash)
       ? "Opening claim..."
       : "Opening record...";
+  });
+
+  // One class on the root drives every prose highlight at once, so the switch
+  // costs nothing per highlight and reaches markup rendered as raw HTML.
+  $effect(() => {
+    document.documentElement.classList.toggle("highlights-subtle", highlightDisplay.subtle);
   });
 
   checkUrlHash();
