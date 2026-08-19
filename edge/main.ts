@@ -28,6 +28,12 @@ import {
 } from "./lib/auth.ts";
 import { stringify as stringifyYaml } from "jsr:@std/yaml@1";
 import { signedUrl } from "./lib/bunny.ts";
+import {
+  applyItems,
+  BodyChanged,
+  type HousekeepingSidecar,
+  MultilineField,
+} from "./lib/housekeeping.ts";
 import { needed, scoreSession, startSession } from "./lib/gate.ts";
 import { type Author, type FileState, GitHubClient, GitHubError } from "./lib/github.ts";
 import { atLeast, DEFAULT_ROLE, parseRoles, type Role, roleOf } from "./lib/roles.ts";
@@ -379,6 +385,105 @@ async function handleReviewWrite(
   return json({ submitted: true });
 }
 
+/**
+ * Record per-item housekeeping decisions and apply the approved ones.
+ *
+ * NOT a reuse of PUT /api/ingests/{hash}: that route takes the whole record from
+ * the client, and a gated record's body never reaches the browser - the snapshot
+ * blanks it. So the client sends decisions only and this reads the record with
+ * the credentials it already holds.
+ *
+ * Record and sidecar go in ONE logical write. The frontmatter change and the
+ * decision that authorised it are the same fact; split them and a reader finds an
+ * unexplained edit.
+ */
+async function handleHousekeepingDecide(
+  hash: string,
+  req: Request,
+  env: Env,
+  deps: Deps,
+  user: User,
+): Promise<Response> {
+  if (!FULL_HASH.test(hash)) return notFound();
+  const payload = (await req.json().catch(() => ({}))) as {
+    decisions?: { item_id?: string; status?: string }[];
+  };
+  const decisions = new Map<string, "approved" | "rejected">();
+  for (const d of payload.decisions ?? []) {
+    if (d.item_id && (d.status === "approved" || d.status === "rejected")) {
+      decisions.set(d.item_id, d.status);
+    }
+  }
+  if (decisions.size === 0) return err(400, "No decisions given");
+
+  const sidecarPath = `store/${hash}.housekeeping.json`;
+  const raw = (await deps.github.getFile(env.ingestsRepo, sidecarPath))?.text;
+  if (raw == null) return notFound();
+
+  let sidecar: HousekeepingSidecar;
+  try {
+    sidecar = JSON.parse(raw);
+  } catch {
+    return err(500, "Unreadable housekeeping sidecar");
+  }
+
+  const known = new Set(sidecar.items.map((i) => i.id));
+  for (const id of decisions.keys()) {
+    // A stale tab must not half-succeed.
+    if (!known.has(id)) return err(400, `Unknown item: ${id}`);
+  }
+  for (const item of sidecar.items) {
+    const decision = decisions.get(item.id);
+    if (!decision) continue;
+    // Already decided means the record has moved underneath this tab.
+    if (item.status !== "proposed") {
+      return err(409, `${item.id} is already ${item.status}`);
+    }
+    item.status = decision;
+  }
+
+  const approved = sidecar.items.filter((i) => decisions.has(i.id) && i.status === "approved");
+  const author = authorOf(user);
+  const note = `housekeeping: ${approved.length} applied, ${
+    decisions.size - approved.length
+  } rejected`;
+
+  if (approved.length) {
+    const bodyPath = await resolveBodyPath(env, deps, hash);
+    const current = (await deps.github.getFile(env.ingestsRepo, bodyPath))?.text;
+    if (current == null) return notFound();
+    let updated: string;
+    try {
+      updated = await applyItems(current, approved);
+    } catch (e) {
+      // A body change is a bug in the splice, not a client error - never commit.
+      if (e instanceof BodyChanged) return err(500, e.message);
+      if (e instanceof MultilineField) return err(422, e.message);
+      throw e;
+    }
+    await deps.github.editFile(
+      env.ingestsRepo,
+      bodyPath,
+      () => updated,
+      `${note} - ${hash.slice(0, 12)}`,
+      author,
+    );
+  }
+
+  await deps.github.editFile(
+    env.ingestsRepo,
+    sidecarPath,
+    () => JSON.stringify(sidecar, null, 2) + "\n",
+    `${note} - ${hash.slice(0, 12)} (decisions)`,
+    author,
+  );
+
+  return json({
+    applied: approved.length,
+    rejected: decisions.size - approved.length,
+  });
+}
+
 async function handleCuration(
   action: string,
   req: Request,
@@ -601,6 +706,13 @@ async function route(req: Request, env: Env, deps: Deps): Promise<Response> {
     const denied = await denyUnless("reviewer");
     if (denied) return denied;
     return handleReviewWrite(review[1], req, env, deps, user!);
+  }
+
+  const housekeep = pathname.match(/^\/api\/ingests\/([^/]+)\/housekeeping\/decide$/);
+  if (housekeep && method === "POST") {
+    const denied = await denyUnless("reviewer");
+    if (denied) return denied;
+    return handleHousekeepingDecide(housekeep[1], req, env, deps, user!);
   }
 
   const curate = pathname.match(/^\/api\/curation\/(merge|unmerge|reject|unreject)$/);
