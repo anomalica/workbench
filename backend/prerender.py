@@ -14,12 +14,17 @@ mirror the live API and the SPA can point at either):
   api/curation/merges.json              - active merges (cluster/un-merge view)
   api/ingests.json                      - the records list (metadata only, no bodies)
   api/ingests/<hash>.json               - record detail; body ONLY for public records
-  api/ingests/<hash>/digest.json        - digest (claims + entities + short quotes), public for all
+  api/ingests/<hash>/digest.json        - digest (claims + entities); verbatim `quote` PUBLIC RECORDS ONLY
   api/ingests/<hash>/coverage.json      - review coverage (spans/notes)
   api/ingests/<hash>/media/<file>       - extracted images; PUBLIC RECORDS ONLY
 
-COPYRIGHT: short attributed quotes (the digest + its quotes) are PUBLIC for all
-records (lawful quotation, Japan Art 32; the site shows them too). The full record
+COPYRIGHT: ONE allow-list decides everything verbatim - body, frontmatter, images,
+and each claim's `quote`. A digest's claim `text` is our own paraphrase and stays
+public for every record, so the graph and the inspection pages are unaffected. The
+verbatim `quote` column used to be public for all records on a "short attributed
+quotes are lawful quotation (Japan Art 32)" rationale; nothing enforced shortness
+and the shipped data was not short (see _gate_digest_quotes), so it now follows the
+same gate as the body. The full record
 BODY + frontmatter enters the snapshot for public_domain/open_licence/
 publicly_accessible (see serves_verbatim - an allow-list, fail-safe); only the
 licensed/restricted records are gated (body emptied, frontmatter whitelisted),
@@ -81,7 +86,12 @@ GATED_FRONTMATTER_ALLOW = frozenset(
         "fetched_url",
         "source_file",
         "source_id",
-        "source_hash",
+        # NOT source_hash. It is the sha256 of the ORIGINAL source file, which is
+        # exactly what the edge's fast-path possession check compares a claimant's
+        # upload against (workbench/edge/main.ts:239-245). Publishing it for a
+        # gated record publishes the gate's own answer, so anyone can copy it out
+        # of the public index and pass. It was shipped for 16 of the 19 gated
+        # records. Public records may still carry it - they are not gated on it.
         "content_hash",
         "public_hash",
         "provenance",
@@ -107,6 +117,32 @@ def _gate_record_detail(detail: dict) -> dict:
         "raw_frontmatter": "",
         "frontmatter": {k: v for k, v in fm.items() if k in GATED_FRONTMATTER_ALLOW},
     }
+
+
+def _gate_digest_quotes(digest: dict) -> dict:
+    """A gated record's digest with every claim's verbatim `quote` removed.
+
+    THE SAME GATE AS THE BODY AND THE IMAGES, and for the reason the old policy
+    got wrong. That policy (see `_prerender_records`) held that digest quotes are
+    public for every record because they are SHORT attributed quotes and so
+    lawful quotation. Nothing enforced shortness and the data is not short: on
+    2026-08-19 the licensed record 303c2190 ("Imminent") shipped 2,190 quotes
+    totalling 354,535 characters - about 41% of its 590 KB body - and 2f154948
+    ("In Plain Sight") shipped 261,953. Reassembled, those are the book.
+
+    Claims keep `text`, which is our own paraphrase of the claim, not the
+    source's wording - so the graph, the entity refs and the whole public
+    inspection surface survive intact. Only the verbatim column goes."""
+    out = dict(digest)
+    for key in ("domain_claims", "infrastructure_claims", "claims"):
+        claims = out.get(key)
+        if not isinstance(claims, list):
+            continue
+        out[key] = [
+            {k: v for k, v in c.items() if k != "quote"} if isinstance(c, dict) else c
+            for c in claims
+        ]
+    return out
 
 
 def snapshot_dir() -> Path:
@@ -232,10 +268,16 @@ def _prerender_records(base: Path, only: set[str] | None = None) -> dict:
 
         yaml_path = digest_map.get(h)
         if yaml_path is not None:
-            # The digest (claims + entities + SHORT attributed quotes) is public
-            # for all records - short quotes are lawful + public (Japan Art 32),
-            # and the site shows them too. Only the full record BODY is gated.
+            # The digest (claims + entities) is public for all records: the claim
+            # `text` is our own paraphrase, so it carries no source wording. The
+            # verbatim `quote` column is NOT public for a gated record - it used
+            # to be, on a "short attributed quotes are lawful" rationale that the
+            # data does not meet (see _gate_digest_quotes). Same allow-list as
+            # the body and the images, so a status can never be gated for the
+            # body and open for its quotes.
             digest = server._filter_digest(_yaml.safe_load(yaml_path.read_text()) or {})
+            if not public:
+                digest = _gate_digest_quotes(digest)
             _write(base / "ingests" / h / "digest.json", digest)
             counts["digests"] += 1
 
