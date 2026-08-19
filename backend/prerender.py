@@ -119,6 +119,41 @@ def _gate_record_detail(detail: dict) -> dict:
     }
 
 
+def _gate_housekeeping(sidecar: dict) -> dict:
+    """A gated record's housekeeping sidecar with items about non-public fields
+    removed.
+
+    A proposal carries the CURRENT and PROPOSED values of a frontmatter field, so
+    publishing one publishes that field. The same allow-list that decides which
+    frontmatter a gated record may ship therefore decides which proposals it may
+    ship - otherwise a proposal about `description` would leak the publisher blurb
+    the frontmatter gate just withheld.
+
+    Item ids are preserved, so an approval posted from the public tab still
+    addresses the same item in the full sidecar the writer reads."""
+    items = [
+        i
+        for i in (sidecar.get("items") or [])
+        if isinstance(i, dict)
+        and i.get("field") in GATED_FRONTMATTER_ALLOW
+        and (i.get("to_field") is None or i.get("to_field") in GATED_FRONTMATTER_ALLOW)
+    ]
+    return {**sidecar, "items": items, "gated": True}
+
+
+def _housekeeping_for(h: str) -> dict | None:
+    """The record's housekeeping sidecar from the ingests store, or None."""
+    from backend import server
+
+    path = server.ingests_path / "store" / f"{h}.housekeeping.json"
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
 def _gate_digest_quotes(digest: dict) -> dict:
     """A gated record's digest with every claim's verbatim `quote` removed.
 
@@ -249,6 +284,8 @@ def _prerender_records(base: Path, only: set[str] | None = None) -> dict:
     summaries = server.source.list_ingests()
     _write(base / "ingests.json", summaries)  # the list = metadata only, no bodies
 
+    _write(base / "housekeeping.json", _housekeeping_queue(summaries))
+
     digest_map = _build_digest_map(server)
     counts = {"records": 0, "record_public": 0, "digests": 0, "coverage": 0, "media": 0}
     for s in summaries:
@@ -281,6 +318,14 @@ def _prerender_records(base: Path, only: set[str] | None = None) -> dict:
             _write(base / "ingests" / h / "digest.json", digest)
             counts["digests"] += 1
 
+        hk = _housekeeping_for(h)
+        if hk is not None:
+            _write(
+                base / "ingests" / h / "housekeeping.json",
+                hk if public else _gate_housekeeping(hk),
+            )
+            counts["housekeeping"] = counts.get("housekeeping", 0) + 1
+
         coverage = server.source.load_coverage(h)
         if coverage is not None:
             _write(base / "ingests" / h / "coverage.json", coverage)
@@ -288,6 +333,34 @@ def _prerender_records(base: Path, only: set[str] | None = None) -> dict:
 
         counts["media"] += _copy_record_media(base, h, public)
     return counts
+
+
+def _housekeeping_queue(summaries: list[dict]) -> dict:
+    """The Housekeeping tab's index: one row per record that has a sidecar.
+
+    Counts only - no field values - so the index itself carries nothing gated and
+    is the same for every reader."""
+    rows = []
+    for s in summaries:
+        h = s["content_hash"]
+        hk = _housekeeping_for(h)
+        if hk is None:
+            continue
+        items = hk.get("items") or []
+        rows.append(
+            {
+                "content_hash": h,
+                "title": s.get("title"),
+                "copyright_status": s.get("copyright_status"),
+                "checked_at": hk.get("checked_at"),
+                "checker_version": hk.get("checker_version"),
+                "proposed": sum(1 for i in items if i.get("status") == "proposed"),
+                "approved": sum(1 for i in items if i.get("status") == "approved"),
+                "rejected": sum(1 for i in items if i.get("status") == "rejected"),
+            }
+        )
+    rows.sort(key=lambda r: (-r["proposed"], r.get("title") or ""))
+    return {"queue": rows}
 
 
 def _copy_record_media(base: Path, content_hash: str, public: bool) -> int:
