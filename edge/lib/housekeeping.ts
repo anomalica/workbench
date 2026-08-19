@@ -28,6 +28,26 @@ export interface HousekeepingItem {
   confidence: string;
   evidence: { reasoning: string; sources?: string[]; record_spans?: string[] };
   status: HousekeepingStatus;
+  /** Items that must be approved alongside this one, or it destroys data. */
+  depends_on?: string[];
+}
+
+/**
+ * Approved ids whose prerequisites are not also approved.
+ *
+ * Enforced, not advisory: the dependent case exists because applying it alone
+ * destroys data - setting date_published without the move that frees it
+ * overwrites the upload date instead of relocating it.
+ */
+export function unmetDependencies(items: HousekeepingItem[], approved: Set<string>): string[] {
+  const byId = new Map(items.map((i) => [i.id, i]));
+  const bad: string[] = [];
+  for (const id of approved) {
+    const item = byId.get(id);
+    if (!item) continue;
+    if ((item.depends_on ?? []).some((d) => !approved.has(d))) bad.push(id);
+  }
+  return bad.sort();
 }
 
 export interface HousekeepingSidecar {

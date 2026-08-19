@@ -141,17 +141,30 @@ def _gate_housekeeping(sidecar: dict) -> dict:
     return {**sidecar, "items": items, "gated": True}
 
 
-def _housekeeping_for(h: str) -> dict | None:
-    """The record's housekeeping sidecar from the ingests store, or None."""
+def _housekeeping_for(h: str, record_text: str | None = None) -> dict | None:
+    """The record's housekeeping sidecar, with each item's preview lines.
+
+    The preview is the exact frontmatter the commit will remove and add, computed
+    from the live record. Snapshot readers get the same thing the live API serves,
+    so the online tab is not a degraded view."""
+    from anomalica_common import housekeeping as hkc
     from backend import server
 
     path = server.ingests_path / "store" / f"{h}.housekeeping.json"
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text())
+        payload = json.loads(path.read_text())
     except (json.JSONDecodeError, OSError):
         return None
+    if record_text:
+        sc = hkc.load_sidecar_file(path)
+        if sc is not None:
+            previews = {i.id: hkc.preview_item(record_text, i) for i in sc.items}
+            for raw in payload.get("items") or []:
+                if raw.get("id") in previews:
+                    raw["preview"] = previews[raw["id"]]
+    return payload
 
 
 def _gate_digest_quotes(digest: dict) -> dict:
@@ -318,7 +331,17 @@ def _prerender_records(base: Path, only: set[str] | None = None) -> dict:
             _write(base / "ingests" / h / "digest.json", digest)
             counts["digests"] += 1
 
-        hk = _housekeeping_for(h)
+        raw_md = ""
+        if detail is not None:
+            raw_md = (detail.get("raw_frontmatter") or "") + (detail.get("body") or "")
+        # A gated record's body is blank in `detail`, so read the store file for
+        # the preview - it is frontmatter only, and gating drops any item about a
+        # field that may not ship.
+        if not raw_md:
+            src = server.ingests_path / "store"
+            f = next(iter(sorted(src.glob(f"{h}*.md"))), None)
+            raw_md = f.read_text(errors="replace") if f else ""
+        hk = _housekeeping_for(h, raw_md)
         if hk is not None:
             _write(
                 base / "ingests" / h / "housekeeping.json",

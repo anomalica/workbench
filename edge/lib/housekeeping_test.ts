@@ -15,6 +15,7 @@ import {
   type HousekeepingItem,
   MultilineField,
   scalar,
+  unmetDependencies,
 } from "./housekeeping.ts";
 
 const RECORD = `---
@@ -138,4 +139,21 @@ Deno.test("the guard catches a parser fault that swallows a body line", async ()
     (await bodyDigest(mangled)) !== (await bodyDigest(RECORD)),
     "a body that lost a line must produce a different digest",
   );
+});
+
+Deno.test("a dependent item cannot be approved without its prerequisite", () => {
+  // Setting date_published without the move that frees it overwrites the upload
+  // date instead of relocating it - so this is refused, not warned about.
+  const move = item({ id: "m", field: "date_published", to_field: "posted_date" });
+  const set = item({
+    id: "s",
+    field: "date_published",
+    operation: "set",
+    to_field: undefined,
+    proposed: "2000",
+    depends_on: ["m"],
+  });
+  assertEquals(unmetDependencies([move, set], new Set(["s"])), ["s"]);
+  assertEquals(unmetDependencies([move, set], new Set(["m", "s"])), []);
+  assertEquals(unmetDependencies([move, set], new Set(["m"])), []);
 });

@@ -33,6 +33,7 @@ import {
   BodyChanged,
   type HousekeepingSidecar,
   MultilineField,
+  unmetDependencies,
 } from "./lib/housekeeping.ts";
 import { needed, scoreSession, startSession } from "./lib/gate.ts";
 import { type Author, type FileState, GitHubClient, GitHubError } from "./lib/github.ts";

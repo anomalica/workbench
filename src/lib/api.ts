@@ -1409,6 +1409,10 @@ export interface HousekeepingItem {
   confidence: "high" | "medium" | "low";
   evidence: { reasoning: string; sources: string[]; record_spans: string[] };
   status: "proposed" | "approved" | "rejected";
+  /** Items that must be approved alongside this one, or it destroys data. */
+  depends_on?: string[];
+  /** The exact frontmatter lines the commit will remove and add. */
+  preview?: { removed: string[]; added: string[] };
 }
 
 export interface HousekeepingSidecar {

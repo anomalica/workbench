@@ -3752,7 +3752,19 @@ def housekeeping_sidecar(full_hash: str) -> JSONResponse:
     p = _housekeeping_sidecar_path(full_hash)
     if not p.exists():
         raise HTTPException(status_code=404, detail="No housekeeping sidecar")
-    return JSONResponse(json.loads(p.read_text()))
+    payload = json.loads(p.read_text())
+    entry = source._scan().get(full_hash) if hasattr(source, "_scan") else None
+    if entry is not None:
+        # The exact frontmatter lines each item removes and adds, computed from
+        # the LIVE record so the preview and the commit cannot disagree.
+        text = entry[0].read_text(errors="replace")
+        sc = hk.load_sidecar_file(p)
+        if sc is not None:
+            previews = {i.id: hk.preview_item(text, i) for i in sc.items}
+            for raw in payload.get("items") or []:
+                if raw.get("id") in previews:
+                    raw["preview"] = previews[raw["id"]]
+    return JSONResponse(payload)
 
 
 @app.post("/api/ingests/{full_hash}/housekeeping/decide")
@@ -3792,6 +3804,19 @@ async def housekeeping_decide(full_hash: str, request: Request) -> JSONResponse:
                     status_code=409, detail=f"{item.id} is already {item.status}"
                 )
             item.status = decisions[item.id]
+
+    approved_ids = {
+        i.id for i in sc.items if i.id in decisions and i.status == "approved"
+    }
+    unmet = hk.unmet_dependencies(sc.items, approved_ids)
+    if unmet:
+        # Not advisory: the dependent case exists because applying it alone
+        # destroys data - setting date_published without the move that frees it
+        # overwrites the upload date instead of relocating it.
+        raise HTTPException(
+            status_code=400,
+            detail=f"These need their prerequisite approved too: {unmet}",
+        )
 
     approved = [i for i in sc.items if i.id in decisions and i.status == "approved"]
     entry = source._scan().get(full_hash) if hasattr(source, "_scan") else None

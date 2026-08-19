@@ -144,10 +144,35 @@
               <span class="check">{item.check}</span>
             </div>
 
+            <!-- The real frontmatter lines, so this reads as the git diff it
+                 will produce. Showing the VALUE either side of an arrow made a
+                 `move` render as "Kevin Cable → Kevin Cable" (the value does not
+                 change, the field does) and hid genuine changes like
+                 `date_published: "2021-08-02"` becoming bare
+                 `posted_date: 2021-08-02`. -->
             <div class="diff">
-              <div class="before"><span>−</span> {show(item.current)}</div>
-              <div class="after"><span>+</span> {show(item.proposed)}</div>
+              {#if item.preview}
+                {#each item.preview.removed as line (line)}
+                  <div class="before"><span>−</span> {line}</div>
+                {/each}
+                {#each item.preview.added as line (line)}
+                  <div class="after"><span>+</span> {line}</div>
+                {/each}
+              {:else}
+                <div class="before"><span>−</span> {item.field}: {show(item.current)}</div>
+                <div class="after">
+                  <span>+</span> {item.to_field ?? item.field}: {show(item.proposed)}
+                </div>
+              {/if}
             </div>
+
+            {#if item.depends_on?.length}
+              <p class="depends">
+                Requires the {item.depends_on.length === 1 ? "item" : "items"} it
+                depends on to be approved too — on its own this would overwrite the
+                value rather than move it.
+              </p>
+            {/if}
 
             <p class="why">{item.evidence.reasoning}</p>
             {#if item.evidence.sources.length}
@@ -348,6 +373,13 @@
   .after {
     background: #f0fdf4;
     color: #14532d;
+  }
+  .depends {
+    margin: 0 0 0.5rem;
+    font-size: 0.85rem;
+    background: #fffbeb;
+    border-left: 3px solid #f59e0b;
+    padding: 0.4rem 0.7rem;
   }
   .why {
     margin: 0 0 0.5rem;
