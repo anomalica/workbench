@@ -374,6 +374,26 @@
     }
   }
 
+  /**
+   * Re-read the record summaries without disturbing the view.
+   *
+   * Submitting a review rewrites that record's coverage sidecar, and the
+   * browse list's Reviewed column is drawn from it - but the list is fetched
+   * once and cached, so going back after a review showed the figure the record
+   * had before it. No `loading` flag: the reviewer is still reading, and the
+   * list they are not looking at should not blank itself to update. A failed
+   * refresh leaves the cached list alone rather than emptying it.
+   */
+  async function refreshIngestSummaries() {
+    try {
+      const fresh = await fetchIngests();
+      if (fresh.length) ingests = fresh;
+    } catch {
+      // Offline or backend down. The stale list is still better than none, and
+      // the next full load will correct it.
+    }
+  }
+
   /** Fetch the record list if it has not been fetched yet. Ingests is reachable
    *  from destinations that never load it (a cold load straight into /digests,
    *  then a click on Ingests), so it must fetch for itself rather than trust
@@ -819,6 +839,9 @@
         onreviewedchange={(hash, reviewed) => {
           setReviewed(hash, reviewed);
           if (reviewed) trackEvent("review-submitted");
+          // The submission changed this record's coverage; the list still
+          // holds what it read at startup.
+          refreshIngestSummaries();
         }}
         onback={goBack}
         ontuning={() => (tuningOpen = true)}
