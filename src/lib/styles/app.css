@@ -452,16 +452,13 @@ del {
   opacity: 0.75;
 }
 
-/* A portion's own classification marking, set as the source prints it: ahead of
-   the text it governs, and quieter than the text, because it classifies the
-   passage rather than being part of it. */
+/* A portion's own classification marking. The source prints it as ordinary
+   text at the head of the passage - so it is set as ordinary text, not
+   coloured and not shrunk. Styling it drew the eye to the one thing on the
+   page that is usually struck out, which is the opposite of what the document
+   is saying. Whether it is struck is the record's business, carried as
+   ~~...~~ around the marking; this rule only stops it standing out. */
 .portion-marking {
-  font-family: var(--font-ui);
-  font-size: 0.75em;
-  font-weight: 500;
-  letter-spacing: 0.02em;
-  color: var(--color-warning);
-  margin-right: 0.35em;
   white-space: nowrap;
   cursor: help;
 }
