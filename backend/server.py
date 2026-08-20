@@ -3869,19 +3869,31 @@ async def housekeeping_decide(full_hash: str, request: Request) -> JSONResponse:
         )
 
     approved = [i for i in sc.items if i.id in decisions and i.status == "approved"]
+    did_not_apply: list[dict] = []
     entry = source._scan().get(full_hash) if hasattr(source, "_scan") else None
     if approved:
         if entry is None:
             raise HTTPException(status_code=404, detail="Record not found")
         md_path, _ = entry
         try:
-            updated = hk.apply_items(md_path, approved)
+            result = hk.apply_patch(md_path, approved)
         except hk.BodyChanged as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         except hk.MultilineField as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        if not source.save_ingest(full_hash, updated):
+        # An item that no longer matches the record is NOT an error - the record
+        # moved on since the proposal was written. It goes back to `proposed` and
+        # is reported, so the reviewer can re-run housekeeping rather than having
+        # a stale change silently overwrite a newer edit.
+        stale = {i.id for i, _ in result.did_not_apply}
+        for item in sc.items:
+            if item.id in stale:
+                item.status = "proposed"
+        if result.applied and not source.save_ingest(full_hash, result.text):
             raise HTTPException(status_code=404, detail="Record not found")
+        did_not_apply = [
+            {"item_id": i.id, "reason": why} for i, why in result.did_not_apply
+        ]
 
     hk.write_sidecar_file(p, sc)
     source.commit_review(
@@ -3892,5 +3904,9 @@ async def housekeeping_decide(full_hash: str, request: Request) -> JSONResponse:
         f"{len(decisions) - len(approved)} rejected",
     )
     return JSONResponse(
-        {"applied": len(approved), "rejected": len(decisions) - len(approved)}
+        {
+            "applied": len(approved),
+            "rejected": len(decisions) - len(approved),
+            "did_not_apply": did_not_apply,
+        }
     )

@@ -13,6 +13,7 @@ import {
   BodyChanged,
   bodyDigest,
   type HousekeepingItem,
+  applyPatch,
   MultilineField,
   scalar,
   unmetDependencies,
@@ -105,12 +106,41 @@ Deno.test("a quote in a value is escaped", () => {
   assertEquals(scalar('a "quoted" name'), '"a \\"quoted\\" name"');
 });
 
-Deno.test("a multiline field is refused rather than mangled", async () => {
+Deno.test("a multiline field does not apply, and does not abort the rest", async () => {
+  // The record is not the shape the proposal assumed. It is reported as
+  // not-applied rather than raised: raising would discard items that WOULD have
+  // applied, and a structural mismatch is the same class of event as any other
+  // "the record moved on".
   const withList = RECORD.replace(
     "publisher: 'Eyes On Cinema'",
     "publisher:\n  - Eyes On Cinema\n  - Someone Else",
   );
-  await assertRejects(() => applyItems(withList, [MOVE_PUBLISHER]), MultilineField);
+  const alsoValid = item({
+    id: "ok",
+    field: "date_published",
+    operation: "set",
+    to_field: undefined,
+    current: "2026-08-11",
+    proposed: "1967",
+  });
+  const r = await applyPatch(withList, [MOVE_PUBLISHER, alsoValid]);
+  assertEquals(
+    r.didNotApply.map((d) => d.item.id),
+    ["i"],
+  );
+  assertEquals(
+    r.applied.map((i) => i.id),
+    ["ok"],
+    "the other item still applied",
+  );
+});
+
+Deno.test("a patch does not apply when the record moved on", async () => {
+  const edited = RECORD.replace("publisher: 'Eyes On Cinema'", "publisher: 'BBC'");
+  const r = await applyPatch(edited, [MOVE_PUBLISHER]);
+  assertEquals(r.applied.length, 0);
+  assertEquals(r.text, edited, "an unmatched patch leaves the record untouched");
+  assertEquals(r.didNotApply.length, 1);
 });
 
 Deno.test("a record with no frontmatter is refused", async () => {

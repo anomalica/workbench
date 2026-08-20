@@ -60,6 +60,47 @@ export interface HousekeepingSidecar {
 }
 
 export class BodyChanged extends Error {}
+
+export interface ApplyResult {
+  text: string;
+  applied: HousekeepingItem[];
+  didNotApply: { item: HousekeepingItem; reason: string }[];
+}
+
+/**
+ * Whether the record still looks the way this item assumed.
+ *
+ * This is what makes an item a PATCH rather than a field-name replacement. A
+ * patch carries its context and fails to apply when the context is gone; a
+ * name-keyed replacement has nothing to fail against, so it overwrites whatever
+ * is there now - including an edit made after the proposal was written.
+ *
+ * Compares the VALUE, not the raw line: the corpus quotes inconsistently and a
+ * proposal must not fail merely because a value is written 'x' rather than "x".
+ */
+function matches(lines: string[], item: HousekeepingItem): { ok: boolean; reason: string } {
+  const span = fieldSpan(lines, item.field);
+  const present = span ? lines[span[0]] : null;
+  const unquote = (v: string) => v.replace(/^['"]+|['"]+$/g, "");
+  if (item.current === null || item.current === undefined) {
+    if (present !== null) {
+      return { ok: false, reason: `${item.field} now exists; expected absent` };
+    }
+    return { ok: true, reason: "" };
+  }
+  if (present === null) {
+    return { ok: false, reason: `${item.field} is gone; expected ${item.current}` };
+  }
+  const idx = present.indexOf(":");
+  const value = idx >= 0 ? present.slice(idx + 1).trim() : "";
+  if (unquote(value) !== unquote(String(item.current))) {
+    return {
+      ok: false,
+      reason: `${item.field} is now ${value}; expected ${item.current}`,
+    };
+  }
+  return { ok: true, reason: "" };
+}
 export class MultilineField extends Error {}
 
 const FIELD_LINE = /^([A-Za-z_][A-Za-z0-9_]*):(.*)$/;
@@ -128,12 +169,28 @@ function fieldSpan(lines: string[], name: string): [number, number] | null {
  * commit diff IS the approved items.
  */
 export async function applyItems(original: string, items: HousekeepingItem[]): Promise<string> {
+  return (await applyPatch(original, items)).text;
+}
+
+export async function applyPatch(
+  original: string,
+  items: HousekeepingItem[],
+): Promise<ApplyResult> {
   const split = splitRecord(original);
   if (!split) throw new BodyChanged("no parseable frontmatter");
   const lines = split.frontmatter.split("\n");
+  const applied: HousekeepingItem[] = [];
+  const didNotApply: { item: HousekeepingItem; reason: string }[] = [];
 
   for (const item of items) {
     if (item.status !== "approved") continue;
+    const m = matches(lines, item);
+    if (!m.ok) {
+      // The record moved on. Applying anyway would overwrite a newer edit.
+      didNotApply.push({ item, reason: m.reason });
+      continue;
+    }
+    applied.push(item);
     const span = fieldSpan(lines, item.field);
     if (span && span[1] - span[0] > 1) {
       throw new MultilineField(`${item.id}: ${item.field} spans lines`);
@@ -164,5 +221,5 @@ export async function applyItems(original: string, items: HousekeepingItem[]): P
   if ((await bodyDigest(updated)) !== (await bodyDigest(original))) {
     throw new BodyChanged("body changed during a frontmatter-only apply");
   }
-  return updated;
+  return { text: updated, applied, didNotApply };
 }
