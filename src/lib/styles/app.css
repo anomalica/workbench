@@ -440,3 +440,14 @@ body {
   content-visibility: auto;
   contain-intrinsic-size: auto 8.5rem;
 }
+
+/* Struck-through source text: a declassification stroke through a
+   classification banner, an editor's deletion. It is content the source
+   struck, not content we removed, so it stays legible - the stroke is the
+   fact. `del` is what markdown's ~~...~~ produces. */
+.prose del,
+del {
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+  opacity: 0.75;
+}
