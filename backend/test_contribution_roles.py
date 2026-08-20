@@ -20,6 +20,11 @@ class StubSource:
         self.committed = False
         self.archived = False
 
+    def get_ingest(self, full_hash):
+        # The submit path reads the record's current copyright status to decide
+        # whether this edit is a change to who may see it.
+        return {"frontmatter": {"copyright.status": "restricted"}}
+
     def save_ingest(self, full_hash, content):
         self.saved = True
         return True

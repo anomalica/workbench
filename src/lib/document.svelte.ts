@@ -1258,6 +1258,23 @@ function readOverlayNextId(rawFm: string): number | null {
   }
 }
 
+/** Set `a.b` inside its block rather than as a key literally called "a.b".
+ *
+ *  The reader flattens nested frontmatter with dots (`copyright.status`), so
+ *  the writer takes the same notation - otherwise a caller has to know which
+ *  fields happen to be nested, and getting it wrong writes a key that every
+ *  consumer ignores while the real one keeps its old value. */
+function setPath(doc: Record<string, unknown>, path: string, value: unknown): void {
+  const parts = path.split(".");
+  let node = doc;
+  for (const part of parts.slice(0, -1)) {
+    const next = node[part];
+    if (typeof next !== "object" || next === null || Array.isArray(next)) node[part] = {};
+    node = node[part] as Record<string, unknown>;
+  }
+  node[parts[parts.length - 1]] = value;
+}
+
 export function rewriteFrontmatterFields(
   rawFm: string,
   fields: Record<string, string | string[] | number>,
@@ -1271,15 +1288,17 @@ export function rewriteFrontmatterFields(
   // to reinterpret that.
   const doc = (yaml.load(fmContent, { schema: yaml.CORE_SCHEMA }) as Record<string, unknown>) ?? {};
   for (const [key, value] of Object.entries(fields)) {
+    let resolved: unknown;
     if (typeof value === "number") {
-      doc[key] = value;
+      resolved = value;
     } else if (Array.isArray(value)) {
       const items = value.map((v) => v.trim()).filter((v) => v !== "");
-      doc[key] = items.length > 0 ? items : undefined;
+      resolved = items.length > 0 ? items : undefined;
     } else {
       const trimmed = value.trim();
-      doc[key] = trimmed !== "" ? trimmed : undefined;
+      resolved = trimmed !== "" ? trimmed : undefined;
     }
+    setPath(doc, key, resolved);
   }
   const newFmContent = yaml.dump(doc, {
     lineWidth: -1,

@@ -3401,6 +3401,36 @@ def get_history(full_hash: str) -> JSONResponse:
     return JSONResponse({"history": source.review_history(full_hash)})
 
 
+def _guard_copyright_change(full_hash: str, content: str, user: dict) -> None:
+    """Only an admin may change who is allowed to see a record.
+
+    `copyright.status` is the access gate, not a label: it decides whether the
+    body and the original file are served to anyone who asks. The workbench
+    only offers the control to admins, but the control is a button - the record
+    is submitted as whole markdown, so any reviewer could edit the frontmatter
+    by hand and post it. This is where that is actually refused.
+    """
+    current = source.get_ingest(full_hash)
+    if current is None:
+        return
+    before = (current.get("frontmatter") or {}).get("copyright.status")
+    after = parse_frontmatter(content)[0].get("copyright.status")
+    # An absent status is not a request to change one. Submitted content whose
+    # frontmatter does not state it reads as "unchanged" here, and as
+    # "restricted" everywhere that serves the record - so the omission fails
+    # closed rather than quietly opening the gate.
+    if after is None or before == after:
+        return
+    if not roles.at_least(_role_of_user(user), "admin"):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Changing a record's copyright status decides who may see it, "
+                "and is restricted to admins."
+            ),
+        )
+
+
 @app.put("/api/ingests/{full_hash}")
 def submit_review(full_hash: str, body: dict, request: Request) -> JSONResponse:
     """Submit a review: save changes and commit with reviewer identity.
@@ -3444,6 +3474,8 @@ def submit_review(full_hash: str, body: dict, request: Request) -> JSONResponse:
             {"submitted": True, "status": "pending", "proposal_id": entry["id"]},
             status_code=202,
         )
+
+    _guard_copyright_change(full_hash, content, user)
 
     if not source.save_ingest(full_hash, content):
         raise HTTPException(status_code=404, detail="Not found")

@@ -872,6 +872,7 @@
         digest={selectedDigest}
         {sourceFile}
         {user}
+        isAdmin={myRole === "admin"}
         reviewed={reviewedHashes.has(selectedIngest.content_hash) &&
           !needsVerifyHashes.has(selectedIngest.content_hash)}
         needsVerify={needsVerifyHashes.has(selectedIngest.content_hash)}

@@ -878,3 +878,43 @@ describe("frontmatter edits leave dates alone", () => {
     expect(rewriteFrontmatterFields(FM, { date_published: "" })).not.toContain("date_published");
   });
 });
+
+describe("writing a nested frontmatter field", () => {
+  const doc = [
+    "---",
+    "title: A Record",
+    "copyright:",
+    "  status: restricted",
+    "  holder: Someone",
+    "---",
+    "body",
+  ].join("\n");
+
+  it("sets the field inside its block, not a key with a dot in its name", () => {
+    // The reader flattens nested keys with dots. A writer that took the string
+    // literally would add a `copyright.status` key every consumer ignores,
+    // while the real status kept its old value - a silent no-op on the one
+    // field that decides who can see the record.
+    const out = rewriteFrontmatterFields(doc.split("body")[0], {
+      "copyright.status": "public_domain",
+    });
+    const fm = yaml.load(out.replace(/^---\n/, "").replace(/---\n$/, "")) as Record<string, any>;
+    expect(fm.copyright).toEqual({ status: "public_domain", holder: "Someone" });
+    expect(fm["copyright.status"]).toBeUndefined();
+  });
+
+  it("leaves its siblings alone", () => {
+    const out = rewriteFrontmatterFields(doc.split("body")[0], {
+      "copyright.status": "licensed",
+    });
+    expect(out).toContain("holder: Someone");
+    expect(out).toContain("title: A Record");
+  });
+
+  it("creates the block when the record has none", () => {
+    const bare = "---\ntitle: A Record\n---\n";
+    const out = rewriteFrontmatterFields(bare, { "copyright.status": "restricted" });
+    const fm = yaml.load(out.replace(/^---\n/, "").replace(/---\n$/, "")) as Record<string, any>;
+    expect(fm.copyright).toEqual({ status: "restricted" });
+  });
+});

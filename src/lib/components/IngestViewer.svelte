@@ -1,6 +1,13 @@
 <script lang="ts">
+  import CopyrightControl from "./CopyrightControl.svelte";
   import { highlightDisplay } from "$lib/highlight-display.svelte";
-  import type { IngestDetail, DigestDocument, IngestSummary, User } from "$lib/api";
+  import type {
+    CopyrightStatus,
+    DigestDocument,
+    IngestDetail,
+    IngestSummary,
+    User,
+  } from "$lib/api";
   import {
     fetchIngests,
     submitReview,
@@ -71,6 +78,7 @@
     digest = null,
     sourceFile,
     user,
+    isAdmin = false,
     reviewed = false,
     needsVerify = false,
     hasNext = false,
@@ -86,6 +94,8 @@
     digest?: DigestDocument | null;
     sourceFile: File | null;
     user: User | null;
+    /** Only an admin may change who can see a record. */
+    isAdmin?: boolean;
     reviewed?: boolean;
     /** Review carried from a re-ingest, not yet re-verified - show a banner. */
     needsVerify?: boolean;
@@ -166,6 +176,17 @@
   // The WORKING title, so a retitle shows in the header immediately, not after
   // submit + reload. Falls back to the server detail for a record whose draft
   // hasn't touched the frontmatter.
+  /** The WORKING access status, so a change shows at once rather than after
+   *  submit + reload. Nested in the frontmatter, unlike the flat fields above,
+   *  and defaults closed: a record that does not say is gated. */
+  let liveCopyright = $derived.by<CopyrightStatus>(() => {
+    const block = currentFrontmatterObj.copyright;
+    const status =
+      block && typeof block === "object" ? (block as Record<string, unknown>).status : undefined;
+    if (typeof status === "string") return status as CopyrightStatus;
+    return (ingest.copyright_status as CopyrightStatus) ?? "restricted";
+  });
+
   let liveTitle = $derived(
     typeof currentFrontmatterObj.title === "string" && currentFrontmatterObj.title.trim()
       ? currentFrontmatterObj.title
@@ -4590,6 +4611,13 @@
                 creators,
                 date_published: datePublished,
               })}
+          />
+          <!-- Who may see it. Admin only: this is the access gate, not a
+               label - see CopyrightControl. -->
+          <CopyrightControl
+            status={liveCopyright}
+            canEdit={isAdmin}
+            onchange={(next) => doc.updateFrontmatter({ "copyright.status": next })}
           />
           <!-- Acquisition provenance: where this record came from. -->
           <div class="flex items-baseline gap-2 text-xs font-ui">
