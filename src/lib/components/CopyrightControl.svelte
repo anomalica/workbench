@@ -5,12 +5,13 @@
    * `copyright.status` is not a label - it is the gate. It decides whether the
    * body is served to anyone who asks, whether the original file is downloadable,
    * and whether the audio's waveform is public. Anomalica is not a redistribution
-   * channel, and a record moved from `restricted` to a public status is served
-   * from a CDN the moment it syncs, which is not something an undo reaches.
+   * channel, and a record moved from `restricted` to a public status goes into
+   * the next public snapshot with its body intact.
    *
-   * So: admin only, and the direction that widens access asks first. Narrowing
-   * needs no confirmation - the cost of being too careful with someone else's
-   * copyright is that a reviewer has to prove possession to read it.
+   * That IS reversible on our side: the snapshot blanks a gated record's body
+   * at build time, so narrowing the status drops it at the next build and the
+   * CDN is purged. What is not reversible is a copy someone already took, or a
+   * crawler's index - which is why widening asks first and narrowing does not.
    */
   import { isPubliclyViewable, type CopyrightStatus } from "$lib/api";
 
@@ -130,8 +131,10 @@
         soon as this syncs.
       </p>
       <p class="text-sm font-ui text-on-surface-secondary leading-relaxed mt-2">
-        Setting it back later does not unpublish what has already been fetched and cached. Only
-        do this if the material really carries no redistribution restriction.
+        You can take it down again - the next snapshot build drops the body and the CDN is
+        purged. What you cannot take back is a copy someone already downloaded, or a crawler
+        already indexed. Only publish material that really carries no redistribution
+        restriction.
       </p>
       <div class="flex justify-end gap-2 mt-4">
         <button

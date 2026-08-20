@@ -4603,13 +4603,19 @@
             publisher={livePublisher}
             creators={liveCreators}
             datePublished={ingest.frontmatter.date_published ?? ""}
+            sourceUrl={String(currentFrontmatterObj.source_url ?? ingest.frontmatter.source_url ?? "")}
+            dateAccessed={String(
+              currentFrontmatterObj.date_accessed ?? ingest.frontmatter.date_accessed ?? "",
+            )}
             canEdit={!!user}
-            onsave={({ title, publisher, creators, datePublished }) =>
+            onsave={({ title, publisher, creators, datePublished, sourceUrl, dateAccessed }) =>
               doc.updateFrontmatter({
                 title,
                 publisher,
                 creators,
                 date_published: datePublished,
+                source_url: sourceUrl,
+                date_accessed: dateAccessed,
               })}
           />
           <!-- Who may see it. Admin only: this is the access gate, not a
