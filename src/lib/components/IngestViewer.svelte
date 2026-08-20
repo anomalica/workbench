@@ -1946,14 +1946,64 @@
       .replace(/\{\{highlight-end:\s*([A-Za-z0-9]+)\s*\}\}/g, "</span>");
   }
 
+  /**
+   * Redactions and illegible passages, however the marker states them.
+   *
+   * The spec's example is an extent - `{{redacted: ~2 words}}` - but what the
+   * corpus overwhelmingly carries is the exemption the redactor cited:
+   * `{{redacted: 1.4a}}`, `{{redacted: (b)(6)}}`, `{{redacted: 3.5c, FOIA
+   * Exemption (b)(6)}}`. 160 of 271 markers across 10 records stated a code
+   * rather than a size, matched nothing, and were shown to the reviewer as
+   * raw `{{redacted: 1.4a}}` in the middle of the prose.
+   *
+   * So the value is read rather than matched: any part of it that looks like
+   * an extent sizes the bar, and anything else is the citation, which is what
+   * the source itself prints inside the box. A marker whose value is neither
+   * still renders as a redaction - a bar that says something unexpected beats
+   * annotation syntax leaking into the text.
+   */
   function renderRedactions(html: string): string {
     return html.replace(
-      /\{\{(redacted|illegible)(?::\s*~(\d+)\s*words?)?\}\}/g,
-      (_, type, count) => {
-        const n = parseInt(count || "1", 10);
+      /\{\{(redacted|illegible)(?::\s*([^{}]*))?\}\}/g,
+      (_, type, rawValue) => {
         const label = type === "illegible" ? "illegible" : "redacted";
-        const width = n * 2.5;
-        return `<span class="redaction" title="${label}: ~${n} word${n > 1 ? "s" : ""}" style="width:${width}em"></span>`;
+        const parts = String(rawValue ?? "")
+          .split(",")
+          .map((part) => part.trim())
+          .filter(Boolean);
+
+        let words = 0;
+        let chars = 0;
+        const citations: string[] = [];
+        for (const part of parts) {
+          const extent = part.match(/^~\s*(\d+)\s*(word|character|char)s?$/i);
+          if (!extent) {
+            citations.push(part);
+            continue;
+          }
+          if (extent[2].toLowerCase().startsWith("word")) words += Number(extent[1]);
+          else chars += Number(extent[1]);
+        }
+
+        // A word is about five characters plus its space; an unstated extent
+        // is one word, which is what the bare marker has always meant.
+        const em = chars > 0 ? chars * 0.55 : (words || 1) * 2.5;
+        const stated = [
+          words ? `~${words} word${words === 1 ? "" : "s"}` : "",
+          chars ? `~${chars} character${chars === 1 ? "" : "s"}` : "",
+          ...citations,
+        ].filter(Boolean);
+        const title = escapeHtml(`${label}${stated.length ? `: ${stated.join(", ")}` : ""}`);
+        // The citation goes INSIDE the bar, the way the source prints it in
+        // the box, and only when it fits - a long FOIA string would set the
+        // bar's width from its own label rather than from the extent.
+        const inside = citations.join(", ");
+        const showInside = inside && inside.length <= 12;
+        return (
+          `<span class="redaction${showInside ? " redaction-cited" : ""}"` +
+          ` title="${title}" style="min-width:${em.toFixed(2)}em">` +
+          `${showInside ? escapeHtml(inside) : ""}</span>`
+        );
       },
     );
   }
@@ -5729,8 +5779,13 @@
 
                     <!-- Verbatim quote, indented to make the relationship obvious -->
                     {#if c.quote}
+                      <!-- The excerpt is the record's own text, so it carries
+                           the record's own redaction markers. Drawn the same
+                           way here as in the ingest pane; leaving them as
+                           `{{redacted: 1.4a}}` showed annotation syntax as
+                           though the source had said it. -->
                       <blockquote class="mt-2 pl-3 border-l-2 border-border/70 text-xs italic text-on-surface-muted leading-relaxed">
-                        {c.quote}
+                        {@html renderRedactions(escapeHtml(c.quote))}
                       </blockquote>
                     {/if}
 

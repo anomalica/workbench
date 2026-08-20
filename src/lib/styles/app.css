@@ -158,6 +158,20 @@ body {
   cursor: help;
 }
 
+/* The exemption the redactor cited, shown in the bar the way the source prints
+   it in the box. Reversed out of the bar rather than beside it: it is what is
+   written on the redaction, not a note about it. */
+.redaction-cited {
+  height: auto;
+  padding: 0 0.35em;
+  color: var(--color-surface);
+  font-family: var(--font-ui);
+  font-size: 0.75em;
+  line-height: 1.5;
+  text-align: center;
+  vertical-align: baseline;
+}
+
 /* A link the source document carried. Shown as what it is and never followed:
    we cannot vouch for where an unvetted URL from someone else's book points,
    and a reviewer's editor should not be the thing that helps it travel. The
