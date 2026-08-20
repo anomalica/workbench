@@ -2473,6 +2473,37 @@
   let submitError = $state<string | null>(null);
   let showSubmitForm = $state(false);
   let reviewNotes = $state("");
+  let reviewNotesBox = $state<HTMLTextAreaElement | undefined>();
+
+  /** What the note says when the reviewer says nothing.
+   *
+   *  Most reviews have nothing to explain - the work was reading the record
+   *  and the note is a formality - so an empty box means either a blank commit
+   *  message or a sentence typed for the sake of it. The coverage is the one
+   *  fact worth recording either way, and it is already known. */
+  let defaultReviewNote = $derived.by(() => {
+    const verdict = isWordRecord ? wordVerdict : isTextRecord ? textVerdict : null;
+    if (!verdict) return "Reviewed";
+    return `Reviewed ${observedPercent(verdict.observed_coverage)}%`;
+  });
+
+  /** Offer it selected, so the first keystroke replaces it and Ctrl-Enter
+   *  keeps it. Cleared on close so the next record computes its own. */
+  function closeSubmitForm() {
+    showSubmitForm = false;
+    // Only the offered default is dropped - a sentence the reviewer actually
+    // wrote survives reopening the dialogue.
+    if (reviewNotes === defaultReviewNote) reviewNotes = "";
+  }
+
+  function openSubmitForm() {
+    if (!reviewNotes.trim()) reviewNotes = defaultReviewNote;
+    showSubmitForm = true;
+    queueMicrotask(() => {
+      reviewNotesBox?.focus();
+      reviewNotesBox?.select();
+    });
+  }
   // When the modal's "Approve & next" button (or Shift+A keystroke) fires,
   // we set this true so a successful submit advances to the next record
   // automatically. Reset on every modal open.
@@ -3134,7 +3165,7 @@
       requestAnimationFrame(() => findView?.focus());
     } else if ((e.ctrlKey || e.metaKey) && e.key === "s") {
       e.preventDefault();
-      if (doc.dirty && user) showSubmitForm = true;
+      if (doc.dirty && user) openSubmitForm();
     } else if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey) {
       e.preventDefault();
       doc.undo();
@@ -3197,7 +3228,7 @@
       // already approved-as-is for a clean record.
       e.preventDefault();
       submitAndAdvance = e.shiftKey && hasNext;
-      showSubmitForm = true;
+      openSubmitForm();
     }
   }
 
@@ -3505,7 +3536,7 @@
       </svg>
       <span class="font-semibold">Your last edit could NOT be saved in this browser (storage full) - do not reload or close this tab.</span>
       <button
-        onclick={() => { if (user) showSubmitForm = true; }}
+        onclick={() => { if (user) openSubmitForm(); }}
         class="ml-1 underline font-semibold cursor-pointer hover:no-underline"
       >Submit now</button>
     {:else if syncWarning}
@@ -3882,8 +3913,8 @@
   {#if showSubmitForm}
     <div
       class="fixed inset-0 bg-ink/50 z-50 flex items-center justify-center p-4"
-      onclick={(e) => { if (e.target === e.currentTarget) showSubmitForm = false; }}
-      onkeydown={(e) => { if (e.key === 'Escape') showSubmitForm = false; }}
+      onclick={(e) => { if (e.target === e.currentTarget) closeSubmitForm(); }}
+      onkeydown={(e) => { if (e.key === 'Escape') closeSubmitForm(); }}
       role="dialog"
       aria-modal="true"
       aria-label="Submit review"
@@ -3911,12 +3942,12 @@
           </div>
         {/if}
 
-        {#if doc.dirty}
-          <label class="block text-xs font-ui text-on-surface-secondary mb-1" for="review-notes">
-            Notes (optional)
-          </label>
-          <textarea
+        <label class="block text-xs font-ui text-on-surface-secondary mb-1" for="review-notes">
+          Notes (optional)
+        </label>
+        <textarea
             id="review-notes"
+            bind:this={reviewNotesBox}
             bind:value={reviewNotes}
             placeholder="What did you change and why?"
             rows="3"
@@ -3933,7 +3964,6 @@
             class="w-full text-sm bg-surface border border-border rounded px-3 py-2
               text-on-surface outline-none focus:border-primary placeholder:text-on-surface-muted/50 resize-none"
           ></textarea>
-        {/if}
 
         {#if !isWordRecord && !isTextRecord}
           <div class="mt-3">
@@ -4005,7 +4035,7 @@
           {/if}
           <div class="flex-1"></div>
           <button
-            onclick={() => { showSubmitForm = false; submitAndAdvance = false; }}
+            onclick={() => { closeSubmitForm(); submitAndAdvance = false; }}
             class="text-xs font-ui text-on-surface-muted px-3 py-1.5 rounded cursor-pointer hover:text-on-surface"
           >Cancel</button>
           <button
@@ -4566,7 +4596,7 @@
             </svg>
           </button>
           <button
-            onclick={() => { if (user) showSubmitForm = true; else window.location.href = '/api/auth/login'; }}
+            onclick={() => { if (user) openSubmitForm(); else window.location.href = '/api/auth/login'; }}
             disabled={submitDisabled}
             class="text-xs font-ui font-medium px-3 py-1 rounded transition-colors
               {submitDisabled
