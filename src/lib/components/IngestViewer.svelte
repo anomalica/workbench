@@ -978,12 +978,27 @@
   // (bound to that container via proseContainer) keeps working.
   let isTextRecord = $derived(isWeb || isEbook || isPdf);
 
-  // Copyright: public/accessible records can show everything freely
+  // Copyright: public/accessible records can show everything freely.
+  //
+  // Read from the WORKING copy, like every other field in the Meta panel. An
+  // admin who corrects a status watched the panel say "Publicly accessible"
+  // while the pane beside it stayed locked and said "restricted" - two answers
+  // to one question, from the same screen. The body is already in the browser
+  // either way (the API serves it to any signed-in reviewer; the gate that
+  // matters is the public snapshot, which blanks it at build time), so this
+  // decides what the reviewer is shown, not what anyone can obtain. Discarding
+  // the edit re-locks it, because the derivation follows the draft back.
   let isPublic = $derived(
-    ingest.copyright_status === "public_domain" ||
-    ingest.copyright_status === "open_licence" ||
-    ingest.copyright_status === "publicly_accessible",
+    liveCopyright === "public_domain" ||
+    liveCopyright === "open_licence" ||
+    liveCopyright === "publicly_accessible",
   );
+  /** The reviewer PROVED possession - dropped the file, or matched the hash.
+   *
+   *  Only those two set it. The archived-original fetch below runs solely for
+   *  records that are already viewable by their status, so granting there
+   *  added nothing and outlived the status that justified it: correcting a
+   *  status, then discarding the correction, left the body on screen. */
   let accessGranted = $state(false);
 
   // File drop state (for dropping source files onto the left panel)
@@ -1244,7 +1259,6 @@
       if (address.kind === "none") return;
       if (address.kind === "stream") {
         localSourceUrl = address.url;
-        accessGranted = true;
         return;
       }
       loadingFile = true;
@@ -1269,7 +1283,6 @@
             sourceBlob = blob;
             const url = URL.createObjectURL(blob);
             localSourceUrl = url;
-            accessGranted = true;
           }
           loadingFile = false;
         })
@@ -4743,7 +4756,7 @@
             </form>
 
             <p class="text-xs text-on-surface-muted mt-4">
-              Copyright status: {ingest.copyright_status}
+              Copyright status: {liveCopyright}
               {#if ingest.frontmatter["copyright.holder"]}
                 - {ingest.frontmatter["copyright.holder"]}
               {/if}
