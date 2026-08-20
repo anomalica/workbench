@@ -420,7 +420,14 @@
    *  headers said it was three. The speakers inside it become labels within the
    *  block rather than turns of their own. */
   let renderBlocks = $derived.by(() => {
-    type Item = { speaker: string | null; seg: ReturnType<typeof turnSegments>[number] };
+    // The run comes along so the voice's name stays editable inside the clip:
+    // a reviewer who works out who is speaking on a played recording has to be
+    // able to say so, and the name is a guess from diarisation until they do.
+    type Item = {
+      speaker: string | null;
+      run: SpeakerRun;
+      seg: ReturnType<typeof turnSegments>[number];
+    };
     type Block =
       | { kind: "turn"; key: string; turn: (typeof turns)[number]; segs: ReturnType<typeof turnSegments> }
       | { kind: "external"; key: string; external: WordExternal; items: Item[] };
@@ -449,7 +456,7 @@
           const label: string | null =
             turn.lead.speaker !== lastSpeakerShown ? turn.lead.speaker : null;
           if (label) lastSpeakerShown = label;
-          open.items.push({ speaker: label, seg });
+          open.items.push({ speaker: label, run: turn.lead, seg });
           continue;
         }
         open = null;
@@ -1180,6 +1187,7 @@
 
   function selectBlock(run: SpeakerRun) {
     headerPicker = null;
+    clipPicker = null;
     pickerOpen = false;
     anchor = run.startWord;
     range = { from: run.startWord, to: run.endWord };
@@ -1370,10 +1378,11 @@
         cancelSpanNote();
         return;
       }
-      if (pickerOpen || headerPicker !== null || range) {
+      if (pickerOpen || headerPicker !== null || clipPicker !== null || range) {
         e.preventDefault();
         pickerOpen = false;
         headerPicker = null;
+        clipPicker = null;
         clearSelection();
       }
       return;
@@ -1800,6 +1809,7 @@
 
   function selectWord(g: number, extend: boolean) {
     headerPicker = null;
+    clipPicker = null;
     // Second half of the context gesture: while picking, a click on a word inside
     // an EARLIER highlight completes the link instead of moving the selection.
     if (contextFor !== null) {
@@ -2027,7 +2037,26 @@
     });
   });
 
+  /** The voice inside a clip gets its own picker state. A turn that speaks
+   *  both in the recording and inside a quotation is ONE run, so keying both
+   *  rows on the run's first word opened two menus at once. */
+  let clipPicker = $state<number | null>(null);
+
+  function toggleClipPicker(run: SpeakerRun) {
+    anchor = null;
+    range = null;
+    pickerOpen = false;
+    headerPicker = null;
+    clipPicker = clipPicker === run.startWord ? null : run.startWord;
+  }
+
+  function chooseClipSpeaker(run: SpeakerRun, name: string) {
+    onreassign(run.startWord, run.endWord, name);
+    clipPicker = null;
+  }
+
   function toggleHeaderPicker(run: SpeakerRun) {
+    clipPicker = null;
 
     // Opening a header picker deselects any word range to avoid two live menus.
     anchor = null;
@@ -2720,9 +2749,24 @@
           </div>
           {#each block.items as item, i (i)}
             {#if item.speaker}
-              <div class="flex items-center gap-2 pt-1 text-xs font-ui text-on-surface-muted/70">
-                <span class="flex-none w-2.5 h-2.5 rounded-full border border-current opacity-40" aria-hidden="true"></span>
-                {item.speaker}
+              <!-- A picker, like every other speaker row. Whoever is in the
+                   clip is a guess from diarisation until a reviewer says
+                   otherwise, and this is where they are looking when they
+                   recognise the voice. Muted, because the fact worth seeing
+                   first is still that the passage is quoted. -->
+              <div class="relative inline-block pt-1">
+                <button
+                  onclick={(e) => { e.stopPropagation(); toggleClipPicker(item.run); }}
+                  class="group flex items-center gap-2 cursor-pointer rounded px-1 -mx-1 text-xs font-ui
+                    text-on-surface-muted/70 hover:bg-primary-container/20 transition-colors"
+                  title="Whose voice is this in the clip?"
+                >
+                  <span class="flex-none w-2.5 h-2.5 rounded-full border border-current opacity-40" aria-hidden="true"></span>
+                  <span class="group-hover:underline">{item.speaker}</span>
+                </button>
+                {#if clipPicker === item.run.startWord}
+                  {@render speakerMenu(item.run.speaker, (name) => chooseClipSpeaker(item.run, name))}
+                {/if}
               </div>
             {/if}
             {#if item.seg.kind === "external"}
