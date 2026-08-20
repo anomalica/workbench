@@ -255,9 +255,12 @@ def test_records_prerender_gates_body_keeps_short_quotes(records_repo, tmp_path)
     assert gated["frontmatter"]["copyright.status"] == "restricted"
     gated_digest = json.loads((base / "ingests" / H_GATED / "digest.json").read_text())
     claim = gated_digest["domain_claims"][0]
-    assert (
-        claim["quote"] == "VERBATIM rec-gated"
-    )  # short quotes PUBLIC for all (Art 32)
+    # Quotes are gated with the body. The old policy kept them public as lawful
+    # short quotation, but nothing enforced shortness: on 2026-08-19 the gated
+    # record 303c2190 ("Imminent") shipped 2,190 quotes totalling 354,535 chars,
+    # 41% of its body. Reassembled, that is the book.
+    assert "quote" not in claim
+    # Our own paraphrase survives, so the public inspection surface is intact.
     assert claim["text"] == "fact rec-gated"
 
 
