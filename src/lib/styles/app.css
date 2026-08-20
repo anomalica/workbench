@@ -451,3 +451,17 @@ del {
   text-decoration-thickness: 1px;
   opacity: 0.75;
 }
+
+/* A portion's own classification marking, set as the source prints it: ahead of
+   the text it governs, and quieter than the text, because it classifies the
+   passage rather than being part of it. */
+.portion-marking {
+  font-family: var(--font-ui);
+  font-size: 0.75em;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--color-warning);
+  margin-right: 0.35em;
+  white-space: nowrap;
+  cursor: help;
+}

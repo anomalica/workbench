@@ -1963,6 +1963,27 @@
    * annotation syntax leaking into the text.
    */
   function renderRedactions(html: string): string {
+    // Portion classification markings: `{{classification: "S//REL"}}` governs
+    // the portion that follows, and the source prints it exactly where the
+    // marker sits. It was leaking as raw annotation syntax into the prose of
+    // three records. Rendered as the source prints it - parenthesised, small,
+    // ahead of the text it classifies - because that is what it is.
+    html = html.replace(
+      /\{\{classification:\s*([^{}]+?)\s*\}\}/g,
+      (_, raw) => {
+        // The value is quoted whenever it carries a `//` or a comma, which is
+        // most markings - and by the time a claim quote reaches here its
+        // quotes are already `&quot;`. Strip either form, then escape once:
+        // escaping an entity again is what printed (&quot;SECRET//REL...) on
+        // screen.
+        const marking = String(raw)
+          .trim()
+          .replace(/^(?:"|&quot;)/, "")
+          .replace(/(?:"|&quot;)$/, "")
+          .trim();
+        return `<span class="portion-marking" title="Classification marking for the passage that follows">(${escapeHtml(marking)})</span>`;
+      },
+    );
     return html.replace(
       /\{\{(redacted|illegible)(?::\s*([^{}]*))?\}\}/g,
       (_, type, rawValue) => {
