@@ -45,7 +45,7 @@ function renderRedactions(html: string): string {
     ].filter(Boolean);
     const title = escapeHtml(`${label}${stated.length ? `: ${stated.join(", ")}` : ""}`);
     const inside = citations.join(", ");
-    const showInside = inside && inside.length <= 12;
+    const showInside = Boolean(inside) && inside.length <= 12 && inside.length * 0.62 <= em;
     return (
       `<span class="redaction${showInside ? " redaction-cited" : ""}"` +
       ` title="${title}" style="min-width:${em.toFixed(2)}em">` +
@@ -114,6 +114,19 @@ describe("what the bar says and how wide it is", () => {
   it("falls back to one word when nothing says how much", () => {
     expect(render("{{redacted}}")).toContain("min-width:2.50em");
     expect(render("{{redacted: 1.4a}}")).toContain("min-width:2.50em");
+  });
+
+  it("keeps the width when the citation will not fit in it", () => {
+    // Two digits hidden inside a grid reference (37SFU38[..]81). Printing
+    // "1.4a" in that box would widen it to four characters and it would draw
+    // the same as a redaction three times its size - the width is the fact
+    // that matters, so the label steps aside.
+    const tiny = render("{{redacted: ~2 chars, 1.4a}}");
+    expect(tiny).toContain("min-width:1.10em");
+    expect(tiny).not.toContain("redaction-cited");
+    expect(tiny).toContain('title="redacted: ~2 characters, 1.4a"');
+    // Wide enough, and it prints inside as the source does.
+    expect(render("{{redacted: ~13 chars, 1.4a}}")).toContain("redaction-cited");
   });
 
   it("does not let a citation inject markup", () => {

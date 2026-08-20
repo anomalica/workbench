@@ -2016,10 +2016,14 @@
         ].filter(Boolean);
         const title = escapeHtml(`${label}${stated.length ? `: ${stated.join(", ")}` : ""}`);
         // The citation goes INSIDE the bar, the way the source prints it in
-        // the box, and only when it fits - a long FOIA string would set the
-        // bar's width from its own label rather than from the extent.
+        // the box - but only when the box is big enough to hold it. A `1.4a`
+        // inside a two-character redaction would set the bar's width from its
+        // own label, and the width is the more important fact: it says how
+        // much was taken out. Two digits hidden inside a grid reference must
+        // not draw the same as a dozen words.
         const inside = citations.join(", ");
-        const showInside = inside && inside.length <= 12;
+        const showInside =
+          Boolean(inside) && inside.length <= 12 && inside.length * 0.62 <= em;
         return (
           `<span class="redaction${showInside ? " redaction-cited" : ""}"` +
           ` title="${title}" style="min-width:${em.toFixed(2)}em">` +
