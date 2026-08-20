@@ -465,6 +465,22 @@
       clearSelection();
       pendingCaption = null;
     }
+    if (e.key === " " && range && !editingDescription && !isTypingTarget(e.target)) {
+      e.preventDefault();
+      markReadAndAdvance();
+    }
+  }
+
+  /** Space belongs to the field when the caret is in one. */
+  function isTypingTarget(target: EventTarget | null): boolean {
+    const el = target as HTMLElement | null;
+    if (!el || !el.tagName) return false;
+    return (
+      el.tagName === "INPUT" ||
+      el.tagName === "TEXTAREA" ||
+      el.tagName === "SELECT" ||
+      el.isContentEditable
+    );
   }
 
   function selectedIndices(): number[] {
@@ -525,7 +541,15 @@
   // Scroll to the first block the reviewer hasn't read yet (a content block not
   // covered by this session's marks or their prior committed coverage).
   function jumpToFirstUnread() {
+    selectFirstUnread();
+  }
+
+  /** Select the first block not yet read, scroll it into view, and say whether
+   *  there was one. `after` starts the search past a block just dealt with, so
+   *  advancing does not land back on it before the coverage state settles. */
+  function selectFirstUnread(after = -1): boolean {
     for (const { block } of renderedBlocks) {
+      if (block.index <= after) continue;
       if (block.contentLines.length === 0) continue;
       if (sessionBlocks.has(block.index) || priorBlocks.has(block.index)) continue;
       if (!containerEl?.querySelector(`[data-block-index="${block.index}"]`)) continue;
@@ -544,7 +568,31 @@
         // profiles, and a jump reads fine landing immediately).
         containerEl.scrollTo({ top: Math.max(0, target) });
       });
-      return;
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Space: this one is read, show me the next.
+   *
+   * Reading a document is a long run of the same two actions - judge a
+   * paragraph, move to the next - and doing that with a mouse means crossing
+   * the screen to a toolbar button between every paragraph. One key does both,
+   * so a whole record can be worked through without leaving the keyboard.
+   *
+   * Only with a block already selected. Space is how everyone scrolls a long
+   * page, and taking that away from a reader who is just reading would be a
+   * worse trade than the keystroke is worth.
+   */
+  function markReadAndAdvance() {
+    if (!range) return;
+    const last = range.to;
+    markSelection(true);
+    if (!selectFirstUnread(last)) {
+      // Nothing left below. Either the record is finished, or what remains is
+      // above - so fall back to a plain search before giving up and clearing.
+      if (!selectFirstUnread()) clearSelection();
     }
   }
 </script>
@@ -594,6 +642,16 @@
       >
         {selectionAllMarked ? "Mark unread" : "Mark read"}
       </button>
+      {#if !selectionAllMarked}
+        <!-- The key is the fast path; the button above is how you find out it
+             exists. -->
+        <span class="text-on-surface-muted whitespace-nowrap hidden md:inline">
+          or <kbd
+            class="px-1 py-0.5 rounded border border-border bg-surface font-ui text-[10px]"
+            >space</kbd
+          > to mark and move on
+        </span>
+      {/if}
       {#if selectionMarkable}
         <!-- Guidance summarised from the canonical list in
              architecture/review-workbench.md#what-to-mark-irrelevant -
