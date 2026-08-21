@@ -80,9 +80,20 @@ def test_prerender_writes_graph_and_curation_json(graph_db, tmp_path):
         "record_public": 0,
         "digests": 0,
         "coverage": 0,
+        # A graph built before page proposals existed has no such table. The
+        # snapshot must still render - a whole build failing for a feature that
+        # has never run is the wrong trade.
+        "topics": 0,
+        "briefs": 0,
     }
 
     api = out / "api"
+    # Topics travel with the snapshot: the deployed workbench has no database
+    # to ask, and without this the tab fetched topics.json, got a 404 and
+    # showed an empty list - which reads as "the corpus proposes nothing".
+    topics = json.loads((api / "topics.json").read_text())
+    assert topics["topics"] == []
+    assert "seeded" in topics and "published" in topics
     assert json.loads((api / "articles.json").read_text()) == []
     assert json.loads((api / "graph" / "stats.json").read_text())["total_nodes"] == 1
     nodes = json.loads((api / "graph" / "nodes.json").read_text())

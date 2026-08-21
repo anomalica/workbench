@@ -209,7 +209,7 @@ def _write(path: Path, data) -> None:
 def prerender(out: Path | None = None) -> dict:
     """Render the read surface to static JSON. Returns a count summary."""
     base = (out or snapshot_dir()) / "api"
-    counts = {"nodes": 0, "node_detail": 0, "ego": 0}
+    counts = {"nodes": 0, "node_detail": 0, "ego": 0, "topics": 0, "briefs": 0}
 
     stats = graph.stats()
     if stats is None:
@@ -239,6 +239,26 @@ def prerender(out: Path | None = None) -> dict:
         {"candidates": curation.enriched_candidates()},
     )
     _write(base / "curation" / "merges.json", {"merges": graph.list_merges() or []})
+
+    # Topics: what earns a page, what is asked for, and what already exists.
+    # A point-in-time copy, like the graph reads above and for the same reason -
+    # the deployed workbench has no database to ask. Without it the tab fetches
+    # /api/topics.json, gets a 404 and shows an empty list, which reads as "the
+    # corpus proposes nothing" rather than "this build cannot see the graph".
+    from backend import pages as _pages
+
+    topics = _pages.list_topics()
+    _write(base / "topics.json", topics)
+    counts["topics"] = len(topics.get("topics") or [])
+    # The brief is the point of opening a topic, so the ones on the list travel
+    # with it. Only those: 696 briefs are 32MB and the list shows 400.
+    for topic in topics.get("topics") or []:
+        if not topic.get("has_brief"):
+            continue
+        brief = _pages.read_brief(topic["slug"])
+        if brief:
+            _write(base / "topics" / topic["slug"] / "brief.json", brief)
+            counts["briefs"] = counts.get("briefs", 0) + 1
 
     # Assembled knowledge-article listing (public content layer). Walked from the
     # content repo at full-render time only; the records-only incremental refresh

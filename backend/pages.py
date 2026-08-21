@@ -25,6 +25,7 @@ owns the mutation and the durable ledger, the workbench invokes and reports.
 from __future__ import annotations
 
 import os
+import sqlite3
 import re
 import subprocess
 import sys
@@ -133,6 +134,88 @@ def _claim_total(path: Path) -> int | None:
     return int(m.group(1)) if m else None
 
 
+def content_pages_dir() -> Path:
+    return (
+        Path(os.environ.get("ANOMALICA_CONTENT_DIR", str(_ANOMALICA / "content")))
+        / "pages"
+    )
+
+
+_BRIEF_HASH = re.compile(rb"brief_hash:\s*([0-9a-f]{16,64})")
+_PAGE_TITLE = re.compile(rb"^title:\s*[\"']?(.+?)[\"']?\s*$", re.M)
+
+
+def _page_head(path: Path) -> tuple[str | None, str | None]:
+    """A published page's title and the brief it was built from.
+
+    Head-read, like `_claim_total`: an assembled page carries every claim id it
+    used, so it runs to hundreds of kilobytes, and the two fields wanted here
+    are in its first lines. Parsing 72 of them to read two strings is the same
+    mistake that hung the topics list.
+    """
+    try:
+        with path.open("rb") as f:
+            head = f.read(4096)
+    except OSError:
+        return None, None
+    title = _PAGE_TITLE.search(head)
+    brief = _BRIEF_HASH.search(head)
+    return (
+        title.group(1).decode("utf-8", "replace").strip() if title else None,
+        brief.group(1).decode() if brief else None,
+    )
+
+
+def _brief_hash_of(slug: str) -> str | None:
+    """The CURRENT brief's hash for a slug, so a page can be told from the
+    material it was written from."""
+    path = briefs_dir() / f"{slug}.yaml"
+    try:
+        with path.open("rb") as f:
+            m = _BRIEF_HASH.search(f.read(4096))
+    except OSError:
+        return None
+    return m.group(1).decode() if m else None
+
+
+def published_pages() -> list[dict]:
+    """Pages that already exist - the third thing a reviewer needs to see.
+
+    Without them the tab is a queue: what to do next, with no way to tell that
+    a topic proposed last week went out last night. With them it is a status
+    view, and the only place the three states of a subject sit together.
+
+    A page whose `brief_hash` no longer matches its brief is TRAILING: the
+    material moved after the page was written. That is the same signal
+    `assimilator doctor` reports, read here from the page itself.
+    """
+    root = content_pages_dir()
+    if not root.is_dir():
+        return []
+    out: list[dict] = []
+    for path in sorted(root.rglob("*.en.md")):
+        rel = path.relative_to(root)
+        title, built_from = _page_head(path)
+        if built_from is None:
+            # Hand-written pages (about, contact, methodology) are not assembled
+            # from a brief and are not topics.
+            continue
+        slug = rel.stem.removesuffix(".en")
+        current = _brief_hash_of(slug)
+        out.append(
+            {
+                "slug": slug,
+                "name": title or slug,
+                "kind": rel.parts[0] if len(rel.parts) > 1 else None,
+                "brief_hash": built_from,
+                # None when the brief has gone: the page outlived its source,
+                # which is a different condition from being out of date.
+                "stale": None if current is None else current != built_from,
+            }
+        )
+    return out
+
+
 def list_topics(limit: int = 400) -> dict:
     """Proposed topics with their evidence, each joined to its brief if one exists.
 
@@ -143,7 +226,11 @@ def list_topics(limit: int = 400) -> dict:
     """
     con = graph._open()
     if con is None:
-        return {"topics": [], "seeded": read_seeded()}
+        # Seeded and published come from files, not the graph, so an absent
+        # database costs the proposals and nothing else.
+        return {"topics": [], "seeded": read_seeded(), "published": published_pages()}
+    rows: list = []
+    vetoed: set = set()
     try:
         rows = con.execute(
             """
@@ -157,6 +244,12 @@ def list_topics(limit: int = 400) -> dict:
             (limit,),
         ).fetchall()
         vetoed = {r[0] for r in con.execute("SELECT node_id FROM page_vetoes")}
+    except sqlite3.OperationalError:
+        # A graph built before page proposals existed has no such table. That
+        # is a graph with nothing to propose, not a broken one - and the
+        # pre-render must not fall over on it, or a whole snapshot fails for a
+        # feature that has never run.
+        rows = []
     finally:
         con.close()
 
@@ -187,7 +280,7 @@ def list_topics(limit: int = 400) -> dict:
                 "brief_claims": brief_claims,
             }
         )
-    return {"topics": out, "seeded": read_seeded()}
+    return {"topics": out, "seeded": read_seeded(), "published": published_pages()}
 
 
 def read_brief(slug: str) -> dict | None:

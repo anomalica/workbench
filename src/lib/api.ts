@@ -1479,7 +1479,21 @@ export interface SeededTopic {
   by?: string | null;
 }
 
-export async function fetchTopics(): Promise<{ topics: Topic[]; seeded: SeededTopic[] }> {
+/** A page that already exists in the content repo. */
+export interface PublishedPage {
+  slug: string;
+  name: string;
+  kind: string | null;
+  brief_hash: string;
+  /** The brief moved after the page was written; null when the brief is gone. */
+  stale: boolean | null;
+}
+
+export async function fetchTopics(): Promise<{
+  topics: Topic[];
+  seeded: SeededTopic[];
+  published: PublishedPage[];
+}> {
   const res = await fetch(readPath("/api/topics"));
   if (!res.ok) throw new Error(`Failed to fetch topics: ${res.status}`);
   return await res.json();
