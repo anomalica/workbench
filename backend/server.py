@@ -42,7 +42,7 @@ from backend import (
     tuning,
     waveform,
 )
-from backend import archive_flag, infrastructure
+from backend import archive_flag, infrastructure, pages
 from backend.auth import setup_auth
 from backend.sync import GIT_LOCK, SyncManager
 from anomalica_common import housekeeping as hk
@@ -2862,6 +2862,70 @@ def delete_audit_verdict(
 # --- Knowledge-graph review (read-only over the assimilator DB) ----------
 # Surfaces the assimilator's merged entity graph for human inspection - above
 # all the merge decisions (a node's aliases), so a bad merge is reviewable.
+
+
+# --- Topic and page management (what earns a page, and what goes into it) ---
+
+
+@app.get("/api/topics")
+def topics_list(limit: int = 400) -> dict:
+    """Proposed topics with their evidence, plus the human-seeded ones.
+
+    The evidence travels with the topic on purpose: a decision about whether
+    something deserves a page is a decision about the numbers behind it, and a
+    name alone cannot carry that.
+    """
+    return pages.list_topics(limit=limit)
+
+
+@app.get("/api/topics/{slug}/brief")
+def topic_brief(slug: str) -> dict:
+    """The brief a page would be written from, whole.
+
+    Returned unsummarised: the point of reading it is to see what actually goes
+    in, and a summary of the input is not the input.
+    """
+    brief = pages.read_brief(slug)
+    if brief is None:
+        raise HTTPException(status_code=404, detail="No brief for that slug")
+    return brief
+
+
+@app.post("/api/topics/veto")
+def topic_veto(body: dict) -> dict:
+    """Editorial "never a page". Durable in the curation ledger and replayed on
+    every rebuild, so the proposal stops reappearing each pass."""
+    node_ids = body.get("node_ids") or []
+    if not node_ids:
+        raise HTTPException(status_code=400, detail="node_ids required")
+    try:
+        return pages.veto(node_ids, body.get("reason"), body.get("by") or "workbench")
+    except (RuntimeError, OSError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/topics/seed")
+def topic_seed(body: dict) -> dict:
+    """Name a topic we want covered, possibly before any material exists.
+
+    This is the half the graph cannot produce. An emergent proposal is derived
+    FROM claims and so cannot exist until they do; a seeded topic is named first
+    and fills up, which shows where the corpus is thin against what we care
+    about - a better steer for what to ingest next than what happens to be
+    abundant already.
+    """
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name required")
+    return pages.add_seeded(name, body.get("note"), body.get("by") or "workbench")
+
+
+@app.delete("/api/topics/seed/{name}")
+def topic_unseed(name: str) -> dict:
+    """Drop a seeded topic. Append-only - a removal is a compensating entry, so
+    what was asked for survives even after it is dropped."""
+    pages.remove_seeded(name, "workbench")
+    return {"ok": True}
 
 
 @app.get("/api/graph/stats")

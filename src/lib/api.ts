@@ -1453,3 +1453,67 @@ export async function decideHousekeeping(
   if (!res.ok) throw new Error(`Failed to record decisions: ${res.status}`);
   return res.json();
 }
+
+// --- Topics: what earns a page, and what goes into it ---
+
+export interface Topic {
+  node_id: string;
+  name: string;
+  node_type: string;
+  tier: string;
+  slug: string;
+  claims: number;
+  sources: number;
+  independent_sources: number | null;
+  /** A second work contributes fewer than three claims: the page rests on one voice. */
+  single_source: boolean;
+  status: string;
+  has_brief: boolean;
+  brief_claims: number | null;
+}
+
+export interface SeededTopic {
+  name: string;
+  note?: string | null;
+  at?: string;
+  by?: string | null;
+}
+
+export async function fetchTopics(): Promise<{ topics: Topic[]; seeded: SeededTopic[] }> {
+  const res = await fetch(readPath("/api/topics"));
+  if (!res.ok) throw new Error(`Failed to fetch topics: ${res.status}`);
+  return await res.json();
+}
+
+/** The brief whole, not summarised - the point is seeing what actually goes in. */
+export async function fetchTopicBrief(slug: string): Promise<Record<string, unknown> | null> {
+  const res = await fetch(readPath(`/api/topics/${encodeURIComponent(slug)}/brief`));
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`Failed to fetch brief: ${res.status}`);
+  return await res.json();
+}
+
+export async function vetoTopic(nodeIds: string[], reason: string): Promise<void> {
+  const res = await fetch("/api/topics/veto", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ node_ids: nodeIds, reason }),
+  });
+  if (!res.ok)
+    throw new Error((await res.json().catch(() => ({}))).detail ?? `Veto failed: ${res.status}`);
+}
+
+export async function seedTopic(name: string, note: string): Promise<void> {
+  const res = await fetch("/api/topics/seed", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, note }),
+  });
+  if (!res.ok)
+    throw new Error((await res.json().catch(() => ({}))).detail ?? `Seed failed: ${res.status}`);
+}
+
+export async function unseedTopic(name: string): Promise<void> {
+  const res = await fetch(`/api/topics/seed/${encodeURIComponent(name)}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`Remove failed: ${res.status}`);
+}

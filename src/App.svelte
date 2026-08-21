@@ -35,6 +35,7 @@
   } from "$lib/browse-prefs";
   import InfrastructureView from "$lib/components/InfrastructureView.svelte";
   import HousekeepingView from "$lib/components/HousekeepingView.svelte";
+  import TopicsView from "$lib/components/TopicsView.svelte";
   import ArticlesView from "$lib/components/ArticlesView.svelte";
   import ReviewView from "$lib/components/ReviewView.svelte";
   import RolesView from "$lib/components/RolesView.svelte";
@@ -60,6 +61,7 @@
     | "digests"
     | "infrastructure"
     | "housekeeping"
+    | "topics"
   >("records");
   // A node to open directly in the graph view (deep link /graph/<node_id>), so a
   // claim-count / any link can jump straight to that node's claims in context.
@@ -537,6 +539,11 @@
     history.pushState(null, "", "/housekeeping");
   }
 
+  function showTopics() {
+    appMode = "topics";
+    history.pushState(null, "", "/topics");
+  }
+
   // Open a record in the workbench review view by its public hash (the 56-char
   // record_hash an Articles record-page carries). Mirrors the deep-link path so
   // a not-yet-reviewable record surfaces the same friendly notice.
@@ -560,6 +567,10 @@
     if (path === "housekeeping") {
       appMode = "housekeeping";
       return; // HousekeepingView fetches its own queue
+    }
+    if (path === "topics") {
+      appMode = "topics";
+      return; // TopicsView fetches its own list
     }
     if (path === "curate") {
       appMode = "curate";
@@ -675,6 +686,12 @@
             {appMode === 'housekeeping' ? 'bg-bone/15 text-bone' : 'text-bone/50 hover:text-bone/80 hover:bg-bone/10'}"
           title="Proposed frontmatter corrections awaiting approval, one item at a time"
         >Housekeeping</button>
+        <button
+          onclick={showTopics}
+          class="text-sm font-ui px-2.5 py-1 rounded cursor-pointer transition-colors
+            {appMode === 'topics' ? 'bg-bone/15 text-bone' : 'text-bone/50 hover:text-bone/80 hover:bg-bone/10'}"
+          title="What earns a page: proposals with their evidence, topics you've asked for, and the brief each page would be written from"
+        >Topics</button>
       {/if}
       <button
         onclick={showGraph}
@@ -817,6 +834,8 @@
       <DigestsView />
     {:else if appMode === "housekeeping"}
       <HousekeepingView canDecide={liveBackend && canHousekeep} />
+    {:else if appMode === "topics"}
+      <TopicsView canDecide={liveBackend && canHousekeep} />
     {:else if appMode === "infrastructure"}
       <InfrastructureView onopenrecord={openRecordByHash} />
     {:else if appMode === "roles"}
