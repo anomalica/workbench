@@ -227,3 +227,40 @@ export function insertHighlight(raw: string, span: BodySpan, id: string): string
   const withEnd = `${raw.slice(0, span.end)}{{highlight-end: ${id}}}${raw.slice(span.end)}`;
   return `${withEnd.slice(0, span.start)}{{highlight-start: ${id}}}${withEnd.slice(span.start)}`;
 }
+
+/** Wrap `[start, end)` in markdown's strikethrough.
+ *
+ *  For text the SOURCE struck and the extraction did not: a declassification
+ *  line ruled through a classification banner, an editor's deletion. The
+ *  extraction model reliably strikes some of these and reliably misses others
+ *  - it recognises a classification marking and tags it instead - so a
+ *  reviewer needs to be able to say so by hand.
+ *
+ *  Markdown's `~~` does not span a blank line, so a selection crossing one
+ *  would produce two stray pairs rather than a strike. The caller checks with
+ *  `spansBlankLine` and declines rather than writing something that renders as
+ *  tildes.
+ */
+export function insertStrikethrough(raw: string, span: BodySpan): string {
+  const withEnd = `${raw.slice(0, span.end)}~~${raw.slice(span.end)}`;
+  return `${withEnd.slice(0, span.start)}~~${withEnd.slice(span.start)}`;
+}
+
+/** Does this span cross a paragraph break? */
+export function spansBlankLine(raw: string, span: BodySpan): boolean {
+  return /\n[ \t]*\n/.test(raw.slice(span.start, span.end));
+}
+
+/** Is the span already struck - so the action is to remove it rather than add
+ *  another pair? Looks just outside the span, which is where the markers sit. */
+export function isStruck(raw: string, span: BodySpan): boolean {
+  return (
+    raw.slice(Math.max(0, span.start - 2), span.start) === "~~" &&
+    raw.slice(span.end, span.end + 2) === "~~"
+  );
+}
+
+/** Remove the strikethrough markers immediately around `[start, end)`. */
+export function removeStrikethrough(raw: string, span: BodySpan): string {
+  return raw.slice(0, span.start - 2) + raw.slice(span.start, span.end) + raw.slice(span.end + 2);
+}

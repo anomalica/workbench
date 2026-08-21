@@ -12,9 +12,13 @@
   import {
     insertHighlight,
     insertSpanNote,
+    insertStrikethrough,
+    isStruck,
     locateSelection,
     mintId,
     rangeText,
+    removeStrikethrough,
+    spansBlankLine,
   } from "$lib/prose-anchor";
 
   interface Props {
@@ -52,6 +56,9 @@
   let composing = $state(false);
   let noteText = $state("");
   let failed = $state(false);
+  /** A strike cannot cross a paragraph break - markdown's `~~` does not span
+   *  one, so the pair would render as tildes. */
+  let crossesParagraph = $state(false);
   let noteBox = $state<HTMLTextAreaElement | undefined>();
 
   /** How much lead-in to keep. Long enough to separate repeated headings on
@@ -99,6 +106,7 @@
     left: Math.max(8, Math.min(box.left + box.width / 2 - 90, host.width - 200)),
   };
   failed = false;
+  crossesParagraph = false;
   }
 
   function dismiss() {
@@ -106,6 +114,7 @@
   composing = false;
   noteText = "";
   failed = false;
+  crossesParagraph = false;
   }
 
   function span() {
@@ -131,6 +140,29 @@
     return;
   }
   onbody?.(insertHighlight(body, at, mintId(body)));
+  window.getSelection()?.removeAllRanges();
+  dismiss();
+  }
+
+  /** Mark the selection as struck in the source - or unstrike it.
+   *
+   *  The extraction model strikes some struck text and misses the rest: it
+   *  recognises a classification marking and tags it rather than striking it,
+   *  reliably enough that `Classification: SECRET` and `Associated Caveats:
+   *  NOFORN` - adjacent identical lines - come back one struck and one not.
+   *  The words are all there either way, so this is the reviewer putting the
+   *  line back through them. */
+  function strike() {
+  const at = span();
+  if (!at) {
+    failed = true;
+    return;
+  }
+  if (spansBlankLine(body, at)) {
+    crossesParagraph = true;
+    return;
+  }
+  onbody?.(isStruck(body, at) ? removeStrikethrough(body, at) : insertStrikethrough(body, at));
   window.getSelection()?.removeAllRanges();
   dismiss();
   }
@@ -223,6 +255,28 @@
         </svg>
       </button>
       <button
+        onclick={strike}
+        aria-label="Strike through"
+        title="The source struck these words through - a declassification line, an editor's deletion. Click again to undo."
+        class="text-primary cursor-pointer p-1 rounded hover:bg-primary/10 transition-colors"
+      >
+        <svg
+          class="w-4 h-4"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.75"
+          viewBox="0 0 24 24"
+          aria-hidden="true"
+        >
+          <path stroke-linecap="round" d="M4 12h16" />
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            d="M7.5 7.5c0-2 2-3.5 4.5-3.5s4.5 1.2 4.5 3M16.5 16.5c0 2-2 3.5-4.5 3.5s-4.5-1.2-4.5-3"
+          />
+        </svg>
+      </button>
+      <button
         onclick={startNote}
         aria-label="Note"
         title="Attach a note over these words - handwriting, a stamp, context the words miss"
@@ -261,6 +315,19 @@
         <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
       </svg>
     </button>
+  </div>
+{/if}
+
+{#if crossesParagraph && picked}
+  <!-- Markdown's `~~` does not cross a blank line, so the pair would render as
+       tildes rather than a strike. Declining beats writing that. -->
+  <div
+    class="fixed z-50 max-w-xs text-xs font-ui bg-surface-raised border border-amber-500/60
+      rounded shadow-xl px-3 py-2 text-on-surface-secondary"
+    style="top: {picked.top + 44}px; left: {picked.left}px"
+  >
+    A strike cannot cross a paragraph break. Select within one paragraph, or strike each
+    separately.
   </div>
 {/if}
 

@@ -6,8 +6,12 @@ import {
   insertSpanNote,
   locateSelection,
   mintId,
+  insertStrikethrough,
+  isStruck,
   normaliseSelection,
   quoteScalar,
+  removeStrikethrough,
+  spansBlankLine,
 } from "./prose-anchor";
 
 const MEMO = `<!-- file_page: 1 -->
@@ -204,5 +208,40 @@ describe("rangeText", () => {
     expect(normaliseSelection(selectAll("<p>Plain <em>prose</em> only.</p>"))).toBe(
       "Plain prose only.",
     );
+  });
+});
+
+describe("striking text the source struck", () => {
+  // The extraction model strikes NOFORN and misses SECRET on adjacent,
+  // identically-shaped lines - it recognises a classification marking and tags
+  // it instead. The words survive either way; this is a reviewer putting the
+  // line back through them.
+  const body = "Classification: SECRET\n\nAssociated Caveats: NOFORN";
+
+  it("wraps the selected words and nothing else", () => {
+    const at = locateSelection(body, "SECRET")!;
+    expect(insertStrikethrough(body, at)).toBe(
+      "Classification: ~~SECRET~~\n\nAssociated Caveats: NOFORN",
+    );
+  });
+
+  it("recognises what it already struck, so the action reverses", () => {
+    const struck = "Classification: ~~SECRET~~";
+    const at = locateSelection(struck, "SECRET")!;
+    expect(isStruck(struck, at)).toBe(true);
+    expect(removeStrikethrough(struck, at)).toBe("Classification: SECRET");
+    expect(isStruck(body, locateSelection(body, "SECRET")!)).toBe(false);
+  });
+
+  it("refuses to cross a paragraph break", () => {
+    // `~~` does not span a blank line, so the pair would render as tildes.
+    const at = locateSelection(body, "SECRET Associated Caveats: NOFORN")!;
+    expect(spansBlankLine(body, at)).toBe(true);
+    expect(spansBlankLine(body, locateSelection(body, "SECRET")!)).toBe(false);
+  });
+
+  it("round-trips through the renderer as a strike", () => {
+    const at = locateSelection(body, "SECRET")!;
+    expect(insertStrikethrough(body, at)).toContain("~~SECRET~~");
   });
 });
