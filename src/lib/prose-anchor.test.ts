@@ -12,6 +12,7 @@ import {
   quoteScalar,
   removeStrikethrough,
   spansBlankLine,
+  strikeClassification,
 } from "./prose-anchor";
 
 const MEMO = `<!-- file_page: 1 -->
@@ -243,5 +244,52 @@ describe("striking text the source struck", () => {
   it("round-trips through the renderer as a strike", () => {
     const at = locateSelection(body, "SECRET")!;
     expect(insertStrikethrough(body, at)).toContain("~~SECRET~~");
+  });
+});
+
+describe("striking a classification marking", () => {
+  // {{classification: X}} asserts a marking IN FORCE; a struck banner says it
+  // was removed. Wrapping the annotation would assert both at once, and
+  // neither the ingester's quality strip nor the digester's annotation strip
+  // keeps the marker - the reviewer would be left with ~~~~ around nothing.
+  const body = '{{classification: "SECRET//REL TO USA, FVEY"}} AT 301639ZJUL22, TF CHOSIN TASKED.';
+
+  it("replaces the annotation with struck prose", () => {
+    expect(strikeClassification(body, "(SECRET//REL TO USA, FVEY)")).toBe(
+      "~~(SECRET//REL TO USA, FVEY)~~ AT 301639ZJUL22, TF CHOSIN TASKED.",
+    );
+  });
+
+  it("leaves no annotation behind for a stripper to remove", () => {
+    const out = strikeClassification(body, "(SECRET//REL TO USA, FVEY)")!;
+    expect(out).not.toContain("{{");
+    expect(out).not.toContain("~~~~");
+  });
+
+  it("declines when the selection is ordinary prose, so the caller wraps it", () => {
+    // NOFORN and the like, which the model does strike correctly, and any
+    // other text a reviewer wants struck.
+    expect(strikeClassification(body, "TF CHOSIN TASKED")).toBeNull();
+  });
+
+  it("picks the marking the reviewer is looking at, not the first in the file", () => {
+    // Every multi-page classified record repeats its banner.
+    const repeated =
+      "{{classification: SECRET}} Page one text.\n\n{{classification: SECRET}} Page two text.";
+    const out = strikeClassification(repeated, "(SECRET)", "Page one text.")!;
+    expect(out).toBe("{{classification: SECRET}} Page one text.\n\n~~(SECRET)~~ Page two text.");
+  });
+
+  it("matches however the value was quoted", () => {
+    expect(strikeClassification("{{classification: S/RELIDO}} Mission", "(S/RELIDO)")).toBe(
+      "~~(S/RELIDO)~~ Mission",
+    );
+  });
+
+  it("the result is ordinary text, so the strike can be taken off again", () => {
+    const struck = strikeClassification(body, "(SECRET//REL TO USA, FVEY)")!;
+    const at = locateSelection(struck, "(SECRET//REL TO USA, FVEY)")!;
+    expect(isStruck(struck, at)).toBe(true);
+    expect(removeStrikethrough(struck, at)).toContain("(SECRET//REL TO USA, FVEY) AT");
   });
 });

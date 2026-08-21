@@ -264,3 +264,48 @@ export function isStruck(raw: string, span: BodySpan): boolean {
 export function removeStrikethrough(raw: string, span: BodySpan): string {
   return raw.slice(0, span.start - 2) + raw.slice(span.start, span.end) + raw.slice(span.end + 2);
 }
+
+const CLASSIFICATION_MARKER = /\{\{classification:\s*([^{}]+?)\s*\}\}/g;
+
+const bare = (s: string) => s.replace(/^[("']+|[)"']+$/g, "").trim();
+
+/**
+ * Strike a classification marking - by turning it into prose, not by wrapping
+ * the annotation.
+ *
+ * `{{classification: X}}` asserts a marking IN FORCE. A struck banner says the
+ * opposite: the marking was removed. So the annotation is REPLACED by the
+ * struck text rather than wrapped in it, which is anomalica's rule and not a
+ * workaround - `~~{{classification: X}}~~` would assert a live classification
+ * AND a strike, and neither the ingester's quality strip nor the digester's
+ * annotation strip keeps the marker, so the reviewer would be left with `~~~~`
+ * around nothing and no way to tell it had failed.
+ *
+ * Returns the new body, or null when the selection is not a marking - the
+ * caller then strikes it as ordinary text.
+ *
+ * `before` disambiguates a document that carries the same marking more than
+ * once, which every multi-page classified record does.
+ */
+export function strikeClassification(raw: string, selected: string, before = ""): string | null {
+  const want = bare(normaliseSelection(selected));
+  if (!want) return null;
+
+  const hits: { start: number; end: number; value: string }[] = [];
+  CLASSIFICATION_MARKER.lastIndex = 0;
+  for (let m = CLASSIFICATION_MARKER.exec(raw); m; m = CLASSIFICATION_MARKER.exec(raw)) {
+    if (bare(normaliseSelection(m[1])) === want) {
+      hits.push({ start: m.index, end: m.index + m[0].length, value: bare(m[1]) });
+    }
+  }
+  if (hits.length === 0) return null;
+
+  let hit = hits[0];
+  if (hits.length > 1 && before.trim()) {
+    // The marking sits just after the text that precedes it, so the first one
+    // at or after the lead-in is the one the reviewer is looking at.
+    const lead = locateSelection(raw, before);
+    if (lead) hit = hits.find((h) => h.start >= lead.end) ?? hit;
+  }
+  return `${raw.slice(0, hit.start)}~~(${hit.value})~~${raw.slice(hit.end)}`;
+}

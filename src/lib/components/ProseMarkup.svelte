@@ -19,6 +19,7 @@
     rangeText,
     removeStrikethrough,
     spansBlankLine,
+    strikeClassification,
   } from "$lib/prose-anchor";
 
   interface Props {
@@ -153,6 +154,19 @@
    *  The words are all there either way, so this is the reviewer putting the
    *  line back through them. */
   function strike() {
+  // A classification marking first. It is an annotation, not prose - the
+  // anchor cannot even locate it, and wrapping it would assert a live
+  // classification and a strike at once - so striking one REPLACES it with
+  // the struck text.
+  if (picked) {
+    const asProse = strikeClassification(body, picked.text, picked.before);
+    if (asProse !== null) {
+      onbody?.(asProse);
+      window.getSelection()?.removeAllRanges();
+      dismiss();
+      return;
+    }
+  }
   const at = span();
   if (!at) {
     failed = true;
