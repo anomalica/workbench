@@ -1009,8 +1009,18 @@
 
   // Who can see the body:
   // - public_domain / open_licence / publicly_accessible: everyone
-  // - restricted / licensed: need hash verification or file drop
-  let canShowBody = $derived(isPublic || accessGranted || !!localSourceFile);
+  // - restricted / licensed: proof of possession, by file drop or hash
+  // - an admin: they hold the corpus. The gate exists to stop the workbench
+  //   showing copyrighted text to someone with no right to it; the person who
+  //   owns the archive is not that someone, and making them re-prove
+  //   possession of their own material on every page load is ceremony, not a
+  //   control. Everyone below admin still proves it.
+  let canShowBody = $derived(isPublic || isAdmin || accessGranted || !!localSourceFile);
+
+  /** Is the record's own text being withheld right now? Drives the one
+   *  invitation to hand over the file, so the source panel does not ask for it
+   *  a second time. */
+  let bodyIsGated = $derived(!canShowBody);
 
   // Hash input for manual verification
   let hashInput = $state("");
@@ -4446,16 +4456,30 @@
               </a>
               <p class="text-on-surface-muted text-xs">or drop the source file to view it here</p>
             {:else}
-              <p>{dragging ? "Drop file here" : "Drop a source file here to view alongside the ingest"}</p>
+              <p>
+                {#if dragging}
+                  Drop file here
+                {:else if bodyIsGated}
+                  Add your copy on the right and it appears here, beside the text.
+                {:else}
+                  Drop a source file here to view alongside the ingest
+                {/if}
+              </p>
             {/if}
             <input type="file" class="hidden" onchange={handleFilePick} bind:this={sourceFileInput} />
-            <button
-              type="button"
-              onclick={() => sourceFileInput?.click()}
-              class="px-3 py-1.5 text-xs font-ui bg-surface-alt hover:bg-surface-alt/70 border border-border rounded transition-colors"
-            >
-              Choose file
-            </button>
+            {#if !bodyIsGated}
+              <!-- One place to hand over the file. When the body is gated the
+                   panel opposite is already asking for it, and two identical
+                   invitations side by side leave the reviewer choosing which
+                   one is real. -->
+              <button
+                type="button"
+                onclick={() => sourceFileInput?.click()}
+                class="px-3 py-1.5 text-xs font-ui bg-surface-alt hover:bg-surface-alt/70 border border-border rounded transition-colors"
+              >
+                Choose file
+              </button>
+            {/if}
           </div>
         {/if}
 
