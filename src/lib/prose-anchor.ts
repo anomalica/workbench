@@ -116,6 +116,22 @@ export function rangeText(range: Range): string {
   return clone.textContent ?? "";
 }
 
+/**
+ * Which occurrence of `selected` this is, counting from the start of `whole`.
+ *
+ * The two strings are the rendered text before the selection and the selection
+ * itself, both normalised - so this is the same count `locateSelection` makes
+ * over the body, and the answer transfers.
+ */
+export function occurrenceIndex(before: string, selected: string): number {
+  const needle = normaliseSelection(selected);
+  const lead = normaliseSelection(before);
+  if (!needle) return 0;
+  let n = 0;
+  for (let at = lead.indexOf(needle); at !== -1; at = lead.indexOf(needle, at + 1)) n++;
+  return n;
+}
+
 /** Collapse a selection's text the same way, so the two can be compared. */
 export function normaliseSelection(s: string): string {
   return s.replace(/\s+/g, " ").trim();
@@ -141,6 +157,7 @@ export function locateSelection(
   selected: string,
   before = "",
   index?: AnchorIndex,
+  occurrence?: number,
 ): BodySpan | null {
   const needle = normaliseSelection(selected);
   if (!needle) return null;
@@ -152,6 +169,19 @@ export function locateSelection(
     if (hits.length > 200) break;
   }
   if (hits.length === 0) return null;
+
+  // WHICH occurrence, counted in the rendered text the reviewer was looking at.
+  // The reader did not choose an arbitrary "FVEY", they chose the third one,
+  // and that is knowable exactly rather than inferred from surrounding words.
+  // Guessing from the lead-in was the old way and it declines whenever two
+  // passages read alike - which in a military report with a repeating
+  // classification banner and identical timestamped lines is most of them.
+  if (occurrence !== undefined && occurrence >= 0 && occurrence < hits.length) {
+    const start = idx.map[hits[occurrence]];
+    const lastChar = idx.map[hits[occurrence] + needle.length - 1];
+    if (start === undefined || lastChar === undefined) return null;
+    return { start, end: lastChar + 1 };
+  }
 
   let hit = hits[0];
   if (hits.length > 1) {

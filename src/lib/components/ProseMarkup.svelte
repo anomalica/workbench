@@ -16,6 +16,7 @@
     isStruck,
     expandToWords,
     locateSelection,
+    occurrenceIndex,
     mintId,
     rangeText,
     removeStrikethrough,
@@ -54,7 +55,16 @@
 
   /** The live selection, captured at mouseup: the text itself plus the text
    *  before it, which is what tells two identical sentences apart. */
-  let picked = $state<{ text: string; before: string; top: number; left: number } | null>(null);
+  let picked = $state<{
+    text: string;
+    before: string;
+    /** Which occurrence of these words this is, counted over everything the
+     *  reviewer can see above the selection. Exact, where the lead-in was a
+     *  guess. */
+    occurrence: number;
+    top: number;
+    left: number;
+  } | null>(null);
   let composing = $state(false);
   /** Set while the snapped range is being put back, so the selectionchange it
    *  causes is not treated as a fresh selection. */
@@ -116,9 +126,11 @@
   lead.setStart(containerEl, 0);
   lead.setEnd(range.startContainer, range.startOffset);
   const box = range.getBoundingClientRect();
+  const leadText = rangeText(lead);
   picked = {
     text,
-    before: rangeText(lead).slice(-LEAD),
+    occurrence: occurrenceIndex(leadText, text),
+    before: leadText.slice(-LEAD),
     // Viewport coordinates: the prose may scroll in this element or in a
     // child that brings its own scroller, and fixed positioning is right
     // either way.
@@ -143,7 +155,7 @@
 
   function span() {
   if (!picked) return null;
-  return locateSelection(body, picked.text, picked.before);
+  return locateSelection(body, picked.text, picked.before, undefined, picked.occurrence);
   }
 
   function saveNote() {

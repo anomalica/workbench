@@ -10,6 +10,7 @@ import {
   insertStrikethrough,
   isStruck,
   normaliseSelection,
+  occurrenceIndex,
   quoteScalar,
   removeStrikethrough,
   spansBlankLine,
@@ -331,5 +332,58 @@ describe("snapping a selection to whole words", () => {
 
   it("handles a selection running to the end of the text", () => {
     expect(selectChars("One two three", 8, 13)).toBe("three");
+  });
+});
+
+describe("choosing between passages that read alike", () => {
+  // A military report repeats its classification banner and its timestamped
+  // lines, so the words around a phrase are often identical. Guessing from
+  // them declined outright - "these words appear more than once and the
+  // surrounding text does not say which" - and a reviewer could not place a
+  // note at all. Which occurrence it is was knowable the whole time.
+  const body = [
+    "## Narrative",
+    "",
+    "(SECRET//REL TO USA, FVEY) AT 301639ZJUL22, TF CHOSIN TASKED.",
+    "",
+    "## Gentext",
+    "",
+    "(SECRET//REL TO USA, FVEY) AT 301822ZJUL22, DEPARTED.",
+    "",
+    "## Weather",
+    "",
+    "(SECRET//REL TO USA, FVEY) AT 302028ZJUL22, ARRIVED.",
+  ].join("\n");
+
+  it("places the note on the occurrence the reviewer selected", () => {
+    const first = locateSelection(body, "FVEY", "", undefined, 0)!;
+    const third = locateSelection(body, "FVEY", "", undefined, 2)!;
+    expect(body.slice(first.start, first.end)).toBe("FVEY");
+    expect(first.start).toBeLessThan(third.start);
+    // The third one is the one in the Weather section.
+    expect(body.slice(third.end, third.end + 20)).toContain("302028");
+  });
+
+  it("counts occurrences over what the reader can see above the selection", () => {
+    const rendered = "Narrative (SECRET//REL TO USA, FVEY) AT 1. Gentext (SECRET//REL TO USA, ";
+    expect(occurrenceIndex(rendered, "FVEY")).toBe(1);
+    expect(occurrenceIndex("", "FVEY")).toBe(0);
+  });
+
+  it("without an occurrence, it still declines - which is the bug this fixes", () => {
+    // The lead-in is compared backwards from the selection, so all three
+    // candidates score identically on "(SECRET//REL TO USA, " and the section
+    // heading further back never gets looked at. This is what a reviewer hit:
+    // a note they could not place anywhere.
+    expect(locateSelection(body, "FVEY", "## Weather")).toBeNull();
+    // It only ever worked when the words just before the selection were
+    // themselves unique.
+    expect(locateSelection(body, "301822ZJUL22", "FVEY AT")).not.toBeNull();
+  });
+
+  it("ignores an occurrence that is not there", () => {
+    // A stale count must not place the note somewhere arbitrary; it falls
+    // through to the lead-in, which declines when it cannot tell.
+    expect(locateSelection(body, "FVEY", "", undefined, 99)).toBeNull();
   });
 });
