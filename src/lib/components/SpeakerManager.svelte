@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Segment } from "$lib/transcript";
-  import { assignableSpecialSpeakers, isDefaultSpeakerName, isSpecialSpeaker, SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE, SPEAKER_GROUP } from "$lib/transcript";
+  import { anonymousLabel, asAnonymousSpeaker, assignableSpecialSpeakers, isAnonymousSpeaker, isDefaultSpeakerName, isSpecialSpeaker, SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE, SPEAKER_GROUP } from "$lib/transcript";
   import SpeakerDot from "./SpeakerDot.svelte";
   import { fetchSpeakers } from "$lib/api";
   import { type KnownSpeaker, suggestSpeakers } from "$lib/speaker-suggest";
@@ -80,12 +80,23 @@
       }));
   });
 
-  // Split into named, unnamed, and special
+  // Split into named, unnamed, and special.
+  //
+  // Named means we know WHO it is. A bracketed name is a description of
+  // somebody whose name is unknown - `[interviewer 2]`, `[audience member]` -
+  // so it belongs with the unnamed however carefully it was written. Listing
+  // it as named is what invites the rest of the pipeline to treat
+  // "interviewer 2" as a person and follow them between records.
+  let anonymous = $derived((id: string) => isAnonymousSpeaker(id) && !isSpecialSpeaker(id));
   let named = $derived(
-    speakerRows().filter((r) => (!isDefaultSpeakerName(r.id) && !isSpecialSpeaker(r.id)) || namedSpeakers.includes(r.id)),
+    speakerRows().filter(
+      (r) =>
+        (!isDefaultSpeakerName(r.id) && !isSpecialSpeaker(r.id) && !anonymous(r.id)) ||
+        (namedSpeakers.includes(r.id) && !anonymous(r.id)),
+    ),
   );
   let unnamed = $derived(
-    speakerRows().filter((r) => isDefaultSpeakerName(r.id) && !namedSpeakers.includes(r.id)),
+    speakerRows().filter((r) => anonymous(r.id) || (isDefaultSpeakerName(r.id) && !namedSpeakers.includes(r.id))),
   );
   let special = $derived(
     speakerRows().filter((r) => isSpecialSpeaker(r.id)),
@@ -123,7 +134,23 @@
     loadKnown();
   });
 
-  let suggestions = $derived(suggestSpeakers(known, newSpeakerName, namedSpeakers));
+  /** Whether the speaker being added is described rather than named. Held as a
+   *  flag rather than typed brackets: the reviewer is filling an empty box, and
+   *  wrapping it as they toggle would put the cursor outside the brackets they
+   *  are meant to type inside. The brackets are shown either side of the box
+   *  instead, so what will be written is still visible. */
+  let newAnonymous = $state(false);
+
+  function toggleNewAnonymous() {
+    newAnonymous = !newAnonymous;
+  }
+
+  let suggestions = $derived(
+    newAnonymous || isAnonymousSpeaker(newSpeakerName)
+      ? []
+      : suggestSpeakers(known, newSpeakerName, namedSpeakers),
+  );
+
 
 
   function takeSuggestion(name: string) {
@@ -138,16 +165,18 @@
 
   function addSpeaker() {
     const name = newSpeakerName.trim();
-    if (name && !pendingNear) {
+    if (name && !pendingNear && !newAnonymous && !isAnonymousSpeaker(name)) {
       const near = nearMiss(name, [...known.map((k) => k.name), ...namedSpeakers]);
       if (near) {
         pendingNear = { typed: name, existing: near };
         return;
       }
     }
-    if (name && !namedSpeakers.includes(name)) {
-      onaddnamed(name);
+    const written = newAnonymous ? asAnonymousSpeaker(name) : name;
+    if (written && !namedSpeakers.includes(written)) {
+      onaddnamed(written);
       newSpeakerName = "";
+      newAnonymous = false;
       showNewInput = false;
       pendingNear = null;
     }
@@ -160,11 +189,13 @@
   /** Renaming a diarisation id to a person is where a name is usually first
    *  written, so the same list has to appear there. */
   let editSuggestions = $derived(
-    suggestSpeakers(
-      known,
-      editingValue,
-      namedSpeakers.filter((n) => n !== editingId),
-    ),
+    isAnonymousSpeaker(editingValue)
+      ? []
+      : suggestSpeakers(
+          known,
+          editingValue,
+          namedSpeakers.filter((n) => n !== editingId),
+        ),
   );
 
   function takeEditSuggestion(name: string) {
@@ -179,6 +210,18 @@
     editingValue = id;
     loadKnown();
     setTimeout(() => editInputEl?.focus(), 0);
+  }
+
+  /** Whether the name being typed is a description rather than a name.
+   *
+   *  Toggling it rewrites the value in place, so the reviewer sees exactly what
+   *  will be written - the brackets are the record's own notation, not a flag
+   *  stored somewhere else. */
+  let editAnonymous = $derived(isAnonymousSpeaker(editingValue));
+
+  function toggleEditAnonymous() {
+    editingValue = editAnonymous ? anonymousLabel(editingValue) : asAnonymousSpeaker(editingValue);
+    editInputEl?.focus();
   }
 
   function commitEdit() {
@@ -276,7 +319,7 @@
         <SpeakerDot speaker={row.id} size="md" ring={filteredSpeakers.has(row.id)} />
       </button>
       {#if editingId === row.id}
-        <div class="relative flex-1 min-w-0">
+        <div class="relative flex-1 min-w-0 flex items-center gap-1.5">
           <input
             bind:this={editInputEl}
             type="text"
@@ -284,8 +327,9 @@
             onblur={commitEdit}
             onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitEdit(); } else if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); } }}
             onclick={(e) => e.stopPropagation()}
-            class="w-full bg-surface text-sm font-ui text-on-surface outline-none px-1 py-0.5 rounded border border-primary"
+            class="flex-1 min-w-0 bg-surface text-sm font-ui text-on-surface outline-none px-1 py-0.5 rounded border border-primary"
           />
+          {@render anonymousToggle(editAnonymous, toggleEditAnonymous)}
           {@render nameSuggestions(editSuggestions, takeEditSuggestion)}
         </div>
       {:else}
@@ -417,14 +461,21 @@
   {#if showNewInput}
     <form class="px-2 py-1 mt-1" onsubmit={(e) => { e.preventDefault(); addSpeaker(); }}>
       <div class="flex items-center gap-2">
+      {#if newAnonymous}
+        <span class="flex-none font-ui text-sm text-primary select-none">[</span>
+      {/if}
       <input
         type="text"
         bind:value={newSpeakerName}
-        placeholder="Speaker name"
-        class="flex-1 text-sm font-ui bg-surface border border-border rounded px-2 py-1
+        placeholder={newAnonymous ? "Who they were" : "Speaker name"}
+        class="flex-1 min-w-0 text-sm font-ui bg-surface border border-border rounded px-2 py-1
           text-on-surface outline-none focus:border-primary placeholder:text-on-surface-muted/50"
-        onkeydown={(e) => { if (e.key === 'Escape') { showNewInput = false; newSpeakerName = ''; } }}
+        onkeydown={(e) => { if (e.key === 'Escape') { showNewInput = false; newSpeakerName = ''; newAnonymous = false; } }}
       />
+      {#if newAnonymous}
+        <span class="flex-none font-ui text-sm text-primary select-none">]</span>
+      {/if}
+      {@render anonymousToggle(newAnonymous, toggleNewAnonymous)}
       <button type="submit" class="text-xs font-ui font-medium px-2 py-1 bg-primary text-on-primary rounded cursor-pointer hover:bg-primary-hover">
         Add
       </button>
@@ -479,6 +530,25 @@
     </button>
   {/if}
 </div>
+
+{#snippet anonymousToggle(on: boolean, toggle: () => void)}
+  <!-- Held down rather than clicked: the input commits on blur, and a click
+       blurs it first, so the toggle would land after the name was already
+       written. -->
+  <button
+    onpointerdown={(e) => { e.preventDefault(); e.stopPropagation(); toggle(); }}
+    onclick={(e) => e.stopPropagation()}
+    class="flex-none px-1.5 py-0.5 rounded text-xs font-ui font-medium border transition-colors cursor-pointer
+      {on
+        ? 'bg-primary/15 border-primary/40 text-primary'
+        : 'border-border text-on-surface-muted hover:text-on-surface hover:border-on-surface-muted'}"
+    title={on
+      ? "This is a description, not a name - nothing will treat it as a person. Click to make it a real name."
+      : "Mark as a description: use when the real name is unknown ([interviewer 2], [audience member])"}
+  >
+    [&nbsp;]
+  </button>
+{/snippet}
 
 {#snippet nameSuggestions(items: KnownSpeaker[], take: (name: string) => void)}
   {#if items.length > 0}
@@ -579,7 +649,7 @@
           <SpeakerDot speaker={row.id} size="md" ring={filteredSpeakers.has(row.id)} />
         </button>
         {#if editingId === row.id}
-          <div class="relative flex-1 min-w-0">
+          <div class="relative flex-1 min-w-0 flex items-center gap-1.5">
             <input
               bind:this={editInputEl}
               type="text"
@@ -587,8 +657,9 @@
               onblur={commitEdit}
               onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitEdit(); } else if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); } }}
               onclick={(e) => e.stopPropagation()}
-              class="w-full bg-surface text-sm font-ui text-on-surface outline-none px-1 py-0.5 rounded border border-primary"
+              class="flex-1 min-w-0 bg-surface text-sm font-ui text-on-surface outline-none px-1 py-0.5 rounded border border-primary"
             />
+            {@render anonymousToggle(editAnonymous, toggleEditAnonymous)}
             {@render nameSuggestions(editSuggestions, takeEditSuggestion)}
           </div>
         {:else}

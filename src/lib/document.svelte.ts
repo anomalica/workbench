@@ -247,7 +247,7 @@ export class DocumentStore {
     // list put it straight back on the next edit, over and over.
     const quotedOnly = new Set(quotedSpeakerCounts(newRuns, parsed.externals).map((r) => r.id));
     const bodyNamed = namedSpeakersInOrder(newRuns).filter((n) => !quotedOnly.has(n));
-    const kept = currentNamed.filter((n) => !isDefaultSpeakerName(n) && !quotedOnly.has(n));
+    const kept = currentNamed.filter((n) => !recordScopedSpeaker(n) && !quotedOnly.has(n));
     const merged = [...kept, ...bodyNamed.filter((n) => !kept.includes(n))];
     const same =
       merged.length === currentNamed.length && merged.every((n, i) => n === currentNamed[i]);
@@ -404,7 +404,7 @@ export class DocumentStore {
     const currentNamed = extractFrontmatterSpeakers(fm);
     const quotedOnly = new Set(quotedSpeakerCounts(next.runs, next.externals).map((r) => r.id));
     const bodyNamed = namedSpeakersInOrder(next.runs).filter((n) => !quotedOnly.has(n));
-    const kept = currentNamed.filter((n) => !isDefaultSpeakerName(n) && !quotedOnly.has(n));
+    const kept = currentNamed.filter((n) => !recordScopedSpeaker(n) && !quotedOnly.has(n));
     const merged = [...kept, ...bodyNamed.filter((n) => !kept.includes(n))];
     const same =
       merged.length === currentNamed.length && merged.every((n, i) => n === currentNamed[i]);
@@ -1177,6 +1177,7 @@ import {
   parseTranscript,
   serializeTranscript,
   extractFrontmatterSpeakers,
+  isAnonymousSpeaker,
   isDefaultSpeakerName,
 } from "$lib/transcript";
 import type { Segment } from "$lib/transcript";
@@ -1389,4 +1390,16 @@ function lcsTable(a: string[], b: string[]): number[][] {
     }
   }
   return table;
+}
+
+/** Whether a speaker name only means anything inside its own record.
+ *
+ *  A real name is curated: a reviewer may write it before assigning a single
+ *  turn, and only they take it away again. A DESCRIPTION is not. `[speaker 3]`
+ *  and `[interviewer 2]` exist to label turns, so once no turn is theirs the
+ *  name means nothing, and leaving it in the record's speaker list makes the
+ *  record claim a participant it does not have - renaming `[interviewer 2]` to
+ *  a person would otherwise leave the description behind as a ghost. */
+function recordScopedSpeaker(name: string): boolean {
+  return isDefaultSpeakerName(name) || isAnonymousSpeaker(name);
 }

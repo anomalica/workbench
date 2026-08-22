@@ -122,7 +122,7 @@ export interface ParsedWords {
   preamble: string;
 }
 
-import { isSpecialSpeaker } from "$lib/transcript";
+import { isDefaultSpeakerName, isSpecialSpeaker } from "$lib/transcript";
 
 // <!-- speaker: Name -->
 const INLINE_SPEAKER = /^<!--\s*speaker:\s*(.+?)\s*-->$/;
@@ -1019,7 +1019,7 @@ export function namedSpeakersInOrder(runs: SpeakerRun[]): string[] {
   for (const run of runs) {
     const name = run.speaker;
     if (seen.has(name)) continue;
-    if (/^Speaker \d+$/i.test(name)) continue;
+    if (isDefaultSpeakerName(name)) continue;
     if (isSpecialSpeaker(name)) continue;
     seen.add(name);
     out.push(name);

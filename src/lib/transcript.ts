@@ -348,9 +348,15 @@ export function insertEventNote(
   return { text: before + insert + after, cursor: start + insert.length };
 }
 
-/** Check if a speaker name looks like a default (Speaker N). */
+/** Check if a speaker name looks like a default (Speaker N).
+ *
+ *  Brackets are accepted because a diarisation id IS an anonymous speaker -
+ *  `Speaker 3` is a cluster number, not a person - so the ingester writes
+ *  `[speaker 3]`. Older records say `Speaker 3`; both are the same thing and
+ *  both must count as unnamed, or a bracketed default would be filed as a
+ *  person and written into the record's speaker list. */
 export function isDefaultSpeakerName(name: string): boolean {
-  return /^Speaker \d+$/i.test(name);
+  return /^\[?\s*Speaker \d+\s*\]?$/i.test(name.trim());
 }
 
 /** Check if a speaker is a special name (not a real person). */
@@ -363,14 +369,22 @@ export function isSegmentIrrelevant(seg: Segment): boolean {
   return seg.speaker === SPEAKER_IRRELEVANT;
 }
 
-/** Return the next speaker number not yet used: "Speaker N". */
+/** Return the next speaker number not yet used.
+ *
+ *  Written in whatever style the record already uses: a record whose defaults
+ *  are `[speaker 1]` gets `[speaker 4]`, an older one whose defaults are
+ *  `Speaker 1` gets `Speaker 4`. Mixing the two inside one record would show
+ *  the reviewer two spellings of the same idea and read as a bug. */
 export function nextSpeakerName(segments: Segment[]): string {
   let max = 0;
+  let bracketed = false;
   for (const seg of segments) {
-    const m = seg.speaker.match(/^Speaker (\d+)$/i);
-    if (m) max = Math.max(max, parseInt(m[1], 10));
+    const m = seg.speaker.trim().match(/^(\[?)\s*Speaker (\d+)\s*\]?$/i);
+    if (!m) continue;
+    if (m[1]) bracketed = true;
+    max = Math.max(max, parseInt(m[2], 10));
   }
-  return `Speaker ${max + 1}`;
+  return bracketed ? `[speaker ${max + 1}]` : `Speaker ${max + 1}`;
 }
 
 /** Return named speakers in display order: those with segments sorted by first
@@ -423,4 +437,33 @@ export function groupSegmentsBySpeaker(segments: Segment[]): SegmentGroup[] {
     }
   }
   return groups;
+}
+
+/**
+ * A speaker whose real name is unknown, described instead of named.
+ *
+ * `[interviewer 2]`, `[audience member]`, `[recovery team member]`. The
+ * brackets are not decoration: they say the value is a DESCRIPTION and must
+ * not be read as an identity. `[interviewer 2]` in one recording is not the
+ * same person as `[interviewer 2]` in another, so nothing downstream should
+ * merge them, build a person from them, or offer them for autocomplete across
+ * records - which is what a bare `Interviewer` invites.
+ *
+ * This generalises what the reserved tokens already do: `[narrator]` has
+ * always been a role rather than a name, and the four reserved values are
+ * simply the descriptions common enough to be worth naming in the spec.
+ */
+export function isAnonymousSpeaker(name: string): boolean {
+  return /^\[.+\]$/.test(name.trim());
+}
+
+/** The description inside the brackets, for display. */
+export function anonymousLabel(name: string): string {
+  return name.trim().replace(/^\[|\]$/g, "");
+}
+
+/** Wrap a description as an anonymous speaker, idempotently. */
+export function asAnonymousSpeaker(description: string): string {
+  const inner = anonymousLabel(description).trim();
+  return inner ? `[${inner}]` : "";
 }

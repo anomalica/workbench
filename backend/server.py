@@ -226,7 +226,7 @@ def _date_sort_key(value: str | None) -> float:
 
 
 # `Speaker 3` from diarisation: a cluster id, not a person's name.
-_DEFAULT_SPEAKER = re.compile(r"^Speaker\s+\d+$", re.IGNORECASE)
+_DEFAULT_SPEAKER = re.compile(r"^\[?\s*Speaker\s+\d+\s*\]?$", re.IGNORECASE)
 
 # Far enough into a queued record to pass its frontmatter, not so far that a
 # body without a title is read in full.
@@ -661,9 +661,13 @@ class LocalIngestSource(IngestSource):
                 if not isinstance(name, str):
                     continue
                 name = name.strip()
-                # `Speaker 3` is a diarisation cluster id, not a person, and
-                # `[irrelevant]` and friends are markers. Neither is a name
-                # anyone should be offered.
+                # A name in square brackets is a DESCRIPTION of someone whose
+                # real name is unknown - `[interviewer 2]`, `[narrator]`,
+                # `[speaker 3]`. It is scoped to its own record: the
+                # `[interviewer 2]` in one recording is not the person in
+                # another, so offering it here would invite a reviewer to file
+                # two strangers under one name. `Speaker 3` unbracketed is the
+                # same thing written the old way.
                 if not name or name.startswith("[") or _DEFAULT_SPEAKER.match(name):
                     continue
                 counts[name] = counts.get(name, 0) + 1
