@@ -309,3 +309,38 @@ export function strikeClassification(raw: string, selected: string, before = "")
   }
   return `${raw.slice(0, hit.start)}~~(${hit.value})~~${raw.slice(hit.end)}`;
 }
+
+/** A character that belongs to a word, for the purpose of snapping a
+ *  selection. Apostrophes and hyphens are inside words - "Fravor's" and
+ *  "forward-looking" are each one word to a reader, and snapping that splits
+ *  them reads as a bug. */
+const WORD_CHAR = /[\p{L}\p{N}_'’-]/u;
+
+/**
+ * Grow a selection out to whole words.
+ *
+ * A drag stops wherever the pointer was, so a highlight ends up starting
+ * mid-word - "as been repeatedly proposed to ex". The word editor has never had
+ * this problem because a word IS the unit there; in prose the reviewer is
+ * dragging over characters and means words.
+ *
+ * Mutates and returns the range. Only the text nodes at each end are examined:
+ * a selection that starts at the very beginning of a node is already at a
+ * boundary, which is why crossing nodes needs no special case.
+ */
+export function expandToWords(range: Range): Range {
+  const { startContainer, endContainer } = range;
+  if (startContainer.nodeType === Node.TEXT_NODE) {
+    const text = startContainer.textContent ?? "";
+    let i = range.startOffset;
+    while (i > 0 && WORD_CHAR.test(text[i - 1])) i--;
+    range.setStart(startContainer, i);
+  }
+  if (endContainer.nodeType === Node.TEXT_NODE) {
+    const text = endContainer.textContent ?? "";
+    let i = range.endOffset;
+    while (i < text.length && WORD_CHAR.test(text[i])) i++;
+    range.setEnd(endContainer, i);
+  }
+  return range;
+}

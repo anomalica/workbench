@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  expandToWords,
   indexBody,
   rangeText,
   insertHighlight,
@@ -291,5 +292,44 @@ describe("striking a classification marking", () => {
     const at = locateSelection(struck, "(SECRET//REL TO USA, FVEY)")!;
     expect(isStruck(struck, at)).toBe(true);
     expect(removeStrikethrough(struck, at)).toContain("(SECRET//REL TO USA, FVEY) AT");
+  });
+});
+
+describe("snapping a selection to whole words", () => {
+  function selectChars(text: string, from: number, to: number) {
+    document.body.innerHTML = `<p id="p">${text}</p>`;
+    const node = document.getElementById("p")!.firstChild!;
+    const range = document.createRange();
+    range.setStart(node, from);
+    range.setEnd(node, to);
+    return expandToWords(range).toString();
+  }
+
+  it("grows a part-word drag out to the words it touched", () => {
+    // A drag stops wherever the pointer was: "as been repeatedly proposed to ex".
+    const text = "It has been repeatedly proposed to expand the scope for SETI.";
+    expect(selectChars(text, 5, 36)).toBe("has been repeatedly proposed to expand");
+  });
+
+  it("leaves a selection that already sits on boundaries alone", () => {
+    expect(selectChars("It has been proposed.", 3, 11)).toBe("has been");
+  });
+
+  it("keeps a hyphenated word together", () => {
+    // "forward-looking" is one word to a reader, and splitting it reads as a bug.
+    expect(selectChars("The forward-looking infrared camera.", 12, 15)).toBe("forward-looking");
+  });
+
+  it("keeps a possessive together", () => {
+    expect(selectChars("Fravor's account of it.", 2, 5)).toBe("Fravor's");
+  });
+
+  it("does not swallow the punctuation after a word", () => {
+    // The stop is not part of the passage being marked.
+    expect(selectChars("It has been proposed. Then more.", 12, 19)).toBe("proposed");
+  });
+
+  it("handles a selection running to the end of the text", () => {
+    expect(selectChars("One two three", 8, 13)).toBe("three");
   });
 });

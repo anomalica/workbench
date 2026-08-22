@@ -14,6 +14,7 @@
     insertSpanNote,
     insertStrikethrough,
     isStruck,
+    expandToWords,
     locateSelection,
     mintId,
     rangeText,
@@ -55,6 +56,9 @@
    *  before it, which is what tells two identical sentences apart. */
   let picked = $state<{ text: string; before: string; top: number; left: number } | null>(null);
   let composing = $state(false);
+  /** Set while the snapped range is being put back, so the selectionchange it
+   *  causes is not treated as a fresh selection. */
+  let snapping = false;
   let noteText = $state("");
   let failed = $state(false);
   /** A strike cannot cross a paragraph break - markdown's `~~` does not span
@@ -85,6 +89,22 @@
   }
   const range = sel.getRangeAt(0);
   if (!containerEl?.contains(range.commonAncestorContainer)) return;
+  // Snap out to whole words, and put the grown range back so the reviewer SEES
+  // what they are about to mark rather than finding out afterwards. Setting
+  // the selection re-enters this handler, hence the guard.
+  if (!snapping) {
+    const grown = expandToWords(range.cloneRange());
+    if (
+      grown.startOffset !== range.startOffset ||
+      grown.endOffset !== range.endOffset
+    ) {
+      snapping = true;
+      sel.removeAllRanges();
+      sel.addRange(grown);
+      snapping = false;
+      return capture();
+    }
+  }
   // Not sel.toString(): a rendered equation's glyphs are nothing like its
   // source, and including them makes the selection unanchorable.
   const text = rangeText(range);
