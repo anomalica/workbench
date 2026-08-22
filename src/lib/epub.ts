@@ -122,7 +122,7 @@ function escapeHtml(s: string): string {
   );
 }
 
-export async function parseEpub(file: File): Promise<ParsedEpub> {
+export async function parseEpub(file: Blob): Promise<ParsedEpub> {
   const reader = new ZipReader(new BlobReader(file));
   try {
     const entries = await reader.getEntries();

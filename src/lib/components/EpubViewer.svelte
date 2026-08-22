@@ -5,7 +5,9 @@
     file,
     pageAnchor = null,
   }: {
-    file: File;
+    /** The book itself. A dropped File or the archived copy we hold - both
+     *  are Blobs, and the viewer has no use for a filename. */
+    file: Blob;
     /** Print-page label to scroll to (the record's printed_page value).
      *  Navigates the sandboxed frame by URL fragment to the normalised
      *  id="page_{label}" anchor - fragment-only changes are same-document

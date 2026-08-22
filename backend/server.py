@@ -3081,6 +3081,53 @@ def models_judgment(body: dict, request: Request) -> dict:
 # /api/ingest-titles and the runner now live there. The workbench is review-only.
 
 
+def _archived_source_by_stem(stem: str) -> Path | None:
+    """The archived original whose filename stem is exactly `stem`.
+
+    Not a sidecar sitting beside it: a source can have a companion like
+    `{hash}.transcript.json`, `{hash}.*` matches that too, and glob order is
+    arbitrary - so taking the first match served the transcript JSON
+    (unplayable) for every record that has one. The source file's stem is the
+    hash; a sidecar's is `{hash}.transcript`.
+    """
+    for candidate in records_path.glob(f"{stem}.*"):
+        if candidate.stem == stem:
+            return candidate
+    return None
+
+
+def _archived_file(full_hash: str) -> Path | None:
+    """The archived original for a record, by the record's content hash.
+
+    Most records are archived under that hash, because for audio, video and PDF
+    the content hash IS the hash of the source file's bytes. For **web and
+    ebook it is not**: those hash the EXTRACTED BODY, so the record and its own
+    source file have two different hashes and the file is archived under
+    `source_hash`. Asking for a book by its content hash therefore found
+    nothing, and the reviewer was told the original was unavailable while it sat
+    on disk the whole time - which is worse than missing, because it cannot be
+    checked against the extraction it is supposed to verify. 51 of 295 records
+    are in that class: 16 ebooks and 35 web pages.
+
+    The mismatch is a known per-type inconsistency in the ingest format, under
+    reconciliation upstream. Resolving it here rather than at each caller means
+    the viewer, the download and the prerender all get the file, and a later
+    reconciliation removes the fallback without changing any of them.
+    """
+    direct = _archived_source_by_stem(full_hash)
+    if direct is not None:
+        return direct
+    # Only reached for the types whose hashes differ, so the extra read costs
+    # nothing on the common path.
+    ingest = source.get_ingest(full_hash)
+    if not ingest:
+        return None
+    source_hash = normalise_hash(ingest.get("frontmatter", {}).get("source_hash"))
+    if not source_hash or source_hash == full_hash:
+        return None
+    return _archived_source_by_stem(source_hash)
+
+
 @app.get("/api/sources/{full_hash}")
 def get_source(full_hash: str) -> FileResponse:
     """Serve an original source file by its full SHA-256 hash.
@@ -3098,16 +3145,9 @@ def get_source(full_hash: str) -> FileResponse:
     if not FULL_HASH_PATTERN.match(full_hash):
         raise HTTPException(status_code=404, detail="Not found")
 
-    # Serve the source media file, not a sidecar sitting beside it. A source can
-    # have a companion like `{hash}.transcript.json`; `{hash}.*` matches that too
-    # and glob order is arbitrary, so taking the first match served the transcript
-    # JSON (unplayable) for records that have one - every .ogg NASA record did.
-    # The source file's stem is exactly the hash; a sidecar's is `{hash}.transcript`.
-    matches = [p for p in records_path.glob(f"{full_hash}.*") if p.stem == full_hash]
-    if not matches:
+    file_path = _archived_file(full_hash)
+    if file_path is None:
         raise HTTPException(status_code=404, detail="Not found")
-
-    file_path = matches[0]
     media_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
     return FileResponse(file_path, media_type=media_type)
 
@@ -3126,8 +3166,11 @@ def source_waveform(
     file's total length. Video sources decode their audio track the same way."""
     if not FULL_HASH_PATTERN.match(full_hash):
         raise HTTPException(status_code=404, detail="Not found")
-    matches = [p for p in records_path.glob(f"{full_hash}.*") if p.stem == full_hash]
-    if not matches:
+    # Audio and video only, where the content hash IS the file's hash, so the
+    # stem lookup is enough - but it shares the sidecar-avoidance rule rather
+    # than restating it.
+    audio_file = _archived_source_by_stem(full_hash)
+    if audio_file is None:
         raise HTTPException(status_code=404, detail="Not found")
 
     start = max(0.0, start)
@@ -3145,7 +3188,7 @@ def source_waveform(
         "-t",
         f"{duration:.3f}",
         "-i",
-        str(matches[0]),
+        str(audio_file),
         "-ac",
         "1",
         "-ar",

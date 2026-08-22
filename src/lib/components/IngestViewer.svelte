@@ -1403,18 +1403,24 @@
 
   // No left panel when there's nothing useful to show in it:
   // - web records with no archived/dropped source (URL bar only)
-  // - ebook records without a dropped source file (the reviewer has to
-  //   provide the .epub themselves; EPUBs are licensed material so we
-  //   don't auto-fetch them)
+  // - ebook records with no book to show: neither dropped nor archived
   // Once the source is attached, two-pane shows the rendered EPUB
   // (flattenEpubToHtml -> single sandbox="" iframe) next to the ingest.
   // Keep the source pane for a web record that has a source_url even when no
   // archived capture loads (it never does online - the edge has no /api/sources
   // route), so the "open the original page" link-out stays available to verify
   // the extraction against the live page.
+  /** The book to render: one the reviewer dropped, or the copy already in the
+   *  archive. Keyed on the blob rather than on a dropped `File`, because an
+   *  ebook IS archived - it is simply stored under `source_hash`, since web and
+   *  ebook records hash their extracted body rather than their source file. The
+   *  reviewer was being asked to supply a book we already hold, and without it
+   *  there is no way to check an extraction against the thing it came from. */
+  let epubSource = $derived<Blob | null>(isEbook ? (localSourceFile ?? sourceBlob) : null);
+
   let singleColumn = $derived(
     (isWeb && !localSourceFile && !localSourceUrl && !ingest.frontmatter.source_url) ||
-      (isEbook && !localSourceFile),
+      (isEbook && !epubSource),
   );
 
   /** Does this record carry any reviewer highlight at all? The colour toggle
@@ -2161,7 +2167,7 @@
     return out;
   });
   let canFollowSource = $derived(
-    (isEbook && !!localSourceFile) || (isPdf && (!!localSourceFile || !!localSourceUrl)),
+    (isEbook && !!epubSource) || (isPdf && (!!localSourceFile || !!localSourceUrl)),
   );
 
   /** Jump the source pane to the page containing the clicked block. */
@@ -4518,8 +4524,8 @@
             class="flex-1 w-full border-none bg-white"
             title="Archived source page"
           ></iframe>
-        {:else if localSourceFile && isEbook}
-          <EpubViewer file={localSourceFile} pageAnchor={epubPageAnchor} />
+        {:else if epubSource}
+          <EpubViewer file={epubSource} pageAnchor={epubPageAnchor} />
         {:else}
           <!-- Drop target fills all available space -->
           <div
