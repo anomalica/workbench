@@ -1257,8 +1257,18 @@
     );
   }
 
+  // Load the copy we hold whenever the reviewer is entitled to see the record -
+  // not only when it is public.
+  //
+  // This was gated on `isPublic`, so a RESTRICTED record showed "Drop a source
+  // file here" over an empty panel while the original sat in the archive and
+  // the API served it on request. It reads as the pipeline having lost the
+  // document; nothing was lost, the front end just never asked. The gate that
+  // matters is the deployed one - resolveSourceAddress still refuses anything
+  // but public_domain in a static build - and locally the API applies its own
+  // rules to the same request.
   $effect(() => {
-    if (isPublic && !localSourceFile && !localSourceUrl && !ytId) {
+    if (canShowBody && !localSourceFile && !localSourceUrl && !ytId) {
       const address = resolveSourceAddress({
         staticReads: STATIC_READS,
         sourceKey,
