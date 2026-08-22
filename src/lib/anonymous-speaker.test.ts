@@ -36,6 +36,22 @@ describe("telling a description from a name", () => {
     expect(isAnonymousSpeaker("Robert (Bob) Lazar")).toBe(false);
   });
 
+  it("keeps a name that carries a disambiguating parenthetical", () => {
+    // About twenty real people in the corpus are written this way, and they
+    // DO match across records - the parenthetical is what tells two Sallys
+    // apart. Reading one as anonymous would remove them from the graph.
+    // Only a value that is ENTIRELY a description is bracketed.
+    for (const name of [
+      "Sally (Budd Hopkins abductee)",
+      "Dave (SR-71 pilot)",
+      "Dr. X (French physician)",
+      "A Friend (anonymous army sergeant)",
+      "Ground Control (Wally)",
+    ]) {
+      expect(isAnonymousSpeaker(name)).toBe(false);
+    }
+  });
+
   it("covers the reserved tokens, which were always descriptions", () => {
     // [narrator] has never been a person's name. The reserved four are simply
     // the descriptions common enough to be worth naming in the spec.
