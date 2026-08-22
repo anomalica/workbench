@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { SUBTLE_HL, bandStyleAttribute, highlightColour } from "$lib/highlight-paint";
   import CopyrightControl from "./CopyrightControl.svelte";
   import { highlightDisplay } from "$lib/highlight-display.svelte";
   import type {
@@ -1419,6 +1420,26 @@
   /** Does this record carry any reviewer highlight at all? The colour toggle
    *  is meaningless without one, and an always-present control for a thing
    *  most records do not have is just another thing to read past. */
+  /**
+   * Which highlight this is, in the order the record introduces them.
+   *
+   * The colour has to be stable for a given highlight across every block it
+   * appears in and every re-render, so it is keyed on the id's position in the
+   * body rather than counted as the renderer goes - the prose is rendered
+   * block by block, and a per-render counter would give the same highlight a
+   * different colour in each one.
+   */
+  let highlightOrder = $derived.by(() => {
+    const order = new Map<string, number>();
+    const re = /\{\{highlight-start:\s*([A-Za-z0-9]+)\s*\}\}/g;
+    const body = currentBody();
+    for (let m = re.exec(body); m; m = re.exec(body)) {
+      if (!order.has(m[1])) order.set(m[1], order.size);
+    }
+    return order;
+  });
+  const highlightIndex = (id: string) => highlightOrder.get(id) ?? 0;
+
   let hasHighlights = $derived(/\{\{highlight-start:/.test(currentBody()));
 
   // Column visibility: user toggles which of source/ingest/digest are shown.
@@ -2002,9 +2023,22 @@
         return `<span class="prose-note" data-note-id="${id}" title="${attr}">`;
       })
       .replace(/\{\{note-end:\s*([A-Za-z0-9]+)\s*\}\}/g, "</span>")
+      // Same painting as the word editor, from the same module: a palette
+      // colour per highlight, or one hairline while reading. It used to be a
+      // single flat tint with no palette, so a document's highlights were
+      // indistinguishable from each other and the colour toggle looked like it
+      // only turned an underline on and off.
       .replace(
         /\{\{highlight-start:\s*([A-Za-z0-9]+)\s*\}\}/g,
-        (_, id) => `<span class="prose-highlight" data-highlight-id="${id}">`,
+        (_, id) => {
+          const colour = highlightDisplay.subtle
+            ? SUBTLE_HL
+            : highlightColour(highlightIndex(String(id)));
+          return (
+            `<span class="prose-highlight" data-highlight-id="${id}"` +
+            ` style="${bandStyleAttribute([colour], highlightDisplay.subtle)}">`
+          );
+        },
       )
       .replace(/\{\{highlight-end:\s*([A-Za-z0-9]+)\s*\}\}/g, "</span>");
   }

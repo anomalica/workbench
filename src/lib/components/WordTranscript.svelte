@@ -1,5 +1,6 @@
 <script lang="ts">
   import { highlightDisplay } from "$lib/highlight-display.svelte";
+  import { SUBTLE_HL, bandStyle, highlightColour } from "$lib/highlight-paint";
   import { untrack, onMount } from "svelte";
   import {
     saveScrollAnchor,
@@ -283,16 +284,11 @@
   // their thickness - every band is the same thin weight, so three or four
   // overlaps stay legible without crowding (anomalica/master's call). Colours
   // are cosmetic only - a highlight is emphasis, not a category.
-  const HL_PALETTE = ["#f59e0b", "#14b8a6", "#8b5cf6", "#ec4899", "#3b82f6", "#84cc16"];
-  const BAND_H = 2; // px, band thickness
-  const BAND_PITCH = 3; // px, band + 1px transparent gap
   // INGEST reads for content: a highlight there only needs to register as
   // PRESENT. Six palette colours stacked one band per overlap is noise when
   // you're trying to read - so Ingest gets a single hairline in the text's own
   // colour at low alpha, and MARKUP keeps the colour coding, which is where
   // telling one highlight from another is the job.
-  const SUBTLE_BAND_H = 1; // px
-  const SUBTLE_HL = "color-mix(in srgb, currentColor 30%, transparent)";
   // Which highlight ids cover a word, so a click can say WHICH highlight was hit.
   let highlightIdsByWord = $derived.by(() => {
     const m = new Map<number, string[]>();
@@ -580,7 +576,7 @@
   let highlightColorsByWord = $derived.by(() => {
     const cols = new Map<number, string[]>();
     parsed.highlights.forEach((h, i) => {
-      const colour = HL_PALETTE[i % HL_PALETTE.length];
+      const colour = highlightColour(i);
       for (let g = h.fromWord; g <= h.toWord; g++) {
         const list = cols.get(g) ?? [];
         list.push(colour);
@@ -596,7 +592,8 @@
   // backgrounds (not box-shadow) so the gaps are genuinely transparent.
   function applyWordHighlight(el: HTMLElement, cols: string[] | undefined, subtle = false) {
     const s = el.style;
-    if (!cols || cols.length === 0) {
+    const band = bandStyle(cols ?? [], subtle);
+    if (!band) {
       s.backgroundImage = "";
       s.backgroundPosition = "";
       s.backgroundSize = "";
@@ -604,17 +601,7 @@
       s.paddingBottom = "";
       return;
     }
-    const n = cols.length;
-    const h = subtle ? SUBTLE_BAND_H : BAND_H;
-    s.backgroundImage = cols.map((c) => `linear-gradient(${c}, ${c})`).join(",");
-    s.backgroundRepeat = "no-repeat";
-    s.backgroundSize = cols.map(() => `100% ${h}px`).join(",");
-    // Band i (i=0 innermost) sits `(n-1-i)*PITCH`px up from the padding bottom,
-    // so band 0 hugs the text and the rest step downward.
-    s.backgroundPosition = cols
-      .map((_, i) => `left 0 bottom ${(n - 1 - i) * BAND_PITCH}px`)
-      .join(",");
-    s.paddingBottom = `${(n - 1) * BAND_PITCH + h}px`;
+    Object.assign(s, band);
   }
 
   // Reviewer span notes: free text attached to a word RANGE ("what was on screen

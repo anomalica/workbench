@@ -264,19 +264,12 @@ body {
   cursor: help;
 }
 
+/* The band itself is an inline style from highlight-paint, the same module the
+   word editor paints with - a palette colour per highlight, or one hairline
+   while reading. Nothing colour-related belongs here, or the two paths drift
+   again. */
 .prose-highlight {
-  background-color: color-mix(in srgb, var(--color-primary-container) 55%, transparent);
   border-radius: 2px;
-}
-
-/* Reading, rather than working on the markup: a highlight only has to register
-   as present. A filled run competes with the words on every line that carries
-   one, so it becomes a hairline in the text's own colour - visible when looked
-   for, invisible when reading past. Same switch as the transcript's bands. */
-:root.highlights-subtle .prose-highlight {
-  background-color: transparent;
-  border-radius: 0;
-  border-bottom: 1px solid color-mix(in srgb, currentColor 30%, transparent);
 }
 
 .segment-irrelevant {
