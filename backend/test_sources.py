@@ -44,3 +44,58 @@ def test_404_when_only_a_sidecar_exists(client, tmp_path):
 def test_404_for_missing_and_malformed_hash(client):
     assert client.get(f"/api/sources/{'a' * 64}").status_code == 404
     assert client.get("/api/sources/not-a-hash").status_code == 404
+
+
+# An ebook or web record does NOT hash its own source file: those types hash the
+# EXTRACTED BODY, so the record's content hash and its file's hash differ and the
+# file is archived under `source_hash`. Asking for a book by its content hash
+# found nothing, and the reviewer was told the original was unavailable while it
+# sat on disk - the one thing they need to check an extraction against.
+
+BODY_HASH = "b" * 64
+FILE_HASH = "f" * 64
+
+
+@pytest.fixture
+def store(monkeypatch):
+    """A stand-in ingest source, so nothing reads or writes the real corpus."""
+    records: dict[str, dict] = {}
+
+    class FakeSource:
+        def get_ingest(self, full_hash):
+            return records.get(full_hash)
+
+    monkeypatch.setattr(server, "source", FakeSource())
+    return records
+
+
+def test_finds_an_ebook_archived_under_its_source_hash(client, tmp_path, store):
+    store[BODY_HASH] = {"frontmatter": {"source_hash": f"sha256:{FILE_HASH}"}}
+    (tmp_path / f"{FILE_HASH}.epub").write_bytes(b"PK-fake-epub")
+    res = client.get(f"/api/sources/{BODY_HASH}")
+    assert res.status_code == 200
+    assert res.content == b"PK-fake-epub"
+
+
+def test_prefers_the_file_under_the_asked_hash(client, tmp_path, store):
+    # Audio, video and PDF are archived under the content hash itself. The
+    # fallback must never shadow that, or a record whose source_hash is stale
+    # serves the wrong file.
+    store[HASH] = {"frontmatter": {"source_hash": f"sha256:{FILE_HASH}"}}
+    (tmp_path / f"{HASH}.opus").write_bytes(b"the-right-one")
+    (tmp_path / f"{FILE_HASH}.epub").write_bytes(b"the-wrong-one")
+    assert client.get(f"/api/sources/{HASH}").content == b"the-right-one"
+
+
+def test_404_when_the_source_hash_names_nothing(client, store):
+    store[BODY_HASH] = {"frontmatter": {"source_hash": f"sha256:{FILE_HASH}"}}
+    assert client.get(f"/api/sources/{BODY_HASH}").status_code == 404
+
+
+def test_404_when_the_record_has_no_source_hash(client, store):
+    store[BODY_HASH] = {"frontmatter": {}}
+    assert client.get(f"/api/sources/{BODY_HASH}").status_code == 404
+
+
+def test_404_when_there_is_no_record_at_all(client, store):
+    assert client.get(f"/api/sources/{BODY_HASH}").status_code == 404
