@@ -11,6 +11,9 @@ import {
   isStruck,
   normaliseSelection,
   occurrenceIndex,
+  readSpanNote,
+  editSpanNote,
+  removeSpanNote,
   quoteScalar,
   removeStrikethrough,
   spansBlankLine,
@@ -385,5 +388,40 @@ describe("choosing between passages that read alike", () => {
     // A stale count must not place the note somewhere arbitrary; it falls
     // through to the lead-in, which declines when it cannot tell.
     expect(locateSelection(body, "FVEY", "", undefined, 99)).toBeNull();
+  });
+});
+
+describe("changing a note after it is written", () => {
+  // A note is a judgement about a passage and judgements get revised. The word
+  // editor has always allowed it; a note on a document was fixed at the moment
+  // it was written, for no reason but nothing having been built.
+  const body =
+    'The {{note-start: [a1, "handwritten in the margin"]}}date{{note-end: a1}} is unclear.';
+
+  it("reads back what it says", () => {
+    expect(readSpanNote(body, "a1")).toBe("handwritten in the margin");
+    expect(readSpanNote(body, "zz")).toBeNull();
+  });
+
+  it("rewrites the text and leaves the passage alone", () => {
+    const out = editSpanNote(body, "a1", "stamped, not handwritten");
+    expect(readSpanNote(out, "a1")).toBe("stamped, not handwritten");
+    expect(out).toContain(">date{{note-end: a1}}".replace(">", ""));
+    expect(out).toContain("The ");
+    expect(out).toContain(" is unclear.");
+  });
+
+  it("keeps a note containing quotes and colons in one piece", () => {
+    const out = editSpanNote(body, "a1", 'reads "SECRET": added later');
+    expect(readSpanNote(out, "a1")).toBe('reads "SECRET": added later');
+  });
+
+  it("removing it restores the passage exactly", () => {
+    expect(removeSpanNote(body, "a1")).toBe("The date is unclear.");
+  });
+
+  it("does nothing to a note that is not there", () => {
+    expect(editSpanNote(body, "zz", "x")).toBe(body);
+    expect(removeSpanNote(body, "zz")).toBe(body);
   });
 });

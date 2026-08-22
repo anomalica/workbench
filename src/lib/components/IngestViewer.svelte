@@ -2018,7 +2018,15 @@
   function renderSpanMarkers(html: string): string {
     return html
       .replace(/\{\{note-start:\s*\[\s*([A-Za-z0-9]+)\s*,\s*([\s\S]*?)\]\}\}/g, (_, id, text) => {
-        const note = String(text).trim().replace(/^"|"$/g, "").replace(/\\"/g, '"');
+        // By the time this runs, marked has escaped the marker's quotes, so
+        // the value arrives as `&quot;text&quot;` and stripping a bare `"`
+        // never matched - every prose note tooltip has been showing its own
+        // quotation marks. Strip either form.
+        const note = String(text)
+          .trim()
+          .replace(/^(?:"|&quot;)/, "")
+          .replace(/(?:"|&quot;)$/, "")
+          .replace(/\\"/g, '"');
         const attr = note.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
         return `<span class="prose-note" data-note-id="${id}" title="${attr}">`;
       })

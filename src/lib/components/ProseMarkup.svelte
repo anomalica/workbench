@@ -17,6 +17,9 @@
     expandToWords,
     locateSelection,
     occurrenceIndex,
+    readSpanNote,
+    editSpanNote,
+    removeSpanNote,
     mintId,
     rangeText,
     removeStrikethrough,
@@ -75,6 +78,50 @@
    *  one, so the pair would render as tildes. */
   let crossesParagraph = $state(false);
   let noteBox = $state<HTMLTextAreaElement | undefined>();
+  /** An existing note opened for revision: its id, its current text, and where
+   *  to float the editor. */
+  let editing = $state<{ id: string; text: string; top: number; left: number } | null>(null);
+  let editBox = $state<HTMLTextAreaElement | undefined>();
+
+  /** Click a note to change it. The word editor has always allowed this; on a
+   *  document a note was fixed the moment it was written. */
+  function openNote(e: MouseEvent) {
+    if (!canMark) return;
+    const el = (e.target as HTMLElement | null)?.closest<HTMLElement>(".prose-note");
+    const id = el?.dataset.noteId;
+    if (!el || !id) return;
+    const text = readSpanNote(body, id);
+    if (text === null) return;
+    e.preventDefault();
+    e.stopPropagation();
+    picked = null;
+    const box = el.getBoundingClientRect();
+    editing = {
+      id,
+      text,
+      top: Math.max(8, box.bottom + 6),
+      left: Math.max(8, Math.min(box.left, window.innerWidth - 340)),
+    };
+    queueMicrotask(() => {
+      editBox?.focus();
+      editBox?.select();
+    });
+  }
+
+  function saveEdit() {
+    if (!editing) return;
+    const text = editing.text.trim();
+    // An emptied note is a removed note: it is the same intent, and making the
+    // reviewer find a separate control to say it is ceremony.
+    onbody?.(text ? editSpanNote(body, editing.id, text) : removeSpanNote(body, editing.id));
+    editing = null;
+  }
+
+  function deleteNote() {
+    if (!editing) return;
+    onbody?.(removeSpanNote(body, editing.id));
+    editing = null;
+  }
 
   /** How much lead-in to keep. Long enough to separate repeated headings on
    *  different pages, short enough that an edit elsewhere cannot invalidate it
@@ -231,10 +278,15 @@
   }}
 />
 
+<!-- Notes are spans inside rendered prose, so the click is delegated here
+     rather than each note being a button: a button inside a paragraph breaks
+     the text selection this whole component exists for. -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
+<!-- svelte-ignore a11y_click_events_have_key_events -->
 <div
   bind:this={containerEl}
   data-prose-markup="1"
+  onclick={openNote}
   class={children ? "contents" : klass}
   data-scroll-sync={children ? undefined : true}
   onscroll={children ? undefined : onscroll}
@@ -364,6 +416,51 @@
         <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
       </svg>
     </button>
+  </div>
+{/if}
+
+{#if editing}
+  <!-- Floated under the note it belongs to, so which note is being changed is
+       never in question. -->
+  <div
+    class="fixed z-50 w-80 bg-surface-raised border border-primary/60 ring-2 ring-primary/25
+      rounded shadow-xl p-2.5"
+    style="top: {editing.top}px; left: {editing.left}px"
+  >
+    <textarea
+      bind:this={editBox}
+      bind:value={editing.text}
+      rows="2"
+      placeholder="What these words miss - handwriting, a stamp, what is on the page"
+      class="w-full text-xs font-ui bg-surface border border-border rounded px-2 py-1
+        text-on-surface placeholder:text-on-surface-muted resize-none"
+      onkeydown={(e) => {
+        if (e.key === "Enter" && (!e.shiftKey || e.ctrlKey || e.metaKey)) {
+          e.preventDefault();
+          saveEdit();
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          editing = null;
+        }
+      }}
+    ></textarea>
+    <div class="flex items-center gap-2 mt-1.5">
+      <button
+        onclick={saveEdit}
+        class="text-xs font-ui font-medium text-primary cursor-pointer hover:underline"
+      >Save</button>
+      <button
+        onclick={() => (editing = null)}
+        class="text-xs font-ui text-on-surface-muted cursor-pointer hover:text-on-surface"
+      >Cancel</button>
+      <span class="flex-1"></span>
+      <button
+        onclick={deleteNote}
+        title="Take the note off - the words it covers stay exactly as they are"
+        class="text-xs font-ui text-on-surface-muted/70 cursor-pointer hover:text-error"
+      >Remove</button>
+    </div>
   </div>
 {/if}
 

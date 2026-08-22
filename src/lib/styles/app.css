@@ -261,7 +261,9 @@ body {
    while a highlight is a claim on the words themselves and tints them. */
 .prose-note {
   border-bottom: 2px dotted var(--color-primary);
-  cursor: help;
+  /* It opens for revision on click, so it points at itself as something to
+     act on rather than something merely explained. */
+  cursor: pointer;
 }
 
 /* The band itself is an inline style from highlight-paint, the same module the

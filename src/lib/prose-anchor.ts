@@ -374,3 +374,34 @@ export function expandToWords(range: Range): Range {
   }
   return range;
 }
+
+/** The marker pair a span note is stored as. The id is the join between them. */
+const noteStart = (id: string) =>
+  new RegExp(`\\{\\{note-start:\\s*\\[\\s*${id}\\s*,\\s*((?:[^"\\\\]|\\\\.|")*?)\\]\\}\\}`);
+const noteEnd = (id: string) => new RegExp(`\\{\\{note-end:\\s*${id}\\s*\\}\\}`);
+
+/** What a span note currently says, or null if there is no such note. */
+export function readSpanNote(raw: string, id: string): string | null {
+  const m = raw.match(noteStart(id));
+  if (!m) return null;
+  return m[1].trim().replace(/^"|"$/g, "").replace(/\\"/g, '"');
+}
+
+/**
+ * Change what a span note says, leaving the words it covers alone.
+ *
+ * A note is a judgement about a passage and judgements get revised - the word
+ * editor has always allowed it, and a note on a document was fixed at the
+ * moment it was written for no reason other than nothing having been built.
+ */
+export function editSpanNote(raw: string, id: string, text: string): string {
+  const re = noteStart(id);
+  if (!re.test(raw)) return raw;
+  return raw.replace(re, `{{note-start: [${id}, ${quoteScalar(text)}]}}`);
+}
+
+/** Take the note off, leaving the passage exactly as it was before the note
+ *  was added - both markers go, the words between them stay. */
+export function removeSpanNote(raw: string, id: string): string {
+  return raw.replace(noteStart(id), "").replace(noteEnd(id), "");
+}
