@@ -96,7 +96,6 @@
   lead.setStart(containerEl, 0);
   lead.setEnd(range.startContainer, range.startOffset);
   const box = range.getBoundingClientRect();
-  const host = containerEl.getBoundingClientRect();
   picked = {
     text,
     before: rangeText(lead).slice(-LEAD),
@@ -104,7 +103,11 @@
     // child that brings its own scroller, and fixed positioning is right
     // either way.
     top: Math.max(8, box.top - 46),
-    left: Math.max(8, Math.min(box.left + box.width / 2 - 90, host.width - 200)),
+    // Clamped to the VIEWPORT, not the container. The bar is positioned
+    // fixed, so clamping to the container's width put it at the left edge of
+    // the screen whenever the prose pane did not start at zero - which is
+    // every two-pane record.
+    left: Math.max(8, Math.min(box.left + box.width / 2 - 90, window.innerWidth - 200)),
   };
   failed = false;
   crossesParagraph = false;

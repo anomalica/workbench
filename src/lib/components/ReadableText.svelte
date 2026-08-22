@@ -424,26 +424,49 @@
 
   /** True while Alt is held: the blocks release the selection so the browser
    *  can make a text one. */
-  let textSelect = $state(false);
 
+  /** The block a press landed in, decided on release - see below. */
+  let pressedBlock: number | null = null;
+
+  /**
+   * A press in the TEXT selects the block only if it turned out not to be a
+   * text selection.
+   *
+   * Both gestures are a press and a drag, and the text had `select-none` on it
+   * so the block always won - highlighting a phrase meant holding Alt, which
+   * is a thing nobody discovers. The words are selectable now, and which
+   * gesture it was is decided on release: a drag that selected words is a text
+   * selection and the block is left alone; a plain click selected nothing, so
+   * it is a block click. Dragging ACROSS blocks is the gutter's job.
+   */
   function onBlockPointerDown(e: PointerEvent, i: number) {
     if (e.button !== 0) return;
-    // Alt-drag is a TEXT selection, not a block one. The plain drag belongs to
-    // read coverage - it is the commoner act and had the gesture first - so
-    // marking up a phrase (a note on some handwriting, a highlight) has to ask
-    // for it, and while Alt is held the blocks stop swallowing the selection.
-    if (e.altKey || e.ctrlKey) return;
-    // Let clicks on links behave normally. Native text selection is suppressed
-    // via `select-none` on the blocks, so only the block highlight shows.
     if ((e.target as HTMLElement).closest("a")) return;
+    pressedBlock = i;
     const block = blocks.find((b) => b.index === i);
     if (block) onblockclick?.(block.lineFrom);
+  }
+
+  function onBlockPointerUp(e: PointerEvent, i: number) {
+    if (pressedBlock !== i) return;
+    pressedBlock = null;
+    const sel = window.getSelection();
+    if (sel && !sel.isCollapsed && sel.toString().trim()) return;
+    if (e.shiftKey) selectBlock(i, true);
+    else selectBlock(i, false);
+  }
+
+  /** The gutter drags a range of blocks. It is the one target that is not text,
+   *  so it can own the gesture outright. */
+  function onGutterPointerDown(e: PointerEvent, i: number) {
+    if (e.button !== 0) return;
+    e.preventDefault();
     if (e.shiftKey) {
       selectBlock(i, true);
-    } else {
-      dragging = true;
-      selectBlock(i, false);
+      return;
     }
+    dragging = true;
+    selectBlock(i, false);
   }
 
   function onBlockPointerEnter(i: number) {
@@ -597,19 +620,7 @@
   }
 </script>
 
-<svelte:window
-  onpointerup={onWindowPointerUp}
-  onkeydown={(e) => {
-    if (e.key === "Alt" || e.key === "Control") textSelect = true;
-    onWindowKeydown(e);
-  }}
-  onkeyup={(e) => {
-    // Held, not toggled - and released on blur too, or leaving the window with
-    // Alt down leaves the blocks unselectable.
-    if (e.key === "Alt" || e.key === "Control") textSelect = false;
-  }}
-  onblur={() => (textSelect = false)}
-/>
+<svelte:window onpointerup={onWindowPointerUp} onkeydown={onWindowKeydown} />
 
 <div class="flex flex-col min-h-0 flex-1">
   <!-- Coverage toolbar: progress + contextual selection actions -->
@@ -822,8 +833,7 @@
               <div class="px-3 pb-2 opacity-50">
                 {#each item.blocks as { html: regionHtml }}
                   <div
-                    class="prose prose-sm max-w-none prose-img:rounded prose-img:max-w-full
-                      {textSelect ? '' : 'select-none'}"
+                    class="prose prose-sm max-w-none prose-img:rounded prose-img:max-w-full"
                   >
                     <!-- eslint-disable-next-line svelte/no-at-html-tags -->
                     {@html regionHtml}
@@ -845,6 +855,7 @@
             {inSelection(block.index) && !structural ? 'bg-primary/10' : 'hover:bg-surface-alt/40'}"
           data-block-index={block.index}
           onpointerdown={(e) => !structural && onBlockPointerDown(e, block.index)}
+          onpointerup={(e) => !structural && onBlockPointerUp(e, block.index)}
           onpointerenter={() => onBlockPointerEnter(block.index)}
         >
           <!-- Coverage gutter: click toggles just this block. Structural blocks
@@ -855,6 +866,7 @@
           {:else}
             <button
               onclick={() => toggleBlock(block.index)}
+              onpointerdown={(e) => onGutterPointerDown(e, block.index)}
               class="flex-none w-1.5 rounded-full my-1 cursor-pointer transition-colors
                 {state === 'session'
                   ? 'bg-primary'
@@ -873,7 +885,7 @@
                element wired to the brand semantic tokens, light + dark); only
                structural image utilities are set here. -->
           <div
-            class="prose prose-sm max-w-none flex-1 py-1 {textSelect ? '' : 'select-none'}
+            class="prose prose-sm max-w-none flex-1 py-1
               prose-img:rounded prose-img:max-w-full
               {state === 'none' && !structural ? 'opacity-70' : ''}"
           >
