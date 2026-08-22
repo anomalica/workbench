@@ -1017,6 +1017,49 @@
   //   control. Everyone below admin still proves it.
   let canShowBody = $derived(isPublic || isAdmin || accessGranted || !!localSourceFile);
 
+  /**
+   * Who can see this record, and why you can.
+   *
+   * The three ways in are not interchangeable and the difference is the whole
+   * point: a public record is public to everyone, a gated one you are reading
+   * as admin is visible to nobody else, and one you unlocked by proving
+   * possession is visible to anyone else who can prove it too. Reading a gated
+   * record with no sign of which is how someone comes to assume the corpus is
+   * open.
+   */
+  let visibility = $derived.by(() => {
+    if (isPublic) {
+      return {
+        label: "Public",
+        tone: "text-success",
+        detail: `Anyone can read this record and download the original. Status: ${liveCopyright}.`,
+      };
+    }
+    if (accessGranted || localSourceFile) {
+      return {
+        label: "Gated - you proved possession",
+        tone: "text-warning",
+        detail:
+          "Others see a locked panel until they supply the file or its hash. Status: " +
+          liveCopyright,
+      };
+    }
+    if (isAdmin) {
+      return {
+        label: "Gated - visible to you as admin",
+        tone: "text-warning",
+        detail:
+          "Nobody else sees this without proving they hold a copy. You are seeing it because you own the archive. Status: " +
+          liveCopyright,
+      };
+    }
+    return {
+      label: "Gated",
+      tone: "text-warning",
+      detail: `Locked until you supply the file or its hash. Status: ${liveCopyright}.`,
+    };
+  });
+
   /** Is the record's own text being withheld right now? Drives the one
    *  invitation to hand over the file, so the source panel does not ask for it
    *  a second time. */
@@ -3511,6 +3554,10 @@
       {/if}
       <div class="flex gap-3 mt-1 text-xs text-on-surface-muted font-ui">
         <span>{ingest.frontmatter.source_type?.toUpperCase()}</span>
+        <!-- Who else can see this, and why you can. Reading a gated record
+             without being told which of those is true is how someone comes to
+             assume the whole corpus is open. -->
+        <span class={visibility.tone} title={visibility.detail}>{visibility.label}</span>
         <span>{ingest.frontmatter.date}</span>
         {#if hasTranscript}
           <span>{segments.length} segments</span>
