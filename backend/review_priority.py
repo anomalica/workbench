@@ -245,6 +245,31 @@ def graph_db_path() -> Path:
     )
 
 
+def db_fingerprint(path: Path) -> tuple:
+    """A cache key for a SQLite database that notices WAL writes.
+
+    The main file's mtime is NOT enough once the database is in WAL mode, which
+    knowledge.db has been since 2026-08-25. A committed transaction lands in
+    `{db}-wal` and leaves the main file untouched - mtime and size both - until
+    something checkpoints. Keying a cache on the main file alone therefore
+    serves a stale answer for as long as the writer stays busy, and starts
+    working again the moment it goes idle and checkpoints: right under test,
+    wrong under load.
+
+    So the fingerprint covers the write-ahead log as well. `-shm` is deliberately
+    left out: it is touched by readers too, and including it would rebuild the
+    cache for every reader rather than for every write.
+    """
+    parts: list[object] = []
+    for candidate in (path, path.with_name(path.name + "-wal")):
+        try:
+            st = candidate.stat()
+            parts.append((st.st_mtime_ns, st.st_size))
+        except OSError:
+            parts.append(None)
+    return tuple(parts)
+
+
 def load_page_worthy(db_path: Path | None = None) -> PageWorthy:
     """Build the matcher from the graph's page proposals.
 

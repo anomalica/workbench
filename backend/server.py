@@ -1690,9 +1690,9 @@ def review_queue() -> JSONResponse:
     graph to work out what a record would feed, and a GitHub-backed deployment
     has neither the graph nor a reviewer sitting in front of it.
 
-    Cached on the graph's mtime and the store's, because building the matcher
-    compiles a pattern over every page-worthy node and the answer only changes
-    when one of those two does.
+    Cached on a fingerprint of the graph (including its write-ahead log) and
+    the store's mtime, because building the matcher indexes every page-worthy
+    node and the answer only changes when one of those two does.
     """
     if not isinstance(source, LocalIngestSource):
         raise HTTPException(status_code=404, detail="Not found")
@@ -1700,7 +1700,7 @@ def review_queue() -> JSONResponse:
     graph = review_priority.graph_db_path()
     store = ingests_path / "store"
     key = (
-        graph.stat().st_mtime_ns if graph.exists() else 0,
+        review_priority.db_fingerprint(graph),
         store.stat().st_mtime_ns if store.exists() else 0,
     )
     if _review_queue_cache.get("key") == key:
