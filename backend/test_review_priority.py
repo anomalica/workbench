@@ -161,3 +161,34 @@ class TestRanking:
             "h", minutes=2.0, reach=4, high_bar=1, housekeeping_open=0, unlocks=["x"]
         )
         assert p.as_dict()["score"] == 2.0
+
+
+class TestDbFingerprint:
+    """knowledge.db went to WAL on 2026-08-25, and a WAL commit does not touch
+    the main file - so a cache keyed on its mtime goes stale under load and
+    recovers when the writer idles and checkpoints. Right under test, wrong in
+    production, which is the only kind worth a test."""
+
+    def test_changes_when_a_commit_lands_in_the_wal(self, tmp_path):
+        import sqlite3
+
+        from backend.review_priority import db_fingerprint
+
+        db = tmp_path / "k.db"
+        con = sqlite3.connect(db)
+        con.execute("pragma journal_mode=wal")
+        con.execute("create table x(a)")
+        con.commit()
+        before = db_fingerprint(db)
+
+        con.execute("insert into x values (1)")
+        con.commit()
+        after = db_fingerprint(db)
+        con.close()
+
+        assert after != before, "a committed write must invalidate the cache"
+
+    def test_a_missing_database_fingerprints_without_raising(self, tmp_path):
+        from backend.review_priority import db_fingerprint
+
+        assert db_fingerprint(tmp_path / "absent.db") == (None, None)
