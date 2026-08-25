@@ -42,7 +42,7 @@ from backend import (
     tuning,
     waveform,
 )
-from backend import archive_flag, infrastructure, pages
+from backend import archive_flag, infrastructure, pages, review_priority
 from backend.auth import setup_auth
 from backend.sync import GIT_LOCK, SyncManager
 from anomalica_common import housekeeping as hk
@@ -781,6 +781,25 @@ class LocalIngestSource(IngestSource):
         ingests = self._dedup_by_source(ingests)
         ingests.sort(key=lambda x: (x.get("date", ""), x.get("title", "")))
         return ingests
+
+    def bodies(self, hashes: set[str]) -> dict[str, str]:
+        """Just the bodies, for callers that want prose and nothing else.
+
+        `get_ingest` assembles a whole per-record verdict - coverage sidecar,
+        digestibility, creator reconciliation - which is right for opening one
+        record and wasteful across the store: it was most of an 18-second
+        review-queue rebuild, and the queue rebuilds every time a review lands.
+        """
+        out: dict[str, str] = {}
+        for full_hash, (md_path, _fm) in self._scan().items():
+            if full_hash not in hashes:
+                continue
+            try:
+                _fm2, body, _raw = parse_frontmatter(md_path.read_text())
+            except OSError:
+                continue
+            out[full_hash] = body
+        return out
 
     def get_ingest(self, full_hash: str) -> dict | None:
         # Archived (store/v1/) records stay fetchable by full hash: the
@@ -1658,6 +1677,68 @@ def list_ingests() -> list[dict]:
     should return only public hashes to non-authenticated callers.
     """
     return source.list_ingests()
+
+
+_review_queue_cache: dict[str, object] = {}
+
+
+@app.get("/api/review-queue")
+def review_queue() -> JSONResponse:
+    """What to read next, best value for attention first.
+
+    Local-only, like the other Python-backed views: it reads the assimilator's
+    graph to work out what a record would feed, and a GitHub-backed deployment
+    has neither the graph nor a reviewer sitting in front of it.
+
+    Cached on the graph's mtime and the store's, because building the matcher
+    compiles a pattern over every page-worthy node and the answer only changes
+    when one of those two does.
+    """
+    if not isinstance(source, LocalIngestSource):
+        raise HTTPException(status_code=404, detail="Not found")
+
+    graph = review_priority.graph_db_path()
+    store = ingests_path / "store"
+    key = (
+        graph.stat().st_mtime_ns if graph.exists() else 0,
+        store.stat().st_mtime_ns if store.exists() else 0,
+    )
+    if _review_queue_cache.get("key") == key:
+        return JSONResponse(_review_queue_cache["value"])  # type: ignore[arg-type]
+
+    # Candidates are what Mark has still to read: not digested, and not already
+    # carrying a completed review. A record mid-review stays listed - partial
+    # coverage is a reason to finish it, not to hide it.
+    wanted = {
+        entry["content_hash"]
+        for entry in source.list_ingests()
+        if entry.get("content_hash")
+        and not entry.get("digested")
+        and not entry.get("digestible")
+    }
+    bodies = source.bodies(wanted)
+    candidates = list(bodies.items())
+    sidecars = {
+        content_hash: review_priority.load_sidecar(
+            store / f"{content_hash}.housekeeping.json"
+        )
+        for content_hash in bodies
+    }
+
+    page_worthy = review_priority.load_page_worthy(graph)
+    ranked = [
+        p.as_dict() for p in review_priority.rank(candidates, page_worthy, sidecars)
+    ]
+    value = {
+        "queue": ranked,
+        # Stated rather than inferred from an empty result: "no graph" and "no
+        # record reaches anything" are different answers and the second is a
+        # finding, while the first is a missing input.
+        "graph_available": page_worthy.available,
+    }
+    _review_queue_cache["key"] = key
+    _review_queue_cache["value"] = value
+    return JSONResponse(value)
 
 
 @app.get("/api/ingests/archived")
