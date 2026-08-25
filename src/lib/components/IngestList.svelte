@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { type IngestSummary, provenanceOf, isPubliclyViewable } from "$lib/api";
+  import { type IngestSummary, type ReviewPriority, provenanceOf, isPubliclyViewable } from "$lib/api";
   import { observedPercent } from "$lib/coverage";
 
   let {
@@ -9,6 +9,7 @@
     reviewedHashes = new Set(),
     needsVerifyHashes = new Set(),
     reviewedTimes = {},
+    priorities = {},
     dateField = "published",
     archived = false,
     onsort,
@@ -24,6 +25,9 @@
     reviewedHashes?: Set<string>;
     needsVerifyHashes?: Set<string>;
     reviewedTimes?: Record<string, string>;
+    /** Where each unreviewed record sits in the review queue. Absent for a
+     *  record that is reviewed, digested, or ranked before the queue loaded. */
+    priorities?: Record<string, ReviewPriority>;
     dateField?: "published" | "ingested" | "reviewed";
     archived?: boolean;
     onsort: (field: string) => void;
@@ -78,6 +82,13 @@
   </button>
   <button onclick={() => onsort("creator")} class="w-36 flex-none cursor-pointer hover:text-on-surface text-left" title="Sort by creator">
     Authors / Creators {sortBy === "creator" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
+  </button>
+  <button
+    onclick={() => onsort("priority")}
+    class="w-24 flex-none cursor-pointer hover:text-on-surface text-left"
+    title="Sort by what reading it is worth: entities it would feed, per minute of reading"
+  >
+    Worth {sortBy === "priority" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
   </button>
   <button onclick={() => onsort("digestible")} class="w-28 flex-none cursor-pointer hover:text-on-surface text-left" title="Sort by review coverage of the ingest (digestible at 100%)">
     Reviewed {sortBy === "digestible" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
@@ -169,6 +180,7 @@
             >{creator}</button>{#if idx < ingest.creators.length - 1}, {/if}
           {/each}
         </span>
+        {@render worth(priorities[ingest.content_hash])}
         <span
           class="w-28 flex-none flex items-center gap-1.5"
           title={`${observedPercent(ingest.observed_coverage)}% observed${ingest.digestible ? " - digestible" : " - not yet digestible"}`}
@@ -219,3 +231,34 @@
     </div>
   {/each}
 </div>
+
+{#snippet worth(p: ReviewPriority | undefined)}
+  <!-- What this record is worth reading next, in the two numbers that decide
+       it: how many page-worthy entities it would feed, and how long it takes.
+       Blank for anything already reviewed or digested - those are not in the
+       queue, and a number there would invite reading them again. -->
+  <span class="w-24 flex-none text-xs font-ui tabular-nums">
+    {#if !p}
+      <span class="text-on-surface-muted/30">&mdash;</span>
+    {:else if p.housekeeping_open}
+      <span
+        class="text-warning"
+        title="{p.housekeeping_open} housekeeping proposal{p.housekeeping_open === 1 ? '' : 's'} still open - its metadata may change under the review"
+      >on hold</span>
+    {:else if p.reach === 0}
+      <span
+        class="text-on-surface-muted"
+        title="Reaches nothing that already earns a page - {p.minutes} min to read"
+      >{p.minutes}m</span>
+    {:else}
+      <span
+        class="text-on-surface"
+        title={`Feeds ${p.reach} entit${p.reach === 1 ? "y" : "ies"} that already earn a page${p.high_bar ? ` (${p.high_bar} high-bar)` : ""}, for ${p.minutes} min of reading.\n\n${p.unlocks.join("\n")}`}
+      >
+        <span class="font-medium text-primary">{p.reach}</span><span class="text-on-surface-muted"
+          >&nbsp;&middot;&nbsp;{p.minutes}m</span
+        >
+      </span>
+    {/if}
+  </span>
+{/snippet}

@@ -141,3 +141,48 @@ describe("SpeakerManager - section filter eye", () => {
     expect(ids).toContain("David Marler");
   });
 });
+
+describe("SpeakerManager - external speakers", () => {
+  // The quoted voice is a SpeakerManager row like any other: their name is
+  // often a diarisation guess from the clip, and a reviewer who knows whose
+  // clip it is must be able to write it - from the sidebar, not only from
+  // inside the passage.
+  function make_external_props(overrides: MakePropsOverrides = {}) {
+    const props = makeProps(overrides);
+    return {
+      ...props,
+      externalRows: [{ id: "Speaker 7", total: 12 }],
+    };
+  }
+
+  it("an external row has a rename button that starts an edit", async () => {
+    const onrename = vi.fn();
+    const { getByTitle } = render(SpeakerManager, make_external_props({ onrename }));
+    const pencil = getByTitle("Rename this voice everywhere");
+    await fireEvent.click(pencil);
+    const input = document.querySelector<HTMLInputElement>("input.border-primary");
+    expect(input).not.toBeNull();
+    expect(input?.value).toBe("Speaker 7");
+  });
+
+  it("committing the edit calls onrename with the new name", async () => {
+    const onrename = vi.fn();
+    const { getByTitle } = render(SpeakerManager, make_external_props({ onrename }));
+    await fireEvent.click(getByTitle("Rename this voice everywhere"));
+    const input = document.querySelector<HTMLInputElement>("input.border-primary");
+    await fireEvent.input(input!, { target: { value: "Bob Lazar" } });
+    await fireEvent.keyDown(input!, { key: "Enter" });
+    expect(onrename).toHaveBeenCalledWith("Speaker 7", "Bob Lazar");
+  });
+
+  it("clicking the row (not the pencil) still jumps to the passage", async () => {
+    const onexternalgo = vi.fn();
+    const { getByTitle } = render(SpeakerManager, {
+      ...makeProps(),
+      externalRows: [{ id: "Speaker 7", total: 12 }],
+      onexternalgo: onexternalgo as unknown as AnyFn,
+    });
+    await fireEvent.click(getByTitle("Go to this voice's first quoted passage"));
+    expect(onexternalgo).toHaveBeenCalledWith("Speaker 7");
+  });
+});

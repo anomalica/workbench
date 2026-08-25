@@ -756,21 +756,50 @@
     </div>
     {#each externalRows as row}
       {@const isSelected = filteredSpeakers.has(row.id)}
-      <button
-        onclick={() => onexternalgo?.(row.id)}
-        class="w-full flex items-center gap-2 px-2 py-1.5 rounded text-sm text-left cursor-pointer transition-colors
+      <div
+        class="group flex items-center gap-2 px-2 py-1.5 rounded text-sm cursor-pointer transition-colors select-none
           {isSelected
             ? 'bg-primary-container/30 ring-1 ring-primary/30 text-on-surface'
             : 'text-on-surface-muted/70 hover:bg-surface-alt'}"
+        role="button"
+        tabindex="0"
+        onclick={() => { if (editingId !== row.id) onexternalgo?.(row.id); }}
+        onkeydown={(e) => { if (editingId !== row.id && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onexternalgo?.(row.id); } }}
         title="Go to this voice's first quoted passage"
       >
         <span
           class="flex-none w-2.5 h-2.5 rounded-full border border-current opacity-50"
           aria-hidden="true"
         ></span>
-        <span class="flex-1 min-w-0 truncate">{row.id}</span>
+        {#if editingId === row.id}
+          <div class="relative flex-1 min-w-0 flex items-center gap-1.5">
+            <input
+              bind:this={editInputEl}
+              type="text"
+              bind:value={editingValue}
+              onblur={commitEdit}
+              onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitEdit(); } else if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); } }}
+              onclick={(e) => e.stopPropagation()}
+              class="flex-1 min-w-0 bg-surface text-sm font-ui text-on-surface outline-none px-1 py-0.5 rounded border border-primary"
+            />
+            {@render anonymousToggle(editAnonymous, toggleEditAnonymous)}
+            {@render nameSuggestions(editSuggestions, takeEditSuggestion)}
+          </div>
+        {:else}
+          <span class="flex-1 min-w-0 truncate">{row.id}</span>
+          <button
+            onclick={(e) => { e.stopPropagation(); startEdit(row.id); }}
+            class="opacity-0 group-hover:opacity-100 cursor-pointer p-0.5 text-on-surface-muted hover:text-primary transition-opacity"
+            title="Rename this voice everywhere"
+          >
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+              <path stroke-linecap="round" stroke-linejoin="round" d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+            </svg>
+          </button>
+        {/if}
         <span class="flex-none text-[10px] font-mono tabular-nums text-on-surface-muted/50">{row.total}</span>
-      </button>
+      </div>
     {/each}
   </div>
 {/if}

@@ -1531,3 +1531,36 @@ export async function unseedTopic(name: string): Promise<void> {
   const res = await fetch(`/api/topics/seed/${encodeURIComponent(name)}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`Remove failed: ${res.status}`);
 }
+
+/** One record's place in the review queue: what reading it costs and what it
+ *  would feed. Server-computed - the ranking reads the knowledge graph, which
+ *  the browser has no access to. */
+export interface ReviewPriority {
+  content_hash: string;
+  /** Minutes to read the content, annotations stripped. */
+  minutes: number;
+  /** Distinct page-worthy entities the record names. */
+  reach: number;
+  high_bar: number;
+  /** Undecided housekeeping proposals. Non-zero means "not ready to read". */
+  housekeeping_open: number;
+  /** The entities it reaches, most-mentioned first - the "why" behind a row. */
+  unlocks: string[];
+  score: number;
+}
+
+export interface ReviewQueue {
+  queue: ReviewPriority[];
+  /** False when there is no knowledge graph behind the ranking, so the order is
+   *  reading cost alone. Stated rather than inferred from an empty result:
+   *  "no graph" and "nothing reaches a page" are different answers. */
+  graph_available: boolean;
+}
+
+export async function fetchReviewQueue(): Promise<ReviewQueue | null> {
+  // 404 on a deployment with no graph and no reviewer; the caller falls back to
+  // its usual ordering rather than showing an error for a missing luxury.
+  const res = await fetch("/api/review-queue");
+  if (!res.ok) return null;
+  return res.json();
+}

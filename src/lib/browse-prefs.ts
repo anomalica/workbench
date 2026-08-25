@@ -24,6 +24,7 @@ export const SORT_KEYS = [
   "digestible",
   "digested",
   "copyright",
+  "priority",
 ] as const;
 
 export const DATE_FIELDS = ["published", "ingested", "reviewed"] as const;

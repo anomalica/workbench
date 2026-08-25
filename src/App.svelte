@@ -10,6 +10,8 @@
     fetchMyRole,
     fetchProposals,
     fetchReviewedHashes,
+    fetchReviewQueue,
+    type ReviewPriority,
     fetchSyncStatus,
     STATIC_READS,
   } from "$lib/api";
@@ -209,6 +211,22 @@
     reviewedTimes = await fetchReviewedHashes();
   }
 
+  /** Where each unreviewed record sits in the review queue, keyed by hash.
+   *
+   *  Loaded once beside the list rather than on demand: the ranking is what the
+   *  "priority" sort orders by, so it has to be present before the first sort
+   *  rather than arriving after and reshuffling under the cursor. Absent on a
+   *  deployment with no graph, where the sort falls back to reading order. */
+  let priorities = $state<Record<string, ReviewPriority>>({});
+  let priorityGraphAvailable = $state(true);
+
+  async function loadPriorities() {
+    const queue = await fetchReviewQueue();
+    if (!queue) return;
+    priorityGraphAvailable = queue.graph_available;
+    priorities = Object.fromEntries(queue.queue.map((p) => [p.content_hash, p]));
+  }
+
   function setReviewed(hash: string, reviewed: boolean) {
     const next = { ...reviewedTimes };
     if (reviewed) next[hash] = new Date().toISOString();
@@ -268,7 +286,11 @@
       .sort((a, b) => {
         // In the Needs review view, the digest-blocked records (digested under
         // the old gate, not yet signed off) are the priority - always on top.
-        if (filterReviewed === "needs_review") {
+        // Except when the reviewer has asked for a specific order: those
+        // records are already digested, so they carry no queue position, and
+        // pinning them puts a block of unranked rows above the ranking that
+        // was just requested.
+        if (filterReviewed === "needs_review" && sortBy !== "priority") {
           const blockDelta =
             Number(b.digested && !b.digestible) - Number(a.digested && !a.digestible);
           if (blockDelta !== 0) return blockDelta;
@@ -289,6 +311,22 @@
         if (sortBy === "digested") {
           const cmp = Number(a.digested) - Number(b.digested);
           return sortAsc ? cmp : -cmp;
+        }
+        if (sortBy === "priority") {
+          // Descending by default: the point of this sort is the top of it.
+          // Records with no entry (already reviewed, or digested) score below
+          // everything ranked, so the queue floats above the done pile rather
+          // than interleaving with it.
+          const pa = priorities[a.content_hash];
+          const pb = priorities[b.content_hash];
+          const sa = pa ? pa.score : -1;
+          const sb = pb ? pb.score : -1;
+          if (sa !== sb) return sortAsc ? sa - sb : sb - sa;
+          // Equal value: the cheaper read first, which is the useful tiebreak
+          // when neither reaches a page.
+          const ma = pa ? pa.minutes : Infinity;
+          const mb = pb ? pb.minutes : Infinity;
+          return ma - mb;
         }
         if (sortBy === "date") {
           const ad = dateValueFor(a);
@@ -362,6 +400,10 @@
     loading = true;
     try {
       ingests = await fetchIngests();
+      // Not awaited: the ranking is a few seconds of server work on a cold
+      // cache and the list must not wait for it. The sort reads whatever has
+      // arrived, so the queue fills in rather than blocking the page.
+      loadPriorities();
       // Garbage-collect local drafts (doc/notes/observed/coverage/etc.) for
       // records no longer in the active corpus at all - dead weight silently
       // eating into the ~5MB per-origin localStorage quota that a live record's
@@ -1075,6 +1117,7 @@
           {:else if filteredIngests.length > 0}
             <IngestList
               ingests={filteredIngests}
+              {priorities}
               {sortBy}
               {sortAsc}
               {reviewedHashes}
