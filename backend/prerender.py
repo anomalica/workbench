@@ -119,6 +119,26 @@ def _gate_record_detail(detail: dict) -> dict:
     }
 
 
+def _gate_summary(summary: dict) -> dict:
+    """A gated record's LIST row with the possession-gate answer removed.
+
+    `source_hash` is the sha256 of the original file, and the edge accepts a bare
+    matching hash string as proof of possession - no upload. Publishing it for a
+    gated record therefore publishes the gate's own answer, and anyone can lift it
+    from the public index and unlock a copyrighted book.
+
+    `_gate_record_detail` has excluded it from record DETAIL since the allow-list
+    was written. The LIST was never gated at all, and the list is the easier file
+    to read: one request, every record. Fixing only the detail and reporting the
+    leak closed is exactly what happened here - the surface that was checked was
+    the surface that had been fixed.
+
+    Only gated records are stripped. A public record's `source_hash` is not a
+    secret: nothing is gated on it.
+    """
+    return {k: v for k, v in summary.items() if k != "source_hash"}
+
+
 def _gate_housekeeping(sidecar: dict) -> dict:
     """A gated record's housekeeping sidecar with items about non-public fields
     removed.
@@ -315,7 +335,13 @@ def _prerender_records(base: Path, only: set[str] | None = None) -> dict:
     from backend import server
 
     summaries = server.source.list_ingests()
-    _write(base / "ingests.json", summaries)  # the list = metadata only, no bodies
+    _write(
+        base / "ingests.json",
+        [
+            s if serves_verbatim(s.get("copyright_status")) else _gate_summary(s)
+            for s in summaries
+        ],
+    )  # the list = metadata only, no bodies, no gate answers
 
     _write(base / "housekeeping.json", _housekeeping_queue(summaries))
 
