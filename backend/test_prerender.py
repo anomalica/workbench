@@ -296,3 +296,40 @@ def test_prerender_records_only_renders_just_the_named_record(
     # ...but the list (cheap, reflects review state) is always written + has both.
     listed = json.loads((api / "ingests.json").read_text())
     assert {r["content_hash"] for r in listed} == {H_PUB, H_GATED}
+
+
+class TestListDoesNotLeakTheGateAnswer:
+    """`source_hash` is the sha256 of the original file, and the edge accepts a
+    bare matching hash as proof of possession - no upload. Publishing it for a
+    gated record publishes the gate's own answer.
+
+    It was excluded from record DETAIL by the frontmatter allow-list but never
+    from the LIST, which is the easier file to read: one request, every record.
+    Sixteen restricted books shipped it to the public CDN."""
+
+    def test_a_gated_record_row_carries_no_source_hash(self):
+        from backend.prerender import _gate_summary
+
+        row = {
+            "content_hash": "a" * 64,
+            "title": "Communion",
+            "copyright_status": "restricted",
+            "source_hash": "sha256:" + "b" * 64,
+        }
+        gated = _gate_summary(row)
+        assert "source_hash" not in gated
+        # Everything else survives - this is a removal, not a whitelist.
+        assert gated["title"] == "Communion"
+        assert gated["content_hash"] == row["content_hash"]
+
+    def test_only_gated_records_are_stripped(self):
+        # A public record's source_hash is not a secret; nothing gates on it.
+        from backend.prerender import serves_verbatim
+
+        assert serves_verbatim("public_domain") is True
+        assert serves_verbatim("publicly_accessible") is True
+        assert serves_verbatim("restricted") is False
+        assert serves_verbatim("licensed") is False
+        # Fail-safe: an unknown or absent status is gated.
+        assert serves_verbatim(None) is False
+        assert serves_verbatim("something_new") is False
