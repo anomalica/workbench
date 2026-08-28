@@ -692,6 +692,54 @@
     setTimeout(() => _findCardWithRetry(claimId, attempts - 1, onFound), 80);
   }
 
+  /** Hold a card in view while the surrounding list settles.
+   *
+   *  Scrolling to it once is not enough. The digest renders more than a
+   *  thousand cards, and any that resolve their height ABOVE the target after
+   *  the scroll push it upwards - measured 246px above the viewport top on a
+   *  cold load, so a reader following a citation landed on a column of cards
+   *  with the one they came for scrolled off the screen. The single scroll had
+   *  worked; the page moved afterwards.
+   *
+   *  So re-assert it until the position stops changing, then stop. Bounded by
+   *  a frame budget rather than a timeout, because the failure is layout
+   *  settling rather than time passing, and give up quietly if the reader
+   *  scrolls away themselves - they have taken over. */
+  function _keepInView(el: HTMLElement, frames = 40) {
+    let lastTop = Number.NaN;
+    let stable = 0;
+    let userMoved = false;
+    const onWheel = () => {
+      userMoved = true;
+    };
+    window.addEventListener("wheel", onWheel, { passive: true, once: true });
+    window.addEventListener("touchstart", onWheel, { passive: true, once: true });
+
+    const tick = (left: number) => {
+      if (userMoved || left <= 0) {
+        window.removeEventListener("wheel", onWheel);
+        window.removeEventListener("touchstart", onWheel);
+        return;
+      }
+      const top = el.getBoundingClientRect().top;
+      if (Math.abs(top - lastTop) < 1) {
+        stable += 1;
+        // Three consecutive still frames: the list has stopped moving.
+        if (stable >= 3) {
+          window.removeEventListener("wheel", onWheel);
+          window.removeEventListener("touchstart", onWheel);
+          return;
+        }
+      } else {
+        stable = 0;
+        el.scrollIntoView({ behavior: "auto", block: "center" });
+      }
+      lastTop = top;
+      requestAnimationFrame(() => tick(left - 1));
+    };
+    requestAnimationFrame(() => tick(frames));
+  }
+
   function _scrollToClaimFromHash() {
     if (typeof window === "undefined" || !digest) return;
     const h = window.location.hash;
@@ -749,9 +797,13 @@
     requestAnimationFrame(() => {
       _findCardWithRetry(claimId, 25, (el) => {
         el.scrollIntoView({ behavior: "smooth", block: "center" });
+        // The URL fragment drove this, so the card can say so - "the claim you
+        // followed" is only true when the reader actually followed a link.
+        el.classList.add("claim-deeplinked");
         // Brief entry pulse on top of the persistent selection state.
         el.classList.add("claim-flash");
         setTimeout(() => el.classList.remove("claim-flash"), 1800);
+        _keepInView(el);
       });
     });
   }
@@ -777,6 +829,14 @@
       "[data-claim-id].claim-selected",
     );
     previouslySelected.forEach((el) => el.classList.remove("claim-selected"));
+    // The "followed" label goes with the selection. Left behind, it would claim
+    // a reader arrived at a card they have since navigated away from - the
+    // badge has to stay true or it is worse than no badge.
+    document
+      .querySelectorAll<HTMLElement>("[data-claim-id].claim-deeplinked")
+      .forEach((el) => {
+        if (el.dataset.claimId !== id) el.classList.remove("claim-deeplinked");
+      });
     if (!id) return;
     const el = document.querySelector<HTMLElement>(
       `[data-claim-id="${CSS.escape(id)}"]`,

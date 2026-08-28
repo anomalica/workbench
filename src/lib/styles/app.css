@@ -384,12 +384,58 @@ body {
 
 /* Persistent selection: stays applied while the URL hash points at this
    claim. Cleared by clicking outside the card or by the hash changing to
-   something else. Distinct enough from the flash to be visible after the
-   pulse decays, subtle enough that it doesn't fight the card's own
-   styling. */
+   something else.
+
+   Deliberately louder than it used to be. It was a 10% tint and a
+   half-transparent ring - enough for a reviewer who knew what they had just
+   clicked, and invisible to the reader this path now serves: someone who
+   followed a citation from a published page and has never seen this screen.
+   Among a column of identically-shaped cards, "slightly tinted" is not an
+   answer to "which one did I come for".
+
+   No `!important` on the background any more. It beat the .claim-flash
+   keyframes, so the entry pulse animated its box-shadow while its background
+   was pinned - half the motion the flash exists to provide. */
 .claim-selected {
-  background-color: color-mix(in srgb, var(--color-primary) 10%, transparent) !important;
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 50%, transparent);
+  background-color: color-mix(in srgb, var(--color-primary) 16%, transparent);
+  box-shadow: 0 0 0 2px var(--color-primary);
+}
+
+/* Followed from a citation. Only set when the URL fragment drove the
+   selection, so it says something true: this is the claim you clicked, not
+   merely the one that happens to be selected. The label is the reader's
+   confirmation that they arrived at the right place - the thing Mark could
+   not see - and it names the act rather than instructing them to review
+   anything, since most people on this path are not reviewers. */
+.claim-deeplinked {
+  position: relative;
+  border-left: 3px solid var(--color-primary);
+}
+
+/* Inside the card, not floating above its top edge. Straddling the edge put
+   the label behind the neighbouring card - no ancestor clips it, the cards
+   simply overlap - and a label you cannot read is worse than none, because the
+   marker it belongs to still looks deliberate. Inside, it cannot collide with
+   anything but its own card, and it sits in the same register as the card's
+   existing chips. */
+.claim-deeplinked {
+  padding-top: 1.9rem;
+}
+
+.claim-deeplinked::before {
+  content: "The claim you followed";
+  position: absolute;
+  top: 0.55rem;
+  left: 0.75rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 0.25rem;
+  background-color: var(--color-primary);
+  color: var(--color-on-primary);
+  font-family: var(--font-ui, inherit);
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
 }
 
 /* Custom Highlight for claim-quote: paints over the matching text range
