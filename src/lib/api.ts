@@ -1558,9 +1558,21 @@ export interface ReviewQueue {
 }
 
 export async function fetchReviewQueue(): Promise<ReviewQueue | null> {
-  // 404 on a deployment with no graph and no reviewer; the caller falls back to
-  // its usual ordering rather than showing an error for a missing luxury.
-  const res = await fetch("/api/review-queue");
-  if (!res.ok) return null;
-  return res.json();
+  // Local-only by construction: the ranking reads the knowledge graph, which a
+  // static deployment does not carry. Not called there at all.
+  //
+  // The content-type guard is not belt-and-braces, it is the actual failure. A
+  // static host answers an unknown path with the SPA shell and status 200, so
+  // `res.ok` is TRUE and `res.json()` then throws on "<!doctype" - an uncaught
+  // rejection on every page load. A missing endpoint is not always a 404.
+  if (STATIC_READS) return null;
+  try {
+    const res = await fetch("/api/review-queue");
+    if (!res.ok) return null;
+    if (!(res.headers.get("content-type") || "").includes("application/json")) return null;
+    return await res.json();
+  } catch {
+    // A ranking is a convenience; failing to get one must never break the list.
+    return null;
+  }
 }
