@@ -1,6 +1,6 @@
 <script lang="ts">
   import { highlightDisplay } from "$lib/highlight-display.svelte";
-  import { SUBTLE_HL, bandStyle, highlightColour } from "$lib/highlight-paint";
+  import { SUBTLE_HL, bandStyle, fadedColour, highlightColour } from "$lib/highlight-paint";
   import { untrack, onMount } from "svelte";
   import {
     saveScrollAnchor,
@@ -1570,15 +1570,22 @@
     // reviewer is hovering a wall of identically-marked text with no sign of
     // what a click would take.
     let subtle = highlightDisplay.subtle;
+    let paint = cols;
     if (pickingFrom !== null && cols?.length) {
       const ids = highlightIdsByWord.get(g);
       const lit =
         !!ids &&
         (ids.includes(pickingFrom) ||
           (hoverHighlightId !== null && ids.includes(hoverHighlightId)));
-      subtle = !lit;
+      // Each highlight keeps its OWN colour, faded. Collapsing the rest to one
+      // hairline merged them all, so at the exact moment the reviewer is asked
+      // to choose a highlight they could no longer tell two apart. Full colours
+      // rather than the reading treatment for the same reason: picking is a
+      // markup action and needs the markup view.
+      subtle = false;
+      paint = lit ? cols : cols.map(fadedColour);
     }
-    applyWordHighlight(el, subtle && cols?.length ? [SUBTLE_HL] : cols, subtle);
+    applyWordHighlight(el, subtle && paint?.length ? [SUBTLE_HL] : paint, subtle);
     c.toggle("wt-highlight", cols !== undefined);
     c.toggle("wt-cited", spanNoteWordSet.has(g) || citedWorkWords.has(g));
     c.toggle("wt-markup-focus", focusWordSet.has(g));

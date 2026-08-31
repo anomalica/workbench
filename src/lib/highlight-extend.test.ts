@@ -131,3 +131,24 @@ describe("both parts of an extended highlight get one colour", () => {
     expect(first.get("a1")?.fromWord).toBe(2);
   });
 });
+
+describe("fading a highlight while another is being picked", () => {
+  it("keeps the colour and only drops its opacity", async () => {
+    // The reading treatment collapses every highlight to one hairline in the
+    // text's own colour. That is right for "is this highlighted" and wrong for
+    // "which one is this" - and picking asks the second question, at the moment
+    // the reviewer has to choose between them.
+    const { fadedColour, HL_PALETTE } = await import("./highlight-paint");
+    for (const c of HL_PALETTE) {
+      const faded = fadedColour(c);
+      expect(faded).toContain(c); // the hue survives
+      expect(faded).toContain("50%");
+      expect(faded).toContain("transparent");
+    }
+  });
+
+  it("gives two different highlights two different faded colours", async () => {
+    const { fadedColour, highlightColour } = await import("./highlight-paint");
+    expect(fadedColour(highlightColour(0))).not.toBe(fadedColour(highlightColour(1)));
+  });
+});

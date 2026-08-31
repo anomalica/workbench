@@ -26,6 +26,22 @@ export const SUBTLE_BAND_H = 1;
  *  colour. Which highlight it is does not matter yet; that it IS one does. */
 export const SUBTLE_HL = "color-mix(in srgb, currentColor 30%, transparent)";
 
+/** The same colour, half visible.
+ *
+ *  For picking modes, where the reviewer needs to see WHICH highlight is which
+ *  while one of them is singled out. The reading-mode treatment ([SUBTLE_HL])
+ *  is wrong here: it collapses every highlight to one hairline in the text's
+ *  colour, which is right when the question is "is this highlighted" and wrong
+ *  when it is "which one is this" - all of them merge and the reviewer cannot
+ *  tell two apart at the moment they are being asked to choose one.
+ *
+ *  Alpha rather than a lighter shade, so the hue that identifies the highlight
+ *  survives at any background lightness - a mix toward white vanishes in dark
+ *  mode. */
+export function fadedColour(colour: string): string {
+  return `color-mix(in srgb, ${colour} 50%, transparent)`;
+}
+
 /** The colour for the nth highlight in a record, cycling. */
 export function highlightColour(index: number): string {
   return HL_PALETTE[index % HL_PALETTE.length];
