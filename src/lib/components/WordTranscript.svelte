@@ -2058,12 +2058,23 @@
    *  rows on the run's first word opened two menus at once. */
   let clipPicker = $state<number | null>(null);
 
+  /** Opening any menu pauses playback.
+   *
+   *  Every one of them asks the reviewer to read options, find a speaker, or go
+   *  and click another highlight - none of which is quick, and audio running
+   *  underneath is a fight rather than a nuisance. Routed through one function
+   *  so a menu added later cannot forget to do it. */
+  function openingMenu() {
+    onpause?.();
+  }
+
   function toggleClipPicker(run: SpeakerRun) {
     anchor = null;
     range = null;
     pickerOpen = false;
     headerPicker = null;
     clipPicker = clipPicker === run.startWord ? null : run.startWord;
+    if (clipPicker !== null) openingMenu();
   }
 
   function chooseClipSpeaker(run: SpeakerRun, name: string) {
@@ -2079,6 +2090,7 @@
     range = null;
     pickerOpen = false;
     headerPicker = headerPicker === run.startWord ? null : run.startWord;
+    if (headerPicker !== null) openingMenu();
   }
 
   function chooseRunSpeaker(run: SpeakerRun, name: string) {
@@ -2357,6 +2369,7 @@
               e.stopPropagation();
               if (!selectionInOneRun) return;
               pickerOpen = !pickerOpen;
+              if (pickerOpen) openingMenu();
             }}
             disabled={!selectionInOneRun}
             aria-label="Assign speaker"
@@ -2416,6 +2429,7 @@
               const box = (e.currentTarget as HTMLElement).getBoundingClientRect();
               menuFlipped = box.left + 220 > window.innerWidth;
               markupOpen = !markupOpen;
+              if (markupOpen) openingMenu();
             }}
             aria-label="Markup"
             aria-expanded={markupOpen}
@@ -2455,17 +2469,17 @@
             {@const hit = highlightAtWord(range.from)}
             <button
               onclick={() => { extendFor = hit; onpause?.(); clearSelection(); }}
-              class="flex items-center gap-2 w-full text-left px-3 py-1.5 text-xs font-ui cursor-pointer transition-colors hover:bg-primary-container/30 text-on-surface"
+              class="flex items-center gap-2 w-full text-left pl-7 pr-3 py-1.5 text-xs font-ui cursor-pointer transition-colors hover:bg-primary-container/30 text-on-surface-secondary"
               title="Add another part to this highlight - one highlight, one claim, in pieces. Select the next part."
             >
               Extend highlight
             </button>
             <button
               onclick={() => { contextFor = hit; onpause?.(); clearSelection(); }}
-              class="flex items-center gap-2 w-full text-left px-3 py-1.5 text-xs font-ui cursor-pointer transition-colors hover:bg-primary-container/30 text-on-surface"
-              title="This highlight needs an earlier one to make sense (e.g. it says 'he' - link the highlight that names him). Click it next."
+              class="flex items-center gap-2 w-full text-left pl-7 pr-3 py-1.5 text-xs font-ui cursor-pointer transition-colors hover:bg-primary-container/30 text-on-surface-secondary"
+              title="This highlight needs another one to make sense (e.g. it says 'he' - link the highlight that names him). Click it next."
             >
-              Link to previous highlight
+              Link to other highlight
             </button>
           {/if}
           <button
@@ -2669,7 +2683,7 @@
 {#if contextFor !== null}
   <div class="flex-none flex items-center gap-2 px-4 py-1.5 bg-primary/10 border-b border-primary/30">
     <span class="text-xs font-ui text-on-surface">
-      Click a word inside the earlier highlight that <strong>{contextFor}</strong> depends on.
+      Click a word inside the other highlight that <strong>{contextFor}</strong> depends on.
     </span>
     <button
       onclick={() => (contextFor = null)}
