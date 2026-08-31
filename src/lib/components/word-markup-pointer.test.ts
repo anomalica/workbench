@@ -11,7 +11,7 @@
  *    mode keeps its immediate seek-on-press, unchanged.
  *
  * 3. THE CONTEXT-PICK CLICK IS CONSUMED: clicking the earlier highlight to
- *    complete a "Needs context" link creates the edge and must NOT also start
+ *    complete a "Link to previous highlight" edge creates the edge and must NOT also start
  *    playback from there.
  *
  * All three hinge on pointer coordinates carried by the events themselves, so
@@ -213,7 +213,7 @@ describe("the context-pick click is consumed, not played", () => {
     // click the reviewer makes.
     await fireEvent.click(screen.getByLabelText("Markup"));
     await settle();
-    await fireEvent.click(screen.getByText("Needs context"));
+    await fireEvent.click(screen.getByText("Link to previous highlight"));
     await settle();
     onseek.mockClear();
     // The first click's press legitimately paused; this test is about the second.
@@ -235,7 +235,7 @@ describe("the context-pick click is consumed, not played", () => {
     // click the reviewer makes.
     await fireEvent.click(screen.getByLabelText("Markup"));
     await settle();
-    await fireEvent.click(screen.getByText("Needs context"));
+    await fireEvent.click(screen.getByText("Link to previous highlight"));
     await settle();
     onseek.mockClear();
 
@@ -275,4 +275,29 @@ describe("holding a word, without dragging", () => {
     await settle();
     expect(onseek).toHaveBeenCalledTimes(1);
   });
+});
+
+describe("entering a picking mode pauses the video", () => {
+  // Mark: "it's frustrating that it keeps playing the video". Both modes ask the
+  // reviewer to go and find something on screen, which takes long enough that
+  // audio running underneath is a fight rather than a nuisance.
+  beforeEach(() => {
+    Element.prototype.scrollTo = vi.fn();
+    Element.prototype.scrollIntoView = vi.fn();
+  });
+
+  for (const label of ["Extend highlight", "Link to previous highlight"]) {
+    it(`"${label}" pauses on entry`, async () => {
+      const onpause = vi.fn();
+      render(WordTranscript, { props: props({ onpause }) });
+      await settle();
+      await click(3);
+      await fireEvent.click(screen.getByLabelText("Markup"));
+      await settle();
+      onpause.mockClear();
+      await fireEvent.click(screen.getByText(label));
+      await settle();
+      expect(onpause).toHaveBeenCalled();
+    });
+  }
 });
