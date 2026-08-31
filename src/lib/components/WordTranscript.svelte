@@ -1564,7 +1564,20 @@
     // Reading collapses any number of overlapping highlights to ONE hairline:
     // the signal is "this is highlighted", not which one it is. Asking for the
     // colours restores the per-highlight bands.
-    const subtle = highlightDisplay.subtle;
+    // While picking, the highlight being worked FROM stays lit and everything
+    // else dims, so the transcript answers "which one am I on?" - and whichever
+    // highlight is under the cursor lights up as the candidate. Without it the
+    // reviewer is hovering a wall of identically-marked text with no sign of
+    // what a click would take.
+    let subtle = highlightDisplay.subtle;
+    if (pickingFrom !== null && cols?.length) {
+      const ids = highlightIdsByWord.get(g);
+      const lit =
+        !!ids &&
+        (ids.includes(pickingFrom) ||
+          (hoverHighlightId !== null && ids.includes(hoverHighlightId)));
+      subtle = !lit;
+    }
     applyWordHighlight(el, subtle && cols?.length ? [SUBTLE_HL] : cols, subtle);
     c.toggle("wt-highlight", cols !== undefined);
     c.toggle("wt-cited", spanNoteWordSet.has(g) || citedWorkWords.has(g));
@@ -1643,6 +1656,10 @@
       {
         const id = el ? highlightAtWord(Number(el.dataset.wordIndex)) : null;
         hoverChainId = id && contextIndex.isChained(id) ? id : null;
+        // Tracked for every highlight, not only chained ones: while picking, the
+        // reviewer needs to see WHICH highlight is under the cursor before
+        // committing to it.
+        hoverHighlightId = id;
       }
       return;
     }
@@ -1675,6 +1692,10 @@
   // `hoverChainId` changes only when the hover crosses a highlight boundary, so
   // sweeping the cursor across plain words costs one Map lookup per word.
   let hoverChainId = $state<string | null>(null);
+  /** The highlight under the cursor, whatever it is. */
+  let hoverHighlightId = $state<string | null>(null);
+  /** The highlight a picking mode started from, if any. */
+  let pickingFrom = $derived(contextFor ?? extendFor);
   let hoverChainWords = $derived.by(() => {
     const s = new Set<number>();
     if (!hoverChainId) return s;
@@ -1720,6 +1741,8 @@
     void styleEpoch;
     void highlightColorsByWord; // re-apply bands when a highlight is added/cleared
     void highlightDisplay.subtle; // ...and when the reviewer asks for colours
+    void pickingFrom; // dim the rest while picking, restore when the mode ends
+    void hoverHighlightId; // and light whichever highlight is under the cursor
     void spanNoteWordSet; // re-apply tint when a span note is added/cleared/re-ranged
     void spanNoteTextByWord; // and the hover text when its words change
     void citedWorkWords; // and the cited-title underline
@@ -2468,18 +2491,18 @@
           {#if range && highlightAtWord(range.from)}
             {@const hit = highlightAtWord(range.from)}
             <button
-              onclick={() => { extendFor = hit; onpause?.(); clearSelection(); }}
-              class="flex items-center gap-2 w-full text-left pl-7 pr-3 py-1.5 text-xs font-ui cursor-pointer transition-colors hover:bg-primary-container/30 text-on-surface-secondary"
-              title="Add another part to this highlight - one highlight, one claim, in pieces. Select the next part."
-            >
-              Extend highlight
-            </button>
-            <button
               onclick={() => { contextFor = hit; onpause?.(); clearSelection(); }}
               class="flex items-center gap-2 w-full text-left pl-7 pr-3 py-1.5 text-xs font-ui cursor-pointer transition-colors hover:bg-primary-container/30 text-on-surface-secondary"
               title="This highlight needs another one to make sense (e.g. it says 'he' - link the highlight that names him). Click it next."
             >
               Link to other highlight
+            </button>
+            <button
+              onclick={() => { extendFor = hit; onpause?.(); clearSelection(); }}
+              class="flex items-center gap-2 w-full text-left pl-7 pr-3 py-1.5 text-xs font-ui cursor-pointer transition-colors hover:bg-primary-container/30 text-on-surface-secondary"
+              title="Add another part to this highlight - one highlight, one claim, in pieces. Select the next part."
+            >
+              Extend highlight
             </button>
           {/if}
           <button
