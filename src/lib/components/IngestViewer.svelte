@@ -5194,6 +5194,7 @@
             oneventnoteedit={(g, ordinal, text) => doc.editWordNote(g, ordinal, text)}
             oneventnoteremove={(g, ordinal) => doc.removeWordNote(g, ordinal)}
             onhighlight={(from, to) => doc.addWordHighlight(from, to)}
+            onhighlightextend={(id, from, to) => doc.extendWordHighlight(id, from, to)}
             onclearhighlight={(from, to) => doc.clearWordHighlights(from, to)}
             onspannote={(from, to, text) => doc.addWordSpanNote(from, to, text)}
             onhighlightcontext={(of, needs) => doc.addHighlightContext(of, needs)}

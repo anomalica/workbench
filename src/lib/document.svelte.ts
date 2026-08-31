@@ -482,6 +482,49 @@ export class DocumentStore {
   /** Highlight the inclusive word range [from, to] in a PWTS body: mint a fresh
    *  id and write the inline `{{highlight-start/end: id}}` marker pair around the
    *  words. Overlap-capable - a new highlight never disturbs an existing one. */
+  /** Add another part to an existing highlight: same id, a second range.
+   *
+   *  The evidence for one claim is often not contiguous - the part that matters
+   *  sits at the top and bottom of a paragraph with unrelated material between.
+   *  A highlight is the unit of expected extraction, so covering the whole
+   *  paragraph tells the grader "one claim from all of this" and stops saying
+   *  which (ingest-format.md, "A highlight may be EXTENDED").
+   *
+   *  Mints NO id - that is the point of it - so the overlay counter, the
+   *  never-reuse guarantee and any cross-record link addressing this highlight
+   *  are all untouched. */
+  extendWordHighlight(id: string, from: number, to: number) {
+    const [fm, body] = splitFrontmatter(this.current);
+    const parsed = parseWords(body);
+    const lo = Math.min(from, to);
+    const hi = Math.max(from, to);
+    if (lo < 0 || hi >= parsed.words.length) return;
+    // Refuse an id the record does not already carry: extending something that
+    // is not there would mint a highlight by the back door, bypassing the
+    // counter that keeps ids unique.
+    if (!parsed.highlights.some((h) => h.id === id)) return;
+    // Overlapping an existing part of the SAME highlight would serialise as a
+    // nested open of one id, which the parser cannot pair up. Parts are
+    // disjoint by construction.
+    if (parsed.highlights.some((h) => h.id === id && lo <= h.toWord && hi >= h.fromWord)) return;
+    const highlights = [...parsed.highlights, { id, fromWord: lo, toWord: hi }];
+    const result =
+      fm +
+      serializeWords(
+        parsed.words,
+        parsed.runs,
+        parsed.lineEndWords,
+        parsed.preamble,
+        highlights,
+        parsed.spanNotes,
+        parsed.highlightContexts,
+        parsed.links,
+        parsed.externals,
+        parsed.citedWorks,
+      );
+    if (result !== this.current) this.pushEdit(result);
+  }
+
   addWordHighlight(from: number, to: number) {
     const [fm, body] = splitFrontmatter(this.current);
     const parsed = parseWords(body);

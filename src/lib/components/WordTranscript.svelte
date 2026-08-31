@@ -88,6 +88,7 @@
     oneventnoteedit,
     oneventnoteremove,
     onhighlight,
+    onhighlightextend,
     onclearhighlight,
     onspannote,
     onspannoteedit,
@@ -194,6 +195,8 @@
     oneventnoteremove?: (gIndex: number, ordinal: number) => void;
     /** Highlight the selected word range [from, to] (mint a new highlight). */
     onhighlight?: (from: number, to: number) => void;
+    /** Add another part to an existing highlight - same id, second range. */
+    onhighlightextend?: (id: string, from: number, to: number) => void;
     /** Clear every highlight overlapping the selected word range [from, to]. */
     onclearhighlight?: (from: number, to: number) => void;
     /** Attach a span note (free text) over the selected word range [from, to]. */
@@ -302,7 +305,15 @@
     return m;
   });
 
-  let highlightById = $derived(new Map(parsed.highlights.map((h) => [h.id, h])));
+  /** First part of each highlight, by id. Keyed on FIRST rather than last so
+   *  "go to this highlight" lands at its beginning: an extended highlight has
+   *  several ranges under one id, and a plain Map from the array would keep
+   *  whichever came last. */
+  let highlightById = $derived.by(() => {
+    const m = new Map<string, (typeof parsed.highlights)[number]>();
+    for (const h of parsed.highlights) if (!m.has(h.id)) m.set(h.id, h);
+    return m;
+  });
 
   let contextIndex = $derived(buildContextIndex(parsed.highlightContexts));
 
@@ -575,8 +586,15 @@
   // text) first.
   let highlightColorsByWord = $derived.by(() => {
     const cols = new Map<number, string[]>();
-    parsed.highlights.forEach((h, i) => {
-      const colour = highlightColour(i);
+    // Colour is keyed on the ID's first appearance, not the array index. An
+    // extended highlight is several ranges sharing one id, and indexing the
+    // array paints its parts in DIFFERENT colours - so one highlight reads as
+    // two unrelated ones, which is the whole thing extend exists to avoid.
+    const colourIndexOf = new Map<string, number>();
+    for (const h of parsed.highlights)
+      if (!colourIndexOf.has(h.id)) colourIndexOf.set(h.id, colourIndexOf.size);
+    parsed.highlights.forEach((h) => {
+      const colour = highlightColour(colourIndexOf.get(h.id) ?? 0);
       for (let g = h.fromWord; g <= h.toWord; g++) {
         const list = cols.get(g) ?? [];
         list.push(colour);
@@ -826,6 +844,9 @@
   // to be cheap or reviewers write big sloppy highlights instead of small chained
   // ones, which is the behaviour the feature exists to encourage.
   let contextFor = $state<string | null>(null);
+  /** The highlight being extended, while picking its next part. Distinct from
+   *  `contextFor`: that one links two highlights, this one adds a range to one. */
+  let extendFor = $state<string | null>(null);
 
   let anchorRestored = false;
   // Last currentTime the playback-follow acted on, to tell a forward tick (follow)
@@ -1836,7 +1857,7 @@
     // A click while picking context is CONSUMED by the gesture (it completes or
     // cancels the link) - it must not also move playback. The reviewer is
     // pointing at the earlier highlight, not asking to hear it.
-    const pickingContext = contextFor !== null;
+    const pickingContext = contextFor !== null || extendFor !== null;
     selectWord(g, false);
     dragging = true;
     // The EVENT's clock, not the wall clock: the gap that matters is between
@@ -1910,6 +1931,14 @@
     }
     dragging = false;
     pressOrigin = null;
+    // A completed selection IS the answer while extending, so apply it and
+    // leave the mode rather than opening the markup menu again - the reviewer
+    // already said what they were doing when they chose "Extend highlight".
+    if (extendFor !== null && range) {
+      onhighlightextend?.(extendFor, range.from, range.to);
+      extendFor = null;
+      clearSelection();
+    }
   }
 
   function clearSelection() {
@@ -2425,11 +2454,18 @@
           {#if range && highlightAtWord(range.from)}
             {@const hit = highlightAtWord(range.from)}
             <button
-              onclick={() => { contextFor = hit; clearSelection(); }}
+              onclick={() => { extendFor = hit; onpause?.(); clearSelection(); }}
+              class="flex items-center gap-2 w-full text-left px-3 py-1.5 text-xs font-ui cursor-pointer transition-colors hover:bg-primary-container/30 text-on-surface"
+              title="Add another part to this highlight - one highlight, one claim, in pieces. Select the next part."
+            >
+              Extend highlight
+            </button>
+            <button
+              onclick={() => { contextFor = hit; onpause?.(); clearSelection(); }}
               class="flex items-center gap-2 w-full text-left px-3 py-1.5 text-xs font-ui cursor-pointer transition-colors hover:bg-primary-container/30 text-on-surface"
               title="This highlight needs an earlier one to make sense (e.g. it says 'he' - link the highlight that names him). Click it next."
             >
-              Needs context
+              Link to previous highlight
             </button>
           {/if}
           <button
@@ -2633,10 +2669,22 @@
 {#if contextFor !== null}
   <div class="flex-none flex items-center gap-2 px-4 py-1.5 bg-primary/10 border-b border-primary/30">
     <span class="text-xs font-ui text-on-surface">
-      Click the earlier highlight that <strong>{contextFor}</strong> needs for context.
+      Click a word inside the earlier highlight that <strong>{contextFor}</strong> depends on.
     </span>
     <button
       onclick={() => (contextFor = null)}
+      class="ml-auto text-xs font-ui text-on-surface-muted hover:text-on-surface cursor-pointer"
+    >Cancel</button>
+  </div>
+{/if}
+
+{#if extendFor !== null}
+  <div class="flex-none flex items-center gap-2 px-4 py-1.5 bg-primary/10 border-b border-primary/30">
+    <span class="text-xs font-ui text-on-surface">
+      Select the next part of highlight <strong>{extendFor}</strong>. It stays one highlight.
+    </span>
+    <button
+      onclick={() => (extendFor = null)}
       class="ml-auto text-xs font-ui text-on-surface-muted hover:text-on-surface cursor-pointer"
     >Cancel</button>
   </div>
