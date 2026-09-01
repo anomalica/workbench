@@ -45,6 +45,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import datetime
 import shutil
 from pathlib import Path
 
@@ -221,9 +222,24 @@ def snapshot_dir() -> Path:
     )
 
 
+def _json_default(value):
+    """Dates as ISO strings.
+
+    YAML parses a bare `2026-01-26` into a `datetime.date`, which `json.dumps`
+    refuses - so ONE digest carrying `release.release_date` unquoted aborted the
+    whole prerender with `Object of type date is not JSON serializable`, taking
+    every other record's snapshot down with it. The reader never sees a date
+    object either way; this just stops one record's YAML style from being able
+    to fail the build.
+    """
+    if isinstance(value, (datetime.date, datetime.datetime)):
+        return value.isoformat()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
 def _write(path: Path, data) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data))
+    path.write_text(json.dumps(data, default=_json_default))
 
 
 def prerender(out: Path | None = None) -> dict:

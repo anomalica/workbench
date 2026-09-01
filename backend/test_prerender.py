@@ -333,3 +333,39 @@ class TestListDoesNotLeakTheGateAnswer:
         # Fail-safe: an unknown or absent status is gated.
         assert serves_verbatim(None) is False
         assert serves_verbatim("something_new") is False
+
+
+class TestDatesDoNotFailTheBuild:
+    """One digest carrying an unquoted `release_date` aborted the entire
+    prerender - `Object of type date is not JSON serializable` - taking every
+    other record's snapshot with it. YAML parses a bare 2026-01-26 into a
+    datetime.date and json.dumps refuses it."""
+
+    def test_a_date_serialises_as_iso(self, tmp_path):
+        import datetime
+        import json
+
+        from backend.prerender import _write
+
+        out = tmp_path / "x.json"
+        _write(out, {"release_date": datetime.date(2026, 1, 26)})
+        assert json.loads(out.read_text()) == {"release_date": "2026-01-26"}
+
+    def test_a_datetime_serialises_too(self, tmp_path):
+        import datetime
+        import json
+
+        from backend.prerender import _write
+
+        out = tmp_path / "y.json"
+        _write(out, {"at": datetime.datetime(2026, 1, 26, 9, 30)})
+        assert json.loads(out.read_text())["at"].startswith("2026-01-26T09:30")
+
+    def test_something_genuinely_unserialisable_still_raises(self, tmp_path):
+        # The default must not swallow a real bug by stringifying anything.
+        import pytest
+
+        from backend.prerender import _write
+
+        with pytest.raises(TypeError):
+            _write(tmp_path / "z.json", {"bad": object()})
