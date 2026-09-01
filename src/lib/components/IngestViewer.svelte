@@ -1,5 +1,6 @@
 <script lang="ts">
   import { SUBTLE_HL, bandStyleAttribute, highlightColour } from "$lib/highlight-paint";
+  import { DOCUMENT_TYPES, recordType } from "$lib/document-types";
   import CopyrightControl from "./CopyrightControl.svelte";
   import { highlightDisplay } from "$lib/highlight-display.svelte";
   import type {
@@ -1049,6 +1050,24 @@
    *  no viewer of its own until now, so the pane said "the original isn't
    *  archived here" for a file sitting in the archive and serving 200. */
   let isImage = $derived(ingest.frontmatter.source_type === "image");
+
+  /** The record's type as shown in the header, read from the WORKING
+   *  frontmatter so an edit lands immediately rather than after submit. */
+  let liveDocumentType = $derived(
+    recordType({
+      document_type:
+        typeof currentFrontmatterObj.document_type === "string"
+          ? currentFrontmatterObj.document_type
+          : ingest.frontmatter.document_type,
+    }),
+  );
+  /** What file arrived - `source_type` while it exists, then `file_format`.
+   *  Never recomputed by an edit; the file is what it is. */
+  let fileFormat = $derived(
+    String(
+      ingest.frontmatter.file_format ?? ingest.frontmatter.source_type ?? "",
+    ).toUpperCase(),
+  );
   // Text records (no playback signal) get explicit block-level read coverage
   // in the rendered prose view. PDFs are included: their page markers render as
   // zero-unit blocks inside ReadableText's container, so the page-sync observer
@@ -3673,8 +3692,48 @@
           {liveCreators.join(", ")}
         </p>
       {/if}
-      <div class="flex gap-3 mt-1 text-xs text-on-surface-muted font-ui">
-        <span>{ingest.frontmatter.source_type?.toUpperCase()}</span>
+      <div class="flex items-center gap-3 mt-1 text-xs text-on-surface-muted font-ui">
+        <!-- What the thing IS, not what file arrived. Editable inline: about
+             half the corpus has no document_type on purpose - the format emits
+             it only where the artefact states its own form - so setting one is
+             a normal reviewing action, not an exception. An empty value is an
+             invitation, never an error: the record is fine, nobody has said
+             what it is yet.
+
+             The list is offered, not enforced. `document_type` is an open set
+             in the format, which names values this list does not carry, so a
+             record may legitimately hold one and must not have it replaced. -->
+        {#if !!user}
+          <select
+            value={liveDocumentType.missing ? "" : liveDocumentType.label}
+            onchange={(e) => doc.updateFrontmatter({ document_type: e.currentTarget.value })}
+            title={liveDocumentType.missing
+              ? "Nobody has said what this is. Set it if you can tell from the record."
+              : "What this record is. The file it arrived as is shown beside it."}
+            class="bg-transparent text-xs font-ui uppercase outline-none cursor-pointer rounded px-1 -mx-1 hover:bg-surface
+              {liveDocumentType.missing
+                ? 'text-primary'
+                : liveDocumentType.known
+                  ? 'text-on-surface-muted hover:text-on-surface'
+                  : 'text-on-surface-muted hover:text-on-surface italic'}"
+          >
+            {#if liveDocumentType.missing}
+              <option value="">set type</option>
+            {:else if !liveDocumentType.known}
+              <option value={liveDocumentType.label}>{liveDocumentType.label}</option>
+            {/if}
+            {#each DOCUMENT_TYPES as t}
+              <option value={t}>{t}</option>
+            {/each}
+          </select>
+        {:else if !liveDocumentType.missing}
+          <span>{liveDocumentType.label.toUpperCase()}</span>
+        {/if}
+        <!-- How it reached us. Secondary and read-only: the file is what it is,
+             and it answers a different question from the type. -->
+        {#if fileFormat}
+          <span class="text-on-surface-muted/60" title="The file this record was made from">{fileFormat}</span>
+        {/if}
         <!-- Who else can see this, and why you can. Reading a gated record
              without being told which of those is true is how someone comes to
              assume the whole corpus is open. -->
