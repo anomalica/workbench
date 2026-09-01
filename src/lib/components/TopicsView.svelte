@@ -180,10 +180,15 @@
         <span><span class="font-medium tabular-nums">{published.length}</span> written</span>
       </button>
       {#if trailing.length}
+        <!-- Not a warning. A page is stale the moment its brief changes, so a
+             busy graph restales pages by the hundred and the count says the
+             pipeline is working, not failing. What WOULD be a warning is a
+             number that never falls after a rebuild - which this badge cannot
+             show, so it does not pretend to. -->
         <span
-          class="rounded-full bg-warning-container px-2 py-0.5 text-xs text-on-warning-container"
-          title="The brief moved after these pages were written, so they are behind the material."
-        >{trailing.length} behind</span>
+          class="text-xs text-on-surface-muted"
+          title="Their brief changed after the page was written. Normal while the graph is moving - each rebuild restates them."
+        >{trailing.length} behind their brief</span>
       {/if}
     </div>
 
