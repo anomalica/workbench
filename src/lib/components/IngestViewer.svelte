@@ -1053,7 +1053,11 @@
   // in the rendered prose view. PDFs are included: their page markers render as
   // zero-unit blocks inside ReadableText's container, so the page-sync observer
   // (bound to that container via proseContainer) keeps working.
-  let isTextRecord = $derived(isWeb || isEbook || isPdf);
+  /** A record whose body is extracted PROSE, so it reads and marks in blocks.
+   *  Image belongs here: a slide's body is the text lifted off it, the same
+   *  shape a PDF page gives, and leaving it out meant an image record rendered
+   *  with no way to mark anything read and no highlighting at all. */
+  let isTextRecord = $derived(isWeb || isEbook || isPdf || isImage);
 
   // Copyright: public/accessible records can show everything freely.
   //

@@ -92,9 +92,9 @@
   <button
     onclick={() => onsort("priority")}
     class="w-32 flex-none cursor-pointer hover:text-on-surface text-left"
-    title="Sort by what reading it is worth: entities it would feed, per minute of reading"
+    title="How many subjects the corpus already covers this record adds to, and what it costs to read. Sorted by subjects per minute - what to review next."
   >
-    Worth {sortBy === "priority" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
+    Feeds {sortBy === "priority" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
   </button>
   <button onclick={() => onsort("digestible")} class="w-28 flex-none cursor-pointer hover:text-on-surface text-left" title="Sort by review coverage of the ingest (digestible at 100%)">
     Reviewed {sortBy === "digestible" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
@@ -238,10 +238,12 @@
 </div>
 
 {#snippet worth(p: ReviewPriority | undefined)}
-  <!-- What this record is worth reading next, in the two numbers that decide
-       it: how many page-worthy entities it would feed, and how long it takes.
-       Blank for anything already reviewed or digested - those are not in the
-       queue, and a number there would invite reading them again. -->
+  <!-- NOT a count of the record's own pages, which is how "9 pages" read and
+       why the column was misunderstood as a random number. It is how many
+       SUBJECTS the corpus already covers that this record adds to - the reason
+       reviewing it is worth doing next. Paired with what it costs to read,
+       because the ordering is value per minute. Blank for anything already
+       reviewed or digested; a number there would invite reading it again. -->
   <span class="w-32 flex-none text-xs font-ui">
     {#if !p}
       <span class="text-on-surface-muted/30">&mdash;</span>
@@ -251,7 +253,7 @@
         title="{p.housekeeping_open} housekeeping proposal{p.housekeeping_open === 1 ? '' : 's'} still open - its metadata may change under the review"
       >on hold</span>
     {:else if p.reach === 0}
-      <span class="text-on-surface-muted" title="Feeds no page that already exists">
+      <span class="text-on-surface-muted" title="Adds to no subject the corpus already covers">
         {readMinutes(p.minutes)}
       </span>
     {:else}
@@ -260,10 +262,10 @@
            column: what it gives, and what it costs. -->
       <span
         class="text-on-surface"
-        title={`Feeds ${p.reach} page${p.reach === 1 ? "" : "s"} that already exist${p.high_bar ? ` (${p.high_bar} high-bar)` : ""}.\n\n${p.unlocks.join("\n")}`}
+        title={`Adds to ${p.reach} subject${p.reach === 1 ? "" : "s"} the corpus already covers${p.high_bar ? ` (${p.high_bar} of them page-worthy on their own)` : ""}:\n\n${p.unlocks.join("\n")}`}
       >
         <span class="font-medium text-primary tabular-nums">{p.reach}</span>
-        <span class="text-on-surface-muted">{p.reach === 1 ? "page" : "pages"}</span>
+        <span class="text-on-surface-muted">{p.reach === 1 ? "subject" : "subjects"}</span>
         <span class="text-on-surface-muted/60">&middot;</span>
         <span class="text-on-surface-muted">{readMinutes(p.minutes)}</span>
       </span>
