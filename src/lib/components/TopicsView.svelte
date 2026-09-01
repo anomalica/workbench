@@ -42,14 +42,25 @@
   let newNote = $state("");
   let filter = $state<"all" | "single" | "nobrief">("all");
 
+  /** Everything still awaiting a page. Every count comes off THIS, so a filter
+   *  chip reports the same number whether or not it is the active one - the
+   *  counts used to be read off the filtered list, so "All" showed the size of
+   *  whatever filter was on and changed each time one was clicked. */
+  const pending = $derived(topics.filter((t) => !publishedSlugs.has(t.slug)));
   const shown = $derived(
-    topics
-      .filter((t) => !publishedSlugs.has(t.slug))
-      .filter((t) =>
-        filter === "single" ? t.single_source : filter === "nobrief" ? !t.has_brief : true,
-      ),
+    pending.filter((t) =>
+      filter === "single" ? t.single_source : filter === "nobrief" ? !t.has_brief : true,
+    ),
   );
-  const singleCount = $derived(topics.filter((t) => t.single_source).length);
+  const counts = $derived({
+    all: pending.length,
+    single: pending.filter((t) => t.single_source).length,
+    nobrief: pending.filter((t) => !t.has_brief).length,
+  });
+  /** Where a written page lives on the site. */
+  const pageUrl = (slug: string) => `https://anomalica.is/en/${slug}/`;
+  let showPublished = $state(false);
+  let confirmVeto = $state<string | null>(null);
   const trailing = $derived(published.filter((p) => p.stale === true));
   /** A proposal that already has a page is not a proposal - it is the same
    *  subject in its finished state, and showing it in both lists reads as work
@@ -143,59 +154,60 @@
   <div class="mx-auto max-w-6xl px-6 py-6">
     <h2 class="font-ui text-lg text-on-surface">Topics</h2>
     <p class="mt-1 max-w-prose text-sm text-on-surface-muted">
-      Every subject in one place and which state it is in: the pages that exist,
-      the topics you have asked for before the material arrived, and the ones the
-      graph proposes on the evidence it holds. Open any proposal to read the brief
-      a page would be written from.
+      Every subject and the state it is in: written, requested, or proposed on the
+      evidence the graph holds.
     </p>
 
     {#if error}
       <p class="mt-4 rounded border border-error/40 px-3 py-2 text-sm text-error">{error}</p>
     {/if}
 
-    <!-- Seeded: the half the graph cannot propose, because a proposal is derived
-         from claims and so cannot exist before them. -->
-    <!-- Already published. First, because it is the finished state: without it
-         the tab is a queue of what to do next, with no way to see that a topic
-         proposed last week went out last night. -->
-    <section class="mt-6 rounded border border-border bg-surface-alt px-4 py-4">
-      <div class="flex flex-wrap items-baseline gap-3">
-        <h3 class="font-ui text-sm text-on-surface">Pages we already have</h3>
-        {#if trailing.length}
-          <span class="text-xs text-warning">
-            {trailing.length} written from a brief that has since changed
-          </span>
-        {/if}
-      </div>
-      {#if published.length}
-        <ul class="mt-3 flex flex-wrap gap-x-4 gap-y-1.5">
-          {#each published as page (page.slug)}
-            <li class="flex items-baseline gap-1.5 text-sm">
-              <span class="text-on-surface">{page.name}</span>
-              {#if page.stale}
-                <span
-                  class="text-[11px] text-warning"
-                  title="The brief moved after this page was written, so the page is behind the material."
-                >behind</span>
-              {:else if page.stale === null}
-                <span
-                  class="text-[11px] text-on-surface-muted"
-                  title="The brief this page was written from is no longer there."
-                >no brief</span>
-              {/if}
-            </li>
-          {/each}
-        </ul>
-      {:else}
-        <p class="mt-3 text-sm text-on-surface-muted">None yet.</p>
+    <!-- Written pages are the finished state, so they belong here - but as a
+         line, not a list. 275 names at the top is a wall, and it buried the
+         proposals the tab exists to work through. -->
+    <div class="mt-5 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+      <button
+        onclick={() => (showPublished = !showPublished)}
+        class="flex items-center gap-1.5 text-on-surface hover:text-primary"
+      >
+        <svg class="h-3.5 w-3.5 transition-transform {showPublished ? 'rotate-90' : ''}"
+             fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+        </svg>
+        <span><span class="font-medium tabular-nums">{published.length}</span> written</span>
+      </button>
+      {#if trailing.length}
+        <span
+          class="rounded-full bg-warning-container px-2 py-0.5 text-xs text-on-warning-container"
+          title="The brief moved after these pages were written, so they are behind the material."
+        >{trailing.length} behind</span>
       {/if}
-    </section>
+    </div>
+
+    {#if showPublished}
+      <ul class="mt-2 grid gap-x-6 gap-y-1 sm:grid-cols-2 lg:grid-cols-3">
+        {#each published as page (page.slug)}
+          <li class="flex items-baseline gap-1.5 text-sm">
+            <a
+              href={pageUrl(page.slug)}
+              target="_blank"
+              rel="noopener"
+              class="truncate text-on-surface hover:text-primary hover:underline"
+            >{page.name}</a>
+            {#if page.stale}
+              <span class="shrink-0 text-[11px] text-warning" title="Written from a brief that has since changed.">behind</span>
+            {:else if page.stale === null}
+              <span class="shrink-0 text-[11px] text-on-surface-muted" title="The brief this page was written from is gone.">no brief</span>
+            {/if}
+          </li>
+        {/each}
+      </ul>
+    {/if}
 
     <section class="mt-6 rounded border border-border bg-surface-alt px-4 py-4">
-      <h3 class="font-ui text-sm text-on-surface">Topics you've asked for</h3>
+      <h3 class="font-ui text-sm text-on-surface">Requested</h3>
       <p class="mt-0.5 text-xs text-on-surface-muted">
-        Named before the material exists. Each shows what the corpus holds for it so
-        far, so a thin one tells you what to ingest next.
+        Named before the material exists, so a thin one shows what to ingest next.
       </p>
 
       {#if seeded.length}
@@ -240,11 +252,9 @@
     </section>
 
     <div class="mt-6 flex flex-wrap items-center gap-3">
-      <h3 class="font-ui text-sm text-on-surface">
-        {topics.length - publishedSlugs.size} proposed and not yet written
-      </h3>
+      <h3 class="font-ui text-sm text-on-surface">Proposed</h3>
       <div class="flex gap-1 text-xs">
-        {#each [["all", `All ${shown.length}`], ["single", `Single-source ${singleCount}`], ["nobrief", "No brief"]] as [key, label]}
+        {#each [["all", `All ${counts.all}`], ["single", `One source ${counts.single}`], ["nobrief", `No brief ${counts.nobrief}`]] as [key, label]}
           <button
             onclick={() => (filter = key as any)}
             class="rounded px-2 py-1 {filter === key
@@ -280,19 +290,51 @@
               <span class="text-xs text-on-surface-muted">no brief yet</span>
             {/if}
 
-            <button
-              onclick={() => openBrief(t)}
-              class="ml-auto text-xs text-primary underline"
-            >{openSlug === t.slug ? "hide brief" : "read the brief"}</button>
-
-            {#if canDecide && t.status !== "vetoed"}
+            <div class="ml-auto flex items-center gap-1">
+              <!-- Icons, with the word in the tooltip: the row is dense and
+                   three labelled links across it read as a sentence. -->
               <button
-                onclick={() => doVeto(t)}
-                disabled={busy}
-                class="text-xs text-on-surface-muted underline hover:text-error"
-              >never a page</button>
-            {/if}
+                onclick={() => openBrief(t)}
+                title={openSlug === t.slug ? "Hide the brief" : "Brief - everything a page would be written from"}
+                aria-label="Brief"
+                class="rounded p-1 {openSlug === t.slug ? 'bg-primary-container text-on-surface' : 'text-on-surface-muted hover:bg-surface hover:text-primary'}"
+              >
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M4 5h11a2 2 0 0 1 2 2v13H6a2 2 0 0 1-2-2V5z" />
+                  <path stroke-linecap="round" d="M8 9h6M8 13h6" />
+                </svg>
+              </button>
+
+              {#if canDecide && t.status !== "vetoed"}
+                <button
+                  onclick={() => (confirmVeto = confirmVeto === t.node_id ? null : t.node_id)}
+                  title="Never write a page for this"
+                  aria-label="Never a page"
+                  class="rounded p-1 {confirmVeto === t.node_id ? 'bg-error/15 text-error' : 'text-on-surface-muted hover:bg-surface hover:text-error'}"
+                >
+                  <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
+                    <path stroke-linecap="round" d="M6 6l12 12M18 6L6 18" />
+                  </svg>
+                </button>
+              {/if}
+            </div>
           </div>
+
+          {#if confirmVeto === t.node_id}
+            <div class="flex flex-wrap items-center gap-2 border-t border-error/30 bg-error/5 px-4 py-2 text-xs">
+              <span class="text-on-surface">Never write a page for <strong>{t.name}</strong>?</span>
+              <span class="text-on-surface-muted">It stays in the graph; it stops being proposed.</span>
+              <button
+                onclick={() => { confirmVeto = null; doVeto(t); }}
+                disabled={busy}
+                class="ml-auto rounded bg-error px-2 py-1 text-on-error disabled:opacity-50"
+              >Never a page</button>
+              <button
+                onclick={() => (confirmVeto = null)}
+                class="rounded px-2 py-1 text-on-surface-muted hover:text-on-surface"
+              >Cancel</button>
+            </div>
+          {/if}
 
           {#if openSlug === t.slug}
             <div class="border-t border-border px-4 py-3">
