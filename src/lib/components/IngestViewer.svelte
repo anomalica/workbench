@@ -169,7 +169,19 @@
   });
   let liveCreators = $derived.by<string[]>(() => {
     const c = currentFrontmatterObj.creators ?? currentFrontmatterObj.authors;
-    return Array.isArray(c) ? c.map(String) : [];
+    if (!Array.isArray(c)) return [];
+    // `String(entry)` on an object gives "[object Object]", which is what the
+    // header showed for a record whose creators were written as
+    // `- name: ... / role: ...`. That shape is against the format (creators are
+    // plain names; roles stay out of frontmatter), but a malformed record must
+    // still render as something a person can read rather than as a JS artefact.
+    return c
+      .map((entry) =>
+        entry && typeof entry === "object"
+          ? String((entry as Record<string, unknown>).name ?? "")
+          : String(entry ?? ""),
+      )
+      .filter((name) => name.trim() !== "");
   });
   let livePublisher = $derived(
     typeof currentFrontmatterObj.publisher === "string" ? currentFrontmatterObj.publisher : "",
@@ -1033,6 +1045,10 @@
   let isAudio = $derived(ingest.frontmatter.source_type === "audio");
   let isVideo = $derived(ingest.frontmatter.source_type === "video");
   let isEbook = $derived(ingest.frontmatter.source_type === "ebook");
+  /** A record whose source IS a picture - a slide, a scan, a photograph. It has
+   *  no viewer of its own until now, so the pane said "the original isn't
+   *  archived here" for a file sitting in the archive and serving 200. */
+  let isImage = $derived(ingest.frontmatter.source_type === "image");
   // Text records (no playback signal) get explicit block-level read coverage
   // in the rendered prose view. PDFs are included: their page markers render as
   // zero-unit blocks inside ReadableText's container, so the page-sync observer
@@ -1480,7 +1496,8 @@
 
   let singleColumn = $derived(
     (isWeb && !localSourceFile && !localSourceUrl && !ingest.frontmatter.source_url) ||
-      (isEbook && !epubSource),
+      (isEbook && !epubSource) ||
+      (isImage && !localSourceUrl),
   );
 
   /** Does this record carry any reviewer highlight at all? The colour toggle
@@ -4567,6 +4584,17 @@
           ></iframe>
         {:else if epubSource}
           <EpubViewer file={epubSource} pageAnchor={epubPageAnchor} />
+        {:else if isImage && localSourceUrl}
+          <!-- The record IS the picture. Scrollable and zoomable to its natural
+               size rather than fitted, because a briefing slide is read at full
+               size and a fitted 1600px slide is unreadable. -->
+          <div class="flex-1 overflow-auto bg-surface-alt p-4">
+            <img
+              src={localSourceUrl}
+              alt={ingest.frontmatter.title ?? "Archived image"}
+              class="mx-auto max-w-none"
+            />
+          </div>
         {:else}
           <!-- Drop target fills all available space -->
           <div
