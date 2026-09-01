@@ -175,7 +175,8 @@ def list_comparable() -> list[dict]:
     sig = _comparable_signature()
     if _comparable_cache is not None and _comparable_cache[0] == sig:
         return _comparable_cache[1]
-    out = []
+    out: list[dict] = []
+    by_hash: dict[str, dict] = {}
     for d in _variant_dirs():
         files = sorted(d.glob("*.yaml"))
         if len(files) < 2:
@@ -192,15 +193,24 @@ def list_comparable() -> list[dict]:
         # been dropped from the corpus is wasted grading either way.
         if not _is_active(_content_hash(first)):
             continue
-        out.append(
-            {
-                "content_hash": _content_hash(first),
+        h = _content_hash(first)
+        existing = by_hash.get(h)
+        if existing is None:
+            by_hash[h] = {
+                "content_hash": h,
                 "title": (first.get("record") or {}).get("title") or d.name,
                 "slug": d.name,
                 "models": [v.get("model") or f.stem for f, v in variants],
                 "variant_count": len(variants),
             }
-        )
+            out.append(by_hash[h])
+        else:
+            # One record, two directories. Merging is not cosmetic: the list is
+            # keyed on content_hash in the UI, and two rows sharing a key made
+            # Svelte throw `each_key_duplicate` and abandon the render, so the
+            # whole Digests tab showed nothing and read as "very slow".
+            existing["models"].extend(v.get("model") or f.stem for f, v in variants)
+            existing["variant_count"] += len(variants)
     out.sort(key=lambda x: x["title"].lower())
     _comparable_cache = (sig, out)
     return out
@@ -245,7 +255,16 @@ def _find_variants(content_hash: str) -> tuple[Path | None, list[dict]]:
     for parsing every variant of every record before it, then threw the lot away.
     That was 43 documents parsed and 12s served for the smallest record in the
     corpus, which made the Digests tab unusable. Only the matching directory's
-    files are parsed now, and _load caches those."""
+    files are parsed now, and _load caches those.
+
+    EVERY matching directory contributes, not the first. One record's variants
+    can be split across two directories when the slug that names them changes -
+    the corpus holds `...implications-on-national` and
+    `...implications-on-national-security-public-safety` for one hash, five
+    variants between them. Returning at the first match showed three and hid
+    two, with nothing to say the comparison was partial."""
+    first_dir: Path | None = None
+    found: list[dict] = []
     for d in _variant_dirs():
         files = sorted(d.glob("*.yaml"))
         # One directory holds one record's variants, so the first file that
@@ -257,16 +276,19 @@ def _find_variants(content_hash: str) -> tuple[Path | None, list[dict]]:
             continue
         loaded = [(f, v) for f in files if (v := _load(f))]
         if loaded and _content_hash(loaded[0][1]) == content_hash:
-            return d, [
+            if first_dir is None:
+                first_dir = d
+            found.extend(
                 {
                     "model": v.get("model") or f.stem,
                     "prompt_variant": v.get("prompt_variant"),
                     "stem": f.stem,
+                    "dir": d.name,
                     "data": v,
                 }
                 for f, v in loaded
-            ]
-    return None, []
+            )
+    return first_dir, found
 
 
 # --- provenance-overlap alignment ------------------------------------------
@@ -373,6 +395,7 @@ def load_comparison(content_hash: str) -> dict | None:
                 # having succeeded. The stem is unique per variant; the prompt
                 # fingerprint says WHY two variants of one model differ.
                 "variant": var["stem"],
+                "source_dir": var.get("dir"),
                 "prompt_fingerprint": prompt_fingerprint(v),
                 "prompt_variant": var.get("prompt_variant"),
                 "domain_count": len(v.get("domain_claims") or []),
@@ -395,6 +418,20 @@ def load_comparison(content_hash: str) -> dict | None:
                 ),
             }
         )
+
+    # The stem is unique WITHIN a directory, and a record's variants can span
+    # two of them, so it is not unique on its own - this record holds
+    # `opus.d161b1ed` in both, with different bytes. The pane keys its list on
+    # `variant` and Svelte aborts the render on a duplicate key, which is the
+    # same crash the stem was introduced to fix, one level along. Qualify with
+    # the directory only where a stem actually repeats, so the common case
+    # keeps reading as `opus.d161b1ed`.
+    seen: dict[str, int] = {}
+    for m in per_model:
+        seen[m["variant"]] = seen.get(m["variant"], 0) + 1
+    for m in per_model:
+        if seen[m["variant"]] > 1 and m.get("source_dir"):
+            m["variant"] = f"{m['source_dir']}/{m['variant']}"
 
     # Entity alignment: which models extracted each entity name.
     all_names: dict[str, list[str]] = {}

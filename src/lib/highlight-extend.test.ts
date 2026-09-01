@@ -15,6 +15,8 @@
  */
 import { describe, expect, it } from "vitest";
 import { parseWords, serializeWords } from "./transcript-words";
+import { DocumentStore } from "./document.svelte";
+import { fadedColour, highlightColour, HL_PALETTE } from "./highlight-paint";
 
 const BODY = `<!-- speaker: A -->
 {{t:1.0}}{{highlight-start: a1}}the {{t:1.2}}part {{t:1.4}}that {{t:1.6}}matters{{highlight-end: a1}} {{t:2.0}}a {{t:2.2}}long {{t:2.4}}digression {{t:2.6}}here {{t:3.0}}{{highlight-start: a1}}and {{t:3.2}}its {{t:3.4}}conclusion{{highlight-end: a1}}
@@ -71,29 +73,28 @@ describe("extending refuses what would corrupt the record", () => {
 {{t:1.0}}{{highlight-start: a1}}first {{t:1.2}}part{{highlight-end: a1}} {{t:2.0}}middle {{t:3.0}}tail
 `;
 
-  const load = async () => {
-    const { DocumentStore } = await import("./document.svelte");
+  const load = () => {
     const doc = new DocumentStore();
     doc.load(`---\ntitle: t\n---\n${BODY_ONE}`, "h".repeat(64));
     return doc;
   };
 
   it("refuses an id the record does not carry", async () => {
-    const doc = await load();
+    const doc = load();
     const before = doc.current;
     doc.extendWordHighlight("zz", 4, 4);
     expect(doc.current).toBe(before);
   });
 
   it("refuses a part overlapping an existing part of the same highlight", async () => {
-    const doc = await load();
+    const doc = load();
     const before = doc.current;
     doc.extendWordHighlight("a1", 0, 1);
     expect(doc.current).toBe(before);
   });
 
   it("adds a disjoint part under the same id, minting nothing", async () => {
-    const doc = await load();
+    const doc = load();
     doc.extendWordHighlight("a1", 3, 3);
     const p = parseWords(doc.current.split("---\n")[2] ?? doc.current);
     expect(p.highlights.filter((h) => h.id === "a1").length).toBe(2);
@@ -133,12 +134,11 @@ describe("both parts of an extended highlight get one colour", () => {
 });
 
 describe("fading a highlight while another is being picked", () => {
-  it("keeps the colour and only drops its opacity", async () => {
+  it("keeps the colour and only drops its opacity", () => {
     // The reading treatment collapses every highlight to one hairline in the
     // text's own colour. That is right for "is this highlighted" and wrong for
     // "which one is this" - and picking asks the second question, at the moment
     // the reviewer has to choose between them.
-    const { fadedColour, HL_PALETTE } = await import("./highlight-paint");
     for (const c of HL_PALETTE) {
       const faded = fadedColour(c);
       expect(faded).toContain(c); // the hue survives
@@ -147,8 +147,7 @@ describe("fading a highlight while another is being picked", () => {
     }
   });
 
-  it("gives two different highlights two different faded colours", async () => {
-    const { fadedColour, highlightColour } = await import("./highlight-paint");
+  it("gives two different highlights two different faded colours", () => {
     expect(fadedColour(highlightColour(0))).not.toBe(fadedColour(highlightColour(1)));
   });
 });

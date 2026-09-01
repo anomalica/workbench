@@ -197,3 +197,62 @@ class TestIntervalMemoisation:
             first = models._interval(loc)
             models._interval_of.cache_clear()
             assert models._interval(loc) == first
+
+
+class TestVariantsSplitAcrossDirectories:
+    """One record's variants can live in two directories, because the slug that
+    names them changed: the corpus holds
+    `...implications-on-national` and `...implications-on-national-security-public-safety`
+    for one content hash, five variants between them.
+
+    Both consequences were crashes rather than degradations, and both looked
+    like slowness: the UI keys its lists on these values and Svelte ABANDONS the
+    render on a duplicate key, so the pane sat empty with every request having
+    returned 200.
+    """
+
+    def test_the_list_shows_one_row_per_record(self):
+        import collections
+
+        from backend import models
+
+        rows = models.list_comparable()
+        counts = collections.Counter(r["content_hash"] for r in rows)
+        assert [h for h, n in counts.items() if n > 1] == []
+
+    def test_a_merged_row_counts_every_variant(self):
+        from backend import models
+
+        rows = {r["content_hash"]: r for r in models.list_comparable()}
+        split = rows.get(
+            "e27169e8198c2a69e4a11612efef16891f33b86209a5d1721246fed69a6d8ec1"
+        )
+        if split is None:
+            return  # corpus-dependent; the unit guarantees above still hold
+        assert split["variant_count"] == 5
+        assert len(split["models"]) == 5
+
+    def test_the_comparison_gathers_every_directory(self):
+        from backend import models
+
+        c = models.load_comparison(
+            "e27169e8198c2a69e4a11612efef16891f33b86209a5d1721246fed69a6d8ec1"
+        )
+        if c is None:
+            return
+        # Returning at the first matching directory showed three and hid two,
+        # with nothing to say the comparison was partial.
+        assert len(c["per_model"]) == 5
+
+    def test_variant_keys_are_unique_even_when_two_stems_collide(self):
+        from backend import models
+
+        c = models.load_comparison(
+            "e27169e8198c2a69e4a11612efef16891f33b86209a5d1721246fed69a6d8ec1"
+        )
+        if c is None:
+            return
+        keys = [m["variant"] for m in c["per_model"]]
+        assert len(set(keys)) == len(keys)
+        # And the uncollided ones keep the short readable form.
+        assert "haiku.d161b1ed" in keys

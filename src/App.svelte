@@ -701,8 +701,8 @@
         onclick={showRecords}
         class="text-sm font-ui px-2.5 py-1 rounded cursor-pointer transition-colors
           {appMode === 'records' ? 'bg-bone/15 text-bone' : 'text-bone/50 hover:text-bone/80 hover:bg-bone/10'}"
-        title="Review source material on its way to becoming an ingest"
-      >Ingests</button>
+        title="Every record and its state - what to read, what is reviewed, what is digested"
+      >Review</button>
       {#if canReview}
         <button
           onclick={showDigests}
