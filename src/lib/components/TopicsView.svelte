@@ -57,8 +57,11 @@
     single: pending.filter((t) => t.single_source).length,
     nobrief: pending.filter((t) => !t.has_brief).length,
   });
-  /** Where a written page lives on the site. */
-  const pageUrl = (slug: string) => `https://anomalica.is/en/${slug}/`;
+  /** Where a written page lives on the site: /en/<kind>/<slug>/. The kind is
+   *  the node type pluralised and it is not optional - without it every link
+   *  404s, which is what shipping `/en/<slug>/` did. */
+  const pageUrl = (page: PublishedPage) =>
+    `https://anomalica.is/en/${page.kind}/${page.slug}/`;
   let showPublished = $state(false);
   let confirmVeto = $state<string | null>(null);
   const trailing = $derived(published.filter((p) => p.stale === true));
@@ -188,12 +191,19 @@
       <ul class="mt-2 grid gap-x-6 gap-y-1 sm:grid-cols-2 lg:grid-cols-3">
         {#each published as page (page.slug)}
           <li class="flex items-baseline gap-1.5 text-sm">
-            <a
-              href={pageUrl(page.slug)}
-              target="_blank"
-              rel="noopener"
-              class="truncate text-on-surface hover:text-primary hover:underline"
-            >{page.name}</a>
+            {#if page.kind}
+              <a
+                href={pageUrl(page)}
+                target="_blank"
+                rel="noopener"
+                class="truncate text-on-surface hover:text-primary hover:underline"
+              >{page.name}</a>
+            {:else}
+              <!-- No kind means no path to build, and a link that 404s is worse
+                   than none: it reads as the page being broken rather than
+                   unlocatable from here. -->
+              <span class="truncate text-on-surface">{page.name}</span>
+            {/if}
             {#if page.stale}
               <span class="shrink-0 text-[11px] text-warning" title="Written from a brief that has since changed.">behind</span>
             {:else if page.stale === null}
