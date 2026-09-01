@@ -21,6 +21,7 @@
     fetchComparable,
     fetchComparison,
     fetchPredigest,
+    fetchIngest,
     saveJudgment,
     type ComparableIngest,
     type ModelComparison,
@@ -107,6 +108,40 @@
   // elements, prose as one continuous string. Coverage is measured over the
   // prose alone, so an annotation never shifts a claim's offsets.
   let parsedSource = $derived(parseSourceBlocks(predigest?.body ?? ""));
+
+  /** The reviewer's own highlights, projected onto the pre-digest.
+   *
+   *  They are STRIPPED from the pre-digest on purpose - a highlight the model
+   *  could see would make it grade its own homework (ADR 0042) - so they cannot
+   *  be read out of this text and are matched back in from the record instead.
+   *  Showing them here does not leak anything: the model has already been given
+   *  the stripped text, and this is the reviewer's screen.
+   *
+   *  It answers the question the two panes exist to ask together: did the models
+   *  draw anything from what I marked as mattering? */
+  let recordBody = $state("");
+  let highlightExtents = $derived.by<{ start: number; end: number }[]>(() => {
+    if (!recordBody || !normalisedSource) return [];
+    const out: { start: number; end: number }[] = [];
+    const re = /\{\{highlight-start:\s*([A-Za-z0-9_-]+)\s*\}\}([\s\S]*?)\{\{highlight-end:\s*\1\s*\}\}/g;
+    for (let m = re.exec(recordBody); m; m = re.exec(recordBody)) {
+      // The prose between the markers survives into the pre-digest verbatim;
+      // only the markers and the word timestamps are taken out.
+      const text = m[2]
+        .replace(/\{\{[^}]*\}\}/g, "")
+        .replace(/<!--[\s\S]*?-->/g, "")
+        .replace(/\s+/g, " ")
+        .trim();
+      if (text.length < 12) continue; // too short to locate without false hits
+      const at = normalisedSource.indexOf(text);
+      if (at >= 0) out.push({ start: at, end: at + text.length });
+    }
+    return out;
+  });
+
+  function isHighlighted(seg: { start: number; end: number }): boolean {
+    return highlightExtents.some((h) => seg.start < h.end && h.start < seg.end);
+  }
   let normalisedSource = $derived(parsedSource.prose);
   let sourceClaims = $derived(
     (comparison?.per_model ?? []).flatMap((m) =>
@@ -228,7 +263,14 @@
     notes = "";
     syncUrl();
     try {
-      const [r, pre] = await Promise.all([fetchComparison(hash), fetchPredigest(hash)]);
+      const [r, pre, rec] = await Promise.all([
+        fetchComparison(hash),
+        fetchPredigest(hash),
+        // The reviewer's highlights live on the record, not the pre-digest.
+        // Failure here costs the overlay and nothing else.
+        fetchIngest(hash).catch(() => null),
+      ]);
+      recordBody = rec?.body ?? "";
       comparison = r.comparison;
       judgment = r.judgment;
       chosen = r.judgment?.chosen_model ?? null;
@@ -456,8 +498,10 @@
                 {:else}
                   <p class="mb-2">
                     {#each segmentsOf(block) as seg, i (i)}
-                      {#if seg.count === 0}<span>{seg.text}</span>{:else}<span
-                          class="extract band-{i % BANDS} {inSpan(seg, activeSpan)
+                      {#if seg.count === 0}<span class={isHighlighted(seg) ? "reviewer-marked" : ""}>{seg.text}</span>{:else}<span
+                          class="extract band-{i % BANDS} {isHighlighted(seg)
+                            ? 'reviewer-marked'
+                            : ''} {inSpan(seg, activeSpan)
                             ? 'is-active'
                             : ''} {inSpan(seg, hoverSpan) ? 'is-hovered' : ''} {inSpan(
                             seg,
@@ -557,6 +601,16 @@
     font-size: 11px;
     font-style: italic;
     color: var(--color-on-surface-secondary, inherit);
+  }
+
+  /* Where the reviewer highlighted, projected back onto the pre-digest. A
+     dotted underline in the accent colour, deliberately unlike the claim bands
+     above it: those say "a model took this", this says "I marked this". Seeing
+     the two together is the point - a highlight with no band over it is
+     something the models missed. */
+  .reviewer-marked {
+    border-bottom: 2px dotted var(--color-primary);
+    padding-bottom: 1px;
   }
 
   .extract {
