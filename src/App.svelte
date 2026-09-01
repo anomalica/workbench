@@ -340,10 +340,6 @@
         }
         else if (sortBy === "title") { va = a.title.toLowerCase(); vb = b.title.toLowerCase(); }
         else if (sortBy === "type") { va = a.document_type || a.source_type; vb = b.document_type || b.source_type; }
-        else if (sortBy === "version") {
-          const cmp = a.schema_version - b.schema_version;
-          return sortAsc ? cmp : -cmp;
-        }
         else if (sortBy === "publisher") { va = a.publisher || "zzz"; vb = b.publisher || "zzz"; }
         else if (sortBy === "creator") {
           va = (a.creators[0] || "zzz").toLowerCase();

@@ -38,6 +38,15 @@
     onfilterpublisher?: (publisher: string) => void;
   } = $props();
 
+  /** Minutes as something a person reads at a glance. */
+  function readMinutes(mins: number): string {
+    if (mins < 1) return `${Math.max(10, Math.round(mins * 60 / 10) * 10)} sec`;
+    if (mins < 90) return `${Math.round(mins)} min`;
+    const h = Math.floor(mins / 60);
+    const m = Math.round(mins % 60);
+    return m ? `${h} hr ${m} min` : `${h} hr`;
+  }
+
   function dateValueFor(i: IngestSummary): string {
     if (dateField === "ingested") return i.date_ingested || "";
     if (dateField === "reviewed") return reviewedTimes[i.content_hash] || "";
@@ -65,9 +74,6 @@
   <button onclick={() => onsort("type")} class="w-14 flex-none cursor-pointer hover:text-on-surface text-left" title="Sort by type">
     Type {sortBy === "type" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
   </button>
-  <button onclick={() => onsort("version")} class="w-10 flex-none cursor-pointer hover:text-on-surface text-left tabular-nums" title="Sort by format version">
-    Ver {sortBy === "version" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
-  </button>
   <button onclick={() => onsort("date")} class="w-20 flex-none cursor-pointer hover:text-on-surface text-left" title="Sort by date">
     Date {sortBy === "date" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
   </button>
@@ -85,7 +91,7 @@
   </button>
   <button
     onclick={() => onsort("priority")}
-    class="w-24 flex-none cursor-pointer hover:text-on-surface text-left"
+    class="w-32 flex-none cursor-pointer hover:text-on-surface text-left"
     title="Sort by what reading it is worth: entities it would feed, per minute of reading"
   >
     Worth {sortBy === "priority" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
@@ -137,7 +143,6 @@
         <span class="text-xs font-ui font-medium text-primary uppercase w-14 flex-none">
           {typeLabels[ingest.document_type || ingest.source_type] ?? (ingest.document_type || ingest.source_type)}
         </span>
-        <span class="w-10 flex-none text-xs text-on-surface-muted tabular-nums">v{ingest.schema_version}</span>
         <span
           class="text-xs text-on-surface-muted font-mono w-20 flex-none"
           title={dateValueFor(ingest) || "no value"}
@@ -237,7 +242,7 @@
        it: how many page-worthy entities it would feed, and how long it takes.
        Blank for anything already reviewed or digested - those are not in the
        queue, and a number there would invite reading them again. -->
-  <span class="w-24 flex-none text-xs font-ui tabular-nums">
+  <span class="w-32 flex-none text-xs font-ui">
     {#if !p}
       <span class="text-on-surface-muted/30">&mdash;</span>
     {:else if p.housekeeping_open}
@@ -246,18 +251,21 @@
         title="{p.housekeeping_open} housekeeping proposal{p.housekeeping_open === 1 ? '' : 's'} still open - its metadata may change under the review"
       >on hold</span>
     {:else if p.reach === 0}
-      <span
-        class="text-on-surface-muted"
-        title="Reaches nothing that already earns a page - {p.minutes} min to read"
-      >{p.minutes}m</span>
+      <span class="text-on-surface-muted" title="Feeds no page that already exists">
+        {readMinutes(p.minutes)}
+      </span>
     {:else}
+      <!-- Spelled out. It read "9 · 2.9m", where the m looked like millions and
+           the bare 9 said nothing at all. The units are the whole point of the
+           column: what it gives, and what it costs. -->
       <span
         class="text-on-surface"
-        title={`Feeds ${p.reach} entit${p.reach === 1 ? "y" : "ies"} that already earn a page${p.high_bar ? ` (${p.high_bar} high-bar)` : ""}, for ${p.minutes} min of reading.\n\n${p.unlocks.join("\n")}`}
+        title={`Feeds ${p.reach} page${p.reach === 1 ? "" : "s"} that already exist${p.high_bar ? ` (${p.high_bar} high-bar)` : ""}.\n\n${p.unlocks.join("\n")}`}
       >
-        <span class="font-medium text-primary">{p.reach}</span><span class="text-on-surface-muted"
-          >&nbsp;&middot;&nbsp;{p.minutes}m</span
-        >
+        <span class="font-medium text-primary tabular-nums">{p.reach}</span>
+        <span class="text-on-surface-muted">{p.reach === 1 ? "page" : "pages"}</span>
+        <span class="text-on-surface-muted/60">&middot;</span>
+        <span class="text-on-surface-muted">{readMinutes(p.minutes)}</span>
       </span>
     {/if}
   </span>

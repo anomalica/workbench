@@ -14,11 +14,12 @@
 
 import { safeLocalSet } from "$lib/storage";
 
+// `version` was removed with the Ver column. A stored preference naming it now
+// fails validation and falls back, which is why the validator exists.
 export const SORT_KEYS = [
   "date",
   "title",
   "type",
-  "version",
   "publisher",
   "creator",
   "digestible",
