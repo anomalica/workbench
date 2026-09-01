@@ -6,6 +6,7 @@ import {
   gridRow,
   passageQuotes,
   passageTally,
+  stepsPastRendered,
   memberLines,
   frameLabel,
 } from "./audit-grid";
@@ -325,5 +326,25 @@ describe("frameLabel shows who said it", () => {
     const a = { ...line(), variant: "a", model: "a", claim_id: "1", location: "", quote: "" };
     const b = { ...a, speaker: "Grusch, David", claim_id: "2" };
     expect(memberLines([a, b])).toHaveLength(2);
+  });
+});
+
+describe("stepsPastRendered", () => {
+  it("extends rather than stopping at the last rendered claim", () => {
+    expect(stepsPastRendered(1, 24, 25, 268)).toBe(true);
+  });
+
+  it("does not extend from the middle of what is rendered", () => {
+    expect(stepsPastRendered(1, 10, 25, 268)).toBe(false);
+  });
+
+  it("does not extend when everything is already rendered", () => {
+    // Otherwise the last claim in the audit would swallow every `j` press
+    // instead of staying put, and the reviewer could never rest on it.
+    expect(stepsPastRendered(1, 24, 25, 0)).toBe(false);
+  });
+
+  it("never extends going backwards", () => {
+    expect(stepsPastRendered(-1, 24, 25, 268)).toBe(false);
   });
 });

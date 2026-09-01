@@ -150,3 +150,21 @@ export function frameLabel(line: MemberLine): string {
   if (line.refs.length) parts.push(`refs: ${line.refs.join(", ")}`);
   return parts.join(" · ");
 }
+
+/**
+ * Whether moving the cursor should pull in the next batch instead of moving.
+ *
+ * The passage list renders in batches so a 293-passage record does not build
+ * 41,000 elements before a reviewer can read the first one. That makes the
+ * bottom of the DOM a boundary the reviewer cannot see, and keyboard navigation
+ * would stop dead there looking exactly like the end of the audit. So stepping
+ * down off the last rendered claim extends the list rather than doing nothing.
+ */
+export function stepsPastRendered(
+  delta: number,
+  cursorIndex: number,
+  renderedClaims: number,
+  unrenderedPassages: number,
+): boolean {
+  return delta > 0 && cursorIndex >= renderedClaims - 1 && unrenderedPassages > 0;
+}

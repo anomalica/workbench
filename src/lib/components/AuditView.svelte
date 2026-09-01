@@ -33,6 +33,7 @@
     visibleRows,
     passageHasContent,
     passageTally,
+    stepsPastRendered,
     memberLines,
     frameLabel,
     type AuditGridRow,
@@ -363,6 +364,13 @@
   }
   function moveCursor(delta: number) {
     if (!claimOrder.length) return;
+    // Stepping past the last rendered claim pulls in the next batch, so j does
+    // not silently stop at a boundary the reviewer cannot see. Without this the
+    // keyboard would reach the end of the DOM rather than the end of the audit.
+    if (stepsPastRendered(delta, cursorIndex(), claimOrder.length, moreToRender)) {
+      renderedCount += PASSAGE_BATCH;
+      return;
+    }
     const next = Math.min(Math.max(cursorIndex() + delta, 0), claimOrder.length - 1);
     cursor = claimOrder[cursorIndex() < 0 ? 0 : next];
     requestAnimationFrame(() => {
@@ -430,7 +438,47 @@
   );
   let emptyPassageCount = $derived((payload?.passages ?? []).length - shownPassages.length);
   let showEmptyPassages = $state(false);
-  let listedPassages = $derived(showEmptyPassages ? (payload?.passages ?? []) : shownPassages);
+  let allListedPassages = $derived(
+    showEmptyPassages ? (payload?.passages ?? []) : shownPassages,
+  );
+
+  /** How many passages are actually built into the DOM.
+   *
+   *  The whole audit used to render at once: 293 passages became 41,000
+   *  elements and 6,264 clickable chips for one record, and a real browser has
+   *  to lay out and paint every one of them before the pane is usable. That is
+   *  seconds of frozen page, and it grows with the record.
+   *
+   *  A batch at a time, extended as the reviewer reaches the end. Reading is
+   *  top-down, so the passages below the fold are not needed until they are
+   *  scrolled to, and the first screen arrives immediately regardless of how
+   *  big the record is. */
+  const PASSAGE_BATCH = 25;
+  let renderedCount = $state(PASSAGE_BATCH);
+  let listedPassages = $derived(allListedPassages.slice(0, renderedCount));
+  let moreToRender = $derived(allListedPassages.length - listedPassages.length);
+
+  // Back to the top of the list whenever the record changes, or a small record
+  // opened after a big one would start already "expanded".
+  $effect(() => {
+    void payload;
+    void showEmptyPassages;
+    renderedCount = PASSAGE_BATCH;
+  });
+
+  /** Extend when the sentinel below the list comes into view. */
+  function moreOnScroll(node: HTMLElement) {
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting) && moreToRender > 0) {
+          renderedCount += PASSAGE_BATCH;
+        }
+      },
+      { rootMargin: "600px" },
+    );
+    io.observe(node);
+    return { destroy: () => io.disconnect() };
+  }
 
   // --- entities (Pass A) ------------------------------------------------------
   // The other half of the two-pass output. Which entities a model found is a
@@ -1056,6 +1104,17 @@
           {/each}
         </section>
       {/each}
+      {#if moreToRender > 0}
+        <!-- Reaching this extends the list. Also a button, so it works without
+             an observer and says plainly that there IS more rather than
+             leaving the reviewer to guess the list ended. -->
+        <div use:moreOnScroll class="py-4 text-center">
+          <button
+            onclick={() => (renderedCount += PASSAGE_BATCH)}
+            class="text-xs font-ui text-on-surface-muted hover:text-on-surface"
+          >{moreToRender} more passage{moreToRender === 1 ? "" : "s"}</button>
+        </div>
+      {/if}
     </div>
     {/if}
   {/if}
