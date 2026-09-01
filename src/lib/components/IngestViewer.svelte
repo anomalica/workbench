@@ -2750,10 +2750,9 @@
       reviewNotesBox?.select();
     });
   }
-  // When the modal's "Approve & next" button (or Shift+A keystroke) fires,
-  // we set this true so a successful submit advances to the next record
-  // automatically. Reset on every modal open.
-  let submitAndAdvance = $state(false);
+  // Submitting does not advance. There was a second button and a Shift+A
+  // keystroke that submitted and jumped to the next record; both are gone, so
+  // submit does one thing and the reviewer moves on when they choose to.
 
   // Review coverage, two pending tiers. `pendingRuns` (observed, strong)
   // are segment-index runs the reviewer marked or edited - solid amber in
@@ -3019,12 +3018,6 @@
       localStorage.removeItem(doc.storageKey);
       // Backend auto-marks reviewed on submit; mirror it locally.
       onreviewedchange?.(ingest.content_hash, true);
-      if (submitAndAdvance) {
-        submitAndAdvance = false;
-        // Advance after the next microtask so the reviewed-state change
-        // gets applied to the list view before we navigate.
-        queueMicrotask(() => onnext?.());
-      }
     } else {
       submitError = result.error ?? "Failed to submit";
     }
@@ -3473,7 +3466,6 @@
       // Open the Approve modal. Won't fire when logged out, mid-submit, or
       // already approved-as-is for a clean record.
       e.preventDefault();
-      submitAndAdvance = e.shiftKey && hasNext;
       openSubmitForm();
     }
   }
@@ -4207,7 +4199,6 @@
               // for a sentence about what changed.
               if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !submitting) {
                 e.preventDefault();
-                submitAndAdvance = false;
                 handleSubmit();
               }
             }}
@@ -4285,27 +4276,17 @@
           {/if}
           <div class="flex-1"></div>
           <button
-            onclick={() => { closeSubmitForm(); submitAndAdvance = false; }}
+            onclick={() => closeSubmitForm()}
             class="text-xs font-ui text-on-surface-muted px-3 py-1.5 rounded cursor-pointer hover:text-on-surface"
           >Cancel</button>
           <button
-            onclick={() => { submitAndAdvance = false; handleSubmit(); }}
+            onclick={() => handleSubmit()}
             disabled={submitting}
             class="text-xs font-ui font-medium px-4 py-1.5 bg-primary text-on-primary rounded cursor-pointer hover:bg-primary-hover
               {submitting ? 'opacity-60' : ''}"
           >
             {submitting ? "Submitting..." : doc.dirty ? "Submit review" : "Approve"}
           </button>
-          {#if hasNext}
-            <button
-              onclick={() => { submitAndAdvance = true; handleSubmit(); }}
-              disabled={submitting}
-              class="text-xs font-ui font-medium px-4 py-1.5 bg-primary/80 text-on-primary rounded cursor-pointer hover:bg-primary"
-              title="Submit, then jump to the next record in the list"
-            >
-              {doc.dirty ? "Submit & next" : "Approve & next"}
-            </button>
-          {/if}
         </div>
       </div>
     </div>
