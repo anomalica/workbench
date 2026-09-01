@@ -151,6 +151,14 @@
   function page(b: Record<string, unknown> | null): any {
     return (b?.page as any) ?? {};
   }
+  /** The brief's own account of what it left out and why. */
+  function belonging(b: Record<string, unknown> | null): {
+    verified?: number;
+    suspect_excluded?: number;
+    unreviewed?: number;
+  } {
+    return (b?.belonging as any) ?? {};
+  }
 </script>
 
 <div class="flex-1 overflow-y-auto">
@@ -314,9 +322,11 @@
                 aria-label="Brief"
                 class="rounded p-1 {openSlug === t.slug ? 'bg-primary-container text-on-surface' : 'text-on-surface-muted hover:bg-surface hover:text-primary'}"
               >
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M4 5h11a2 2 0 0 1 2 2v13H6a2 2 0 0 1-2-2V5z" />
-                  <path stroke-linecap="round" d="M8 9h6M8 13h6" />
+                <svg
+                  class="h-4 w-4 transition-transform {openSlug === t.slug ? 'rotate-180' : ''}"
+                  fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"
+                >
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6" />
                 </svg>
               </button>
 
@@ -362,12 +372,25 @@
                 </p>
               {:else}
                 <p class="text-xs text-on-surface-muted">
-                  {claimsList(brief).length} of {page(brief).claim_count_total} claims
-                  selected for the page, spread across sources. This is the whole of
+                  {claimsList(brief).length} claims, oldest source first - the whole of
                   what a page would be written from.
+                  <!-- Where the shortfall against claim_count_total comes from,
+                       taken from the brief's own belonging block rather than
+                       guessed. The dominant reason is exclusion, not the cap:
+                       the Nimitz brief drops 630 of 1,033 as read-and-does-not-
+                       belong, which is a fact about the graph worth seeing. -->
+                  {#if belonging(brief).suspect_excluded}
+                    <span class="text-on-surface-secondary">
+                      {belonging(brief).suspect_excluded} more were attached to this
+                      subject and read as not belonging to it.
+                    </span>
+                  {/if}
+                  {#if belonging(brief).unreviewed}
+                    <span>{belonging(brief).unreviewed} not yet read.</span>
+                  {/if}
                 </p>
-                <ol class="mt-2 flex flex-col gap-2">
-                  {#each claimsList(brief).slice(0, 40) as c (c.id ?? c.content)}
+                <ol class="mt-2 flex max-h-[32rem] flex-col gap-2 overflow-y-auto pr-2">
+                  {#each claimsList(brief) as c (c.id ?? c.content)}
                     <li class="border-l-2 border-border pl-3 text-sm text-on-surface-secondary">
                       <span>{c.content ?? c.text}</span>
                       {#if c.source || c.attestation}
@@ -378,11 +401,7 @@
                     </li>
                   {/each}
                 </ol>
-                {#if claimsList(brief).length > 40}
-                  <p class="mt-2 text-xs text-on-surface-muted">
-                    … and {claimsList(brief).length - 40} more in the brief.
-                  </p>
-                {/if}
+
               {/if}
             </div>
           {/if}
