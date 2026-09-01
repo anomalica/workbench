@@ -264,8 +264,11 @@
     m: AuditMember,
     p: AuditPassage,
     change: {
-      quality?: "bad" | "okay" | "good";
-      value?: "irrelevant" | "potentially" | "gold";
+      // null CLEARS the axis. A misclick set a verdict permanently - there was
+      // no way back, and a wrong grade is worse than an absent one because
+      // nothing downstream can tell them apart.
+      quality?: "bad" | "okay" | "good" | null;
+      value?: "irrelevant" | "potentially" | "gold" | null;
     },
   ) {
     const key = keyOf(m);
@@ -283,12 +286,16 @@
         quote: m.quote ?? "",
         claim_type: m.claim_type ?? "",
         ...(change.quality !== undefined
-          ? { quality: change.quality }
+          ? change.quality === null
+            ? {}
+            : { quality: change.quality }
           : prev?.quality
             ? { quality: prev.quality }
             : {}),
         ...(change.value !== undefined
-          ? { value: change.value }
+          ? change.value === null
+            ? {}
+            : { value: change.value }
           : prev?.value
             ? { value: prev.value }
             : {}),
@@ -391,13 +398,19 @@
     if (!cursor) return;
     const { m, p } = cursor;
     if (!gradable(p)) return;
-    if (e.key === "1") saveClaim(m, p, { quality: "bad" });
-    else if (e.key === "2") saveClaim(m, p, { quality: "okay" });
-    else if (e.key === "3") saveClaim(m, p, { quality: "good" });
-    else if (e.key === "8" || e.key === "0" || e.key === "x" || e.key === "X")
-      saveClaim(m, p, { value: "irrelevant" });
-    else if (e.key === "9") saveClaim(m, p, { value: "potentially" });
-    else if (e.key === "7") saveClaim(m, p, { value: "gold" });
+    // The number keys toggle too, so a mis-keyed grade is undone the same way
+    // it was made rather than being permanent.
+    const set = verdictOf(m);
+    const q = (v: "bad" | "okay" | "good") =>
+      saveClaim(m, p, { quality: set?.quality === v ? null : v });
+    const val = (v: "irrelevant" | "potentially" | "gold") =>
+      saveClaim(m, p, { value: set?.value === v ? null : v });
+    if (e.key === "1") q("bad");
+    else if (e.key === "2") q("okay");
+    else if (e.key === "3") q("good");
+    else if (e.key === "8" || e.key === "0" || e.key === "x" || e.key === "X") val("irrelevant");
+    else if (e.key === "9") val("potentially");
+    else if (e.key === "7") val("gold");
     else return;
     e.preventDefault();
   }
@@ -998,9 +1011,12 @@
                                 <span class="grade-axis">extraction</span>
                                 {#each QUALITY as q, qi}
                                   <button
-                                    onclick={() => saveClaim(m, p, { quality: q })}
+                                    onclick={() =>
+                                      saveClaim(m, p, { quality: g?.quality === q ? null : q })}
                                     class="grade-chip {g?.quality === q ? 'is-set ' + q : ''}"
-                                    title="{QUALITY_HELP[q]} - hover this claim and press {qi + 1}"
+                                    title="{g?.quality === q
+                                      ? 'Click again to clear this'
+                                      : QUALITY_HELP[q]} - hover this claim and press {qi + 1}"
                                   >
                                     <kbd class:invisible={!isHovered(m)}>{qi + 1}</kbd>{q}
                                   </button>
@@ -1010,7 +1026,13 @@
                                 <span class="grade-axis">value</span>
                                 {#each VALUE as v, vi}
                                   <button
-                                    onclick={() => saveClaim(m, p, { value: v })}
+                                    onclick={() =>
+                                      saveClaim(m, p, {
+                                        value:
+                                          g?.value === v || (v === "irrelevant" && g?.irrelevant && !g?.value)
+                                            ? null
+                                            : v,
+                                      })}
                                     class="grade-chip {g?.value === v ||
                                     (v === 'irrelevant' && g?.irrelevant && !g?.value)
                                       ? 'is-set ' + v

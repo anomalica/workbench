@@ -280,8 +280,8 @@
 {#if !selected}
   <!-- The list. -->
   <div class="flex-1 flex flex-col min-h-0 font-ui bg-surface">
-    <div class="flex-none px-6 py-3 border-b border-border">
-      <h1 class="text-sm font-semibold text-on-surface">Digests</h1>
+    <div class="flex-none px-6 py-6 border-b border-border">
+      <h2 class="font-ui text-lg text-on-surface">Digests</h2>
       <p class="text-xs text-on-surface-muted mt-0.5">
         {#if loadingList}
           Finding records digested by more than one model...
@@ -324,18 +324,18 @@
 {:else}
   <!-- Drilled in: ingest on the left, what the models made of it on the right. -->
   <div class="flex-1 flex flex-col min-h-0 font-ui">
-    <header class="flex-none px-4 py-2.5 border-b border-border bg-surface-alt/60 flex flex-wrap items-center gap-x-3 gap-y-2">
+    <header class="flex-none px-4 py-3 border-b border-border bg-surface-alt flex flex-wrap items-center gap-x-3 gap-y-2">
       <button
         onclick={backToList}
-        class="flex-none text-xs text-on-surface-secondary hover:text-on-surface cursor-pointer transition-colors flex items-center gap-1"
+        class="p-2 rounded text-on-surface-muted hover:text-on-surface hover:bg-surface transition-colors cursor-pointer flex-none"
         title="Back to the digest list"
+        aria-label="Back to the digest list"
       >
-        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />
         </svg>
-        Digests
       </button>
-      <span class="text-sm font-medium text-on-surface truncate max-w-sm">{title}</span>
+      <span class="font-ui font-semibold text-on-surface truncate max-w-md">{title}</span>
       <span class="flex-1"></span>
       {#if loading}
         <span class="text-xs text-on-surface-muted">Loading…</span>
@@ -355,7 +355,8 @@
         {/each}
         <input
           bind:value={notes}
-          placeholder="Why? (optional)"
+          placeholder="Why this one? Saved with the choice"
+          title="Stored with the judgment and shown here again next time this record is opened."
           class="text-xs px-2 py-1 rounded border border-border bg-surface text-on-surface w-40"
         />
         <button

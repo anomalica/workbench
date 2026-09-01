@@ -39,7 +39,6 @@
   let brief = $state<Record<string, unknown> | null>(null);
   let briefLoading = $state(false);
   let newTopic = $state("");
-  let newNote = $state("");
   let filter = $state<"all" | "single" | "nobrief">("all");
 
   /** Everything still awaiting a page. Every count comes off THIS, so a filter
@@ -122,9 +121,8 @@
     busy = true;
     error = null;
     try {
-      await seedTopic(newTopic, newNote);
+      await seedTopic(newTopic, "");
       newTopic = "";
-      newNote = "";
       await load();
     } catch (e) {
       error = String(e);
@@ -258,11 +256,6 @@
           <input
             bind:value={newTopic}
             placeholder="Topic name, e.g. Summoning"
-            class="flex-1 min-w-48 rounded border border-border bg-surface px-2.5 py-1.5 text-sm text-on-surface"
-          />
-          <input
-            bind:value={newNote}
-            placeholder="Why (optional)"
             class="flex-1 min-w-48 rounded border border-border bg-surface px-2.5 py-1.5 text-sm text-on-surface"
           />
           <button
