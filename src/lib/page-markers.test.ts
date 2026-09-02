@@ -116,3 +116,55 @@ describe("pageMarkerLines", () => {
     expect(pageMarkerLines(body).size).toBe(claimedPages(body).length);
   });
 });
+
+describe("the block notation", () => {
+  // Three records group the two page numbers in one comment. The first version
+  // of this module matched only the inline form, found 0 of one record's 63
+  // markers, and reported it as having no pages at all.
+  const BLOCK = `<!--
+file_page: 76
+printed_page: 4
+-->
+text
+<!--
+file_page: 77
+printed_page: 5
+-->`;
+
+  it("is seen at all", () => {
+    expect(claimedPages(BLOCK)).toEqual([76, 77]);
+  });
+
+  it("is counted the same way whichever notation a record mixes", () => {
+    const mixed = `<!-- file_page: 1 -->\na\n<!--\nfile_page: 2\nprinted_page: 2\n-->`;
+    expect(claimedPages(mixed)).toEqual([1, 2]);
+    expect(pageMarkerLines(mixed).size).toBe(2);
+  });
+
+  it("is renumbered without losing the number on the paper", () => {
+    const out = applyPageMarkers(BLOCK, readPageMarkers([76, 77], 2));
+    expect(claimedPages(out)).toEqual([1, 2]);
+    expect(out).toContain("printed_page: 4");
+    expect(out).toContain("printed_page: 5");
+  });
+
+  it("keeps the printed number when the file number cannot be placed", () => {
+    // The document's own numbering is not what went wrong, so it survives.
+    const out = applyPageMarkers(BLOCK, readPageMarkers([1, 59, 3], 15));
+    expect(claimedPages(out)).toEqual([]);
+    expect(out).toContain("printed_page: 4");
+    expect(out).not.toContain("page_break");
+  });
+
+  it("does not mistake a comment that merely mentions the words", () => {
+    expect(claimedPages("<!-- the file_page: 3 was wrong -->")).toEqual([]);
+    expect(claimedPages("<!-- speaker: Someone -->")).toEqual([]);
+  });
+
+  it("leaves an ordinary comment untouched when renumbering", () => {
+    const body = "<!-- speaker: Bob -->\n<!-- file_page: 9 -->";
+    const out = applyPageMarkers(body, readPageMarkers([9], 1));
+    expect(out).toContain("<!-- speaker: Bob -->");
+    expect(claimedPages(out)).toEqual([1]);
+  });
+});

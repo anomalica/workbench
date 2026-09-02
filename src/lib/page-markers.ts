@@ -68,39 +68,82 @@ export function readPageMarkers(claimed: number[], pageCount: number | null): Pa
   };
 }
 
-const FILE_PAGE = /<!--\s*file_page:\s*(\d+)\s*-->/g;
+/**
+ * Finding the markers.
+ *
+ * A page marker is a comment CONTAINING a file_page line, not a comment of a
+ * particular shape. Most records write it inline:
+ *
+ *     <!-- file_page: 12 -->
+ *
+ * but some group it with the printed number in one block:
+ *
+ *     <!--
+ *     file_page: 12
+ *     printed_page: 4
+ *     -->
+ *
+ * The first version of this matched only the inline form. It found nothing in
+ * the 63 markers of one record and 13 of 16 in another, and reported them as
+ * records missing their pages - a confident, wrong answer in exactly the shape
+ * of a right one. So the comment is parsed and then looked inside, rather than
+ * its punctuation being enumerated.
+ */
+const COMMENT = /<!--([\s\S]*?)-->/g;
+const FILE_PAGE_LINE = /(?:^|\n)[ \t]*file_page:[ \t]*(\d+)[ \t]*(?=\n|$)/;
+
+function claimedIn(comment: string): number | null {
+  const m = comment.match(FILE_PAGE_LINE);
+  return m ? Number(m[1]) : null;
+}
 
 export function claimedPages(body: string): number[] {
-  return [...body.matchAll(FILE_PAGE)].map((m) => Number(m[1]));
+  const out: number[] = [];
+  for (const m of body.matchAll(COMMENT)) {
+    const n = claimedIn(m[1]);
+    if (n !== null) out.push(n);
+  }
+  return out;
 }
 
 /**
- * Rewrites `file_page` values to the ones actually shown, so every path that
+ * Rewrites the page numbers to the ones actually shown, so every path that
  * reads them downstream - the divider label, the scroll sync, the click target -
  * agrees without each having to know the numbers were suspect.
  *
- * `printed_page` is left alone: it is the number on the paper, not a count of
- * the file, and a document that restarts at 1 is telling the truth.
+ * `printed_page` is left alone wherever it appears: it is the number on the
+ * paper, not a count of the file, and a document that restarts at 1 is telling
+ * the truth about itself.
  */
 export function applyPageMarkers(body: string, markers: PageMarkers, from = 0): string {
   let i = from - 1;
-  return body.replace(FILE_PAGE, () => {
+  return body.replace(COMMENT, (whole, inner: string) => {
+    if (claimedIn(inner) === null) return whole;
     const page = markers.pageFor(++i);
-    // An unplaceable break is still a break. Keeping it - unnumbered - shows
-    // the page ended where it ended, which is true, instead of dropping the
-    // division or printing a number that sends the source pane elsewhere.
-    return page === null ? "<!-- page_break -->" : `<!-- file_page: ${page} -->`;
+    // Rewritten inside the comment, then put back: the delimiters are not part
+    // of what a line matches, and replacing against the whole comment silently
+    // matched nothing and left every number as it was.
+    if (page !== null) {
+      const fixed = inner.replace(FILE_PAGE_LINE, (line) => line.replace(/\d+/, String(page)));
+      return `<!--${fixed}-->`;
+    }
+    // Unplaceable. Drop the number that would send the source pane somewhere
+    // invented, but keep anything else the comment was carrying - and keep the
+    // break itself, because the page did end here.
+    const rest = inner.replace(FILE_PAGE_LINE, "").trim();
+    return rest ? `<!--\n${rest}\n-->` : "<!-- page_break -->";
   });
 }
 
-/** Every page marker with where it sits, so a caller rendering the body block
- *  by block can still tell which marker in the WHOLE record it is holding. */
+/** Every page marker's line, and which marker of the whole record it is, so a
+ *  caller rendering block by block can still place a block's first marker. */
 export function pageMarkerLines(body: string): Map<number, number> {
-  const lines = body.split("\n");
   const at = new Map<number, number>();
   let ordinal = 0;
-  lines.forEach((line, i) => {
-    for (const _ of line.matchAll(FILE_PAGE)) at.set(i, ordinal++);
-  });
+  for (const m of body.matchAll(COMMENT)) {
+    if (claimedIn(m[1]) === null) continue;
+    const line = body.slice(0, m.index).split("\n").length - 1;
+    at.set(line, ordinal++);
+  }
   return at;
 }
