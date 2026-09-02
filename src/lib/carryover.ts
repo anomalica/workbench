@@ -2,7 +2,11 @@
 export interface ReviewCarryover {
   /** ISO-8601 Zulu time of the re-ingest that carried the labels. */
   at: string;
-  /** content hash of the v1 record the labels came from. */
+  /** Content hash of the record the labels came from. Usually a retired
+   *  predecessor; equal to the record's OWN hash when the ingester refreshed
+   *  it in place (same source bytes, re-processed). Informational only -
+   *  nothing here resolves it, and it must not be assumed to name another
+   *  record. */
   from: string;
   /** v1 had manual text edits beyond speaker labels - flag a re-check. */
   had_text_edits: boolean;
