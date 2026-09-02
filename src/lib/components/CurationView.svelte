@@ -208,7 +208,12 @@
               <span class="text-xs font-ui px-2 py-0.5 rounded bg-primary/10 text-primary uppercase tracking-wide">
                 {isCrossType ? "mixed types" : current.node_type}
               </span>
-              <span class="text-xs font-ui text-on-surface-secondary">{Math.round(current.score * 100)}% · {REASON_LABEL[current.reason] ?? current.reason}</span>
+              <span class="text-xs font-ui text-on-surface-secondary">
+                {Math.round(current.score * 100)}%{#if current.rule_score != null}
+                  <span title="The rules pass surfaced this pair too; its own score">
+                    · rules {Math.round(current.rule_score * 100)}%</span
+                  >{/if} · {REASON_LABEL[current.reason] ?? current.reason}
+              </span>
               <span class="flex-1"></span>
               <span class="text-xs font-ui text-on-surface-muted tabular-nums">{selectedMembers.length} selected</span>
             </div>

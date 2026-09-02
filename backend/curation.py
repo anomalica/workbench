@@ -91,17 +91,32 @@ def read_candidates() -> list[dict]:
     # another type, with a reason beginning "import:". Tagging those "manual"
     # would call a machine proposal a reviewer's verification, which is the
     # one thing the ordering below relies on the tag to mean.
-    manual = [
+    tagged = [
         {**c, "source": _origin(c)}
         for c in _read_candidate_file(manual_candidates_path())
     ]
-    seen = {candidate_key(c["node_ids"]) for c in manual}
-    auto = [
-        c
-        for c in _read_candidate_file(candidates_path())
-        if candidate_key(c["node_ids"]) not in seen
-    ]
-    return manual + auto
+    # Only a reviewer's own entry leads. The machine passes that now write to
+    # the same file (verify, import) are a shortlist, not a person's word:
+    # nine in ten right, and 246 of them ahead of everything would bury the
+    # few human proposals. They sit with the rules' candidates, by score.
+    human = [c for c in tagged if c["source"] == "manual"]
+    machine = {
+        candidate_key(c["node_ids"]): c for c in tagged if c["source"] != "manual"
+    }
+    lead = {candidate_key(c["node_ids"]) for c in human}
+    for c in _read_candidate_file(candidates_path()):
+        key = candidate_key(c["node_ids"])
+        if key in lead:
+            continue
+        if key in machine:
+            # Both passes surfaced the pair. Keep the judged entry's reason and
+            # carry the rules' score beside it: two independent signals, and a
+            # reviewer benefits from seeing whether they agree.
+            machine[key] = {**machine[key], "rule_score": c.get("score")}
+        else:
+            machine[key] = {**c, "source": "rules"}
+    ranked = sorted(machine.values(), key=lambda c: -(c.get("score") or 0))
+    return human + ranked
 
 
 def _run(module: str, args: list[str]) -> dict:

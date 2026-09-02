@@ -1097,7 +1097,14 @@ export interface MergeCandidate {
   suggested_canonical: string;
   score: number;
   node_type: string;
-  reason: "name-equiv" | "name-equiv-crosstype" | "fuzzy" | "embedding";
+  /** A rules label, or free text from a machine pass ("verify: ...",
+   *  "import: ...") or a reviewer. */
+  reason: string;
+  /** Who proposed it: "manual" for a reviewer, else the pass's name. */
+  source?: string;
+  /** The rules' own score when the rules surfaced the same pair a machine
+   *  judgement did - shown beside `score` as an independent signal. */
+  rule_score?: number | null;
   members: MergeMember[];
 }
 

@@ -65,7 +65,7 @@ def test_manual_candidates_merge_in_and_are_tagged(monkeypatch, tmp_path):
     )
     c = curation.read_candidates()
     assert [x["node_ids"] for x in c] == [["c", "d"], ["a", "b"]]  # manual first
-    assert c[0]["source"] == "manual" and "source" not in c[1]
+    assert c[0]["source"] == "manual" and c[1]["source"] == "rules"
 
 
 def test_manual_candidate_outranks_the_machines_duplicate(monkeypatch, tmp_path):
@@ -242,3 +242,57 @@ def test_each_machine_pass_names_itself(monkeypatch, tmp_path):
     assert by_first["v1"]["source"] == "verify"
     # No tag at all is a reviewer's entry, as the file was originally.
     assert by_first["h1"]["source"] == "manual"
+
+
+def _entry(ids, reason, score, node_type="person"):
+    return {
+        "node_ids": ids,
+        "suggested_canonical": ids[0],
+        "score": score,
+        "node_type": node_type,
+        "reason": reason,
+    }
+
+
+def test_only_a_reviewer_s_entry_leads_and_machine_entries_rank_by_score(
+    monkeypatch, tmp_path
+):
+    manual = tmp_path / "manual.json"
+    manual.write_text(
+        json.dumps(
+            [
+                _entry(["v1", "v2"], "verify: Haiku judged one entity", 0.95),
+                _entry(["h1", "h2"], "same person, verified via claims", 0.5),
+                _entry(
+                    ["i1", "i2"],
+                    "import: minted beside a live node of the same name",
+                    0.7,
+                ),
+            ]
+        )
+    )
+    rules = tmp_path / "rules.json"
+    rules.write_text(json.dumps([_entry(["r1", "r2"], "fuzzy", 0.8)]))
+    monkeypatch.setenv("ANOMALICA_MERGE_CANDIDATES_MANUAL", str(manual))
+    monkeypatch.setenv("ANOMALICA_MERGE_CANDIDATES", str(rules))
+    order = [c["node_ids"][0] for c in curation.read_candidates()]
+    # The human entry first regardless of score; then every machine entry,
+    # whichever file it came from, by score.
+    assert order == ["h1", "v1", "r1", "i1"]
+
+
+def test_a_pair_both_passes_surfaced_keeps_the_judgement_and_the_rules_score(
+    monkeypatch, tmp_path
+):
+    manual = tmp_path / "manual.json"
+    manual.write_text(
+        json.dumps([_entry(["a", "b"], "verify: one entity, seen in claims", 0.9)])
+    )
+    rules = tmp_path / "rules.json"
+    rules.write_text(json.dumps([_entry(["b", "a"], "fuzzy", 0.62)]))
+    monkeypatch.setenv("ANOMALICA_MERGE_CANDIDATES_MANUAL", str(manual))
+    monkeypatch.setenv("ANOMALICA_MERGE_CANDIDATES", str(rules))
+    [c] = curation.read_candidates()
+    assert c["reason"].startswith("verify:")
+    assert c["source"] == "verify"
+    assert c["rule_score"] == 0.62
