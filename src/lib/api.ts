@@ -1538,6 +1538,18 @@ export interface Topic {
   status: string;
   has_brief: boolean;
   brief_claims: number | null;
+  /** Set only when a rename was asked for and did NOT land. An applied one
+   *  needs no telling - `name` is already the new one. */
+  rename?: RenameOutcome | null;
+}
+
+/** What became of a proposed rename. `rejected` means the name is already
+ *  another node's, which is a merge decision rather than a rename; `lost` means
+ *  the node no longer resolves; `pending` means the assimilator has not run. */
+export interface RenameOutcome {
+  status: "pending" | "applied" | "rejected" | "lost";
+  proposed_name?: string;
+  note?: string | null;
 }
 
 export interface SeededTopic {
@@ -1598,6 +1610,28 @@ export async function seedTopic(name: string, note: string): Promise<void> {
   });
   if (!res.ok)
     throw new Error((await res.json().catch(() => ({}))).detail ?? `Seed failed: ${res.status}`);
+}
+
+/** Rename a node - its name is the page title and the slug.
+ *
+ *  Resolves with the OUTCOME rather than throwing on anything but a transport
+ *  error: `rejected` and `lost` are ordinary answers, not failures, and a caller
+ *  that treats them as success tells a reviewer their change landed when it
+ *  did not. */
+export async function renameTopic(
+  nodeId: string,
+  name: string,
+  newName: string,
+  reason?: string,
+): Promise<RenameOutcome & { ok: boolean; name: string }> {
+  const res = await fetch("/api/topics/rename", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ node_id: nodeId, name, new_name: newName, reason }),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(payload.detail ?? `Rename failed: ${res.status}`);
+  return payload;
 }
 
 export async function unseedTopic(name: string): Promise<void> {

@@ -24,11 +24,13 @@ owns the mutation and the durable ledger, the workbench invokes and reports.
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import re
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 import yaml
@@ -297,6 +299,7 @@ def list_topics(limit: int = 400) -> dict:
         return {"topics": [], "seeded": read_seeded(), "published": published_pages()}
     rows: list = []
     vetoed: set = set()
+    renames: dict = {}
     try:
         rows = con.execute(
             """
@@ -316,6 +319,20 @@ def list_topics(limit: int = 400) -> dict:
         # pre-render must not fall over on it, or a whole snapshot fails for a
         # feature that has never run.
         rows = []
+    try:
+        # Renames that did NOT land. An applied one needs no telling - the row
+        # already shows the new name - but a rejected or lost one is an answer
+        # somebody is owed, and it is invisible everywhere else. Ordered oldest
+        # first so the latest attempt per node is the one that survives.
+        renames = {
+            r[0]: {"status": r[1], "proposed_name": r[2], "note": r[3]}
+            for r in con.execute(
+                "SELECT node_id, status, proposed_name, resolution_note"
+                " FROM rename_proposals WHERE status != 'applied' ORDER BY proposed_at"
+            )
+        }
+    except sqlite3.OperationalError:
+        renames = {}
     finally:
         con.close()
 
@@ -347,6 +364,8 @@ def list_topics(limit: int = 400) -> dict:
                 # proposal table computed before the column existed.
                 "subject_claims": subject,
                 "status": "vetoed" if nid in vetoed else (status or "proposed"),
+                # Present only when a rename was asked for and did not land.
+                "rename": renames.get(nid),
                 "has_brief": ref is not None,
                 "brief_claims": ref["claim_total"] if ref else None,
             }
@@ -393,3 +412,117 @@ def veto(node_ids: list[str], reason: str | None, by: str | None) -> dict:
     if r.returncode != 0:
         raise RuntimeError(r.stderr.strip()[-400:] or "veto failed")
     return {"ok": True, "detail": r.stdout.strip()}
+
+
+def rename_proposals_dir() -> Path:
+    base = Path(os.environ.get("ANOMALICA_CURATION_DIR", str(_ANOMALICA / "curation")))
+    return base / "rename-proposals"
+
+
+def rename_outcome(proposal_id: str) -> dict | None:
+    """What the assimilator recorded for one proposal, or None if it never
+    reached the table (a graph built before renames existed has no such table)."""
+    con = graph._open()
+    if con is None:
+        return None
+    try:
+        row = con.execute(
+            "SELECT status, resolution_note FROM rename_proposals WHERE id = ?",
+            (proposal_id,),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    finally:
+        con.close()
+    return {"status": row[0], "note": row[1]} if row else None
+
+
+def propose_rename(
+    node_id: str,
+    current_name: str | None,
+    new_name: str | None,
+    reason: str | None,
+    by: str | None,
+) -> dict:
+    """Rename a graph node - the title its page will carry - via the assimilator.
+
+    Two hops rather than one because the workbench holds the graph READ-ONLY and
+    a name written straight into the database would not survive a rebuild: the
+    graph is re-imported from the digests and only the curation ledger is
+    replayed. So the rename is dropped as a proposal file and applied by the
+    assimilator's own command, which writes the ledger entry replay re-applies.
+
+    The outcome is read back and returned rather than assumed. A rename can end
+    `rejected` (the name is already another node's, which is a MERGE decision,
+    not this one) or `lost` (neither the id nor the name resolves any more), and
+    both of those exit zero - reporting success off the exit code would tell a
+    reviewer their change landed when it did not.
+    """
+    from datetime import datetime, timezone
+
+    new_name = (new_name or "").strip()
+    current_name = (current_name or "").strip()
+    if not new_name:
+        raise ValueError("A new name is required")
+    if not current_name:
+        raise ValueError("The current name is required to identify the node")
+    if new_name == current_name:
+        raise ValueError("That is already the name")
+
+    now = datetime.now(timezone.utc)
+    proposal = {
+        "id": str(uuid.uuid4()),
+        "node_id": node_id,
+        # NOT redundant with node_id: a rebuild mints new node ids, so the name
+        # the reviewer saw is the fallback identity.
+        "node_name_at_proposal": current_name,
+        "proposed_name": new_name,
+        "reason": (reason or "").strip() or None,
+        "proposed_by": by or "workbench",
+        "proposed_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    directory = rename_proposals_dir()
+    directory.mkdir(parents=True, exist_ok=True)
+    # Timestamp first so the directory sorts into application order; the id tail
+    # keeps two proposals made in the same second from overwriting each other.
+    stamp = now.strftime("%Y-%m-%dT%H-%M-%SZ")
+    path = (
+        directory / f"{stamp}-{_slugify(current_name)[:60]}-{proposal['id'][:8]}.json"
+    )
+    path.write_text(json.dumps(proposal, indent=2) + "\n")
+
+    cmd = [
+        sys.executable,
+        "-m",
+        "assimilator.cli",
+        "--db",
+        os.environ.get("GRAPH_DB_PATH", str(graph.graph_db_path())),
+        "apply-renames",
+    ]
+    env = {**os.environ, "PYTHONPATH": str(_ASSIMILATOR_WS)}
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=120, env=env)
+    except subprocess.TimeoutExpired as exc:
+        # The proposal file is already on disk, so the next apply-renames run
+        # picks it up - say that rather than implying the rename was lost.
+        raise RuntimeError(
+            "the assimilator did not finish in time; the rename is queued"
+        ) from exc
+    outcome = rename_outcome(proposal["id"])
+    if outcome is None:
+        # Nothing was recorded, so the command did not get as far as this
+        # proposal - that IS the failure, whatever the exit code said.
+        raise RuntimeError(
+            r.stderr.strip()[-400:] or r.stdout.strip()[-400:] or "rename failed"
+        )
+    status = outcome["status"]
+    # A non-zero exit here means some OTHER proposal file in the directory would
+    # not parse. Ours has a recorded outcome, so report that outcome.
+    return {
+        "ok": status == "applied",
+        "status": status,
+        "note": outcome["note"],
+        "name": new_name if status == "applied" else current_name,
+        "proposal_id": proposal["id"],
+        "detail": r.stdout.strip(),
+    }

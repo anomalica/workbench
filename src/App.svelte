@@ -99,6 +99,11 @@
   let canHousekeep = $derived(
     myRole === "reviewer" || myRole === "editor" || myRole === "admin",
   );
+  // Topics is a step above housekeeping: vetoing, seeding and renaming decide
+  // what gets published and under what title, so the server gates all three at
+  // editor. Offering a reviewer buttons that come back 403 is worse than not
+  // showing them.
+  let canCurate = $derived(myRole === "editor" || myRole === "admin");
 
   async function reloadPending() {
     if (!canReview) {
@@ -862,7 +867,7 @@
     {:else if appMode === "housekeeping"}
       <HousekeepingView canDecide={liveBackend && canHousekeep} />
     {:else if appMode === "topics"}
-      <TopicsView canDecide={liveBackend && canHousekeep} />
+      <TopicsView canDecide={liveBackend && canCurate} />
     {:else if appMode === "infrastructure"}
       <InfrastructureView onopenrecord={openRecordByHash} />
     {:else if appMode === "roles"}

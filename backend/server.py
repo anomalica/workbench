@@ -2990,9 +2990,13 @@ def topic_brief(section: str, slug: str) -> dict:
 
 
 @app.post("/api/topics/veto")
-def topic_veto(body: dict) -> dict:
+def topic_veto(body: dict, request: Request) -> dict:
     """Editorial "never a page". Durable in the curation ledger and replayed on
-    every rebuild, so the proposal stops reappearing each pass."""
+    every rebuild, so the proposal stops reappearing each pass.
+
+    Editor-gated, like the two beside it: deciding what the site does and does
+    not publish is a change to published output, not an assessment of it."""
+    _require_role(request, "editor")
     node_ids = body.get("node_ids") or []
     if not node_ids:
         raise HTTPException(status_code=400, detail="node_ids required")
@@ -3003,7 +3007,7 @@ def topic_veto(body: dict) -> dict:
 
 
 @app.post("/api/topics/seed")
-def topic_seed(body: dict) -> dict:
+def topic_seed(body: dict, request: Request) -> dict:
     """Name a topic we want covered, possibly before any material exists.
 
     This is the half the graph cannot produce. An emergent proposal is derived
@@ -3012,6 +3016,7 @@ def topic_seed(body: dict) -> dict:
     about - a better steer for what to ingest next than what happens to be
     abundant already.
     """
+    _require_role(request, "editor")
     name = (body.get("name") or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="name required")
@@ -3019,11 +3024,43 @@ def topic_seed(body: dict) -> dict:
 
 
 @app.delete("/api/topics/seed/{name}")
-def topic_unseed(name: str) -> dict:
+def topic_unseed(name: str, request: Request) -> dict:
     """Drop a seeded topic. Append-only - a removal is a compensating entry, so
     what was asked for survives even after it is dropped."""
+    _require_role(request, "editor")
     pages.remove_seeded(name, "workbench")
     return {"ok": True}
+
+
+@app.post("/api/topics/rename")
+def topic_rename(body: dict, request: Request) -> dict:
+    """Rename a graph node - the name IS the page title and the slug.
+
+    Editor-gated for that reason: it changes published output, the same class as
+    archiving a record, not an assessment of it.
+
+    The rename is applied through the assimilator and the recorded outcome comes
+    back with it, because a rename can legitimately end `rejected` (the name
+    belongs to another node already, which is a merge decision, not this one) or
+    `lost` (the node no longer resolves) without anything having gone wrong.
+    """
+    user = _require_role(request, "editor")
+    node_id = (body.get("node_id") or "").strip()
+    if not node_id:
+        raise HTTPException(status_code=400, detail="node_id required")
+    login = user.get("login") or user.get("email") or "unknown"
+    try:
+        return pages.propose_rename(
+            node_id,
+            body.get("name"),
+            body.get("new_name"),
+            body.get("reason"),
+            f"workbench/{login}",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (RuntimeError, OSError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @app.get("/api/graph/stats")

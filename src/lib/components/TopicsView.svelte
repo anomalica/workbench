@@ -14,6 +14,7 @@
   import {
     fetchTopics,
     fetchTopicBrief,
+    renameTopic,
     seedTopic,
     unseedTopic,
     vetoTopic,
@@ -66,6 +67,13 @@
     `https://anomalica.is/en/${page.kind}/${page.slug}/`;
   let showPublished = $state(false);
   let confirmVeto = $state<string | null>(null);
+  /** The node whose name is being edited, and the text in the box. Only one row
+   *  edits at a time - a name is read against its evidence, not in a batch. */
+  let renaming = $state<string | null>(null);
+  let renameDraft = $state("");
+  /** An outcome that is not "applied", kept until the next edit so a reviewer
+   *  reads WHY nothing changed rather than watching the name stay put. */
+  let renameResult = $state<{ node_id: string; message: string } | null>(null);
   const trailing = $derived(published.filter((p) => p.stale === true));
   /** A proposal that already has a page is not a proposal - it is the same
    *  subject in its finished state, and showing it in both lists reads as work
@@ -111,6 +119,45 @@
     error = null;
     try {
       await vetoTopic([t.node_id], reason);
+      await load();
+    } catch (e) {
+      error = String(e);
+    } finally {
+      busy = false;
+    }
+  }
+
+  function startRename(t: Topic) {
+    renameResult = null;
+    renaming = renaming === t.node_id ? null : t.node_id;
+    renameDraft = t.name;
+  }
+
+  /** `rejected` and `lost` come back with a zero exit and no error: they are
+   *  answers, not failures, and each has its own next step. */
+  const RENAME_MESSAGE: Record<string, string> = {
+    rejected: "Another node already has that name. Two nodes wanting one name is a merge, not a rename.",
+    lost: "That node no longer resolves - the graph was rebuilt. Reload and try again.",
+    pending: "Queued. The assimilator has not applied it yet.",
+  };
+
+  async function saveRename(t: Topic) {
+    const proposed = renameDraft.trim();
+    if (!proposed || proposed === t.name) {
+      renaming = null;
+      return;
+    }
+    busy = true;
+    error = null;
+    try {
+      const outcome = await renameTopic(t.node_id, t.name, proposed);
+      renaming = null;
+      renameResult = outcome.ok
+        ? null
+        : {
+            node_id: t.node_id,
+            message: RENAME_MESSAGE[outcome.status] ?? outcome.note ?? outcome.status,
+          };
       await load();
     } catch (e) {
       error = String(e);
@@ -309,6 +356,14 @@
             {#if !t.has_brief}
               <span class="text-xs text-on-surface-muted">no brief yet</span>
             {/if}
+            {#if t.rename}
+              <!-- Only unlanded renames reach here; an applied one is just the
+                   name. A reviewer who asked for a change is owed the answer. -->
+              <span
+                class="rounded-full bg-warning-container px-1.5 text-xs text-on-warning-container"
+                title={t.rename.note ?? ""}
+              >rename {t.rename.status}: {t.rename.proposed_name}</span>
+            {/if}
 
             <div class="ml-auto flex items-center gap-1">
               <!-- Icons, with the word in the tooltip: the row is dense and
@@ -327,6 +382,19 @@
                 </svg>
               </button>
 
+              {#if canWrite}
+                <button
+                  onclick={() => startRename(t)}
+                  title="Rename - the name is the page title and its address"
+                  aria-label="Rename"
+                  class="rounded p-1 {renaming === t.node_id ? 'bg-primary-container text-on-surface' : 'text-on-surface-muted hover:bg-surface hover:text-primary'}"
+                >
+                  <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M16.5 4.5l3 3L8 19H5v-3L16.5 4.5z" />
+                  </svg>
+                </button>
+              {/if}
+
               {#if canDecide && t.status !== "vetoed"}
                 <button
                   onclick={() => (confirmVeto = confirmVeto === t.node_id ? null : t.node_id)}
@@ -341,6 +409,41 @@
               {/if}
             </div>
           </div>
+
+          {#if renaming === t.node_id}
+            <div class="flex flex-wrap items-center gap-2 border-t border-border bg-surface px-4 py-2.5 text-xs">
+              <label class="text-on-surface-muted" for="rename-{t.node_id}">New name</label>
+              <input
+                id="rename-{t.node_id}"
+                bind:value={renameDraft}
+                onkeydown={(e) => {
+                  if (e.key === "Enter") saveRename(t);
+                  if (e.key === "Escape") renaming = null;
+                }}
+                disabled={busy}
+                class="min-w-64 flex-1 rounded border border-border bg-surface-alt px-2 py-1 text-sm text-on-surface"
+              />
+              <button
+                onclick={() => saveRename(t)}
+                disabled={busy || !renameDraft.trim() || renameDraft.trim() === t.name}
+                class="rounded bg-primary px-2 py-1 text-on-primary disabled:opacity-50"
+              >Rename</button>
+              <button
+                onclick={() => (renaming = null)}
+                class="rounded px-2 py-1 text-on-surface-muted hover:text-on-surface"
+              >Cancel</button>
+              <p class="w-full text-on-surface-muted">
+                This name becomes the page's title and its web address. It is recorded
+                as a correction, so it survives the graph being rebuilt.
+              </p>
+            </div>
+          {/if}
+
+          {#if renameResult?.node_id === t.node_id}
+            <div class="border-t border-warning/30 bg-warning-container/30 px-4 py-2 text-xs text-on-surface">
+              {renameResult.message}
+            </div>
+          {/if}
 
           {#if confirmVeto === t.node_id}
             <div class="flex flex-wrap items-center gap-2 border-t border-error/30 bg-error/5 px-4 py-2 text-xs">
