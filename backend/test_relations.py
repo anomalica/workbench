@@ -42,7 +42,6 @@ def graph_db(tmp_path, monkeypatch):
         "INSERT INTO records VALUES ('third', 'Third', NULL, 'sha256:' || ?, 't')",
         ("c" * 64,),
     )
-    # Graph ids are UUIDs; the assimilator links by their first 8 characters.
     con.execute(
         "INSERT INTO claims VALUES ('5dbae39e-c14f-4ad1-9159-9c459d951001', "
         "'The craft hovered over the base.', 'me', 't')"
@@ -50,12 +49,6 @@ def graph_db(tmp_path, monkeypatch):
     con.execute(
         "INSERT INTO claims VALUES ('8fc54bb2-0000-4000-8000-000000000000', "
         "'An object hung above the installation.', 'other', 't')"
-    )
-    # Same 8-character prefix as the other record's claim, on a THIRD record:
-    # a prefix lookup not scoped to the pair would find two and pick wrongly.
-    con.execute(
-        "INSERT INTO claims VALUES ('8fc54bb2-ffff-4fff-8fff-ffffffffffff', "
-        "'A stranger''s claim.', 'third', 't')"
     )
     con.commit()
     con.close()
@@ -117,14 +110,19 @@ class TestRelationsFor:
             "other",
             "me",
             "same_subject",
-            links=[{"a": "8fc54bb2", "b": "5dbae39e", "relation": "corroborates"}],
+            links=[
+                {
+                    "a": "8fc54bb2-0000-4000-8000-000000000000",
+                    "b": "5dbae39e-c14f-4ad1-9159-9c459d951001",
+                    "relation": "corroborates",
+                }
+            ],
         )
         [r] = relations.relations_for(ME)
         [link] = r["links"]
         assert link["a"]["text"] == "The craft hovered over the base."
         assert link["b"]["text"] == "An object hung above the installation."
         assert link["relation"] == "corroborates"
-        # Full ids come back: the record page deep-links on the 36-character id.
         assert link["a"]["id"] == "5dbae39e-c14f-4ad1-9159-9c459d951001"
         assert link["b"]["id"] == "8fc54bb2-0000-4000-8000-000000000000"
 
@@ -136,10 +134,20 @@ class TestRelationsFor:
             "me",
             "other",
             "same_subject",
-            links=[{"a": "5dbae39e", "b": "deadbeef", "relation": "x"}],
+            links=[
+                {
+                    "a": "5dbae39e-c14f-4ad1-9159-9c459d951001",
+                    "b": "deadbeef-0000-4000-8000-000000000000",
+                    "relation": "x",
+                }
+            ],
         )
         [r] = relations.relations_for(ME)
-        assert r["links"][0]["b"] == {"id": "deadbeef", "text": None, "record_id": None}
+        assert r["links"][0]["b"] == {
+            "id": "deadbeef-0000-4000-8000-000000000000",
+            "text": None,
+            "record_id": None,
+        }
 
     def test_an_unconfirmed_judgement_is_not_shown(self, graph_db):
         # The pass judges twice; a first verdict the confirmation did not
