@@ -23,6 +23,7 @@
     User,
   } from "$lib/api";
   import { typeLabel } from "$lib/document-types";
+  import ToolbarMenu from "$lib/components/ToolbarMenu.svelte";
   import FileDropZone from "$lib/components/FileDropZone.svelte";
   import IngestList from "$lib/components/IngestList.svelte";
   import IngestViewer from "$lib/components/IngestViewer.svelte";
@@ -196,7 +197,6 @@
   // Lives in the toolbar above the list as a separate selector;
   // the table's Date column header stays a plain sort-direction toggle.
   let dateField = $state<DateField>(browsePrefs.dateField);
-  let dateMenuOpen = $state(false);
 
   $effect(() => {
     saveBrowsePrefs({ sortBy, sortAsc, dateField });
@@ -240,25 +240,6 @@
     if (dateField === "reviewed") return reviewedTimes[i.content_hash] || "";
     return i.date || "";
   }
-
-  function pickDateField(f: DateField) {
-    dateField = f;
-    dateMenuOpen = false;
-  }
-
-  function handleDocClickForDateMenu(e: MouseEvent) {
-    if (!dateMenuOpen) return;
-    const t = e.target as HTMLElement | null;
-    if (t?.closest("[data-date-menu]")) return;
-    if (t?.closest('[data-date-menu-trigger="1"]')) return;
-    dateMenuOpen = false;
-  }
-
-  $effect(() => {
-    if (!dateMenuOpen) return;
-    document.addEventListener("mousedown", handleDocClickForDateMenu);
-    return () => document.removeEventListener("mousedown", handleDocClickForDateMenu);
-  });
 
   let filteredIngests = $derived(
     ingests
@@ -355,6 +336,19 @@
   let sourceTypes = $derived(
     [...new Set(ingests.map((i) => i.document_type || i.source_type))].sort(),
   );
+  /** What picking each type would leave, so the choice can be made from the
+   *  list rather than by trying it. */
+  let typeOptions = $derived.by(() => {
+    const counts = new Map<string, number>();
+    for (const i of ingests) {
+      const t = i.document_type || i.source_type;
+      counts.set(t, (counts.get(t) ?? 0) + 1);
+    }
+    return [
+      { id: "all", label: "All", count: ingests.length },
+      ...sourceTypes.map((t) => ({ id: t, label: typeLabel(t), count: counts.get(t) ?? 0 })),
+    ];
+  });
 
   let blocksRedigestCount = $derived(
     ingests.filter((i) => i.digested && !i.digestible).length,
@@ -973,20 +967,13 @@
                 </button>
               {/if}
             </div>
-            <div class="flex items-center gap-1">
-              <button
-                onclick={() => { filterType = "all"; }}
-                class="text-xs font-ui px-2 py-1 rounded cursor-pointer transition-colors
-                  {filterType === 'all' ? 'bg-primary text-on-primary' : 'text-on-surface-secondary hover:bg-surface'}"
-              >All</button>
-              {#each sourceTypes as type}
-                <button
-                  onclick={() => { filterType = type; }}
-                  class="text-xs font-ui px-2 py-1 rounded cursor-pointer transition-colors
-                    {filterType === type ? 'bg-primary text-on-primary' : 'text-on-surface-secondary hover:bg-surface'}"
-                >{typeLabel(type)}</button>
-              {/each}
-            </div>
+            <ToolbarMenu
+              label="Type"
+              value={filterType}
+              options={typeOptions}
+              onpick={(id) => (filterType = id)}
+              title="Show only records of one type"
+            />
             {#if blocksRedigestCount > 0}
               <div class="flex items-center gap-1 border-l border-border pl-3">
                 <button
@@ -1001,37 +988,17 @@
             <!-- Date-field selector: what value the Date column shows
                  and what "Date" sort uses. Lives in the toolbar so the
                  column header itself stays a plain sort-direction toggle. -->
-            <div class="flex items-center gap-2 border-l border-border pl-3 relative">
-              <span class="text-xs font-ui text-on-surface-muted">Date:</span>
-              <button
-                data-date-menu-trigger="1"
-                onclick={() => { dateMenuOpen = !dateMenuOpen; }}
-                class="text-xs font-ui px-2 py-1 rounded cursor-pointer transition-colors
-                  flex items-center gap-1 bg-surface text-on-surface-secondary
-                  hover:bg-surface/60 border border-border"
+            <div class="border-l border-border pl-3">
+              <ToolbarMenu
+                label="Date"
+                value={dateField}
+                options={(["published", "ingested", "reviewed"] as DateField[]).map((f) => ({
+                  id: f,
+                  label: DATE_FIELD_LABELS[f],
+                }))}
+                onpick={(id) => (dateField = id as DateField)}
                 title="Change which date the Date column shows"
-              >
-                {DATE_FIELD_LABELS[dateField]}
-                <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6" />
-                </svg>
-              </button>
-              {#if dateMenuOpen}
-                <div
-                  data-date-menu
-                  class="absolute top-full left-0 mt-1 min-w-32 z-30 bg-surface border border-border rounded shadow-lg py-1"
-                >
-                  {#each (["published", "ingested", "reviewed"] as Array<typeof dateField>) as f}
-                    <button
-                      onclick={() => pickDateField(f)}
-                      class="w-full text-left text-xs font-ui px-3 py-1.5 hover:bg-surface-alt cursor-pointer
-                        {dateField === f ? 'text-primary font-medium' : 'text-on-surface'}"
-                    >
-                      {DATE_FIELD_LABELS[f]}
-                    </button>
-                  {/each}
-                </div>
-              {/if}
+              />
             </div>
 
             {#if filterCreator}

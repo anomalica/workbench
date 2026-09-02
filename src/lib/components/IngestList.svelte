@@ -77,7 +77,10 @@
   <button onclick={() => onsort("copyright")} class="w-16 flex-none cursor-pointer hover:text-on-surface text-left" title="Sort by access (publicly viewable?)">
     Public {sortBy === "copyright" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
   </button>
-  <button onclick={() => onsort("title")} class="flex-1 min-w-0 cursor-pointer hover:text-on-surface text-left" title="Sort by title">
+  <!-- min-w-32, not min-w-0: the fixed columns alone sum to about 1,040px,
+       so below that a zero-width Title cell let the word run under the next
+       header. A floor makes a narrow window scroll sideways instead. -->
+  <button onclick={() => onsort("title")} class="flex-1 min-w-32 cursor-pointer hover:text-on-surface text-left" title="Sort by title">
     Title {sortBy === "title" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
   </button>
   <button onclick={() => onsort("creator")} class="w-36 flex-none cursor-pointer hover:text-on-surface text-left" title="Sort by creator">
@@ -169,7 +172,7 @@
         >
           {isPubliclyViewable(ingest.copyright_status) ? "Yes" : "No"}
         </span>
-        <div class="flex items-baseline gap-1.5 flex-1 min-w-0">
+        <div class="flex items-baseline gap-1.5 flex-1 min-w-32">
           {#if !provenanceOf(ingest).traceable}
             <span class="text-warning flex-none" title="Untraceable: no recoverable source/origin">&#9888;</span>
           {/if}
