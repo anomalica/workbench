@@ -210,7 +210,7 @@
               </span>
               <span class="text-xs font-ui text-on-surface-secondary">
                 {Math.round(current.score * 100)}%{#if current.rule_score != null}
-                  <span title="The rules pass surfaced this pair too; its own score">
+                  <span title="The rules' own score for this pair, before any model judgement">
                     · rules {Math.round(current.rule_score * 100)}%</span
                   >{/if} · {REASON_LABEL[current.reason] ?? current.reason}
               </span>
