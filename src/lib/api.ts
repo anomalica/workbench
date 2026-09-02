@@ -1449,6 +1449,40 @@ export async function fetchHousekeepingQueue(): Promise<HousekeepingRow[]> {
   return (await res.json()).queue ?? [];
 }
 
+/** EXPERIMENTAL. A record the assimilator judged to share a subject with
+ *  this one, and the claim pairs that link them. Read-only: a decision on a
+ *  relation is a curation-ledger operation, not a write here. */
+export interface RecordRelation {
+  verdict: "same_subject" | "possibly_related";
+  shared_subject: string | null;
+  reason: string | null;
+  model: string | null;
+  judged_at: string;
+  other: {
+    record_id: string;
+    title: string | null;
+    date: string | null;
+    content_hash: string | null;
+    /** 56-char prefix, the form the record page is addressed by. */
+    public_hash: string | null;
+  };
+  /** Ours first, theirs second, whichever way the assimilator wrote them. */
+  links: {
+    a: { id: string; text: string | null; record_id: string | null };
+    b: { id: string; text: string | null; record_id: string | null };
+    relation: string;
+  }[];
+}
+
+export async function fetchRelations(contentHash: string): Promise<RecordRelation[]> {
+  const h = contentHash.replace(/^sha256:/, "");
+  const res = await fetch(readPath(`/api/ingests/${h}/relations`));
+  // Not pre-rendered into the static snapshot yet: an absent file is "none".
+  if (res.status === 404) return [];
+  if (!res.ok) throw new Error(`Failed to fetch relations: ${res.status}`);
+  return res.json();
+}
+
 export async function fetchHousekeeping(contentHash: string): Promise<HousekeepingSidecar | null> {
   const h = contentHash.replace(/^sha256:/, "");
   const res = await fetch(readPath(`/api/ingests/${h}/housekeeping`));

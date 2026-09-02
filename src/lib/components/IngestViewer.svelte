@@ -16,6 +16,8 @@
     pushOrigin,
     fetchPredigest,
     fetchSupersession,
+    fetchRelations,
+    type RecordRelation,
     type Predigest,
     fetchCoverage,
     provenanceOf,
@@ -277,7 +279,27 @@
       ["audit", "Audit", "Compare model extraction variants of this record"],
       ["predigest", "Pre-digest", "Exactly what the model receives - read-only (ADR 0042)"],
     );
+    // EXPERIMENTAL: only offered when the assimilator has judged this record
+    // to share a subject with another. A tab that is usually empty is noise.
+    if (relations.length) {
+      tabs.push([
+        "related",
+        `Related (${relations.length})`,
+        "Records the assimilator judged to share a specific subject with this one - experimental, read-only",
+      ]);
+    }
     return tabs;
+  });
+  /** The assimilator's cross-record judgements for this record. */
+  let relations = $state<RecordRelation[]>([]);
+  $effect(() => {
+    const h = ingest.content_hash;
+    relations = [];
+    fetchRelations(h)
+      .then((r) => {
+        if (h === ingest.content_hash) relations = r;
+      })
+      .catch(() => (relations = []));
   });
   // Per-speaker WORD counts for the speaker panel (word records); null for v1,
   // where the panel counts segments instead.
@@ -370,8 +392,7 @@
   // View mode for the ingest column's sub-tabs (rendered/edit/raw/diff/find).
   // Digest is no longer a sub-tab; it lives in its own column.
   let view = $state<
-    "ingest" | "edit" | "diff" | "raw" | "predigest" | "find" | "audit"
-  >("ingest");
+    "ingest" | "edit" | "diff" | "raw" | "predigest" | "find" | "audit" | "related">("ingest");
   // Fall back to Ingest when the active tab isn't offered for this record (e.g.
   // Edit on a word record, or Markup after switching to a prose record).
   $effect(() => {
@@ -5202,6 +5223,72 @@
           <DiffViewer original={doc.original} modified={doc.current} />
         </div>
 
+      {:else if view === "related"}
+        <!-- EXPERIMENTAL. What the assimilator's relate pass concluded about
+             this record and each other one it compared it with. Read-only:
+             confirming or rejecting a relation is a curation-ledger operation
+             (decision 0038) and is not built yet. -->
+        <div class="flex-1 overflow-auto px-6 py-4 space-y-6">
+          <p class="text-xs font-ui text-on-surface-muted">
+            Experimental. A local model judged whether this record and another refer to the same
+            specific subject. Nothing here is confirmed; the claim pairs are what it found.
+          </p>
+          {#each relations as rel (rel.other.record_id + rel.judged_at)}
+            <section class="border border-border rounded-lg p-4 space-y-3">
+              <div class="flex items-baseline gap-3 flex-wrap">
+                <span
+                  class="text-[10px] font-ui font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded
+                    {rel.verdict === 'same_subject'
+                      ? 'bg-primary-container text-on-primary-container'
+                      : 'bg-surface-alt text-on-surface-secondary'}"
+                >{rel.verdict === "same_subject" ? "same subject" : "possibly related"}</span>
+                {#if rel.shared_subject}
+                  <span class="text-sm font-medium text-on-surface">{rel.shared_subject}</span>
+                {/if}
+              </div>
+              <div class="text-sm">
+                {#if rel.other.public_hash}
+                  <a href="/{rel.other.public_hash}" class="text-primary hover:underline">{rel.other.title ?? rel.other.record_id}</a>
+                {:else}
+                  <span class="text-on-surface">{rel.other.title ?? rel.other.record_id}</span>
+                {/if}
+                {#if rel.other.date}
+                  <span class="text-on-surface-muted font-mono text-xs ml-2">{rel.other.date}</span>
+                {/if}
+              </div>
+              {#if rel.reason}
+                <p class="text-sm text-on-surface-secondary leading-relaxed">{rel.reason}</p>
+              {/if}
+              {#if rel.links.length}
+                <div class="space-y-2">
+                  <div class="grid grid-cols-2 gap-3 text-[10px] font-ui uppercase tracking-wide text-on-surface-muted">
+                    <span>This record</span><span>{rel.other.title ?? "The other record"}</span>
+                  </div>
+                  {#each rel.links as link (link.a.id + link.b.id)}
+                    <div class="grid grid-cols-2 gap-3 text-sm">
+                      <a
+                        href="#claim-{link.a.id}"
+                        class="block rounded bg-surface-alt px-3 py-2 hover:bg-surface text-on-surface leading-relaxed"
+                        title="Open this claim in the digest"
+                      >{link.a.text ?? "(claim no longer in the graph)"}</a>
+                      <a
+                        href="/{rel.other.public_hash ?? ''}#claim-{link.b.id}"
+                        class="block rounded bg-surface-alt px-3 py-2 hover:bg-surface text-on-surface leading-relaxed"
+                        title="Open this claim in the other record"
+                      >{link.b.text ?? "(claim no longer in the graph)"}</a>
+                    </div>
+                    {#if link.relation}
+                      <div class="text-[11px] font-ui text-on-surface-muted text-center">{link.relation}</div>
+                    {/if}
+                  {/each}
+                </div>
+              {/if}
+              <div class="text-[11px] font-ui text-on-surface-muted">
+                judged {rel.judged_at.slice(0, 10)}{rel.model ? ` by ${rel.model}` : ""}
+              </div>
+            </section>
+          {/each}
+        </div>
       {:else if view === "predigest"}
         <div class="flex-1 overflow-auto" data-scroll-sync onscroll={handleContentScroll}>
           {#if predigest === null}

@@ -42,7 +42,7 @@ from backend import (
     tuning,
     waveform,
 )
-from backend import archive_flag, infrastructure, pages, review_priority
+from backend import archive_flag, infrastructure, pages, relations, review_priority
 from backend.auth import setup_auth
 from backend.sync import GIT_LOCK, SyncManager
 from anomalica_common import housekeeping as hk
@@ -3595,6 +3595,16 @@ def get_supersession(full_hash: str) -> JSONResponse:
             "public_supersedes": by[:PUBLIC_HASH_LENGTH] if by else None,
         }
     )
+
+
+@app.get("/api/ingests/{full_hash}/relations")
+def get_relations(full_hash: str) -> list[dict]:
+    """EXPERIMENTAL. Records the assimilator judged to share a subject with
+    this one, with the linked claim pairs resolved. Read-only; a decision on
+    a relation goes through the curation ledger, never here."""
+    if not FULL_HASH_PATTERN.match(full_hash):
+        raise HTTPException(status_code=404, detail="Not found")
+    return relations.relations_for(full_hash)
 
 
 @app.get("/api/ingests/{full_hash}/history")
