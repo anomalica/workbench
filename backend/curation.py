@@ -11,6 +11,7 @@ merge_id; see the assimilator's contract.
 from __future__ import annotations
 
 import json
+import re
 import os
 import subprocess
 import sys
@@ -65,8 +66,13 @@ def _read_candidate_file(path: Path) -> list[dict]:
 
 
 def _origin(candidate: dict) -> str:
+    """Who proposed it. A machine-written entry names its pass in the reason's
+    first word ("import:", "verify:"); a reviewer's own carries no such tag or
+    says "manual:". The tag is what earns an entry the manual ordering, so a
+    machine's pass must never be read as a person."""
     reason = str(candidate.get("reason") or "")
-    return "import" if reason.startswith("import:") else "manual"
+    m = re.match(r"([a-z]+):", reason)
+    return m.group(1) if m and m.group(1) != "manual" else "manual"
 
 
 def read_candidates() -> list[dict]:

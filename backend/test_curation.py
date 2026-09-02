@@ -212,3 +212,33 @@ def test_an_import_written_entry_is_not_called_manual(monkeypatch, tmp_path):
     by_first = {c["node_ids"][0]: c for c in curation.read_candidates()}
     assert by_first["a"]["source"] == "import"
     assert by_first["c"]["source"] == "manual"
+
+
+def test_each_machine_pass_names_itself(monkeypatch, tmp_path):
+    manual = tmp_path / "manual.json"
+    manual.write_text(
+        json.dumps(
+            [
+                {
+                    "node_ids": ["v1", "v2"],
+                    "suggested_canonical": "v1",
+                    "score": 1.0,
+                    "node_type": "person",
+                    "reason": "verify: Haiku judged one entity; 'A' [person, 9 claims] and 'A.' [person, 2 claims]",
+                },
+                {
+                    "node_ids": ["h1", "h2"],
+                    "suggested_canonical": "h1",
+                    "score": 1.0,
+                    "node_type": "person",
+                    "reason": "same person, seen in claims",
+                },
+            ]
+        )
+    )
+    monkeypatch.setenv("ANOMALICA_MERGE_CANDIDATES_MANUAL", str(manual))
+    monkeypatch.setenv("ANOMALICA_MERGE_CANDIDATES", str(tmp_path / "absent.json"))
+    by_first = {c["node_ids"][0]: c for c in curation.read_candidates()}
+    assert by_first["v1"]["source"] == "verify"
+    # No tag at all is a reviewer's entry, as the file was originally.
+    assert by_first["h1"]["source"] == "manual"
