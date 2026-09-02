@@ -296,3 +296,24 @@ def test_a_pair_both_passes_surfaced_keeps_the_judgement_and_the_rules_score(
     assert c["reason"].startswith("verify:")
     assert c["source"] == "verify"
     assert c["rule_score"] == 0.62
+
+
+def test_a_pair_the_rules_list_twice_is_one_entry_with_no_rules_score_beside_itself(
+    monkeypatch, tmp_path
+):
+    rules = tmp_path / "rules.json"
+    rules.write_text(
+        json.dumps(
+            [
+                _entry(["a", "b"], "fuzzy", 0.6),
+                _entry(["b", "a"], "name-equiv-crosstype", 0.9),
+            ]
+        )
+    )
+    monkeypatch.setenv(
+        "ANOMALICA_MERGE_CANDIDATES_MANUAL", str(tmp_path / "absent.json")
+    )
+    monkeypatch.setenv("ANOMALICA_MERGE_CANDIDATES", str(rules))
+    [c] = curation.read_candidates()
+    assert c["score"] == 0.9
+    assert "rule_score" not in c

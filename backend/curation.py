@@ -108,13 +108,21 @@ def read_candidates() -> list[dict]:
         key = candidate_key(c["node_ids"])
         if key in lead:
             continue
-        if key in machine:
-            # Both passes surfaced the pair. Keep the judged entry's reason and
-            # carry the rules' score beside it: two independent signals, and a
-            # reviewer benefits from seeing whether they agree.
-            machine[key] = {**machine[key], "rule_score": c.get("score")}
-        else:
+        held = machine.get(key)
+        if held is None:
             machine[key] = {**c, "source": "rules"}
+        elif held["source"] == "rules":
+            # The rules file lists the pair twice (its passes overlap). One
+            # entry, the higher score; a rules score beside a rules score
+            # would read as two signals agreeing when it is one, twice.
+            if (c.get("score") or 0) > (held.get("score") or 0):
+                machine[key] = {**c, "source": "rules"}
+        else:
+            # A judged entry and the rules both surfaced the pair. Keep the
+            # judgement's reason and carry the rules' score beside it: two
+            # independent signals, and a reviewer benefits from seeing whether
+            # they agree.
+            machine[key] = {**held, "rule_score": c.get("score")}
     ranked = sorted(machine.values(), key=lambda c: -(c.get("score") or 0))
     return human + ranked
 
