@@ -40,11 +40,20 @@ def graph_db(tmp_path, monkeypatch):
         "INSERT INTO records VALUES ('third', 'Third', NULL, 'sha256:' || ?, 't')",
         ("c" * 64,),
     )
+    # Graph ids are UUIDs; the assimilator links by their first 8 characters.
     con.execute(
-        "INSERT INTO claims VALUES ('c-me', 'The craft hovered over the base.', 'me', 't')"
+        "INSERT INTO claims VALUES ('5dbae39e-c14f-4ad1-9159-9c459d951001', "
+        "'The craft hovered over the base.', 'me', 't')"
     )
     con.execute(
-        "INSERT INTO claims VALUES ('c-other', 'An object hung above the installation.', 'other', 't')"
+        "INSERT INTO claims VALUES ('8fc54bb2-0000-4000-8000-000000000000', "
+        "'An object hung above the installation.', 'other', 't')"
+    )
+    # Same 8-character prefix as the other record's claim, on a THIRD record:
+    # a prefix lookup not scoped to the pair would find two and pick wrongly.
+    con.execute(
+        "INSERT INTO claims VALUES ('8fc54bb2-ffff-4fff-8fff-ffffffffffff', "
+        "'A stranger''s claim.', 'third', 't')"
     )
     con.commit()
     con.close()
