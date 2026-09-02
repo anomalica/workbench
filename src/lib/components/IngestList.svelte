@@ -178,17 +178,6 @@
             <span class="text-warning flex-none" title="Untraceable: no recoverable source/origin">&#9888;</span>
           {/if}
           <span class="text-sm text-on-surface truncate">{ingest.title}</span>
-          {#if ingest.pipeline_version != null && ingest.pipeline_current != null && ingest.pipeline_version < ingest.pipeline_current && !ingest.refresh_refused}
-            <!-- "Queued", not "outdated". A record behind the manifest is one the
-                 pipeline will re-extract on its own, one at a time, unless it
-                 also carries a refusal - in which case the refusal is the fact
-                 and this chip is hidden. "Outdated" read as a fault and a wall
-                 of them read as an incident, when the wall was a queue. -->
-            <span
-              class="flex-none text-[10px] font-ui font-medium px-1.5 py-0.5 rounded bg-surface-alt text-on-surface-muted tabular-nums"
-              title="Extracted with version {ingest.pipeline_version} of the {ingest.source_type} extractor; version {ingest.pipeline_current} is current. The pipeline re-extracts it automatically and carries your review across. Nothing is wrong with the record."
-            >refresh queued v{ingest.pipeline_version}/{ingest.pipeline_current}</span>
-          {/if}
           {#if ingest.refresh_refused}
             <!-- Distinct from "outdated": that says a refresh is pending; this
                  says one was attempted and declined, and why. Without it the
