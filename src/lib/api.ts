@@ -1461,6 +1461,9 @@ export interface Topic {
   name: string;
   node_type: string;
   tier: string;
+  /** Where the page would be published: people, events, projects... A page is
+   *  the pair (section, slug) - two sections can hold one slug. */
+  section: string;
   slug: string;
   claims: number;
   sources: number;
@@ -1500,8 +1503,13 @@ export async function fetchTopics(): Promise<{
 }
 
 /** The brief whole, not summarised - the point is seeing what actually goes in. */
-export async function fetchTopicBrief(slug: string): Promise<Record<string, unknown> | null> {
-  const res = await fetch(readPath(`/api/topics/${encodeURIComponent(slug)}/brief`));
+export async function fetchTopicBrief(
+  section: string,
+  slug: string,
+): Promise<Record<string, unknown> | null> {
+  const res = await fetch(
+    readPath(`/api/topics/${encodeURIComponent(section)}/${encodeURIComponent(slug)}/brief`),
+  );
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`Failed to fetch brief: ${res.status}`);
   return await res.json();

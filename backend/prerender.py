@@ -291,9 +291,11 @@ def prerender(out: Path | None = None) -> dict:
     for topic in topics.get("topics") or []:
         if not topic.get("has_brief"):
             continue
-        brief = _pages.read_brief(topic["slug"])
+        brief = _pages.read_brief(topic["section"], topic["slug"])
         if brief:
-            _write(base / "topics" / topic["slug"] / "brief.json", brief)
+            _write(
+                base / "topics" / topic["section"] / topic["slug"] / "brief.json", brief
+            )
             counts["briefs"] = counts.get("briefs", 0) + 1
 
     # Assembled knowledge-article listing (public content layer). Walked from the

@@ -114,24 +114,93 @@ def remove_seeded(name: str, by: str | None) -> None:
 
 
 sys.path.insert(0, str(_ANOMALICA / "anomalica-common" / "src"))
-from anomalica_common.slug import slugify as _slugify  # noqa: E402
+from anomalica_common.slug import section_for, slugify as _slugify  # noqa: E402
 
 
-_CLAIM_TOTAL = re.compile(rb"claim_count_total:\s*(\d+)")
+_BRIEF_HASH = re.compile(rb"brief_hash:\s*([0-9a-f]{16,64})")
+# The `page:` block and nothing after it. The head also holds the start of
+# `related_nodes`, whose entries carry `slug:` and `node_type:` lines at the
+# same indent, so a field regex over the whole head would read a neighbour's
+# slug as the page's if the block order ever changed. Cut the block out first.
+_PAGE_BLOCK = re.compile(rb"^page:\n((?:[ \t]+[^\n]*\n)+)", re.M)
 
 
-def _claim_total(path: Path) -> int | None:
-    """claim_count_total from the head of a brief, without parsing it.
+def _brief_head(path: Path) -> dict | None:
+    """What identifies a brief, from its first bytes: `brief_hash` and the
+    `page` block (node_id, node_type, slug, claim_count_total).
 
-    The page block is written first, so the number is within the first few
-    hundred bytes; 4KB is generous cover for a long title and creator list.
+    Head-read, never parsed whole. A brief runs to ~300KB and the list shows
+    400 of them; parsing each to read one integer hung the endpoint outright.
+    The page block is written first and is a few lines, so 4KB covers it.
     """
     try:
         with path.open("rb") as f:
-            m = _CLAIM_TOTAL.search(f.read(4096))
+            head = f.read(4096)
     except OSError:
         return None
-    return int(m.group(1)) if m else None
+    h = _BRIEF_HASH.search(head)
+    page: dict = {}
+    block = _PAGE_BLOCK.search(head)
+    if block:
+        try:
+            parsed = yaml.safe_load(b"page:\n" + block.group(1))
+        except yaml.YAMLError:
+            parsed = None
+        if isinstance(parsed, dict) and isinstance(parsed.get("page"), dict):
+            page = parsed["page"]
+    return {"brief_hash": h.group(1).decode() if h else None, "page": page}
+
+
+def _claim_total(path: Path) -> int | None:
+    head = _brief_head(path)
+    if head is None:
+        return None
+    n = head["page"].get("claim_count_total")
+    return n if isinstance(n, int) else None
+
+
+# A section is a plural word; a slug is lowercase letters, digits and hyphens
+# (a disambiguated one carries a node-id suffix, which is hex and hyphens).
+# Anything else is not a brief reference and is refused before it becomes a
+# path - the two are user-supplied URL parts.
+_PATH_PART = re.compile(r"[a-z0-9][a-z0-9-]*")
+
+
+def brief_path(section: str, slug: str) -> Path | None:
+    if not (_PATH_PART.fullmatch(section) and _PATH_PART.fullmatch(slug)):
+        return None
+    return briefs_dir() / section / f"{slug}.yaml"
+
+
+def brief_index() -> dict[str, dict]:
+    """Every brief, keyed by the node it is for.
+
+    Keyed on node_id, not slug. A slug is unique only within a node type, so an
+    event and a project both called "Apollo 14" have one slug and two briefs;
+    looking a brief up by the name-derived slug found one file for both, and
+    also missed every brief whose slug had been disambiguated with a suffix.
+    The brief's own head says which node it is for, and that is the only key
+    that cannot collide.
+
+    Only `<section>/<slug>.yaml` is read. A file directly in the root is the
+    pre-section layout, which the synthesiser prunes and this never reads.
+    """
+    out: dict[str, dict] = {}
+    for path in sorted(briefs_dir().glob("*/*.yaml")):
+        head = _brief_head(path)
+        if head is None:
+            continue
+        nid = head["page"].get("node_id")
+        if not isinstance(nid, str) or not nid:
+            continue
+        total = head["page"].get("claim_count_total")
+        out[nid] = {
+            "section": path.parent.name,
+            "slug": path.stem,
+            "brief_hash": head["brief_hash"],
+            "claim_total": total if isinstance(total, int) else None,
+        }
+    return out
 
 
 def content_pages_dir() -> Path:
@@ -141,7 +210,6 @@ def content_pages_dir() -> Path:
     )
 
 
-_BRIEF_HASH = re.compile(rb"brief_hash:\s*([0-9a-f]{16,64})")
 _PAGE_TITLE = re.compile(rb"^title:\s*[\"']?(.+?)[\"']?\s*$", re.M)
 
 
@@ -166,16 +234,13 @@ def _page_head(path: Path) -> tuple[str | None, str | None]:
     )
 
 
-def _brief_hash_of(slug: str) -> str | None:
-    """The CURRENT brief's hash for a slug, so a page can be told from the
-    material it was written from."""
-    path = briefs_dir() / f"{slug}.yaml"
-    try:
-        with path.open("rb") as f:
-            m = _BRIEF_HASH.search(f.read(4096))
-    except OSError:
-        return None
-    return m.group(1).decode() if m else None
+def _brief_hash_of(section: str, slug: str) -> str | None:
+    """The CURRENT brief's hash for a page, so it can be told from the material
+    it was written from. A page is the pair, not the slug: two sections can
+    hold one slug, and they are different pages with different briefs."""
+    path = brief_path(section, slug)
+    head = _brief_head(path) if path else None
+    return head["brief_hash"] if head else None
 
 
 def published_pages() -> list[dict]:
@@ -201,12 +266,13 @@ def published_pages() -> list[dict]:
             # from a brief and are not topics.
             continue
         slug = rel.stem.removesuffix(".en")
-        current = _brief_hash_of(slug)
+        kind = rel.parts[0] if len(rel.parts) > 1 else None
+        current = _brief_hash_of(kind, slug) if kind else None
         out.append(
             {
                 "slug": slug,
                 "name": title or slug,
-                "kind": rel.parts[0] if len(rel.parts) > 1 else None,
+                "kind": kind,
                 "brief_hash": built_from,
                 # None when the brief has gone: the page outlived its source,
                 # which is a different condition from being out of date.
@@ -253,21 +319,22 @@ def list_topics(limit: int = 400) -> dict:
     finally:
         con.close()
 
-    bdir = briefs_dir()
+    index = brief_index()
     out = []
     for nid, name, ntype, tier, claims, sources, ind, second, status in rows:
-        slug = _slugify(name)
-        bp = bdir / f"{slug}.yaml"
-        # Read the count out of the head of the file rather than parsing the
-        # brief. A brief runs to ~300KB and the list shows 400 of them; parsing
-        # them all to read one integer each hung the endpoint outright.
-        brief_claims = _claim_total(bp) if bp.is_file() else None
+        ref = index.get(nid)
+        # The brief's slug is the authoritative one: a same-type collision
+        # loser carries a suffix the name alone does not know about. The
+        # name-derived slug stands in only where there is no brief to ask.
+        slug = ref["slug"] if ref else _slugify(name)
+        section = ref["section"] if ref else section_for(ntype)
         out.append(
             {
                 "node_id": nid,
                 "name": name,
                 "node_type": ntype,
                 "tier": tier,
+                "section": section,
                 "slug": slug,
                 "claims": claims,
                 "sources": sources,
@@ -276,21 +343,25 @@ def list_topics(limit: int = 400) -> dict:
                 # fewer than three claims means the page rests on one voice.
                 "single_source": (second or 0) < 3,
                 "status": "vetoed" if nid in vetoed else (status or "proposed"),
-                "has_brief": bp.is_file(),
-                "brief_claims": brief_claims,
+                "has_brief": ref is not None,
+                "brief_claims": ref["claim_total"] if ref else None,
             }
         )
     return {"topics": out, "seeded": read_seeded(), "published": published_pages()}
 
 
-def read_brief(slug: str) -> dict | None:
+def read_brief(section: str, slug: str) -> dict | None:
     """The brief itself - the exact material a page would be written from.
 
     Returned whole rather than summarised. The point of showing it is to see what
     is actually going in, and a summary of the input is not the input.
+
+    Addressed by the pair. A slug alone can name two pages now that the
+    collision is representable, and guessing which one was asked for is how the
+    scheduler re-emitted the wrong page on every pass.
     """
-    p = briefs_dir() / f"{slug}.yaml"
-    if not p.is_file():
+    p = brief_path(section, slug)
+    if p is None or not p.is_file():
         return None
     try:
         return yaml.safe_load(p.read_text()) or {}

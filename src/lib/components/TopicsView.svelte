@@ -45,7 +45,10 @@
    *  chip reports the same number whether or not it is the active one - the
    *  counts used to be read off the filtered list, so "All" showed the size of
    *  whatever filter was on and changed each time one was clicked. */
-  const pending = $derived(topics.filter((t) => !publishedSlugs.has(t.slug)));
+  /** A page's identity is (section, slug), never the slug alone: an event and
+   *  a project of one name share a slug and are two pages. */
+  const pageKey = (t: { section: string; slug: string }) => `${t.section}/${t.slug}`;
+  const pending = $derived(topics.filter((t) => !publishedKeys.has(pageKey(t))));
   const shown = $derived(
     pending.filter((t) =>
       filter === "single" ? t.single_source : filter === "nobrief" ? !t.has_brief : true,
@@ -67,7 +70,7 @@
   /** A proposal that already has a page is not a proposal - it is the same
    *  subject in its finished state, and showing it in both lists reads as work
    *  outstanding. */
-  const publishedSlugs = $derived(new Set(published.map((p) => p.slug)));
+  const publishedKeys = $derived(new Set(published.map((p) => `${p.kind}/${p.slug}`)));
 
   async function load() {
     try {
@@ -84,16 +87,16 @@
   });
 
   async function openBrief(t: Topic) {
-    if (openSlug === t.slug) {
+    if (openSlug === pageKey(t)) {
       openSlug = null;
       brief = null;
       return;
     }
-    openSlug = t.slug;
+    openSlug = pageKey(t);
     brief = null;
     briefLoading = true;
     try {
-      brief = await fetchTopicBrief(t.slug);
+      brief = await fetchTopicBrief(t.section, t.slug);
     } catch (e) {
       error = String(e);
     } finally {
@@ -200,7 +203,7 @@
 
     {#if showPublished}
       <ul class="mt-2 grid gap-x-6 gap-y-1 sm:grid-cols-2 lg:grid-cols-3">
-        {#each published as page (page.slug)}
+        {#each published as page (`${page.kind}/${page.slug}`)}
           <li class="flex items-baseline gap-1.5 text-sm">
             {#if page.kind}
               <a
@@ -311,12 +314,12 @@
                    three labelled links across it read as a sentence. -->
               <button
                 onclick={() => openBrief(t)}
-                title={openSlug === t.slug ? "Hide the brief" : "Brief - everything a page would be written from"}
+                title={openSlug === pageKey(t) ? "Hide the brief" : "Brief - everything a page would be written from"}
                 aria-label="Brief"
-                class="rounded p-1 {openSlug === t.slug ? 'bg-primary-container text-on-surface' : 'text-on-surface-muted hover:bg-surface hover:text-primary'}"
+                class="rounded p-1 {openSlug === pageKey(t) ? 'bg-primary-container text-on-surface' : 'text-on-surface-muted hover:bg-surface hover:text-primary'}"
               >
                 <svg
-                  class="h-4 w-4 transition-transform {openSlug === t.slug ? 'rotate-180' : ''}"
+                  class="h-4 w-4 transition-transform {openSlug === pageKey(t) ? 'rotate-180' : ''}"
                   fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"
                 >
                   <path stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6" />
@@ -354,7 +357,7 @@
             </div>
           {/if}
 
-          {#if openSlug === t.slug}
+          {#if openSlug === pageKey(t)}
             <div class="border-t border-border px-4 py-3">
               {#if briefLoading}
                 <p class="text-sm text-on-surface-muted">Loading the brief…</p>

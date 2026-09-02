@@ -2963,16 +2963,17 @@ def topics_list(limit: int = 400) -> dict:
     return pages.list_topics(limit=limit)
 
 
-@app.get("/api/topics/{slug}/brief")
-def topic_brief(slug: str) -> dict:
+@app.get("/api/topics/{section}/{slug}/brief")
+def topic_brief(section: str, slug: str) -> dict:
     """The brief a page would be written from, whole.
 
     Returned unsummarised: the point of reading it is to see what actually goes
-    in, and a summary of the input is not the input.
+    in, and a summary of the input is not the input. Addressed as
+    `<section>/<slug>` because a slug alone can name two pages.
     """
-    brief = pages.read_brief(slug)
+    brief = pages.read_brief(section, slug)
     if brief is None:
-        raise HTTPException(status_code=404, detail="No brief for that slug")
+        raise HTTPException(status_code=404, detail="No brief for that page")
     return brief
 
 
