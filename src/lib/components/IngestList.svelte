@@ -184,6 +184,15 @@
               title="Extraction is behind the current pipeline (v{ingest.pipeline_version} of {ingest.pipeline_current}) - pending re-ingest"
             >outdated v{ingest.pipeline_version}/{ingest.pipeline_current}</span>
           {/if}
+          {#if ingest.refresh_refused}
+            <!-- Distinct from "outdated": that says a refresh is pending; this
+                 says one was attempted and declined, and why. Without it the
+                 two are indistinguishable and the record waits forever. -->
+            <span
+              class="flex-none text-[10px] font-ui font-medium px-1.5 py-0.5 rounded bg-error-container/40 text-on-error-container"
+              title={`${ingest.refresh_refused.reason}\n\nThe pipeline will not replace a reviewed record that would lose text. Either mark that passage irrelevant to accept the loss (the next refresh then passes), or leave the record on its current extraction.`}
+            >refresh refused</span>
+          {/if}
         </div>
         <span class="text-xs text-on-surface-secondary w-36 flex-none truncate">
           {#each ingest.creators ?? [] as creator, idx}

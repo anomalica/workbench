@@ -749,6 +749,18 @@ class LocalIngestSource(IngestSource):
                     "pipeline_current": manifest.get(
                         frontmatter.get("source_type", "")
                     ),
+                    # The pipeline tried to refresh this stale record and would
+                    # not: the fresh extraction lost words a reviewer had kept.
+                    # Without this a refused record looks exactly like one never
+                    # tried. The reason is written by the ingester for a person.
+                    "refresh_refused": (
+                        {
+                            "at": frontmatter.get("refresh_refused.at", ""),
+                            "reason": frontmatter.get("refresh_refused.reason", ""),
+                        }
+                        if frontmatter.get("refresh_refused.at")
+                        else None
+                    ),
                     "source_url": frontmatter.get("source_url", ""),
                     # Acquisition provenance: source_url (http origin),
                     # source_file (local origin filename), source_hash (the

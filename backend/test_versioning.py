@@ -15,6 +15,7 @@ B = "b" * 64
 C = "c" * 64
 D = "d" * 64
 E = "e" * 64
+F = "0" * 64
 SUPERSEDER = "f" * 64
 
 
@@ -26,6 +27,7 @@ def _rec(
     source_type: str = "video",
     pipeline_version: int | None = None,
     superseded_by: str = "",
+    refresh_refused: str = "",
 ) -> str:
     lines = [
         "---",
@@ -43,6 +45,12 @@ def _rec(
     if pipeline_version is not None:
         lines.append("processing:")
         lines.append(f"  pipeline_version: {pipeline_version}")
+    if refresh_refused:
+        # The ingester's own shape: a quoted reason carrying a colon and
+        # brackets, written for a person.
+        lines.append("refresh_refused:")
+        lines.append("  at: 2026-09-02T04:56:15Z")
+        lines.append(f'  reason: "{refresh_refused}"')
     lines.append("---")
     lines.append("Body.\n")
     return "\n".join(lines)
@@ -81,6 +89,19 @@ def repo(tmp_path):
     )
     # E: no source_url (passthrough), no pipeline_version (not stale).
     (store / "e.md").write_text(_rec(E, source_type="web"))
+    # F: stale, and the pipeline tried to refresh it and would not.
+    (store / "f.md").write_text(
+        _rec(
+            F,
+            source_url="u://4",
+            source_type="web",
+            pipeline_version=0,
+            refresh_refused=(
+                "refused: 2 word(s) of the stored body are absent from the fresh "
+                "extraction (a reviewed record keeps every word): june 5"
+            ),
+        )
+    )
 
     (store / "_pipeline_versions.yaml").write_text(
         "# current generation per media type\nvideo: 2\naudio: 1\nweb: 1\n"
@@ -116,3 +137,15 @@ def test_pipeline_version_and_current_exposed(repo):
 def test_records_without_source_url_pass_through(repo):
     hashes = {i["content_hash"] for i in LocalIngestSource(repo).list_ingests()}
     assert E in hashes
+
+
+def test_a_refused_refresh_is_told_apart_from_one_never_tried(repo):
+    """Both are stale. Without the stamp the list shows them identically, and
+    the refused one waits forever for a refresh that already declined."""
+    by_hash = {i["content_hash"]: i for i in LocalIngestSource(repo).list_ingests()}
+    refused = by_hash[F]["refresh_refused"]
+    assert refused["at"] == "2026-09-02T04:56:15Z"
+    assert refused["reason"].endswith("june 5")
+    assert "absent from the fresh extraction" in refused["reason"]
+    # A is stale too, and simply has not been tried.
+    assert by_hash[A]["refresh_refused"] is None

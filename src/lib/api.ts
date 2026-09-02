@@ -28,6 +28,10 @@ export interface IngestSummary {
   /** Current extraction generation for this record's media type, from the
    *  ingester's manifest, or null when the media type isn't in the manifest. */
   pipeline_current?: number | null;
+  /** The pipeline tried to refresh this stale record and refused: the fresh
+   *  extraction lost words a reviewer had kept. `reason` names them. Absent
+   *  when never tried, or when a later refresh succeeded. */
+  refresh_refused?: { at: string; reason: string } | null;
   /** Local-file origin filename (PDFs ingested from disk). */
   source_file: string;
   /** sha256 of the archived original source file (ebooks/PDFs ingested from a
