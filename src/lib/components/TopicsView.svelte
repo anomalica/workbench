@@ -292,7 +292,8 @@
             <span class="text-xs uppercase text-on-surface-muted">{t.node_type}</span>
 
             <span class="text-xs tabular-nums text-on-surface-secondary">
-              {t.claims} claims / {t.sources} sources
+              {t.claims} claims / {t.sources} sources{#if t.subject_claims != null}
+                / {t.subject_claims} about it{/if}
             </span>
 
             {#if t.single_source}

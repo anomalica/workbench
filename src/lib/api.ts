@@ -1488,6 +1488,8 @@ export interface Topic {
   independent_sources: number | null;
   /** A second work contributes fewer than three claims: the page rests on one voice. */
   single_source: boolean;
+  /** Claims that are ABOUT the node (it is the subject), not merely mentioning it. */
+  subject_claims: number | null;
   status: string;
   has_brief: boolean;
   brief_claims: number | null;

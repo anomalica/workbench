@@ -302,7 +302,7 @@ def list_topics(limit: int = 400) -> dict:
             """
             SELECT p.node_id, n.name, p.node_type, p.tier, p.claim_count,
                    p.source_count, p.independent_source_count,
-                   p.second_source_claims, p.status
+                   p.second_source_claims, p.subject_claims, p.status
             FROM page_proposals p JOIN nodes n ON n.id = p.node_id
             WHERE n.retired_at IS NULL
             ORDER BY p.claim_count DESC LIMIT ?
@@ -321,7 +321,7 @@ def list_topics(limit: int = 400) -> dict:
 
     index = brief_index()
     out = []
-    for nid, name, ntype, tier, claims, sources, ind, second, status in rows:
+    for nid, name, ntype, tier, claims, sources, ind, second, subject, status in rows:
         ref = index.get(nid)
         # The brief's slug is the authoritative one: a same-type collision
         # loser carries a suffix the name alone does not know about. The
@@ -342,6 +342,10 @@ def list_topics(limit: int = 400) -> dict:
                 # The gate's own single-source test: a second work contributing
                 # fewer than three claims means the page rests on one voice.
                 "single_source": (second or 0) < 3,
+                # Claims that are ABOUT the node, not merely mentioning it - the
+                # gate's subject test (page_gate._subject_counts). NULL on a
+                # proposal table computed before the column existed.
+                "subject_claims": subject,
                 "status": "vetoed" if nid in vetoed else (status or "proposed"),
                 "has_brief": ref is not None,
                 "brief_claims": ref["claim_total"] if ref else None,
