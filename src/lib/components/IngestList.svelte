@@ -1,6 +1,7 @@
 <script lang="ts">
   import { type IngestSummary, type ReviewPriority, provenanceOf, isPubliclyViewable } from "$lib/api";
   import { typeLabel } from "$lib/document-types";
+  import { carryoverTooltip } from "$lib/carryover";
   import { observedPercent } from "$lib/coverage";
 
   let {
@@ -124,7 +125,7 @@
         <span
           class="w-6 flex-none text-center text-sm leading-none"
           title={needsVerifyHashes.has(ingest.content_hash)
-            ? "Review carried over - verify"
+            ? carryoverTooltip(ingest.review_carryover)
             : reviewedHashes.has(ingest.content_hash)
               ? "Reviewed"
               : "Not yet reviewed"}

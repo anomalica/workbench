@@ -31,3 +31,24 @@ export function carryoverState(
   if (reviewedAt && reviewedAt >= carriedAt) return "verified";
   return "needs_verify";
 }
+
+/** What the reviewer is being asked to look at again, and what they are not.
+ *
+ *  Said precisely because the cost of the two mistakes is not symmetric. A
+ *  reviewer told "verify" who believes their highlights were lost will redo
+ *  them; one who believes coverage was kept will not look at the prose that
+ *  moved. The ingester places every inline marker - highlights, notes, links,
+ *  citations, irrelevant regions - back on the same prose (a marker whose
+ *  prose is gone refuses the refresh rather than being dropped), and does not
+ *  touch the read-coverage sidecar. */
+export function carryoverTooltip(c: ReviewCarryover | null | undefined): string {
+  const moved = c?.had_text_edits
+    ? "The text itself changed in re-processing. "
+    : "The text was re-processed. ";
+  return (
+    moved +
+    "Your earlier review - speakers, highlights, notes, links and irrelevant regions - " +
+    "was placed back onto the new text. What you had marked as read was not: " +
+    "look again and submit to confirm."
+  );
+}

@@ -66,6 +66,7 @@
   import MarkupList from "./MarkupList.svelte";
   import SpeakerFilter from "./SpeakerFilter.svelte";
   import ReadableText from "./ReadableText.svelte";
+  import { carryoverTooltip } from "$lib/carryover";
   import {
     readPageMarkers,
     claimedPages,
@@ -1047,6 +1048,19 @@
   let syncWarning = $state<string | null>(null);
 
   // Source
+  /** The detail carries frontmatter flattened to dotted keys, not the summary's
+   *  object, so the carryover is rebuilt here the way the list endpoint builds
+   *  it - including that had_text_edits arrives as the string "true". */
+  let carryover = $derived.by(() => {
+    const at = ingest.frontmatter["review_carryover.at"];
+    if (!at) return null;
+    const edits = ingest.frontmatter["review_carryover.had_text_edits"];
+    return {
+      at,
+      from: ingest.frontmatter["review_carryover.from"] ?? "",
+      had_text_edits: String(edits).toLowerCase() === "true",
+    };
+  });
   let isPdf = $derived(ingest.frontmatter.source_type === "pdf");
   /** Whether this record's page numbers can be believed. One record's were
    *  invented once per extraction chunk, and the source pane followed them to
@@ -3872,7 +3886,7 @@
     {:else if needsVerify}
       <span
         class="flex items-center gap-1.5 text-xs font-ui font-medium text-warning flex-none"
-        title="Speakers were carried over from your earlier review of this record. Verify them and submit to confirm."
+        title={carryoverTooltip(carryover)}
       >
         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v6h6M20 20v-6h-6M20 9a8 8 0 0 0-14-3M4 15a8 8 0 0 0 14 3" />
