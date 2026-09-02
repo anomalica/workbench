@@ -224,3 +224,59 @@ class TestVariantSignature:
 
     def test_empty_when_no_variants(self, tmp_path):
         assert variant_signature(tmp_path, "nothing-here") == ()
+
+
+class TestEntailment:
+    """The digester's per-claim check rides through to the payload untouched,
+    and anything that is not its shape is 'not assessed' rather than a value
+    the sort would trust."""
+
+    def test_the_field_passes_through(self):
+        from backend.audit_load import parse_claims
+
+        doc = {
+            "domain_claims": [
+                {
+                    "id": "c1",
+                    "quote": "the sky was green",
+                    "text": "the sky was blue",
+                    "entailment": {
+                        "label": "contradicts",
+                        "score": 0.812,
+                        "model": "MoritzLaurer/DeBERTa-v3-base-mnli-fever-anli",
+                    },
+                }
+            ]
+        }
+        [c] = parse_claims(doc, "v", "m")
+        assert c.entailment.label == "contradicts"
+        assert c.entailment.score == 0.812
+        assert c.entailment.model.startswith("MoritzLaurer/")
+
+    def test_absent_is_not_assessed(self):
+        from backend.audit_load import parse_claims
+
+        [c] = parse_claims(
+            {"domain_claims": [{"id": "c1", "quote": "q", "text": "t"}]}, "v", "m"
+        )
+        assert c.entailment is None
+
+    def test_a_shape_that_is_not_the_digester_s_is_not_trusted(self):
+        from backend.audit_load import parse_claims
+
+        for bad in (
+            {"label": "supports", "score": 0.9, "model": "m"},
+            {"label": "contradicts", "score": "high", "model": "m"},
+            {"label": "contradicts", "score": 1.7, "model": "m"},
+            "contradicts",
+        ):
+            [c] = parse_claims(
+                {
+                    "domain_claims": [
+                        {"id": "c", "quote": "q", "text": "t", "entailment": bad}
+                    ]
+                },
+                "v",
+                "m",
+            )
+            assert c.entailment is None, bad

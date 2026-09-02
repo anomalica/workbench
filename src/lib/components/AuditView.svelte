@@ -34,6 +34,8 @@
     passageHasContent,
     passageTally,
     stepsPastRendered,
+    doubtfulFirst,
+    entailmentLabel,
     memberLines,
     frameLabel,
     type AuditGridRow,
@@ -438,9 +440,15 @@
   );
   let emptyPassageCount = $derived((payload?.passages ?? []).length - shownPassages.length);
   let showEmptyPassages = $state(false);
-  let allListedPassages = $derived(
-    showEmptyPassages ? (payload?.passages ?? []) : shownPassages,
-  );
+  /** Doubtful claims first - a contradiction, then a neutral, then a weak
+   *  entailment - so a reviewer meets what the digester could not confirm
+   *  before what it could. On by default; document order is one click away
+   *  for reading against the source. */
+  let doubtfulFirstOn = $state(true);
+  let allListedPassages = $derived.by(() => {
+    const base = showEmptyPassages ? (payload?.passages ?? []) : shownPassages;
+    return doubtfulFirstOn ? doubtfulFirst(base) : base;
+  });
 
   /** How many passages are actually built into the DOM.
    *
@@ -886,6 +894,23 @@
       </div>
     {/if}
 
+    {#if tab === "claims" && (payload?.passages ?? []).length > 0}
+      <div class="flex items-center gap-2 px-4 py-1.5 text-[11px] text-on-surface-muted">
+        <span>Order:</span>
+        <button
+          onclick={() => (doubtfulFirstOn = true)}
+          class="cursor-pointer hover:underline {doubtfulFirstOn ? 'text-primary font-medium' : ''}"
+          title="Claims the digester could not confirm against their own quote first: contradictions, then neutral, then weak entailments"
+        >doubtful first</button>
+        <span aria-hidden="true">&middot;</span>
+        <button
+          onclick={() => (doubtfulFirstOn = false)}
+          class="cursor-pointer hover:underline {doubtfulFirstOn ? '' : 'text-primary font-medium'}"
+          title="The order the passages appear in the record"
+        >document order</button>
+      </div>
+    {/if}
+
     {#if tab === "claims"}
     <div class="flex-1 overflow-auto min-h-0">
       {#each listedPassages as p (p.index)}
@@ -1034,6 +1059,17 @@
                                  The grouping already says these are one fact;
                                  the box says what each model made of it and
                                  which words it took. -->
+                            {#if entailmentLabel(m.entailment)}
+                              <!-- Only neutral and contradicts are said; an
+                                   entailment is the expected case. Combined
+                                   with a quote that is not in the record it is
+                                   a contradiction against words the source
+                                   never had, which the hover says. -->
+                              <span
+                                class="entailment-tag {m.entailment?.label}"
+                                title={`The quote ${m.entailment?.label === "contradicts" ? "contradicts" : "neither supports nor contradicts"} the claim (${m.entailment?.score.toFixed(2)}, ${m.entailment?.model})${m.located === false ? ". And the quote itself is not in the record." : ""}`}
+                              >{entailmentLabel(m.entailment)}</span>
+                            {/if}
                             {#if m.quote}
                               <p class="member-quote {m.located === false ? 'not-in-source' : ''}">
                                 {m.quote}
@@ -1162,6 +1198,25 @@
 
   .member-quote.not-in-source {
     border-left-color: var(--color-error, #dc2626);
+  }
+  .entailment-tag {
+    display: inline-block;
+    margin: 0.15rem 0 0.1rem;
+    padding: 0 0.3rem;
+    border-radius: 0.15rem;
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    cursor: help;
+  }
+  .entailment-tag.neutral {
+    background: color-mix(in srgb, var(--color-warning) 18%, transparent);
+    color: var(--color-warning);
+  }
+  .entailment-tag.contradicts {
+    background: color-mix(in srgb, var(--color-error) 18%, transparent);
+    color: var(--color-error);
   }
   .not-found-tag {
     display: inline-block;

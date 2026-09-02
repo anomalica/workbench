@@ -9,6 +9,9 @@ import {
   stepsPastRendered,
   memberLines,
   frameLabel,
+  doubt,
+  doubtfulFirst,
+  entailmentLabel,
 } from "./audit-grid";
 import type { AuditCluster, AuditMember, AuditPassage, AuditVariant } from "$lib/api";
 
@@ -346,5 +349,76 @@ describe("stepsPastRendered", () => {
 
   it("never extends going backwards", () => {
     expect(stepsPastRendered(-1, 24, 25, 268)).toBe(false);
+  });
+});
+
+describe("doubt ordering", () => {
+  const e = (label: "entails" | "neutral" | "contradicts", score: number) => ({
+    label,
+    score,
+    model: "m",
+  });
+
+  it("puts a confident contradiction before everything", () => {
+    expect(doubt(e("contradicts", 0.9))).toBeLessThan(doubt(e("contradicts", 0.5)));
+    expect(doubt(e("contradicts", 0.5))).toBeLessThan(doubt(e("neutral", 0.99)));
+  });
+
+  it("puts a confident neutral before a weak entailment", () => {
+    expect(doubt(e("neutral", 0.9))).toBeLessThan(doubt(e("entails", 0.3)));
+  });
+
+  it("puts a weak entailment before a strong one", () => {
+    // The quote only just supports it: the next most worth a look.
+    expect(doubt(e("entails", 0.51))).toBeLessThan(doubt(e("entails", 0.99)));
+  });
+
+  it("puts not-assessed last, after every entailment", () => {
+    expect(doubt(null)).toBeGreaterThan(doubt(e("entails", 1.0)));
+    expect(doubt(undefined)).toBe(doubt(null));
+  });
+
+  it("labels only what needs a look", () => {
+    expect(entailmentLabel(e("entails", 0.99))).toBe("");
+    expect(entailmentLabel(e("neutral", 0.8))).toBe("neutral");
+    expect(entailmentLabel(e("contradicts", 0.8))).toBe("contradicts");
+    expect(entailmentLabel(null)).toBe("");
+  });
+
+  it("orders passages by their most doubtful claim and keeps document order otherwise", () => {
+    const passage = (index: number, ents: (ReturnType<typeof e> | null)[]) =>
+      ({
+        index,
+        clusters: [
+          {
+            id: `c${index}`,
+            singleton: false,
+            variants: ["a"],
+            members: ents.map((en, i) => ({
+              variant: "a",
+              model: "a",
+              claim_id: `${index}-${i}`,
+              location: "",
+              quote: "q",
+              text: "t",
+              claim_type: "",
+              attestation: "",
+              speaker: "",
+              refs: [],
+              entailment: en,
+            })),
+          },
+        ],
+      }) as unknown as import("$lib/api").AuditPassage;
+    const ps = [
+      passage(0, [null]),
+      passage(1, [e("entails", 0.9)]),
+      passage(2, [e("neutral", 0.7), e("entails", 0.9)]),
+      passage(3, [e("contradicts", 0.6)]),
+      passage(4, [null]),
+    ];
+    expect(doubtfulFirst(ps).map((p) => p.index)).toEqual([3, 2, 1, 0, 4]);
+    // The input is not reordered in place.
+    expect(ps.map((p) => p.index)).toEqual([0, 1, 2, 3, 4]);
   });
 });

@@ -22,6 +22,8 @@ from pathlib import Path
 import yaml
 
 from backend.audit import (
+    ENTAILMENT_LABELS,
+    Entailment,
     Claim,
     Node,
     build_source_passages,
@@ -37,6 +39,24 @@ from backend.audit import (
 )
 
 _CLAIM_SECTIONS = ("domain_claims", "infrastructure_claims")
+
+
+def _entailment(raw) -> Entailment | None:
+    """The digester's shape, or None. A label outside the three, or a score that
+    is not a number, is treated as not assessed rather than trusted - the field
+    is read by a sort, and a malformed one must not float a claim to the top."""
+    if not isinstance(raw, dict):
+        return None
+    label = raw.get("label")
+    if label not in ENTAILMENT_LABELS:
+        return None
+    try:
+        score = float(raw.get("score"))
+    except (TypeError, ValueError):
+        return None
+    if not 0.0 <= score <= 1.0:
+        return None
+    return Entailment(label=label, score=score, model=str(raw.get("model") or ""))
 
 
 def parse_claims(doc: dict, variant_id: str, model: str) -> list[Claim]:
@@ -58,6 +78,7 @@ def parse_claims(doc: dict, variant_id: str, model: str) -> list[Claim]:
                     attestation=str(c.get("attestation", "") or ""),
                     speaker=_speaker_name(c.get("speaker")),
                     refs=_ref_names(c.get("refs")),
+                    entailment=_entailment(c.get("entailment")),
                 )
             )
     return claims
@@ -351,6 +372,15 @@ def audit_payload(variants: list[Variant], similar: Similar, prose: str = "") ->
                                 "attestation": m.attestation,
                                 "speaker": m.speaker,
                                 "refs": list(m.refs),
+                                "entailment": (
+                                    {
+                                        "label": m.entailment.label,
+                                        "score": m.entailment.score,
+                                        "model": m.entailment.model,
+                                    }
+                                    if m.entailment
+                                    else None
+                                ),
                             }
                             for m in cl.members
                         ],

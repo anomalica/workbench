@@ -12,7 +12,7 @@
 // standalone one: haiku said X here, sonnet said nothing here, both visible in
 // the same row without looking anywhere else.
 
-import type { AuditCluster, AuditMember, AuditPassage, AuditVariant } from "$lib/api";
+import type { AuditCluster, AuditMember, AuditPassage, AuditVariant, Entailment } from "$lib/api";
 
 /** One model's output for one fact. `members` is empty when this model produced
  *  nothing here - which the UI must SHOW rather than omit. */
@@ -167,4 +167,45 @@ export function stepsPastRendered(
   unrenderedPassages: number,
 ): boolean {
   return delta > 0 && cursorIndex >= renderedClaims - 1 && unrenderedPassages > 0;
+}
+
+/**
+ * How much a claim deserves a second look, lower first.
+ *
+ * The digester's order: a contradiction before a neutral before an
+ * entailment, confident contradictions and confident neutrals first, and
+ * among entailments the WEAK ones first - a claim the quote only just
+ * supports is the next most worth a look. Not assessed sorts last: it says
+ * nothing, and nothing must not outrank something.
+ */
+export function doubt(e: Entailment | null | undefined): number {
+  // 4, not 3: an entailment at score 1.0 lands exactly on 3, and not-assessed
+  // must sort strictly after it, not tie with it.
+  if (!e) return 4;
+  if (e.label === "contradicts") return 0 + (1 - e.score);
+  if (e.label === "neutral") return 1 + (1 - e.score);
+  return 2 + e.score;
+}
+
+export function passageDoubt(p: AuditPassage): number {
+  let least = 4;
+  for (const cl of p.clusters)
+    for (const m of cl.members) least = Math.min(least, doubt(m.entailment));
+  return least;
+}
+
+/** Doubtful passages first, document order within a tie. Stable, so a record
+ *  with no assessments at all comes out exactly as it went in. */
+export function doubtfulFirst(passages: AuditPassage[]): AuditPassage[] {
+  return passages
+    .map((p, i) => ({ p, i, d: passageDoubt(p) }))
+    .sort((a, b) => a.d - b.d || a.i - b.i)
+    .map((x) => x.p);
+}
+
+/** The words on the chip, or "" when there is nothing to say: an entailment is
+ *  the expected case and labelling it would bury the two that matter. */
+export function entailmentLabel(e: Entailment | null | undefined): string {
+  if (!e || e.label === "entails") return "";
+  return e.label;
 }

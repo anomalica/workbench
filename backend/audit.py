@@ -33,6 +33,22 @@ from typing import Callable
 
 
 @dataclass(frozen=True)
+class Entailment:
+    """The digester's check of a claim against its own quote: does the quoted
+    passage entail the claim text, say nothing either way, or contradict it?
+    `score` is the probability of the chosen label, so a contradiction at 0.9
+    is a confident one. Absent on a claim with no quote or no text - which is
+    "not assessed", a different state from neutral."""
+
+    label: str  # entails | neutral | contradicts
+    score: float
+    model: str
+
+
+ENTAILMENT_LABELS = ("entails", "neutral", "contradicts")
+
+
+@dataclass(frozen=True)
 class Claim:
     """One extracted claim, tagged with the variant that produced it.
 
@@ -59,6 +75,7 @@ class Claim:
     attestation: str = ""
     speaker: str = ""
     refs: tuple[str, ...] = ()
+    entailment: Entailment | None = None
 
 
 @dataclass(frozen=True)

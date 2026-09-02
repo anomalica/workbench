@@ -272,6 +272,16 @@ export interface AuditMember {
   attestation: string;
   speaker: string;
   refs: string[];
+  /** The digester's check of the claim against its own quote. `score` is the
+   *  probability of the label. Absent = not assessed (no quote or no text),
+   *  which is not the same as neutral. */
+  entailment?: Entailment | null;
+}
+
+export interface Entailment {
+  label: "entails" | "neutral" | "contradicts";
+  score: number;
+  model: string;
 }
 
 /** A reviewer's per-member judgement within an adjudicated cluster. */
