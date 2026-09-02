@@ -64,6 +64,11 @@ def _read_candidate_file(path: Path) -> list[dict]:
     ]
 
 
+def _origin(candidate: dict) -> str:
+    reason = str(candidate.get("reason") or "")
+    return "import" if reason.startswith("import:") else "manual"
+
+
 def read_candidates() -> list[dict]:
     """The pre-vetted merge candidates (JSON lists, scheduler-style). Each:
     {node_ids, suggested_canonical, score, node_type, reason}. Absent or
@@ -75,8 +80,13 @@ def read_candidates() -> list[dict]:
     doesn't queue it twice. EVERY candidate from either file is review-only:
     score is display data, and the sole apply path is a reviewer's explicit
     merge click (apply_merge). Nothing here auto-applies at any score."""
+    # The file is no longer only human-authored: the assimilator's import
+    # appends an entry when a node it mints shares a name with a live node of
+    # another type, with a reason beginning "import:". Tagging those "manual"
+    # would call a machine proposal a reviewer's verification, which is the
+    # one thing the ordering below relies on the tag to mean.
     manual = [
-        {**c, "source": "manual"}
+        {**c, "source": _origin(c)}
         for c in _read_candidate_file(manual_candidates_path())
     ]
     seen = {candidate_key(c["node_ids"]) for c in manual}

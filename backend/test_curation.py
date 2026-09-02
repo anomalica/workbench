@@ -180,3 +180,35 @@ def test_rejected_keys_no_table(monkeypatch, tmp_path):
 def test_reject_validates_before_shelling():
     assert curation.reject([])["ok"] is False
     assert curation.reject(["only-one"])["ok"] is False
+
+
+def test_an_import_written_entry_is_not_called_manual(monkeypatch, tmp_path):
+    """The assimilator's import now appends to the manual file. Its entries
+    carry a reason beginning "import:", and must not be tagged as a reviewer's
+    own proposal - that tag is what puts an entry ahead of the machine's."""
+    manual = tmp_path / "manual.json"
+    manual.write_text(
+        json.dumps(
+            [
+                {
+                    "node_ids": ["a", "b"],
+                    "suggested_canonical": "a",
+                    "score": 1.0,
+                    "node_type": "organisation",
+                    "reason": "import: 'AARO' minted beside a live organisation of the same name",
+                },
+                {
+                    "node_ids": ["c", "d"],
+                    "suggested_canonical": "c",
+                    "score": 1.0,
+                    "node_type": "person",
+                    "reason": "manual: same person, verified via claims",
+                },
+            ]
+        )
+    )
+    monkeypatch.setenv("ANOMALICA_MERGE_CANDIDATES_MANUAL", str(manual))
+    monkeypatch.setenv("ANOMALICA_MERGE_CANDIDATES", str(tmp_path / "absent.json"))
+    by_first = {c["node_ids"][0]: c for c in curation.read_candidates()}
+    assert by_first["a"]["source"] == "import"
+    assert by_first["c"]["source"] == "manual"
