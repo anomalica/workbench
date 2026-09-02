@@ -108,9 +108,12 @@ def _links(
 
 
 def relations_for(content_hash: str) -> list[dict]:
-    """Every same_subject / possibly_related judgement involving this record,
-    from either side of the pair, with the OTHER record and the linked claims
-    resolved. `unrelated` rows are the pass's negatives and are not shown."""
+    """Every CONFIRMED same_subject / possibly_related judgement involving this
+    record, from either side of the pair, with the OTHER record and the linked
+    claims resolved. The pass judges twice - a first verdict, then a
+    confirmation - and only a row both agree on is shown; `unrelated` rows are
+    its negatives. A table without the confirmation column is from before the
+    pass judged that way, and reads as not run."""
     con = graph._open()
     if con is None:
         return []
@@ -126,6 +129,7 @@ def relations_for(content_hash: str) -> list[dict]:
                 FROM record_relations
                 WHERE (record_a = ? OR record_b = ?)
                   AND verdict IN (?, ?)
+                  AND confirmed = 1
                 ORDER BY judged_at DESC
                 """,
                 (me, me, *SHOWN_VERDICTS),

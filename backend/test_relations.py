@@ -25,7 +25,9 @@ def graph_db(tmp_path, monkeypatch):
         CREATE TABLE record_relations (
             record_a TEXT NOT NULL, record_b TEXT NOT NULL, verdict TEXT NOT NULL,
             shared_subject TEXT, reason TEXT, links TEXT, model TEXT,
-            prompt_sha TEXT, judged_at TEXT NOT NULL, PRIMARY KEY (record_a, record_b));
+            prompt_sha TEXT, judged_at TEXT NOT NULL,
+            first_verdict TEXT, confirm_verdict TEXT, confirmed INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (record_a, record_b));
         """
     )
     # The graph stores hashes with the prefix; the workbench asks without it.
@@ -69,11 +71,26 @@ def _relate(
     links=None,
     subject="the 1997 hover",
     reason="same night, same base",
+    confirmed=1,
 ):
+    """A judgement as the pass writes it: a first verdict, a confirmation, and
+    whether the two agreed. An unconfirmed row keeps its first verdict but the
+    confirmation said otherwise."""
     con = sqlite3.connect(db)
     con.execute(
-        "INSERT INTO record_relations VALUES (?, ?, ?, ?, ?, ?, 'haiku', 'sha', '2026-09-03T00:00:00Z')",
-        (a, b, verdict, subject, reason, json.dumps(links or [])),
+        "INSERT INTO record_relations VALUES (?, ?, ?, ?, ?, ?, 'haiku', 'sha', "
+        "'2026-09-03T00:00:00Z', ?, ?, ?)",
+        (
+            a,
+            b,
+            verdict,
+            subject,
+            reason,
+            json.dumps(links or []),
+            verdict,
+            verdict if confirmed else "unrelated",
+            confirmed,
+        ),
     )
     con.commit()
     con.close()
@@ -123,6 +140,14 @@ class TestRelationsFor:
         )
         [r] = relations.relations_for(ME)
         assert r["links"][0]["b"] == {"id": "deadbeef", "text": None, "record_id": None}
+
+    def test_an_unconfirmed_judgement_is_not_shown(self, graph_db):
+        # The pass judges twice; a first verdict the confirmation did not
+        # uphold is not a finding, and showing it would be showing the noise.
+        _relate(graph_db, "me", "other", "same_subject", confirmed=0)
+        _relate(graph_db, "me", "third", "possibly_related", confirmed=1)
+        [r] = relations.relations_for(ME)
+        assert r["other"]["title"] == "Third"
 
     def test_a_record_the_graph_does_not_know_has_no_relations(self, graph_db):
         assert relations.relations_for("f" * 64) == []
