@@ -24,6 +24,18 @@ from backend import graph
 
 PUBLIC_HASH_LENGTH = 56
 SHOWN_VERDICTS = ("same_subject", "possibly_related")
+# Strongest first. The panel is a review queue and understates: when the
+# first judgement and its confirmation differ, the weaker is what is shown.
+_STRENGTH = {"same_subject": 2, "possibly_related": 1, "unrelated": 0}
+
+
+def shown_verdict(first: str | None, confirm: str | None, fallback: str) -> str:
+    """The weaker of the two verdicts a confirmed row carries; the row's own
+    `verdict` when only one is recorded."""
+    both = [v for v in (first, confirm) if v in _STRENGTH]
+    if not both:
+        return fallback
+    return min(both, key=lambda v: _STRENGTH[v])
 
 
 def _bare(content_hash: str) -> str:
@@ -125,7 +137,7 @@ def relations_for(content_hash: str) -> list[dict]:
             rows = con.execute(
                 """
                 SELECT record_a, record_b, verdict, shared_subject, reason, links,
-                       model, judged_at
+                       model, judged_at, first_verdict, confirm_verdict
                 FROM record_relations
                 WHERE (record_a = ? OR record_b = ?)
                   AND verdict IN (?, ?)
@@ -139,6 +151,11 @@ def relations_for(content_hash: str) -> list[dict]:
             return []
         out = []
         for r in rows:
+            verdict = shown_verdict(
+                r["first_verdict"], r["confirm_verdict"], r["verdict"]
+            )
+            if verdict not in SHOWN_VERDICTS:
+                continue
             other_id = r["record_b"] if r["record_a"] == me else r["record_a"]
             links = _links(con, r["links"], (me, other_id))
             # Present each pair with THIS record's claim first, whichever side
@@ -151,7 +168,9 @@ def relations_for(content_hash: str) -> list[dict]:
                     link["a"], link["b"] = link["b"], link["a"]
             out.append(
                 {
-                    "verdict": r["verdict"],
+                    "verdict": verdict,
+                    "first_verdict": r["first_verdict"],
+                    "confirm_verdict": r["confirm_verdict"],
                     "shared_subject": r["shared_subject"],
                     "reason": r["reason"],
                     "model": r["model"],

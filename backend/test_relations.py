@@ -149,6 +149,40 @@ class TestRelationsFor:
         [r] = relations.relations_for(ME)
         assert r["other"]["title"] == "Third"
 
+    def test_when_the_two_judgements_differ_the_weaker_is_shown(self, graph_db):
+        # A review queue understates. Both verdicts travel so the stronger can
+        # be seen on hover.
+        con = sqlite3.connect(graph_db)
+        con.execute(
+            "INSERT INTO record_relations VALUES ('me', 'other', 'same_subject', 's', 'r', '[]', "
+            "'haiku', 'sha', '2026-09-03T00:00:00Z', 'same_subject', 'possibly_related', 1)"
+        )
+        con.commit()
+        con.close()
+        [r] = relations.relations_for(ME)
+        assert r["verdict"] == "possibly_related"
+        assert (r["first_verdict"], r["confirm_verdict"]) == (
+            "same_subject",
+            "possibly_related",
+        )
+
+    def test_shown_verdict_takes_the_weaker(self):
+        assert (
+            relations.shown_verdict("same_subject", "possibly_related", "x")
+            == "possibly_related"
+        )
+        assert (
+            relations.shown_verdict("possibly_related", "same_subject", "x")
+            == "possibly_related"
+        )
+        assert (
+            relations.shown_verdict("same_subject", "same_subject", "x")
+            == "same_subject"
+        )
+        # Only one recorded, or none: the row's own verdict stands.
+        assert relations.shown_verdict(None, None, "same_subject") == "same_subject"
+        assert relations.shown_verdict("same_subject", None, "x") == "same_subject"
+
     def test_a_record_the_graph_does_not_know_has_no_relations(self, graph_db):
         assert relations.relations_for("f" * 64) == []
 

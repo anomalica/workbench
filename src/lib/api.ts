@@ -1460,7 +1460,11 @@ export async function fetchHousekeepingQueue(): Promise<HousekeepingRow[]> {
  *  this one, and the claim pairs that link them. Read-only: a decision on a
  *  relation is a curation-ledger operation, not a write here. */
 export interface RecordRelation {
+  /** The weaker of the pass's two judgements when they differ: the panel is
+   *  a review queue and understates. The two themselves follow. */
   verdict: "same_subject" | "possibly_related";
+  first_verdict?: string | null;
+  confirm_verdict?: string | null;
   shared_subject: string | null;
   reason: string | null;
   model: string | null;

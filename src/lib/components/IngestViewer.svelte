@@ -5241,6 +5241,9 @@
                     {rel.verdict === 'same_subject'
                       ? 'bg-primary-container text-on-primary-container'
                       : 'bg-surface-alt text-on-surface-secondary'}"
+                  title={rel.first_verdict && rel.confirm_verdict && rel.first_verdict !== rel.confirm_verdict
+                    ? `The two judgements differed - first ${rel.first_verdict.replace("_", " ")}, on confirmation ${rel.confirm_verdict.replace("_", " ")} - and the weaker is shown.`
+                    : "Judged twice; both agreed."}
                 >{rel.verdict === "same_subject" ? "same subject" : "possibly related"}</span>
                 {#if rel.shared_subject}
                   <span class="text-sm font-medium text-on-surface">{rel.shared_subject}</span>
