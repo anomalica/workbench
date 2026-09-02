@@ -134,9 +134,17 @@
             <span class="text-on-surface-muted/40" aria-label="Not yet reviewed">&#x2022;</span>
           {/if}
         </span>
+        <!-- Two vocabularies share this column while document_type is being
+             filled in: what the record IS, and - falling back - how the file
+             arrived. Rendering them identically would read as though someone
+             had classified a record nobody has looked at, so the fallback is
+             muted and says so on hover. -->
         <span
-          class="text-xs font-ui font-medium text-primary uppercase w-24 flex-none truncate"
-          title={ingest.document_type || ingest.source_type}
+          class="text-xs font-ui font-medium uppercase w-24 flex-none truncate
+            {ingest.document_type ? 'text-primary' : 'text-on-surface-muted/70'}"
+          title={ingest.document_type
+            ? ingest.document_type
+            : `No type set - showing how it arrived (${ingest.source_type})`}
         >
           {typeLabel(ingest.document_type || ingest.source_type)}
         </span>
