@@ -23,6 +23,7 @@ import yaml
 
 from backend.audit import (
     ENTAILMENT_LABELS,
+    ENTAILMENT_PREMISES,
     Entailment,
     Claim,
     Node,
@@ -56,7 +57,12 @@ def _entailment(raw) -> Entailment | None:
         return None
     if not 0.0 <= score <= 1.0:
         return None
-    return Entailment(label=label, score=score, model=str(raw.get("model") or ""))
+    premise = raw.get("premise")
+    if premise not in ENTAILMENT_PREMISES:
+        premise = "quote"
+    return Entailment(
+        label=label, score=score, model=str(raw.get("model") or ""), premise=premise
+    )
 
 
 def parse_claims(doc: dict, variant_id: str, model: str) -> list[Claim]:
@@ -377,6 +383,7 @@ def audit_payload(variants: list[Variant], similar: Similar, prose: str = "") ->
                                         "label": m.entailment.label,
                                         "score": m.entailment.score,
                                         "model": m.entailment.model,
+                                        "premise": m.entailment.premise,
                                     }
                                     if m.entailment
                                     else None

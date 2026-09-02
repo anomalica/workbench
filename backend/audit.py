@@ -43,9 +43,15 @@ class Entailment:
     label: str  # entails | neutral | contradicts
     score: float
     model: str
+    # Which text produced the label: the quote alone, or the record 800
+    # characters either side of it. An entailment on the window is the weaker
+    # verdict - the quote shown to the reader does not carry the claim on its
+    # own. Missing or unknown reads as "quote".
+    premise: str = "quote"  # quote | window
 
 
 ENTAILMENT_LABELS = ("entails", "neutral", "contradicts")
+ENTAILMENT_PREMISES = ("quote", "window")
 
 
 @dataclass(frozen=True)

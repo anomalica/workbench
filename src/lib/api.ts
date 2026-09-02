@@ -282,6 +282,10 @@ export interface Entailment {
   label: "entails" | "neutral" | "contradicts";
   score: number;
   model: string;
+  /** Which text produced the label. "window" is the record 800 characters
+   *  either side of the quote: an entailment on it is the weaker verdict, since
+   *  the quote shown does not carry the claim alone. Absent reads as "quote". */
+  premise?: "quote" | "window";
 }
 
 /** A reviewer's per-member judgement within an adjudicated cluster. */

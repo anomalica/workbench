@@ -1067,7 +1067,7 @@
                                    never had, which the hover says. -->
                               <span
                                 class="entailment-tag {m.entailment?.label}"
-                                title={`The quote ${m.entailment?.label === "contradicts" ? "contradicts" : "neither supports nor contradicts"} the claim (${m.entailment?.score.toFixed(2)}, ${m.entailment?.model})${m.located === false ? ". And the quote itself is not in the record." : ""}`}
+                                title={`${m.entailment?.premise === "window" ? "Even the surrounding record" : "The quote"} ${m.entailment?.label === "contradicts" ? "contradicts" : "neither supports nor contradicts"} the claim (${m.entailment?.score.toFixed(2)}, ${m.entailment?.model})${m.located === false ? ". And the quote itself is not in the record." : ""}`}
                               >{entailmentLabel(m.entailment)}</span>
                             {/if}
                             {#if m.quote}

@@ -373,8 +373,23 @@ describe("doubt ordering", () => {
     expect(doubt(e("entails", 0.51))).toBeLessThan(doubt(e("entails", 0.99)));
   });
 
+  it("puts an entailment carried only by the surrounding record before one the quote carries", () => {
+    const window = { ...e("entails", 0.9), premise: "window" as const };
+    const quote = { ...e("entails", 0.6), premise: "quote" as const };
+    expect(doubt(window)).toBeLessThan(doubt(quote));
+    // Within the window band, weak first, as with the quote band.
+    expect(doubt({ ...window, score: 0.5 })).toBeLessThan(doubt(window));
+    // Still after every neutral.
+    expect(doubt(e("neutral", 0.5))).toBeLessThan(doubt({ ...window, score: 0.1 }));
+  });
+
+  it("reads a missing premise as the quote", () => {
+    expect(doubt(e("entails", 0.7))).toBe(doubt({ ...e("entails", 0.7), premise: "quote" }));
+  });
+
   it("puts not-assessed last, after every entailment", () => {
     expect(doubt(null)).toBeGreaterThan(doubt(e("entails", 1.0)));
+    expect(doubt(null)).toBeGreaterThan(doubt({ ...e("entails", 1.0), premise: "window" }));
     expect(doubt(undefined)).toBe(doubt(null));
   });
 

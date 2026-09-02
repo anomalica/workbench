@@ -179,16 +179,19 @@ export function stepsPastRendered(
  * nothing, and nothing must not outrank something.
  */
 export function doubt(e: Entailment | null | undefined): number {
-  // 4, not 3: an entailment at score 1.0 lands exactly on 3, and not-assessed
-  // must sort strictly after it, not tie with it.
-  if (!e) return 4;
+  // Not-assessed sits strictly beyond every band: an entailment at score 1.0
+  // lands exactly on the band's upper edge and must not tie with nothing-known.
+  if (!e) return 5;
   if (e.label === "contradicts") return 0 + (1 - e.score);
   if (e.label === "neutral") return 1 + (1 - e.score);
-  return 2 + e.score;
+  // Entailed by the surrounding record only, before entailed by the quote
+  // itself: the reader sees the quote, and on its own it does not carry the
+  // claim. A missing premise is the quote, as the digester specified.
+  return (e.premise === "window" ? 2 : 3) + e.score;
 }
 
 export function passageDoubt(p: AuditPassage): number {
-  let least = 4;
+  let least = 5;
   for (const cl of p.clusters)
     for (const m of cl.members) least = Math.min(least, doubt(m.entailment));
   return least;

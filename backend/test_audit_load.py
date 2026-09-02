@@ -253,6 +253,28 @@ class TestEntailment:
         assert c.entailment.score == 0.812
         assert c.entailment.model.startswith("MoritzLaurer/")
 
+    def test_premise_passes_through_and_defaults_to_the_quote(self):
+        from backend.audit_load import parse_claims
+
+        def one(ent):
+            [c] = parse_claims(
+                {
+                    "domain_claims": [
+                        {"id": "c", "quote": "q", "text": "t", "entailment": ent}
+                    ]
+                },
+                "v",
+                "m",
+            )
+            return c.entailment
+
+        base = {"label": "entails", "score": 0.7, "model": "m"}
+        assert one({**base, "premise": "window"}).premise == "window"
+        assert one({**base, "premise": "quote"}).premise == "quote"
+        # Missing or unknown: the quote, as the digester specified.
+        assert one(base).premise == "quote"
+        assert one({**base, "premise": "paragraph"}).premise == "quote"
+
     def test_absent_is_not_assessed(self):
         from backend.audit_load import parse_claims
 
