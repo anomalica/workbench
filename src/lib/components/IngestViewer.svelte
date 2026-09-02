@@ -66,6 +66,12 @@
   import MarkupList from "./MarkupList.svelte";
   import SpeakerFilter from "./SpeakerFilter.svelte";
   import ReadableText from "./ReadableText.svelte";
+  import {
+    readPageMarkers,
+    claimedPages,
+    pageMarkerLines,
+    applyPageMarkers,
+  } from "$lib/page-markers";
   import EditableMetadata from "./EditableMetadata.svelte";
   import ReviewHistory from "./ReviewHistory.svelte";
   import { hasWordTimestamps, parseWords, nextRelevantWordStartAfter, speakerWordCounts, quotedSpeakerCounts } from "$lib/transcript-words";
@@ -1042,6 +1048,19 @@
 
   // Source
   let isPdf = $derived(ingest.frontmatter.source_type === "pdf");
+  /** Whether this record's page numbers can be believed. One record's were
+   *  invented once per extraction chunk, and the source pane followed them to
+   *  the wrong page with nothing on screen saying the two disagreed. */
+  // Frontmatter arrives as strings, and a record need not declare a page count
+  // at all - in which case there is nothing to check the numbers against.
+  let declaredPages = $derived.by(() => {
+    const n = Number(ingest.frontmatter.pages);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  });
+  let pageMarkers = $derived(readPageMarkers(claimedPages(currentBody()), declaredPages));
+  /** How many page markers precede each body line. The prose renders block by
+   *  block, so a block cannot count its own place in the record. */
+  let markersBeforeLine = $derived(pageMarkerLines(currentBody()));
   let isWeb = $derived(ingest.frontmatter.source_type === "web");
   let isAudio = $derived(ingest.frontmatter.source_type === "audio");
   let isVideo = $derived(ingest.frontmatter.source_type === "video");
@@ -1930,6 +1949,14 @@
   // file can carry two annotations (media dedupes by content hash, so a repeated
   // figure resolves to one file), and keying the controls by file made the
   // second figure edit the first and then go dead.
+  /** Markers lying before a body line - the ordinal a block's first marker
+   *  continues from. Counted over the whole record, not the block. */
+  function markersBefore(line: number): number {
+    let n = 0;
+    for (const [at, ordinal] of markersBeforeLine) if (at < line) n = Math.max(n, ordinal + 1);
+    return n;
+  }
+
   function preprocessAnnotations(body: string, imageControls = false, lineOffset = 0): string {
     const recordHash = ingest.content_hash;
     // Resolved against the ORIGINAL text: the rewrites below (caption pairing,
@@ -1942,6 +1969,10 @@
     // consumes them; any markdown/prose render must hide them (word records use
     // WordTranscript, but this keeps markers out of every other prose path too).
     body = body.replace(/\{\{t:\d+(?:\.\d+)?\}\}/g, "");
+    // Correct the page numbers FIRST, while the text still lines up with the
+    // record: every rewrite below moves lines about, and the correction has to
+    // know which marker of the whole record each one is.
+    body = applyPageMarkers(body, pageMarkers, markersBefore(lineOffset));
     body = pairImageCaptions(body);
     // PDFs emit file_page with an adjacent printed_page when the printed
     // number differs - collapse the pair into ONE divider labelled with the
@@ -1984,6 +2015,12 @@
           // Blank lines around the raw div, or CommonMark's HTML block runs
           // to the next blank line and swallows an adjacent heading.
           return `\n\n<div class="page-marker" data-file-page="${pageMatch[1]}"><span class="page-label">Page ${pageMatch[1]}</span></div>\n\n`;
+        }
+        // A page ended here but which page it was cannot be recovered, so the
+        // divider says only that - no number, and nothing for the source pane
+        // to follow.
+        if (trimmed === "page_break") {
+          return `\n\n<div class="page-marker"><span class="page-label">Page break</span></div>\n\n`;
         }
         // Page marker (ebooks): printed_page stands alone - EPUB pagebreaks
         // have no file_page - and must render as a visible divider.
@@ -4498,6 +4535,22 @@
         {#if isPdf && sourceBlob}
           <!-- Rendered here rather than by the browser: its viewer has no way
                to be moved to a page except by reloading the file. -->
+          <!-- Which page you are looking at. Without it the pane moves under
+               you as the text scrolls and there is no way to tell where it
+               landed, or to notice when it landed somewhere wrong. -->
+          <div
+            class="flex-none flex items-baseline gap-2 px-3 py-1 border-b border-border
+                   bg-surface-alt text-xs font-ui text-on-surface-muted"
+          >
+            <span class="text-on-surface-secondary">
+              Page {pdfPage}{declaredPages ? ` of ${declaredPages}` : ""}
+            </span>
+            {#if !pageMarkers.trustworthy}
+              <span class="ml-auto text-warning" title={pageMarkers.fault}>
+                {pageMarkers.derived ? "page numbers recounted" : "page numbers unusable"}
+              </span>
+            {/if}
+          </div>
           <PdfViewer
             blob={sourceBlob}
             page={pdfPage}
