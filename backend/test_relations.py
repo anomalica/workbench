@@ -91,13 +91,16 @@ class TestRelationsFor:
             "other",
             "me",
             "same_subject",
-            links=[{"a": "c-other", "b": "c-me", "relation": "corroborates"}],
+            links=[{"a": "8fc54bb2", "b": "5dbae39e", "relation": "corroborates"}],
         )
         [r] = relations.relations_for(ME)
         [link] = r["links"]
         assert link["a"]["text"] == "The craft hovered over the base."
         assert link["b"]["text"] == "An object hung above the installation."
         assert link["relation"] == "corroborates"
+        # Full ids come back: the record page deep-links on the 36-character id.
+        assert link["a"]["id"] == "5dbae39e-c14f-4ad1-9159-9c459d951001"
+        assert link["b"]["id"] == "8fc54bb2-0000-4000-8000-000000000000"
 
     def test_a_link_to_a_claim_the_graph_no_longer_holds_is_kept_and_marked(
         self, graph_db
@@ -107,10 +110,10 @@ class TestRelationsFor:
             "me",
             "other",
             "same_subject",
-            links=[{"a": "c-me", "b": "gone", "relation": "x"}],
+            links=[{"a": "5dbae39e", "b": "deadbeef", "relation": "x"}],
         )
         [r] = relations.relations_for(ME)
-        assert r["links"][0]["b"] == {"id": "gone", "text": None, "record_id": None}
+        assert r["links"][0]["b"] == {"id": "deadbeef", "text": None, "record_id": None}
 
     def test_a_record_the_graph_does_not_know_has_no_relations(self, graph_db):
         assert relations.relations_for("f" * 64) == []

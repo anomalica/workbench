@@ -66,18 +66,29 @@ def _record_summary(con: sqlite3.Connection, record_id: str) -> dict:
     }
 
 
-def _claim(con: sqlite3.Connection, claim_id: str) -> dict:
-    row = con.execute(
-        "SELECT id, content, record_id FROM claims WHERE id = ?", (claim_id,)
-    ).fetchone()
-    # A link to a claim the graph no longer holds is shown as such, not
-    # dropped: the assimilator said the pair existed when it judged.
-    if row is None:
-        return {"id": claim_id, "text": None, "record_id": None}
+def _claim(con: sqlite3.Connection, claim_ref: str, records: tuple[str, str]) -> dict:
+    """A linked claim. The assimilator writes the digest's 8-character id,
+    which is the first 8 of the graph's full id, so the lookup is by prefix -
+    scoped to the two records of the pair, because 8 hex characters over
+    33,000 claims can collide and a stranger's claim must not be shown as the
+    link. The full id is returned: the record page deep-links on it."""
+    rows = con.execute(
+        "SELECT id, content, record_id FROM claims "
+        "WHERE (id = ? OR id LIKE ?) AND record_id IN (?, ?) LIMIT 2",
+        (claim_ref, f"{claim_ref}%", *records),
+    ).fetchall()
+    # A link to a claim the graph no longer holds - or one that resolves to
+    # two - is shown as unresolved, not dropped: the assimilator said the pair
+    # existed when it judged, and a reviewer should see that it did.
+    if len(rows) != 1:
+        return {"id": claim_ref, "text": None, "record_id": None}
+    row = rows[0]
     return {"id": row["id"], "text": row["content"], "record_id": row["record_id"]}
 
 
-def _links(con: sqlite3.Connection, raw: str | None) -> list[dict]:
+def _links(
+    con: sqlite3.Connection, raw: str | None, records: tuple[str, str]
+) -> list[dict]:
     try:
         pairs = json.loads(raw) if raw else []
     except json.JSONDecodeError:
@@ -88,8 +99,8 @@ def _links(con: sqlite3.Connection, raw: str | None) -> list[dict]:
             continue
         out.append(
             {
-                "a": _claim(con, str(p.get("a", ""))),
-                "b": _claim(con, str(p.get("b", ""))),
+                "a": _claim(con, str(p.get("a", "")), records),
+                "b": _claim(con, str(p.get("b", "")), records),
                 "relation": str(p.get("relation") or ""),
             }
         )
@@ -125,7 +136,7 @@ def relations_for(content_hash: str) -> list[dict]:
         out = []
         for r in rows:
             other_id = r["record_b"] if r["record_a"] == me else r["record_a"]
-            links = _links(con, r["links"])
+            links = _links(con, r["links"], (me, other_id))
             # Present each pair with THIS record's claim first, whichever side
             # the assimilator wrote it on, so the panel reads "ours / theirs".
             for link in links:
