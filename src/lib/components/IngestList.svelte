@@ -1,5 +1,6 @@
 <script lang="ts">
   import { type IngestSummary, type ReviewPriority, provenanceOf, isPubliclyViewable } from "$lib/api";
+  import { typeLabel } from "$lib/document-types";
   import { observedPercent } from "$lib/coverage";
 
   let {
@@ -53,13 +54,6 @@
     return i.date || "";
   }
 
-  const typeLabels: Record<string, string> = {
-    pdf: "PDF",
-    web: "Web",
-    audio: "Audio",
-    video: "Video",
-  };
-
   const copyrightLabels: Record<string, string> = {
     public_domain: "public domain",
     open_licence: "open licence",
@@ -71,7 +65,7 @@
 <!-- Column headers -->
 <div class="flex items-center gap-3 px-6 py-2 border-b border-border bg-surface-alt text-xs font-ui text-on-surface-muted select-none sticky top-0 z-10">
   <span class="w-6 flex-none" aria-hidden="true"></span>
-  <button onclick={() => onsort("type")} class="w-14 flex-none cursor-pointer hover:text-on-surface text-left" title="Sort by type">
+  <button onclick={() => onsort("type")} class="w-24 flex-none cursor-pointer hover:text-on-surface text-left" title="Sort by type">
     Type {sortBy === "type" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
   </button>
   <button onclick={() => onsort("date")} class="w-20 flex-none cursor-pointer hover:text-on-surface text-left" title="Sort by date">
@@ -140,8 +134,11 @@
             <span class="text-on-surface-muted/40" aria-label="Not yet reviewed">&#x2022;</span>
           {/if}
         </span>
-        <span class="text-xs font-ui font-medium text-primary uppercase w-14 flex-none">
-          {typeLabels[ingest.document_type || ingest.source_type] ?? (ingest.document_type || ingest.source_type)}
+        <span
+          class="text-xs font-ui font-medium text-primary uppercase w-24 flex-none truncate"
+          title={ingest.document_type || ingest.source_type}
+        >
+          {typeLabel(ingest.document_type || ingest.source_type)}
         </span>
         <span
           class="text-xs text-on-surface-muted font-mono w-20 flex-none"

@@ -70,3 +70,18 @@ export function recordType(frontmatter: { document_type?: string | null }): {
   // How it arrived is shown separately, which is where that fact belongs.
   return { label: "", known: false, missing: true };
 }
+
+/**
+ * How a type reads to a human.
+ *
+ * The list and the filter chips each grew their own version of this, so the same
+ * record read `PDF` in one place and `Pdf` in the other. Only the acronyms need
+ * saying; everything else is a plain word and capitalises the ordinary way.
+ */
+const TYPE_LABELS: Record<string, string> = { pdf: "PDF" };
+
+export function typeLabel(value: string | undefined | null): string {
+  const v = (value ?? "").trim();
+  if (!v) return "";
+  return TYPE_LABELS[v.toLowerCase()] ?? v.charAt(0).toUpperCase() + v.slice(1);
+}

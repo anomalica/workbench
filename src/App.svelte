@@ -22,6 +22,7 @@
     SyncStatus,
     User,
   } from "$lib/api";
+  import { typeLabel } from "$lib/document-types";
   import FileDropZone from "$lib/components/FileDropZone.svelte";
   import IngestList from "$lib/components/IngestList.svelte";
   import IngestViewer from "$lib/components/IngestViewer.svelte";
@@ -983,7 +984,7 @@
                   onclick={() => { filterType = type; }}
                   class="text-xs font-ui px-2 py-1 rounded cursor-pointer transition-colors
                     {filterType === type ? 'bg-primary text-on-primary' : 'text-on-surface-secondary hover:bg-surface'}"
-                >{type.charAt(0).toUpperCase() + type.slice(1)}</button>
+                >{typeLabel(type)}</button>
               {/each}
             </div>
             {#if blocksRedigestCount > 0}
