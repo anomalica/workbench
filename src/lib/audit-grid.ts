@@ -212,3 +212,28 @@ export function entailmentLabel(e: Entailment | null | undefined): string {
   if (!e || e.label === "entails") return "";
   return e.label;
 }
+
+/**
+ * The hover on a mark, in words that claim exactly what the check did.
+ *
+ * A neutral on the quote alone is NOT "even the surrounding record says
+ * nothing": every such neutral in the corpus is a claim whose quote could not
+ * be located, so the record was never consulted. Saying more than that would
+ * send a reviewer to distrust a record that was not read.
+ */
+export function entailmentSentence(e: Entailment): string {
+  const window = e.premise === "window";
+  if (e.label === "contradicts") {
+    return window
+      ? "Even the surrounding record contradicts the claim"
+      : "The quote contradicts the claim";
+  }
+  if (e.label === "neutral") {
+    return window
+      ? "Even the surrounding record neither supports nor contradicts the claim"
+      : "The quote alone does not support the claim; the record was not consulted";
+  }
+  return window
+    ? "The surrounding record supports the claim; the quote alone does not"
+    : "The quote supports the claim";
+}

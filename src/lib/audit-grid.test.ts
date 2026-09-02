@@ -12,6 +12,7 @@ import {
   doubt,
   doubtfulFirst,
   entailmentLabel,
+  entailmentSentence,
 } from "./audit-grid";
 import type { AuditCluster, AuditMember, AuditPassage, AuditVariant } from "$lib/api";
 
@@ -435,5 +436,26 @@ describe("doubt ordering", () => {
     expect(doubtfulFirst(ps).map((p) => p.index)).toEqual([3, 2, 1, 0, 4]);
     // The input is not reordered in place.
     expect(ps.map((p) => p.index)).toEqual([0, 1, 2, 3, 4]);
+  });
+});
+
+describe("entailmentSentence", () => {
+  const e = (label: "entails" | "neutral" | "contradicts", premise?: "quote" | "window") =>
+    ({ label, score: 0.8, model: "m", premise }) as import("$lib/api").Entailment;
+
+  it("does not claim the record was read when only the quote was", () => {
+    // Every neutral-on-quote in the corpus is a quote the locator could not
+    // find, so the window stage never ran.
+    expect(entailmentSentence(e("neutral", "quote"))).toMatch(/record was not consulted/);
+    expect(entailmentSentence(e("neutral"))).toMatch(/record was not consulted/);
+    expect(entailmentSentence(e("neutral", "quote"))).not.toMatch(/surrounding record/);
+  });
+
+  it("says the surrounding record was consulted only when it was", () => {
+    expect(entailmentSentence(e("neutral", "window"))).toMatch(/^Even the surrounding record/);
+    expect(entailmentSentence(e("contradicts", "window"))).toMatch(
+      /^Even the surrounding record contradicts/,
+    );
+    expect(entailmentSentence(e("contradicts", "quote"))).toBe("The quote contradicts the claim");
   });
 });
