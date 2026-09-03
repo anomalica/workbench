@@ -3389,6 +3389,30 @@ def _archived_source_by_stem(stem: str) -> Path | None:
     return None
 
 
+def _single_file_snapshot(raw_frontmatter: str | None) -> str | None:
+    """The hash of the `single_file` snapshot - the self-contained capture of a
+    web page, with its stylesheets and images inlined."""
+    import yaml as _yaml  # local, as elsewhere in this module
+
+    if not raw_frontmatter:
+        return None
+    try:
+        # safe_load_all, not safe_load: the raw block still carries its `---`
+        # delimiters, which makes it more than one YAML document.
+        parsed = next(
+            (d for d in _yaml.safe_load_all(raw_frontmatter) if isinstance(d, dict)),
+            None,
+        )
+    except _yaml.YAMLError:
+        return None
+    if parsed is None:
+        return None
+    for snap in parsed.get("snapshots") or []:
+        if isinstance(snap, dict) and snap.get("role") == "single_file":
+            return normalise_hash(snap.get("hash"))
+    return None
+
+
 def _archived_file(full_hash: str) -> Path | None:
     """The archived original for a record, by the record's content hash.
 
@@ -3415,7 +3439,24 @@ def _archived_file(full_hash: str) -> Path | None:
     ingest = source.get_ingest(full_hash)
     if not ingest:
         return None
-    source_hash = normalise_hash(ingest.get("frontmatter", {}).get("source_hash"))
+    frontmatter = ingest.get("frontmatter", {})
+    # A WEB record archives several captures of the same page, and the raw fetch
+    # is the worst of them to show: its stylesheets and images are still
+    # external URLs, so offline it renders as an unstyled skeleton of stacked
+    # links and broken images - which reads as "the capture is empty" even
+    # though every word is there. The `single_file` snapshot is the one that
+    # inlines them and is meant to stand alone.
+    #
+    # Read from the RAW frontmatter, because the parsed one flattens a list of
+    # mappings to `snapshots.hash` / `snapshots.content_type` holding whichever
+    # snapshot came last - and `role`, the only field that says which capture a
+    # snapshot IS, does not survive at all.
+    single_file = _single_file_snapshot(ingest.get("raw_frontmatter"))
+    if single_file:
+        self_contained = _archived_source_by_stem(single_file)
+        if self_contained is not None:
+            return self_contained
+    source_hash = normalise_hash(frontmatter.get("source_hash"))
     if not source_hash or source_hash == full_hash:
         return None
     return _archived_source_by_stem(source_hash)

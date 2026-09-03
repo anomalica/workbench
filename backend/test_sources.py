@@ -99,3 +99,65 @@ def test_404_when_the_record_has_no_source_hash(client, store):
 
 def test_404_when_there_is_no_record_at_all(client, store):
     assert client.get(f"/api/sources/{BODY_HASH}").status_code == 404
+
+
+def test_a_web_record_serves_its_self_contained_capture(monkeypatch, tmp_path):
+    """A web record archives several captures of one page. The raw fetch still
+    points at external stylesheets and images, so offline it renders as a
+    skeleton of stacked links and broken pictures - which reads as an empty
+    capture even though every word is in it. The single_file snapshot inlines
+    them and is the one to show."""
+    import backend.server as server
+
+    records = tmp_path / "records"
+    records.mkdir()
+    raw_hash = "a" * 64
+    snapshot_hash = "b" * 64
+    body_hash = "c" * 64
+    (records / f"{raw_hash}.html").write_text("<html>raw fetch</html>")
+    (records / f"{snapshot_hash}.html").write_text("<html>self-contained</html>")
+    monkeypatch.setattr(server, "records_path", records)
+
+    class _Source:
+        def get_ingest(self, h):
+            return {
+                "frontmatter": {"source_hash": f"sha256:{raw_hash}"},
+                "raw_frontmatter": (
+                    "---\n"
+                    "source_type: web\n"
+                    f"source_hash: sha256:{raw_hash}\n"
+                    "snapshots:\n"
+                    "  - role: page_render\n"
+                    "    hash: sha256:" + "d" * 64 + "\n"
+                    "    content_type: application/pdf\n"
+                    "  - role: single_file\n"
+                    f"    hash: sha256:{snapshot_hash}\n"
+                    "    content_type: text/html\n"
+                    "---\n"
+                ),
+            }
+
+    monkeypatch.setattr(server, "source", _Source())
+    assert server._archived_file(body_hash).name == f"{snapshot_hash}.html"
+
+
+def test_it_falls_back_to_the_raw_fetch_when_there_is_no_snapshot(
+    monkeypatch, tmp_path
+):
+    import backend.server as server
+
+    records = tmp_path / "records"
+    records.mkdir()
+    raw_hash = "a" * 64
+    (records / f"{raw_hash}.html").write_text("<html>raw fetch</html>")
+    monkeypatch.setattr(server, "records_path", records)
+
+    class _Source:
+        def get_ingest(self, h):
+            return {
+                "frontmatter": {"source_hash": f"sha256:{raw_hash}"},
+                "raw_frontmatter": f"---\nsource_hash: sha256:{raw_hash}\n---\n",
+            }
+
+    monkeypatch.setattr(server, "source", _Source())
+    assert server._archived_file("c" * 64).name == f"{raw_hash}.html"
