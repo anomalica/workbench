@@ -3169,6 +3169,9 @@ def compose_page(body: dict, request: Request) -> dict:
             body.get("node_ids") or [],
             body.get("note"),
             f"workbench/{login}",
+            # From the SESSION, never the body: a confirmation a caller can put
+            # in its own request confirms nothing.
+            confirmed_by=f"workbench/{login}",
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

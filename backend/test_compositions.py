@@ -223,3 +223,30 @@ class TestTheEndpointIsGated:
         assert client.post("/api/pages/compose", json=body).status_code == 403
         client.login("ed")
         assert client.post("/api/pages/compose", json=body).status_code == 200
+
+
+def test_a_composition_carries_who_confirmed_it(curation, graph_db, monkeypatch):
+    """A composition takes member pages down, so it is the same class of change
+    as a merge: no session composes anything Mark has not confirmed here. The
+    assimilator refuses an entry without the block and replay skips one."""
+    _stub_apply(monkeypatch, graph_db)
+    compositions.compose(
+        "UAPs and UFOs",
+        [UAP, UFO],
+        None,
+        "workbench/mark",
+        confirmed_by="workbench/mark",
+    )
+    [entry] = list(yaml.safe_load_all(curation.read_text()))
+    assert entry["confirmation"]["by"] == "workbench/mark"
+    assert entry["confirmation"]["via"] == "workbench-compose"
+    assert entry["confirmation"]["at"].endswith("Z")
+
+
+def test_without_a_confirmer_no_confirmation_is_forged(curation, graph_db, monkeypatch):
+    """The block must never be synthesised from the process's own name - that is
+    the whole point of it."""
+    _stub_apply(monkeypatch, graph_db)
+    compositions.compose("UAPs and UFOs", [UAP, UFO], None, "operator/script")
+    [entry] = list(yaml.safe_load_all(curation.read_text()))
+    assert "confirmation" not in entry

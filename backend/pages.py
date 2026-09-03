@@ -259,7 +259,7 @@ def _page_head(path: Path) -> tuple[str | None, str | None]:
     )
 
 
-def published_pages() -> list[dict]:
+def published_pages(index: dict[str, dict] | None = None) -> list[dict]:
     """Pages that already exist - the third thing a reviewer needs to see.
 
     Without them the tab is a queue: what to do next, with no way to tell that
@@ -279,10 +279,13 @@ def published_pages() -> list[dict]:
     if not root.is_dir():
         return []
     # (section, slug) -> the brief, inverted from the node-keyed index. One pass
-    # over the briefs rather than a file read per page.
+    # over the briefs rather than a file read per page - and the caller passes
+    # the index in where it has already built one, because reading 805 brief
+    # files twice for one request is the difference between a fast list and a
+    # four-second one.
     by_page = {
-        (ref["section"], ref["slug"]): {**ref, "node_id": nid}
-        for nid, ref in brief_index().items()
+        (ref["section"], ref["slug"]): {**ref, "node_id": ref["primary_node_id"]}
+        for ref in (index if index is not None else brief_index()).values()
     }
     out: list[dict] = []
     for path in sorted(root.rglob("*.en.md")):
@@ -324,7 +327,11 @@ def list_topics(limit: int = 400) -> dict:
     if con is None:
         # Seeded and published come from files, not the graph, so an absent
         # database costs the proposals and nothing else.
-        return {"topics": [], "seeded": read_seeded(), "published": published_pages()}
+        return {
+            "topics": [],
+            "seeded": read_seeded(),
+            "published": published_pages(),
+        }
     rows: list = []
     vetoed: set = set()
     renames: dict = {}
@@ -364,7 +371,7 @@ def list_topics(limit: int = 400) -> dict:
     finally:
         con.close()
 
-    index = brief_index()
+    index = brief_index()  # built once; published_pages reuses it
     out = []
     for nid, name, ntype, tier, claims, sources, ind, second, subject, status in rows:
         ref = index.get(nid)
@@ -398,7 +405,11 @@ def list_topics(limit: int = 400) -> dict:
                 "brief_claims": ref["claim_total"] if ref else None,
             }
         )
-    return {"topics": out, "seeded": read_seeded(), "published": published_pages()}
+    return {
+        "topics": out,
+        "seeded": read_seeded(),
+        "published": published_pages(index),
+    }
 
 
 def read_brief(section: str, slug: str) -> dict | None:

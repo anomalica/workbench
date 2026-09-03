@@ -189,6 +189,7 @@ def compose(
     node_ids: list[str],
     note: str | None,
     by: str | None,
+    confirmed_by: str | None = None,
 ) -> dict:
     """Cover several subjects with one page.
 
@@ -207,15 +208,27 @@ def compose(
     if len(members) < 2:
         raise ValueError("At least two of those subjects no longer resolve")
 
+    now = _now()
     entry = {
         "op": "compose",
         "page_id": str(uuid.uuid4()),
-        "at": _now(),
+        "at": now,
         "by": by or "workbench",
         "page": {"name": name, "node_type": members[0]["node_type"]},
         "members": members,
         "note": (note or "").strip() or None,
     }
+    if confirmed_by:
+        # A composition takes member pages down, so it is the same class of
+        # change as a merge and carries the same record: who confirmed it, when,
+        # and through which control. The assimilator refuses an entry without
+        # one, and replay skips a post-rule entry that lacks it - so the
+        # confirmation must be the person who clicked, never this process.
+        entry["confirmation"] = {
+            "by": confirmed_by,
+            "at": now,
+            "via": "workbench-compose",
+        }
     _append(entry)
     r = _apply()
     outcome = _outcome(entry["page_id"])
