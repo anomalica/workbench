@@ -1570,7 +1570,9 @@
     // reviewer is hovering a wall of identically-marked text with no sign of
     // what a click would take.
     let subtle = highlightDisplay.subtle;
-    let paint = cols;
+    // Hidden means hidden: no bands at all, while the words keep every other
+    // treatment they carry. The markup is untouched - one click brings it back.
+    let paint = highlightDisplay.shown ? cols : undefined;
     if (pickingFrom !== null && cols?.length) {
       const ids = highlightIdsByWord.get(g);
       const lit =
@@ -1581,7 +1583,9 @@
       // hairline merged them all, so at the exact moment the reviewer is asked
       // to choose a highlight they could no longer tell two apart. Full colours
       // rather than the reading treatment for the same reason: picking is a
-      // markup action and needs the markup view.
+      // markup action and needs the markup view - which is also why picking
+      // overrides HIDDEN. Being asked to choose between highlights nobody can
+      // see is not a reading preference, it is a broken control.
       subtle = false;
       paint = lit ? cols : cols.map(fadedColour);
     }
@@ -1747,7 +1751,7 @@
     void observedVisible; // the observed-only filter hides words; restyle when that set moves
     void styleEpoch;
     void highlightColorsByWord; // re-apply bands when a highlight is added/cleared
-    void highlightDisplay.subtle; // ...and when the reviewer asks for colours
+    void highlightDisplay.mode; // ...and when the reviewer changes how loud they are
     void pickingFrom; // dim the rest while picking, restore when the mode ends
     void hoverHighlightId; // and light whichever highlight is under the cursor
     void spanNoteWordSet; // re-apply tint when a span note is added/cleared/re-ranged

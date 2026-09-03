@@ -3,7 +3,11 @@
   import { DOCUMENT_TYPES, recordType } from "$lib/document-types";
   import CopyrightControl from "./CopyrightControl.svelte";
   import RecordTags from "./RecordTags.svelte";
-  import { highlightDisplay } from "$lib/highlight-display.svelte";
+  import {
+    HIGHLIGHT_HINT,
+    HIGHLIGHT_LABEL,
+    highlightDisplay,
+  } from "$lib/highlight-display.svelte";
   import type {
     CopyrightStatus,
     DigestDocument,
@@ -2221,12 +2225,17 @@
       .replace(
         /\{\{highlight-start:\s*([A-Za-z0-9]+)\s*\}\}/g,
         (_, id) => {
+          // The span stays even when highlights are hidden - it carries the id
+          // everything else addresses a highlight by - and simply paints
+          // nothing. Stripping it would take the markup out of the document to
+          // answer a question about how loud it looks.
           const colour = highlightDisplay.subtle
             ? SUBTLE_HL
             : highlightColour(highlightIndex(String(id)));
+          const bands = highlightDisplay.shown ? [colour] : [];
           return (
             `<span class="prose-highlight" data-highlight-id="${id}"` +
-            ` style="${bandStyleAttribute([colour], highlightDisplay.subtle)}">`
+            ` style="${bandStyleAttribute(bands, highlightDisplay.subtle)}">`
           );
         },
       )
@@ -4885,25 +4894,36 @@
         </button>
 
         <div class="ml-auto flex items-center gap-1">
-          <!-- Highlight colours. Off by default: while reading, a highlight
-               only has to register as present, and the palette competes with
-               the words on every line that carries one. -->
+          <!-- How loudly other people's highlights are drawn, at three
+               volumes: hidden, a hairline, or the palette. Hairline by default -
+               while reading, a highlight only has to register as present, and
+               the colours compete with the words on every line that carries
+               one - but somebody reading the record for itself is entitled to
+               have it without anybody else's marks on it. -->
           {#if view === "ingest" && hasHighlights}
             <button
-              onclick={() => highlightDisplay.toggle()}
+              onclick={() => highlightDisplay.cycle()}
               class="flex items-center gap-1 cursor-pointer px-1.5 py-0.5 rounded-full transition-colors text-xs font-ui font-medium
-                {highlightDisplay.subtle
-                  ? 'text-on-surface-muted hover:text-on-surface hover:bg-surface'
-                  : 'bg-primary/10 text-primary'}"
-              title={highlightDisplay.subtle
-                ? "Highlights are shown as a hairline. Click to colour them."
-                : "Highlights are coloured, one band per overlap. Click to quieten them."}
+                {highlightDisplay.mode === 'full'
+                  ? 'bg-primary/10 text-primary'
+                  : 'text-on-surface-muted hover:text-on-surface hover:bg-surface'}"
+              title={HIGHLIGHT_HINT[highlightDisplay.mode]}
             >
-              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M14.5 3.5l6 6-7.5 7.5H7.5l-1.5-4 8.5-9.5z" />
-                <path stroke-linecap="round" stroke-width="3" d="M5.5 21h13" />
-              </svg>
-              Highlight colours
+              {#if highlightDisplay.mode === "off"}
+                <!-- Struck through, so the state reads at a glance rather than
+                     from the label alone. -->
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M14.5 3.5l6 6-7.5 7.5H7.5l-1.5-4 8.5-9.5z" />
+                  <path stroke-linecap="round" stroke-width="3" d="M5.5 21h13" />
+                  <path stroke-linecap="round" stroke-width="2" d="M3 3l18 18" />
+                </svg>
+              {:else}
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M14.5 3.5l6 6-7.5 7.5H7.5l-1.5-4 8.5-9.5z" />
+                  <path stroke-linecap="round" stroke-width="3" d="M5.5 21h13" />
+                </svg>
+              {/if}
+              {HIGHLIGHT_LABEL[highlightDisplay.mode]}
             </button>
           {/if}
           <!-- Follow in source: block clicks jump the source pane to the
