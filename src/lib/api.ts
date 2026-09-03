@@ -1630,7 +1630,16 @@ export async function composePage(
   name: string,
   nodeIds: string[],
   note?: string,
-): Promise<{ ok: boolean; name: string; slug: string; members: string[]; dropped: string[] }> {
+): Promise<{
+  ok: boolean;
+  name: string;
+  slug: string;
+  members: string[];
+  dropped: string[];
+  /** The member pages this one takes over from - they come down at the next
+   *  assembly, which a reviewer should not find out afterwards. */
+  superseded: string[];
+}> {
   const res = await fetch("/api/pages/compose", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

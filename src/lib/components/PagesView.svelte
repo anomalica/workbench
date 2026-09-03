@@ -350,8 +350,16 @@
       const out = await composePage(name, picked);
       notice =
         `"${out.name}" now covers ${out.members.length} subjects` +
-        (out.dropped.length ? `; ${out.dropped.join(", ")} no longer resolved and was left out` : "") +
-        ". They stop being proposed separately.";
+        (out.dropped.length
+          ? `; ${out.dropped.join(", ")} no longer resolved and was left out`
+          : "") +
+        ". They stop being proposed separately" +
+        // Which existing pages this replaces. The reviewer chose the name, and
+        // the name is what decides whether an existing page survives - so what
+        // comes down belongs in the same sentence as what was made.
+        (out.superseded.length
+          ? `, and the page${out.superseded.length > 1 ? "s" : ""} at ${out.superseded.join(" and ")} ${out.superseded.length > 1 ? "come" : "comes"} down at the next assembly.`
+          : ".");
       composing = false;
       picked = [];
       composeName = "";
