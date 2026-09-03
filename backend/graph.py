@@ -266,7 +266,8 @@ def list_merges(db_path: str | Path | None = None):
         try:
             rows = con.execute(
                 "SELECT m.merge_id, m.survivor_id, m.canonical_name, m.victim_id,"
-                " m.victim_prior_name, m.created_at, n.name AS survivor_name"
+                " m.victim_prior_name, m.created_at, m.created_by,"
+                " n.name AS survivor_name"
                 " FROM node_merges m LEFT JOIN nodes n ON n.id = m.survivor_id"
                 " WHERE m.undone_at IS NULL"
                 " ORDER BY m.created_at DESC, m.merge_id"
@@ -283,6 +284,10 @@ def list_merges(db_path: str | Path | None = None):
                     "survivor_name": r["survivor_name"],
                     "canonical_name": r["canonical_name"],
                     "created_at": r["created_at"],
+                    # WHO applied it. 163 of the 164 merges in the graph were
+                    # applied by a session with nobody confirming, which is the
+                    # thing this list now exists to let a person review.
+                    "created_by": r["created_by"],
                     "victims": [],
                 },
             )

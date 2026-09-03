@@ -1114,6 +1114,9 @@ export interface ActiveMerge {
   survivor_name: string;
   canonical_name: string;
   created_at: string;
+  /** Who applied it. A `workbench/<login>` is one a person confirmed; anything
+   *  else was applied by a session, which is what the review list is for. */
+  created_by: string | null;
   victims: { id: string; prior_name: string }[];
 }
 

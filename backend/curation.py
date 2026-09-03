@@ -173,9 +173,21 @@ def apply_merge(
     victim_ids: list[str],
     canonical_name: str,
     by: str | None = None,
+    confirmed_by: str | None = None,
+    confirmed_via: str = "workbench-queue",
 ) -> dict:
     """Merge victims into the survivor under canonical_name. Validated here;
-    the assimilator does the re-pointing + records the reversible merge-log row."""
+    the assimilator does the re-pointing + records the reversible merge-log row.
+
+    A merge is applied only with a CONFIRMATION - who confirmed it, when, and
+    through which control - and the assimilator refuses without one, writing the
+    cluster into the reviewer queue instead. The rule is Mark's: no session
+    merges anything he has not confirmed in the workbench. So `confirmed_by` is
+    the login of the person who clicked, never the process; passing the caller's
+    own name here would defeat the whole guard.
+    """
+    from datetime import datetime, timezone
+
     if not survivor_id or not victim_ids or not canonical_name:
         return {
             "ok": False,
@@ -183,6 +195,18 @@ def apply_merge(
         }
     if survivor_id in victim_ids:
         return {"ok": False, "error": "survivor cannot also be a victim"}
+    confirmation = (
+        [
+            "--confirmed-by",
+            confirmed_by,
+            "--confirmed-at",
+            datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "--confirmed-via",
+            confirmed_via,
+        ]
+        if confirmed_by
+        else []
+    )
     return _run(
         "merge",
         [
@@ -193,6 +217,7 @@ def apply_merge(
             "--name",
             canonical_name,
             *(["--by", by] if by else []),
+            *confirmation,
         ],
     )
 

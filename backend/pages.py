@@ -597,7 +597,17 @@ def _merge_into_the_name(
             "target": target,
             "source": source_node,
         }
-    result = curation.apply_merge(target["id"], [node_id], new_name, by=by)
+    # `by` is already workbench/<login>, taken from the session by the endpoint,
+    # so it is also the confirmation: this merge happened because a person typed
+    # a name that exists and pressed a button that said "Merge into it".
+    result = curation.apply_merge(
+        target["id"],
+        [node_id],
+        new_name,
+        by=by,
+        confirmed_by=by,
+        confirmed_via="workbench-rename",
+    )
     if not result.get("ok"):
         return {
             "ok": False,

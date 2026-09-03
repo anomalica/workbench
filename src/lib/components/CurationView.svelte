@@ -14,6 +14,15 @@
 
   let candidates = $state<MergeCandidate[]>([]);
   let merges = $state<ActiveMerge[]>([]);
+  let unconfirmedOnly = $state(false);
+  /** A merge a PERSON confirmed carries their login through the workbench.
+   *  Anything else - an operator script, an assimilator pass, no actor at all -
+   *  was applied without anyone agreeing to it. */
+  const confirmedByPerson = (m: ActiveMerge) => (m.created_by ?? "").startsWith("workbench/");
+  const unconfirmedCount = $derived(merges.filter((m) => !confirmedByPerson(m)).length);
+  const shownMerges = $derived(
+    unconfirmedOnly ? merges.filter((m) => !confirmedByPerson(m)) : merges,
+  );
   let tab = $state<Tab>("candidates");
   let index = $state(0);
   let loading = $state(true);
@@ -267,14 +276,31 @@
       <!-- Merged -->
       <div class="max-w-3xl mx-auto px-6 py-6 space-y-3">
         <h2 class="text-lg font-medium text-on-surface">Merged entities</h2>
+        <!-- Every merge in the graph is reversible, and most were not confirmed
+             by anybody: they were applied by sessions before a merge needed a
+             person's confirmation. That is what this filter is for - it is the
+             list to read through, not a status badge. -->
+        <div class="flex flex-wrap items-center gap-2 text-xs font-ui">
+          <button
+            onclick={() => (unconfirmedOnly = !unconfirmedOnly)}
+            class="rounded px-2 py-1 {unconfirmedOnly
+              ? 'bg-primary-container text-on-surface'
+              : 'text-on-surface-muted hover:bg-surface-alt'}"
+          >Applied without a person confirming <span class="tabular-nums">{unconfirmedCount}</span></button>
+          <span class="text-on-surface-muted">of {merges.length}</span>
+        </div>
         {#if merges.length === 0}
           <p class="text-sm text-on-surface-muted">No merges yet. Confirmed merges appear here, each reversible.</p>
         {:else}
-          {#each merges as m (m.merge_id)}
+          {#each shownMerges as m (m.merge_id)}
             <div class="rounded-lg border border-border bg-surface p-4 space-y-2">
               <div class="flex items-baseline gap-2 flex-wrap">
                 <a href={`/graph/${m.survivor_id}`} class="text-on-surface font-medium hover:underline">{m.canonical_name || m.survivor_name}</a>
                 <span class="text-xs font-ui text-on-surface-muted">survivor · {m.victims.length} folded in</span>
+                <span
+                  class="text-xs font-ui {confirmedByPerson(m) ? 'text-on-surface-muted' : 'text-warning'}"
+                  title={m.created_by ?? "no actor recorded"}
+                >{confirmedByPerson(m) ? `confirmed by ${m.created_by?.split("/")[1]}` : "applied by a session"}</span>
                 <span class="flex-1"></span>
                 <button onclick={() => doUndo(m.merge_id)} disabled={busy} class="text-xs font-ui px-2 py-0.5 rounded border border-border text-on-surface-secondary cursor-pointer hover:bg-surface-alt disabled:opacity-40">Un-merge</button>
               </div>

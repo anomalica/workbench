@@ -356,8 +356,8 @@ class TestRenamingOntoATakenName:
         """Records what would be merged instead of running the assimilator."""
         calls = []
 
-        def fake_apply(survivor_id, victim_ids, canonical_name, by=None):
-            calls.append((survivor_id, victim_ids, canonical_name, by))
+        def fake_apply(survivor_id, victim_ids, canonical_name, **kw):
+            calls.append((survivor_id, victim_ids, canonical_name, kw))
             return {"ok": True}
 
         from backend import curation
@@ -377,7 +377,14 @@ class TestRenamingOntoATakenName:
         assert out["ok"] is True
         assert out["merged_into"]["id"] == OTHER
         # Survivor is the node that HOLDS the name, so its name needs no change.
-        assert merged == [(OTHER, [NID], "The Greys", None)]
+        assert merged == [
+            (
+                OTHER,
+                [NID],
+                "The Greys",
+                {"by": None, "confirmed_by": None, "confirmed_via": "workbench-rename"},
+            )
+        ]
 
     def test_a_different_kind_of_thing_is_asked_about_first(
         self, graph_db, curation, monkeypatch, merged
@@ -407,7 +414,14 @@ class TestRenamingOntoATakenName:
         )
 
         assert out["status"] == "merged"
-        assert merged == [(OTHER, [NID], "The Greys", None)]
+        assert merged == [
+            (
+                OTHER,
+                [NID],
+                "The Greys",
+                {"by": None, "confirmed_by": None, "confirmed_via": "workbench-rename"},
+            )
+        ]
 
     def test_a_retired_node_does_not_hold_a_name(
         self, graph_db, curation, monkeypatch, merged
@@ -488,3 +502,27 @@ class TestNameSuggestions:
 
     def test_one_letter_asks_nothing(self, graph_db):
         assert pages.name_suggestions("G") == []
+
+
+def test_a_merge_from_a_rename_carries_the_confirmation(
+    graph_db, curation, monkeypatch
+):
+    """Mark's rule: no session merges anything he has not confirmed here. The
+    confirmation is the person who typed a name that already existed and pressed
+    a button that said Merge into it - so it travels with the merge, naming the
+    control it came from."""
+    from backend import curation as curation_module
+
+    _add_node(graph_db, OTHER, "The Greys", "topic", claims=9)
+    _stub_assimilator(monkeypatch, status="rejected")
+    seen: dict = {}
+    monkeypatch.setattr(
+        curation_module,
+        "apply_merge",
+        lambda *a, **kw: (seen.update(kw), {"ok": True})[1],
+    )
+
+    pages.propose_rename(NID, "Grey aliens", "The Greys", None, "workbench/mark")
+
+    assert seen["confirmed_by"] == "workbench/mark"
+    assert seen["confirmed_via"] == "workbench-rename"

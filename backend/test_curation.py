@@ -359,3 +359,55 @@ def test_an_undo_names_the_database_too(monkeypatch, tmp_path):
     )
     assert curation.undo_merge("some-merge-id")["ok"]
     assert seen[0][seen[0].index("--db") + 1] == str(db)
+
+
+def test_a_merge_carries_the_confirmation_that_lets_it_apply(monkeypatch, tmp_path):
+    """No session merges anything Mark has not confirmed in the workbench. The
+    assimilator applies nothing without the block and queues the cluster
+    instead, so a caller that omits it cannot merge by accident."""
+    import subprocess
+
+    monkeypatch.setenv("GRAPH_DB_PATH", str(tmp_path / "g.db"))
+    seen: list[list[str]] = []
+    monkeypatch.setattr(
+        curation.subprocess,
+        "run",
+        lambda cmd, **kw: (
+            seen.append(cmd),
+            subprocess.CompletedProcess(cmd, 0, stdout="", stderr=""),
+        )[1],
+    )
+
+    curation.apply_merge(
+        "s",
+        ["v"],
+        "Name",
+        by="workbench/x",
+        confirmed_by="workbench/x",
+        confirmed_via="workbench-rename",
+    )
+    argv = seen[0]
+    assert argv[argv.index("--confirmed-by") + 1] == "workbench/x"
+    assert argv[argv.index("--confirmed-via") + 1] == "workbench-rename"
+    assert argv[argv.index("--confirmed-at") + 1].endswith("Z")
+
+
+def test_without_a_confirmer_no_confirmation_is_forged(monkeypatch, tmp_path):
+    """The flags must never be synthesised from the process's own name: a
+    confirmation the caller writes for itself confirms nothing, and the safe
+    direction is the assimilator queueing the cluster instead of applying it."""
+    import subprocess
+
+    monkeypatch.setenv("GRAPH_DB_PATH", str(tmp_path / "g.db"))
+    seen: list[list[str]] = []
+    monkeypatch.setattr(
+        curation.subprocess,
+        "run",
+        lambda cmd, **kw: (
+            seen.append(cmd),
+            subprocess.CompletedProcess(cmd, 0, stdout="", stderr=""),
+        )[1],
+    )
+
+    curation.apply_merge("s", ["v"], "Name")
+    assert "--confirmed-by" not in seen[0]

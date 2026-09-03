@@ -3141,14 +3141,26 @@ def curation_merges() -> dict:
 
 
 @app.post("/api/curation/merge")
-def curation_merge(body: dict) -> dict:
+def curation_merge(body: dict, request: Request) -> dict:
     """Merge victim nodes into a survivor under a canonical name (writes the live
     graph via the assimilator). Fail-closed: a failed command returns 400 with
-    the error, applies nothing."""
+    the error, applies nothing.
+
+    Editor-gated, and the confirmation is taken from the SESSION - never from the
+    body. Mark's rule is that no session merges anything he has not confirmed
+    here; a confirmation a caller could put in its own request would confirm
+    nothing. Without one the assimilator applies nothing and queues the cluster
+    instead.
+    """
+    user = _require_role(request, "editor")
+    login = user.get("login") or user.get("email") or "unknown"
     result = curation.apply_merge(
         body.get("survivor_id"),
         body.get("victim_ids") or [],
         body.get("canonical_name"),
+        by=f"workbench/{login}",
+        confirmed_by=f"workbench/{login}",
+        confirmed_via="workbench-queue",
     )
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error", "merge failed"))
@@ -3156,8 +3168,9 @@ def curation_merge(body: dict) -> dict:
 
 
 @app.post("/api/curation/unmerge")
-def curation_unmerge(body: dict) -> dict:
-    """Reverse a merge by merge_id."""
+def curation_unmerge(body: dict, request: Request) -> dict:
+    """Reverse a merge by merge_id. Editor-gated like the merge it reverses."""
+    _require_role(request, "editor")
     result = curation.undo_merge(body.get("merge_id"))
     if not result.get("ok"):
         raise HTTPException(
@@ -3171,8 +3184,8 @@ def curation_reject(body: dict, request: Request) -> dict:
     """Record a durable 'not a duplicate' rejection for a candidate cluster so it
     never re-shows in the queue. Fail-closed. Attributes it to the logged-in
     reviewer when there is one."""
-    user = request.session.get("user")
-    by = user.get("email") if user else ""
+    user = _require_role(request, "editor")
+    by = user.get("email") or ""
     result = curation.reject(
         body.get("node_ids") or [], reason=body.get("reason") or "", by=by
     )
