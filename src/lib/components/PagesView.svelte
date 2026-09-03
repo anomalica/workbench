@@ -1,5 +1,9 @@
 <script lang="ts">
-  // Topics: every subject and the state it is in.
+  // Pages: what earns a page, and what goes into it.
+  //
+  // Called Topics until 2026-09-03, and misnamed the whole time: of the page
+  // proposals it lists, 128 are people, 36 organisations and 33 topics, so
+  // "topic" named the smallest slice of what is here. It is about pages.
   //
   // ONE list, not three. The three states - written, proposed, requested - used
   // to be three separate blocks, with the written ones collapsed into a line of
@@ -330,10 +334,11 @@
 
 <div class="flex-1 overflow-y-auto">
   <div class="mx-auto max-w-6xl px-6 py-6">
-    <h2 class="font-ui text-lg text-on-surface">Topics</h2>
+    <h2 class="font-ui text-lg text-on-surface">Pages</h2>
     <p class="mt-1 max-w-prose text-sm text-on-surface-muted">
-      Every subject and the state it is in - written, proposed on the evidence the
-      graph holds, or requested before the material exists. Heaviest first.
+      Every subject and the state its page is in - written, proposed on the
+      evidence the graph holds, or requested before the material exists. Heaviest
+      first.
     </p>
 
     {#if error}

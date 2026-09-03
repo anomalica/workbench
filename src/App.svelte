@@ -38,7 +38,7 @@
   } from "$lib/browse-prefs";
   import InfrastructureView from "$lib/components/InfrastructureView.svelte";
   import HousekeepingView from "$lib/components/HousekeepingView.svelte";
-  import TopicsView from "$lib/components/TopicsView.svelte";
+  import PagesView from "$lib/components/PagesView.svelte";
   import ArticlesView from "$lib/components/ArticlesView.svelte";
   import ReviewView from "$lib/components/ReviewView.svelte";
   import RolesView from "$lib/components/RolesView.svelte";
@@ -64,7 +64,7 @@
     | "digests"
     | "infrastructure"
     | "housekeeping"
-    | "topics"
+    | "pages"
   >("records");
   // A node to open directly in the graph view (deep link /graph/<node_id>), so a
   // claim-count / any link can jump straight to that node's claims in context.
@@ -99,7 +99,7 @@
   let canHousekeep = $derived(
     myRole === "reviewer" || myRole === "editor" || myRole === "admin",
   );
-  // Topics is a step above housekeeping: vetoing, seeding and renaming decide
+  // Pages is a step above housekeeping: vetoing, seeding and renaming decide
   // what gets published and under what title, so the server gates all three at
   // editor. Offering a reviewer buttons that come back 403 is worse than not
   // showing them.
@@ -576,9 +576,9 @@
     history.pushState(null, "", "/housekeeping");
   }
 
-  function showTopics() {
-    appMode = "topics";
-    history.pushState(null, "", "/topics");
+  function showPages() {
+    appMode = "pages";
+    history.pushState(null, "", "/pages");
   }
 
   // Open a record in the workbench review view by its public hash (the 56-char
@@ -605,9 +605,11 @@
       appMode = "housekeeping";
       return; // HousekeepingView fetches its own queue
     }
-    if (path === "topics") {
-      appMode = "topics";
-      return; // TopicsView fetches its own list
+    if (path === "pages" || path === "topics") {
+      // "topics" still resolves: the view was called that until today and a
+      // bookmark should not break for a rename.
+      appMode = "pages";
+      return; // PagesView fetches its own list
     }
     if (path === "curate") {
       appMode = "curate";
@@ -719,11 +721,11 @@
           title="Proposed frontmatter corrections awaiting approval, one item at a time"
         >Housekeeping</button>
         <button
-          onclick={showTopics}
+          onclick={showPages}
           class="text-sm font-ui px-2.5 py-1 rounded cursor-pointer transition-colors
-            {appMode === 'topics' ? 'bg-bone/15 text-bone' : 'text-bone/50 hover:text-bone/80 hover:bg-bone/10'}"
-          title="What earns a page: proposals with their evidence, topics you've asked for, and the brief each page would be written from"
-        >Topics</button>
+            {appMode === 'pages' ? 'bg-bone/15 text-bone' : 'text-bone/50 hover:text-bone/80 hover:bg-bone/10'}"
+          title="What earns a page: every subject and its state, with the brief each page would be written from"
+        >Pages</button>
       {/if}
       <button
         onclick={showGraph}
@@ -866,8 +868,8 @@
       <DigestsView />
     {:else if appMode === "housekeeping"}
       <HousekeepingView canDecide={liveBackend && canHousekeep} />
-    {:else if appMode === "topics"}
-      <TopicsView canDecide={liveBackend && canCurate} />
+    {:else if appMode === "pages"}
+      <PagesView canDecide={liveBackend && canCurate} />
     {:else if appMode === "infrastructure"}
       <InfrastructureView onopenrecord={openRecordByHash} />
     {:else if appMode === "roles"}
