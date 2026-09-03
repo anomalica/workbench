@@ -23,11 +23,17 @@
   // from the brief and nothing else, so this is the only place to see what a
   // page would be made of before spending a model call on it.
   import {
+    composePage,
+    decomposePage,
+    fetchCompositions,
+    fetchNameCheck,
     fetchTopics,
     fetchTopicBrief,
     seedTopic,
     unseedTopic,
     vetoTopic,
+    type NameCheck,
+    type PageComposition,
     type PublishedPage,
     type RenameOutcome,
     type SeededTopic,
@@ -92,6 +98,23 @@
   /** What a rename or merge did, above the list rather than on the row: a merged
    *  row is gone by the time the message would show. */
   let notice = $state<string | null>(null);
+
+  /** Covering several subjects with one page.
+   *
+   *  UAP and UFO are the same phenomenon under two vocabularies, and a reader
+   *  cannot tell which page to read. Merging the two nodes would be the wrong
+   *  fix - they share only 26 claims of 2,068, and folding them together
+   *  destroys which word each source used, which is the evidence for when the
+   *  terminology changed. So the nodes stay separate and one page covers both.
+   *
+   *  The name is free but defaults to the heaviest member's, because the name
+   *  sets the slug and so decides which member's existing page survives
+   *  untouched - naming it after the bigger one retires only the smaller. */
+  let composing = $state(false);
+  let picked = $state<string[]>([]);
+  let composeName = $state("");
+  let composeCheck = $state<NameCheck | null>(null);
+  let compositions = $state<PageComposition[]>([]);
 
   /** Where a written page lives on the site: /en/<kind>/<slug>/. The kind is the
    *  node type pluralised and it is not optional - without it every link 404s,
@@ -173,6 +196,11 @@
     );
   });
 
+  /** The rows currently picked for one page, in the order they were picked. */
+  const pickedRows = $derived(
+    picked.map((id) => rows.find((r) => r.node_id === id)).filter((r) => !!r) as Row[],
+  );
+
   const matches = (r: Row, f: typeof filter) =>
     f === "all"
       ? true
@@ -208,10 +236,11 @@
 
   async function load() {
     try {
-      const d = await fetchTopics();
+      const [d, comps] = await Promise.all([fetchTopics(), fetchCompositions()]);
       topics = d.topics;
       seeded = d.seeded;
       published = d.published;
+      compositions = comps;
       error = null;
     } catch (e) {
       error = String(e);
@@ -297,6 +326,56 @@
     }
   }
 
+  function togglePick(r: Row) {
+    if (!r.node_id) return;
+    const id = r.node_id;
+    picked = picked.includes(id) ? picked.filter((x) => x !== id) : [...picked, id];
+    if (picked.length === 1) {
+      // Default to the first one picked; the reviewer can write anything.
+      composeName = r.name;
+      checkName();
+    }
+  }
+
+  async function checkName() {
+    composeCheck = composeName.trim() ? await fetchNameCheck(composeName) : null;
+  }
+
+  async function doCompose() {
+    const name = composeName.trim();
+    if (!name || picked.length < 2) return;
+    busy = true;
+    error = null;
+    try {
+      const out = await composePage(name, picked);
+      notice =
+        `"${out.name}" now covers ${out.members.length} subjects` +
+        (out.dropped.length ? `; ${out.dropped.join(", ")} no longer resolved and was left out` : "") +
+        ". They stop being proposed separately.";
+      composing = false;
+      picked = [];
+      composeName = "";
+      await load();
+    } catch (e) {
+      error = String(e);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function doDecompose(c: PageComposition) {
+    busy = true;
+    try {
+      await decomposePage(c.page_id);
+      notice = `"${c.name}" is no longer one page; its subjects are proposed separately again.`;
+      await load();
+    } catch (e) {
+      error = String(e);
+    } finally {
+      busy = false;
+    }
+  }
+
   function claimsList(b: Record<string, unknown> | null): any[] {
     return (b?.claims as any[]) ?? [];
   }
@@ -358,6 +437,16 @@
 
     {#if canWrite}
       <div class="mt-3 flex flex-wrap items-center gap-2">
+        <button
+          onclick={() => {
+            composing = !composing;
+            picked = [];
+          }}
+          class="rounded px-2 py-1 text-xs {composing
+            ? 'bg-primary-container text-on-surface'
+            : 'border border-border text-on-surface-muted hover:bg-surface-alt'}"
+          title="Cover several subjects with one page - two names for one thing"
+        >{composing ? "Stop composing" : "Cover several with one page"}</button>
         <input
           bind:value={newTopic}
           placeholder="Request a topic, e.g. Summoning"
@@ -377,10 +466,92 @@
       </p>
     {/if}
 
+    {#if composing}
+      <!-- Two names for one thing: the nodes stay separate, so which word each
+           source used survives, and one page covers both. -->
+      <div class="mt-3 rounded border border-primary/40 bg-primary-container/20 px-4 py-3 text-xs">
+        <p class="text-on-surface">
+          Pick the subjects one page should cover, then name it. They stay separate
+          in the graph - which word each source used is evidence - and stop being
+          proposed as pages of their own.
+        </p>
+        {#if pickedRows.length}
+          <ul class="mt-2 flex flex-wrap gap-1.5">
+            {#each pickedRows as r (r.key)}
+              <li class="rounded-full border border-border bg-surface px-2 py-0.5">
+                {r.name} <span class="text-on-surface-muted">{r.claims ?? 0} claims</span>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+        <div class="mt-2 flex flex-wrap items-center gap-2">
+          <label class="text-on-surface-muted" for="compose-name">Page name</label>
+          <input
+            id="compose-name"
+            bind:value={composeName}
+            oninput={checkName}
+            placeholder="What should the page be called?"
+            class="min-w-64 flex-1 rounded border border-border bg-surface px-2 py-1 text-sm text-on-surface"
+          />
+          <button
+            onclick={doCompose}
+            disabled={busy || picked.length < 2 || !composeName.trim()}
+            class="rounded bg-primary px-2 py-1 text-on-primary disabled:opacity-50"
+          >Cover {picked.length} with one page</button>
+        </div>
+        {#if composeCheck && composeCheck.title !== composeName.trim()}
+          <p class="mt-1.5 text-on-surface-muted">
+            Its title will read <strong class="text-on-surface">{composeCheck.title}</strong>.
+          </p>
+        {/if}
+        {#each composeCheck?.warnings ?? [] as w}
+          <p class="mt-1.5 rounded border border-warning/40 bg-warning-container/30 px-2 py-1 text-on-surface">{w}</p>
+        {/each}
+        <p class="mt-1.5 text-on-surface-muted">
+          The name sets the address, so naming it after the bigger subject leaves
+          that page where it is and retires only the smaller one.
+        </p>
+      </div>
+    {/if}
+
+    {#if compositions.length}
+      <ul class="mt-3 flex flex-col gap-1.5">
+        {#each compositions as c (c.page_id)}
+          <li class="rounded border border-primary/40 bg-surface-alt px-4 py-2.5">
+            <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-sm">
+              <span class="font-medium text-on-surface">{c.name}</span>
+              <span class="rounded-full bg-primary/10 px-1.5 text-[0.65rem] uppercase tracking-wide text-primary">
+                one page, {c.members.length} subjects
+              </span>
+              <span class="text-xs text-on-surface-muted">
+                {c.members.map((m) => m.name).join(" · ")}
+              </span>
+              {#if canWrite}
+                <button
+                  onclick={() => doDecompose(c)}
+                  disabled={busy}
+                  class="ml-auto rounded px-2 py-1 text-xs text-on-surface-muted hover:text-error"
+                >Take apart</button>
+              {/if}
+            </div>
+          </li>
+        {/each}
+      </ul>
+    {/if}
+
     <ul class="mt-3 flex flex-col gap-1.5">
       {#each shown as r (r.key)}
         <li class="rounded border border-border bg-surface-alt">
           <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-4 py-2.5">
+            {#if composing && r.node_id}
+              <input
+                type="checkbox"
+                checked={picked.includes(r.node_id)}
+                onchange={() => togglePick(r)}
+                aria-label="Cover with one page"
+                class="accent-primary"
+              />
+            {/if}
             {#if r.url}
               <a
                 href={r.url}

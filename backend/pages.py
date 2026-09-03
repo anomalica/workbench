@@ -184,6 +184,13 @@ def brief_index() -> dict[str, dict]:
     The brief's own head says which node it is for, and that is the only key
     that cannot collide.
 
+    A page can cover SEVERAL nodes (schema brief/2: `page.nodes` is a list),
+    which is how one page covers UAP and UFO without merging the two subjects.
+    Every member is indexed to the page covering it, so a covered node resolves
+    to the page it is part of rather than looking like a page nobody wrote. The
+    old singular `page.node_id` is read as a one-member list, so a brief/1 file
+    on disk still works.
+
     Only `<section>/<slug>.yaml` is read. A file directly in the root is the
     pre-section layout, which the synthesiser prunes and this never reads.
     """
@@ -192,16 +199,32 @@ def brief_index() -> dict[str, dict]:
         head = _brief_head(path)
         if head is None:
             continue
-        nid = head["page"].get("node_id")
-        if not isinstance(nid, str) or not nid:
+        page = head["page"]
+        members = page.get("nodes")
+        if isinstance(members, list):
+            ids = [
+                m.get("node_id")
+                for m in members
+                if isinstance(m, dict) and isinstance(m.get("node_id"), str)
+            ]
+        else:
+            ids = [page.get("node_id")]
+        ids = [i for i in ids if isinstance(i, str) and i]
+        if not ids:
             continue
-        total = head["page"].get("claim_count_total")
-        out[nid] = {
+        total = page.get("claim_count_total")
+        ref = {
             "section": path.parent.name,
             "slug": path.stem,
             "brief_hash": head["brief_hash"],
             "claim_total": total if isinstance(total, int) else None,
+            # Which node the page is FILED under - the first member. A covered
+            # member resolves here too, and a caller that needs to know whether
+            # this node is the page's own subject can compare.
+            "primary_node_id": ids[0],
         }
+        for nid in ids:
+            out[nid] = ref
     return out
 
 

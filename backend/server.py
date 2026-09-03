@@ -44,6 +44,7 @@ from backend import (
 )
 from backend import (
     archive_flag,
+    compositions,
     infrastructure,
     pages,
     relations,
@@ -3139,6 +3140,49 @@ def remove_record_tag(full_hash: str, tag_id: str, request: Request) -> dict:
     login = user.get("login") or user.get("email") or "unknown"
     try:
         return tags.remove_tag(tag_id, f"workbench/{login}")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (RuntimeError, OSError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.get("/api/pages/compositions")
+def list_compositions() -> dict:
+    """Pages that cover several subjects at once."""
+    return {"compositions": compositions.list_compositions()}
+
+
+@app.post("/api/pages/compose")
+def compose_page(body: dict, request: Request) -> dict:
+    """Cover several subjects with one page.
+
+    Editor-gated: it decides what the site publishes and under what name, the
+    same class as a veto or a rename. It writes no vetoes - the composition op
+    suppresses its members' separate proposals itself, so undoing it needs
+    nothing else undone.
+    """
+    user = _require_role(request, "editor")
+    login = user.get("login") or user.get("email") or "unknown"
+    try:
+        return compositions.compose(
+            body.get("name"),
+            body.get("node_ids") or [],
+            body.get("note"),
+            f"workbench/{login}",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (RuntimeError, OSError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.post("/api/pages/decompose")
+def decompose_page(body: dict, request: Request) -> dict:
+    """Take a composed page apart; its members are proposed separately again."""
+    user = _require_role(request, "editor")
+    login = user.get("login") or user.get("email") or "unknown"
+    try:
+        return compositions.decompose(body.get("page_id"), f"workbench/{login}")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except (RuntimeError, OSError) as exc:

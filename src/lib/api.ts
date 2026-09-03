@@ -1609,6 +1609,50 @@ export interface NameSuggestion extends GraphNodeRef {
   exact: boolean;
 }
 
+/** A page that covers several subjects at once. UAP and UFO are the same
+ *  phenomenon under two vocabularies: merging the nodes would destroy which word
+ *  each source used, so the nodes stay separate and one page covers both. */
+export interface PageComposition {
+  page_id: string;
+  name: string;
+  slug: string;
+  node_type: string;
+  members: { name: string; node_id: string }[];
+}
+
+export async function fetchCompositions(): Promise<PageComposition[]> {
+  const res = await fetch(readPath("/api/pages/compositions"));
+  if (!res.ok) return [];
+  return (await res.json()).compositions ?? [];
+}
+
+export async function composePage(
+  name: string,
+  nodeIds: string[],
+  note?: string,
+): Promise<{ ok: boolean; name: string; slug: string; members: string[]; dropped: string[] }> {
+  const res = await fetch("/api/pages/compose", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, node_ids: nodeIds, note }),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(payload.detail ?? `Compose failed: ${res.status}`);
+  return payload;
+}
+
+export async function decomposePage(pageId: string): Promise<void> {
+  const res = await fetch("/api/pages/decompose", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ page_id: pageId }),
+  });
+  if (!res.ok)
+    throw new Error(
+      (await res.json().catch(() => ({}))).detail ?? `Decompose failed: ${res.status}`,
+    );
+}
+
 /** What a proposed node NAME will render as on the page, and where it breaks
  *  the naming convention. Advisory only. */
 export interface NameCheck {
