@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { suggestedCanonical } from "$lib/merge-canonical";
   import {
     fetchMergeCandidates,
     fetchActiveMerges,
@@ -46,18 +47,22 @@
       lastKey = key;
       selected = new Set(current?.members.map((m) => m.id) ?? []);
       canonicalChoice = "__suggested__";
-      newName = current?.suggested_canonical ?? "";
+      newName = suggestedName;
       note = null;
       error = null;
     }
   });
 
   let selectedMembers = $derived(current ? current.members.filter((m) => selected.has(m.id)) : []);
+  const suggestedName = $derived(
+    current ? suggestedCanonical(current.suggested_canonical, current.members) : "",
+  );
+
   let canonicalName = $derived.by(() => {
     if (!current) return "";
-    if (canonicalChoice === "__suggested__") return current.suggested_canonical;
+    if (canonicalChoice === "__suggested__") return suggestedName;
     if (canonicalChoice === "__new__") return newName.trim();
-    return current.members.find((m) => m.id === canonicalChoice)?.name ?? current.suggested_canonical;
+    return current.members.find((m) => m.id === canonicalChoice)?.name ?? suggestedName;
   });
 
   function toggle(id: string) {
@@ -86,7 +91,9 @@
   async function load() {
     loading = true;
     try {
-      [candidates, merges] = await Promise.all([fetchMergeCandidates(), fetchActiveMerges()]);
+      const [cs, ms] = await Promise.all([fetchMergeCandidates(), fetchActiveMerges()]);
+      candidates = byBand(cs);
+      merges = ms;
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
@@ -141,7 +148,8 @@
     try {
       await undoMerge(merge_id);
       merges = await fetchActiveMerges();
-      candidates = await fetchMergeCandidates(); // the un-merged nodes may re-propose
+      // The un-merged nodes may re-propose, so re-band the queue as well.
+      candidates = byBand(await fetchMergeCandidates());
       note = "Merge reversed.";
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
@@ -157,7 +165,25 @@
     embedding: "same entity, different wording",
   };
 
-  let isCrossType = $derived(current?.reason === "name-equiv-crosstype");
+  /** Whether a cluster spans node types, from the MEMBERS rather than from the
+   *  reason label: a cross-type pair can arrive from fuzzy matching or an
+   *  embedding as easily as from the name-equivalence pass, and the reason only
+   *  named one of those routes.
+   *
+   *  It is the strongest signal there is about whether a proposal is any good.
+   *  Over 500 judged pairs, same-type proposals were right about 70% of the
+   *  time and cross-type ones about 11% - so the queue puts every same-type
+   *  proposal first and this marks where the bad band starts, rather than
+   *  hiding it. Nothing is filtered out: an event and the matter for it is a
+   *  real cross-type merge. */
+  const crossType = (c: MergeCandidate) =>
+    new Set((c.members ?? []).map((m) => m.node_type)).size > 1;
+  /** Stable, so the score order the passes produced survives inside each band. */
+  const byBand = (list: MergeCandidate[]) =>
+    [...list].sort((a, b) => Number(crossType(a)) - Number(crossType(b)));
+  const sameTypeCount = $derived(candidates.filter((c) => !crossType(c)).length);
+
+  let isCrossType = $derived(current ? crossType(current) : false);
 
   onMount(() => {
     const p = new URLSearchParams(window.location.search);
@@ -202,6 +228,13 @@
             <div class="flex items-center gap-2 text-sm font-ui">
               <button onclick={() => go(index - 1)} disabled={index === 0} class="px-2 py-0.5 rounded border border-border disabled:opacity-40 cursor-pointer hover:bg-surface-alt">&larr;</button>
               <span class="text-on-surface-muted tabular-nums">{index + 1} of {candidates.length}</span>
+              {#if sameTypeCount < candidates.length}
+                <!-- Where the good band ends. Working past it is a choice, and
+                     it should be a visible one rather than a surprise. -->
+                <span class="text-xs text-on-surface-muted">
+                  {sameTypeCount} same type, then {candidates.length - sameTypeCount} mixed
+                </span>
+              {/if}
               <button onclick={() => go(index + 1)} disabled={index >= candidates.length - 1} class="px-2 py-0.5 rounded border border-border disabled:opacity-40 cursor-pointer hover:bg-surface-alt">&rarr;</button>
             </div>
           </div>
@@ -228,7 +261,11 @@
             </div>
             {#if isCrossType}
               <p class="text-xs font-ui text-warning border border-warning/40 bg-warning/5 rounded px-2.5 py-1.5">
-                Spans node types - a cross-type merge. Check each member's type below; merge only if they're genuinely the same thing (e.g. an event and the matter for it), not merely same-named.
+                Spans node types, and these are the weak band: across 500 judged
+                pairs, proposals within one type were right about 70% of the time
+                and these about 11%. Check each member's type below and merge only
+                if they are genuinely the same thing - an event and the matter for
+                it - rather than merely same-named.
               </p>
             {/if}
 
@@ -247,7 +284,7 @@
               <p class="text-xs font-ui font-medium text-on-surface-secondary">Canonical name</p>
               <label class="flex items-center gap-2 text-sm text-on-surface cursor-pointer">
                 <input type="radio" name="canon" checked={canonicalChoice === "__suggested__"} onchange={() => (canonicalChoice = "__suggested__")} class="accent-primary" />
-                <span>{current.suggested_canonical}</span>
+                <span>{suggestedName}</span>
                 <span class="text-[10px] font-ui px-1.5 py-0.5 rounded bg-success/15 text-success">suggested</span>
               </label>
               {#each selectedMembers as m (m.id)}
