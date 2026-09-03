@@ -42,7 +42,14 @@ from backend import (
     tuning,
     waveform,
 )
-from backend import archive_flag, infrastructure, pages, relations, review_priority
+from backend import (
+    archive_flag,
+    infrastructure,
+    pages,
+    relations,
+    review_priority,
+    tags,
+)
 from backend.auth import setup_auth
 from backend.sync import GIT_LOCK, SyncManager
 from anomalica_common import housekeeping as hk
@@ -3000,8 +3007,18 @@ def topic_veto(body: dict, request: Request) -> dict:
     node_ids = body.get("node_ids") or []
     if not node_ids:
         raise HTTPException(status_code=400, detail="node_ids required")
+    reason = (body.get("reason") or "").strip()
+    if not reason:
+        # The reason is not paperwork: whoever carries out the retirement reads
+        # it to decide what happens to the page. The first veto placed here went
+        # in blank and stalled - a page whose claims are all about somebody else
+        # wants MOVING, and only the reviewer knows which case it is.
+        raise HTTPException(
+            status_code=400,
+            detail="A reason is required - it decides what happens to the page",
+        )
     try:
-        return pages.veto(node_ids, body.get("reason"), body.get("by") or "workbench")
+        return pages.veto(node_ids, reason, body.get("by") or "workbench")
     except (RuntimeError, OSError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -3066,6 +3083,75 @@ def topic_rename(body: dict, request: Request) -> dict:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except (RuntimeError, OSError) as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.get("/api/ingests/{full_hash}/tags")
+def record_tags(full_hash: str) -> dict:
+    """What a reviewer has said this record is about.
+
+    Read-only and ungated, like the record itself. Each tag carries what became
+    of it: `applied` is live in the graph, `pending` is waiting for the record to
+    be digested (most records in the store have no graph row yet), `lost` can
+    never resolve.
+    """
+    if not FULL_HASH_PATTERN.match(full_hash):
+        raise HTTPException(status_code=404, detail="Not found")
+    return {"tags": tags.tags_for_record(full_hash)}
+
+
+@app.post("/api/ingests/{full_hash}/tags")
+def add_record_tag(full_hash: str, body: dict, request: Request) -> dict:
+    """Assert that this record is about a subject.
+
+    Reviewer-gated: it is a judgement about a record, the same class as an audit
+    verdict, and it changes no published output - a tag attaches no claim to the
+    subject, so it feeds neither the page gate nor scoring.
+
+    The judgement is worth capturing at the moment it is made, so a record the
+    pipeline has not digested yet does not refuse the tag: it is held and lands
+    when the record arrives.
+    """
+    user = _require_role(request, "reviewer")
+    if not FULL_HASH_PATTERN.match(full_hash):
+        raise HTTPException(status_code=404, detail="Not found")
+    login = user.get("login") or user.get("email") or "unknown"
+    try:
+        return tags.add_tag(
+            full_hash,
+            body.get("name"),
+            body.get("node_type") or "topic",
+            body.get("note"),
+            f"workbench/{login}",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (RuntimeError, OSError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.delete("/api/ingests/{full_hash}/tags/{tag_id}")
+def remove_record_tag(full_hash: str, tag_id: str, request: Request) -> dict:
+    """Withdraw a tag. A compensating entry, never a deletion: what was asserted,
+    and that it was withdrawn, both stay in the record."""
+    user = _require_role(request, "reviewer")
+    if not FULL_HASH_PATTERN.match(full_hash):
+        raise HTTPException(status_code=404, detail="Not found")
+    login = user.get("login") or user.get("email") or "unknown"
+    try:
+        return tags.remove_tag(tag_id, f"workbench/{login}")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (RuntimeError, OSError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.get("/api/topics/name-check")
+def topic_name_check(name: str = "") -> dict:
+    """What a proposed node name will render as, and where it breaks the naming
+    convention. Advisory: a reviewer may know better than the rule, and a name is
+    reversible - but the NAME and the page TITLE are different things, and that
+    difference is invisible in a text box until it is shown."""
+    return pages.name_check(name)
 
 
 @app.get("/api/topics/name-suggestions")

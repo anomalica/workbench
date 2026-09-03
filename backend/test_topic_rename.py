@@ -306,14 +306,11 @@ class TestTheEndpointIsGated:
         )
 
     def test_veto_is_gated_too(self, client):
+        body = {"node_ids": [NID], "reason": "the claims are about somebody else"}
         client.login("rev")
-        assert (
-            client.post("/api/topics/veto", json={"node_ids": [NID]}).status_code == 403
-        )
+        assert client.post("/api/topics/veto", json=body).status_code == 403
         client.login("ed")
-        assert (
-            client.post("/api/topics/veto", json={"node_ids": [NID]}).status_code == 200
-        )
+        assert client.post("/api/topics/veto", json=body).status_code == 200
 
     def test_seeding_is_gated_too(self, client):
         client.login("rev")
@@ -526,3 +523,66 @@ def test_a_merge_from_a_rename_carries_the_confirmation(
 
     assert seen["confirmed_by"] == "workbench/mark"
     assert seen["confirmed_via"] == "workbench-rename"
+
+
+class TestWhatANameWillDo:
+    """A node's NAME and its page TITLE are different things, and the difference
+    is invisible in a text box. The UAP topic was named "UAPs" by a reviewer who
+    wanted that TITLE - a name the matcher cannot use, since `uap` is one of its
+    stopwords, and which moved a published page out from under itself."""
+
+    def test_the_resulting_title_is_shown(self):
+        assert (
+            pages.name_check("Unidentified Anomalous Phenomena (UAP)")["title"]
+            == "UAPs"
+        )
+
+    def test_a_bare_acronym_is_warned_about(self):
+        assert pages.name_check("UAPs")["warnings"]
+        assert pages.name_check("CIA")["warnings"]
+
+    def test_a_name_in_full_is_not(self):
+        assert (
+            pages.name_check("Unidentified Anomalous Phenomena (UAP)")["warnings"] == []
+        )
+        assert pages.name_check("2004 USS Nimitz UAP encounter")["warnings"] == []
+
+    def test_a_lowercase_start_is_warned_about(self):
+        assert pages.name_check("apartheid")["warnings"]
+
+    def test_nothing_is_blocked(self):
+        """Advisory only: a reviewer may know better than the rule, and a name
+        is reversible through the same ledger that applied it."""
+        assert "title" in pages.name_check("UAPs")
+
+
+def test_a_veto_without_a_reason_is_refused(monkeypatch, tmp_path):
+    """The reason is what the person carrying out the retirement reads to decide
+    what happens to the page - move it to the entity its claims are actually
+    about, retire it, or fix the data. The first veto placed from the workbench
+    went in blank and stalled there."""
+    from fastapi.testclient import TestClient
+
+    import backend.server as server
+
+    ingests = tmp_path / "ingests"
+    ingests.mkdir()
+    (ingests / "roles.yaml").write_text("ed: editor\n")
+    monkeypatch.setattr(server, "ingests_path", ingests)
+    monkeypatch.setattr(server.pages, "veto", lambda *a, **k: {"ok": True})
+    monkeypatch.setattr(
+        server,
+        "_require_user",
+        lambda request: {"login": "ed", "email": "ed@x.invalid"},
+    )
+    client = TestClient(server.app)
+
+    blank = client.post("/api/topics/veto", json={"node_ids": [NID], "reason": "  "})
+    assert blank.status_code == 400
+    assert "reason" in blank.json()["detail"].lower()
+
+    given = client.post(
+        "/api/topics/veto",
+        json={"node_ids": [NID], "reason": "every claim is about Tom DeLonge"},
+    )
+    assert given.status_code == 200

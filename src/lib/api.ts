@@ -1546,6 +1546,53 @@ export interface Topic {
   rename?: RenameOutcome | null;
 }
 
+/** What a reviewer has said a record is about. `applied` is live in the graph;
+ *  `pending` is waiting for the record to be digested (most records in the store
+ *  have no graph row yet); `lost` can never resolve. */
+export interface RecordTag {
+  tag_id: string;
+  name: string;
+  node_type: string;
+  status: "applied" | "pending" | "lost";
+  reason: string | null;
+  /** The name the tag landed on, when the subject was renamed or merged after
+   *  the tag was written and its alias carried the tag across. */
+  resolved_name: string | null;
+  note: string | null;
+  at: string | null;
+  by: string | null;
+}
+
+export async function fetchRecordTags(hash: string): Promise<RecordTag[]> {
+  const res = await fetch(readPath(`/api/ingests/${hash}/tags`));
+  if (!res.ok) return [];
+  return (await res.json()).tags ?? [];
+}
+
+export async function addRecordTag(
+  hash: string,
+  name: string,
+  nodeType = "topic",
+  note?: string,
+): Promise<{ ok: boolean; status: string; reason: string | null }> {
+  const res = await fetch(`/api/ingests/${hash}/tags`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, node_type: nodeType, note }),
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(payload.detail ?? `Tag failed: ${res.status}`);
+  return payload;
+}
+
+export async function removeRecordTag(hash: string, tagId: string): Promise<void> {
+  const res = await fetch(`/api/ingests/${hash}/tags/${encodeURIComponent(tagId)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok)
+    throw new Error((await res.json().catch(() => ({}))).detail ?? `Remove failed: ${res.status}`);
+}
+
 /** A live node offered as "did you mean this one?" while renaming. Picking one
  *  whose name matches exactly is how two nodes become one. */
 export interface GraphNodeRef {
@@ -1560,6 +1607,20 @@ export interface NameSuggestion extends GraphNodeRef {
    *  what was typed. */
   via: string | null;
   exact: boolean;
+}
+
+/** What a proposed node NAME will render as on the page, and where it breaks
+ *  the naming convention. Advisory only. */
+export interface NameCheck {
+  name: string;
+  title: string;
+  warnings: string[];
+}
+
+export async function fetchNameCheck(name: string): Promise<NameCheck | null> {
+  const res = await fetch(readPath(`/api/topics/name-check?name=${encodeURIComponent(name)}`));
+  if (!res.ok) return null;
+  return await res.json();
 }
 
 export async function fetchNameSuggestions(q: string, exclude: string): Promise<NameSuggestion[]> {

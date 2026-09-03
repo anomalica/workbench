@@ -76,6 +76,12 @@
   let newTopic = $state("");
   let filter = $state<"all" | State | "single" | "nobrief" | "behind">("all");
   let confirmRemove = $state<string | null>(null);
+  /** Why a page or a proposal is being dropped. NOT optional: it is the evidence
+   *  the person carrying out the retirement reads before deciding what actually
+   *  happens to the page - move it to the entity the claims are really about,
+   *  retire it, or fix the data behind it. The first veto placed here went in
+   *  blank and stalled on exactly that question. */
+  let removeReason = $state("");
   /** The row whose name is being edited. One at a time - a name is read against
    *  its evidence, not in a batch. */
   let renaming = $state<string | null>(null);
@@ -246,12 +252,12 @@
    *  subject - and it lands in the curation ledger either way. What differs is
    *  what happens next: a proposal simply stops being offered, while a page that
    *  exists comes down at the next assembly. */
-  async function doVeto(r: Row) {
+  async function doVeto(r: Row, reason: string) {
     if (!r.node_id) return;
     busy = true;
     error = null;
     try {
-      await vetoTopic([r.node_id], "");
+      await vetoTopic([r.node_id], reason);
       await load();
     } catch (e) {
       error = String(e);
@@ -479,7 +485,10 @@
                      does. Removing a written topic takes a page off the site;
                      rejecting a proposal or a request removes an intention. -->
                 <button
-                  onclick={() => (confirmRemove = confirmRemove === r.key ? null : r.key)}
+                  onclick={() => {
+                    removeReason = "";
+                    confirmRemove = confirmRemove === r.key ? null : r.key;
+                  }}
                   title={r.state === "written" ? "Take this page down" : "Never write a page for this"}
                   aria-label={r.state === "written" ? "Delete page" : "Never a page"}
                   class="rounded p-1 {confirmRemove === r.key
@@ -530,13 +539,26 @@
                 <span class="text-on-surface">Drop the request for <strong>{r.name}</strong>?</span>
                 <span class="text-on-surface-muted">Nothing is deleted - the subject was only ever a name.</span>
               {/if}
+              {#if r.state !== "requested"}
+                <!-- Required. Whoever carries out the retirement reads this to
+                     decide what happens to the page: a page whose claims are all
+                     about somebody else wants MOVING, not deleting, and only the
+                     reviewer knows which case this is. -->
+                <input
+                  bind:value={removeReason}
+                  placeholder="Why? (recorded, and read before the page is touched)"
+                  class="w-full rounded border border-border bg-surface px-2 py-1 text-on-surface"
+                />
+              {/if}
               <button
                 onclick={() => {
+                  const reason = removeReason.trim();
                   confirmRemove = null;
+                  removeReason = "";
                   if (r.state === "requested") dropSeed(r.name);
-                  else doVeto(r);
+                  else doVeto(r, reason);
                 }}
-                disabled={busy}
+                disabled={busy || (r.state !== "requested" && !removeReason.trim())}
                 class="ml-auto rounded bg-error px-2 py-1 text-on-error disabled:opacity-50"
               >{r.state === "written"
                   ? "Take it down"

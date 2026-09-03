@@ -465,6 +465,46 @@ def _live_node(node_id: str) -> dict | None:
     )
 
 
+# A name that is only an acronym, with or without a plural "s": UAP, UAPs, CIA,
+# VFA-41. The convention writes a node name as "Full Name (ACRONYM)", and this
+# is the shape that breaks it.
+_BARE_ACRONYM = re.compile(r"^[A-Z][A-Z0-9&/.-]{1,}s?$")
+
+
+def name_check(name: str) -> dict:
+    """What a proposed node name will do, and where it breaks the convention.
+
+    A node's NAME and its page TITLE are different things and the difference is
+    invisible in a text box: the title rule renders "Unidentified Anomalous
+    Phenomena (UAP)" as "UAPs", and a reviewer who wants the title to read
+    "UAPs" reasonably types that into the only field they can see. That is how
+    the UAP topic came to be NAMED "UAPs" - a name the matcher cannot use (`uap`
+    is one of its stopwords, so the name is all-stopword) and which moved a
+    published page out from under itself.
+
+    So: never a block - the reviewer may know better, and a name is reversible -
+    but the resulting title is shown, and a name that breaks the convention says
+    which rule and why.
+    """
+    from anomalica_common.titles import collapse_bare_title_acronyms
+
+    name = (name or "").strip()
+    warnings: list[str] = []
+    if name and _BARE_ACRONYM.match(name):
+        warnings.append(
+            "A node name is written in full with the acronym in brackets, never "
+            "the acronym on its own. The page title already shortens it, and a "
+            "name that is only an acronym is one the matcher cannot use."
+        )
+    if name and name[0].islower():
+        warnings.append("A name starts with a capital - it becomes a page title.")
+    return {
+        "name": name,
+        "title": collapse_bare_title_acronyms(name),
+        "warnings": warnings,
+    }
+
+
 def name_suggestions(q: str, exclude: str = "", limit: int = 8) -> list[dict]:
     """Live nodes whose name or alias contains `q`, best match first.
 

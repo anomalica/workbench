@@ -924,6 +924,7 @@
         {sourceFile}
         {user}
         isAdmin={myRole === "admin"}
+        canTag={liveBackend && canHousekeep}
         reviewed={reviewedHashes.has(selectedIngest.content_hash) &&
           !needsVerifyHashes.has(selectedIngest.content_hash)}
         needsVerify={needsVerifyHashes.has(selectedIngest.content_hash)}

@@ -13,11 +13,13 @@
   //   Across two different node types that inference is weak, so that case comes
   //   back to be confirmed rather than assumed.
   import {
-    fetchNameSuggestions,
+    fetchNameCheck,
     renameTopic,
     type GraphNodeRef,
+    type NameCheck,
     type NameSuggestion,
   } from "$lib/api";
+  import { subjectSuggest } from "$lib/subject-suggest.svelte";
 
   let {
     node,
@@ -33,9 +35,12 @@
 
   // svelte-ignore state_referenced_locally
   let draft = $state(node.name);
-  let suggestions = $state<NameSuggestion[]>([]);
-  let highlighted = $state(-1);
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  const suggest = subjectSuggest({
+    excludeId: () => node.id,
+    // The box opens pre-filled, and a list of names like the current one is
+    // noise until somebody starts typing.
+    ignore: () => node.name,
+  });
   let busy = $state(false);
   let message = $state<string | null>(null);
   let clash = $state<{ target: GraphNodeRef; source: GraphNodeRef } | null>(null);
@@ -48,54 +53,54 @@
 
   const unchanged = $derived(!draft.trim() || draft.trim() === node.name);
 
-  /** Debounced so a fast typist makes one query, not eight. Nothing is offered
-   *  for the name already in the box - it opens pre-filled, and a list of names
-   *  like the current one is noise until somebody starts typing. */
-  function suggest() {
-    clearTimeout(timer);
-    matched = null;
+  /** What this NAME will render as on the page, and where it breaks the naming
+   *  convention. The two are different things and the difference is invisible in
+   *  a text box: the title rule already renders "Unidentified Anomalous
+   *  Phenomena (UAP)" as "UAPs", so somebody who wants that title reasonably
+   *  types it into the only field they can see - and names the node after an
+   *  acronym the matcher cannot use. Advisory, never a block. */
+  let check = $state<NameCheck | null>(null);
+  let checkTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function recheck() {
+    clearTimeout(checkTimer);
     const q = draft.trim();
-    if (q.length < 2 || q === node.name) {
-      suggestions = [];
-      highlighted = -1;
+    if (!q) {
+      check = null;
       return;
     }
-    timer = setTimeout(async () => {
-      suggestions = await fetchNameSuggestions(q, node.id);
-      matched = suggestions.find((s) => s.name === draft.trim()) ?? null;
-      highlighted = -1;
+    checkTimer = setTimeout(async () => {
+      check = await fetchNameCheck(q);
     }, 150);
+  }
+
+  $effect(() => {
+    recheck();
+  });
+
+  function onInput() {
+    matched = null;
+    suggest.search(draft);
+    recheck();
   }
 
   function pick(s: NameSuggestion) {
     draft = s.name;
     matched = s;
-    suggestions = [];
-    highlighted = -1;
+    suggest.clear();
   }
 
   function onkey(e: KeyboardEvent) {
-    if (e.key === "Escape") {
-      if (suggestions.length) suggestions = [];
-      else oncancel();
-      return;
-    }
-    if (!suggestions.length) {
-      if (e.key === "Enter") save();
-      return;
-    }
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      highlighted = (highlighted + 1) % suggestions.length;
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      highlighted = (highlighted - 1 + suggestions.length) % suggestions.length;
-    } else if (e.key === "Enter") {
-      e.preventDefault();
-      if (highlighted >= 0) pick(suggestions[highlighted]);
-      else save();
-    }
+    if (suggest.key(e, pick)) return;
+    if (e.key === "Escape") oncancel();
+    else if (e.key === "Enter") save();
   }
+
+  // The list arrives after the debounce, so the exact match is recomputed from
+  // it rather than at keystroke time.
+  $effect(() => {
+    if (suggest.items.length) matched = suggest.exact(draft);
+  });
 
   /** Every outcome here comes back with a zero exit: they are answers, not
    *  failures, and each has its own next step. */
@@ -118,7 +123,7 @@
         return;
       }
       clash = null;
-      suggestions = [];
+      suggest.clear();
       if (outcome.status === "merged" && outcome.merged_into) {
         onchanged(
           `"${node.name}" folded into "${outcome.merged_into.name}", which now holds ` +
@@ -144,7 +149,7 @@
     <input
       id="rename-{node.id}"
       bind:value={draft}
-      oninput={suggest}
+      oninput={onInput}
       onkeydown={onkey}
       autocomplete="off"
       disabled={busy}
@@ -161,7 +166,7 @@
     >Cancel</button>
   </div>
 
-  {#if suggestions.length}
+  {#if suggest.items.length}
     <!-- Said once, above: picking any row puts its exact name in the box, and an
          exact name merges rather than renames. On every row it was eight copies
          of one sentence. -->
@@ -169,13 +174,13 @@
       Already in the graph - picking one merges this into it.
     </p>
     <ul class="mt-1 flex flex-col overflow-hidden rounded border border-border">
-      {#each suggestions as s, i (s.id)}
+      {#each suggest.items as s, i (s.id)}
         <li>
           <button
             onclick={() => pick(s)}
-            onmouseenter={() => (highlighted = i)}
+            onmouseenter={() => (suggest.highlighted = i)}
             class="flex w-full flex-wrap items-baseline gap-x-2 px-2 py-1.5 text-left
-                   {i === highlighted ? 'bg-primary-container' : 'bg-surface-alt'}"
+                   {i === suggest.highlighted ? 'bg-primary-container' : 'bg-surface-alt'}"
           >
             <span class="text-on-surface">{s.name}</span>
             <span class="text-[0.65rem] uppercase text-on-surface-muted">{s.node_type}</span>
@@ -190,6 +195,23 @@
         </li>
       {/each}
     </ul>
+  {/if}
+
+  {#if check && (check.warnings.length || check.title !== draft.trim())}
+    <div class="mt-2 flex flex-col gap-1">
+      {#if check.title !== draft.trim()}
+        <p class="text-on-surface-muted">
+          This is the subject's NAME. Its page will be titled
+          <strong class="text-on-surface">{check.title}</strong> - the title
+          shortens it; the name stays in full.
+        </p>
+      {/if}
+      {#each check.warnings as w}
+        <p class="rounded border border-warning/40 bg-warning-container/30 px-2 py-1 text-on-surface">
+          {w}
+        </p>
+      {/each}
+    </div>
   {/if}
 
   {#if matched}

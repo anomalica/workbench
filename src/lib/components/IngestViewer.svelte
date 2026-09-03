@@ -2,6 +2,7 @@
   import { SUBTLE_HL, bandStyleAttribute, highlightColour } from "$lib/highlight-paint";
   import { DOCUMENT_TYPES, recordType } from "$lib/document-types";
   import CopyrightControl from "./CopyrightControl.svelte";
+  import RecordTags from "./RecordTags.svelte";
   import { highlightDisplay } from "$lib/highlight-display.svelte";
   import type {
     CopyrightStatus,
@@ -90,6 +91,7 @@
     sourceFile,
     user,
     isAdmin = false,
+    canTag = false,
     reviewed = false,
     needsVerify = false,
     hasNext = false,
@@ -107,6 +109,8 @@
     user: User | null;
     /** Only an admin may change who can see a record. */
     isAdmin?: boolean;
+    /** Whether this reviewer may say what the record is about. */
+    canTag?: boolean;
     reviewed?: boolean;
     /** Review carried from a re-ingest, not yet re-verified - show a banner. */
     needsVerify?: boolean;
@@ -5092,6 +5096,12 @@
             canEdit={isAdmin}
             onchange={(next) => doc.updateFrontmatter({ "copyright.status": next })}
           />
+          <!-- What the record is ABOUT, asserted by a person. The pipeline can
+               only link records through a named entity they share; this is the
+               link a person has to assert, and it belongs beside the record's
+               own facts rather than in a tab of its own. -->
+          <RecordTags hash={ingest.content_hash} {canTag} />
+
           <!-- Acquisition provenance: where this record came from. -->
           <div class="flex items-baseline gap-2 text-xs font-ui">
             <span class="text-on-surface-muted w-32 flex-none">Origin</span>
