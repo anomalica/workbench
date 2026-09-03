@@ -49,6 +49,8 @@ def graph_db(tmp_path, monkeypatch):
             node_name_at_proposal TEXT, proposed_name TEXT, reason TEXT,
             proposed_by TEXT, proposed_at TEXT, status TEXT, resolved_at TEXT,
             resolution_note TEXT);
+        CREATE TABLE claim_node_refs (claim_id TEXT, node_id TEXT);
+        CREATE TABLE aliases (alias TEXT, node_id TEXT);
         """
     )
     con.execute(
@@ -129,9 +131,9 @@ class TestTheOutcomeIsReportedHonestly:
         assert out["ok"] is True
         assert out["name"] == "New Name"
 
-    @pytest.mark.parametrize("status", ["rejected", "lost", "pending"])
+    @pytest.mark.parametrize("status", ["lost", "pending"])
     def test_anything_else_is_not_success(self, curation, monkeypatch, status):
-        """All three exit zero. Reading the exit code would call them success."""
+        """Both exit zero. Reading the exit code would call them success."""
         _stub_assimilator(monkeypatch, status=status)
         out = pages.propose_rename(NID, "Old Name", "New Name", None, None)
         assert out["ok"] is False
@@ -324,3 +326,165 @@ class TestTheEndpointIsGated:
             client.post("/api/topics/seed", json={"name": "Summoning"}).status_code
             == 200
         )
+
+
+OTHER = "22222222-2222-4222-8222-222222222222"
+
+
+def _add_node(db, node_id, name, node_type="topic", claims=0, retired=None):
+    con = sqlite3.connect(db)
+    con.execute(
+        "INSERT INTO nodes (id, node_type, name, retired_at) VALUES (?,?,?,?)",
+        (node_id, node_type, name, retired),
+    )
+    for i in range(claims):
+        con.execute(
+            "INSERT INTO claim_node_refs (claim_id, node_id) VALUES (?,?)",
+            (f"{node_id}-c{i}", node_id),
+        )
+    con.commit()
+    con.close()
+
+
+class TestRenamingOntoATakenName:
+    """Typing a name another node already has is not a dead end. It is the
+    reviewer saying these two are one thing, so it becomes a merge into the node
+    that holds the name - which keeps the folded-in node's name as an alias."""
+
+    @pytest.fixture
+    def merged(self, monkeypatch):
+        """Records what would be merged instead of running the assimilator."""
+        calls = []
+
+        def fake_apply(survivor_id, victim_ids, canonical_name, by=None):
+            calls.append((survivor_id, victim_ids, canonical_name, by))
+            return {"ok": True}
+
+        from backend import curation
+
+        monkeypatch.setattr(curation, "apply_merge", fake_apply)
+        return calls
+
+    def test_same_type_merges_into_the_node_holding_the_name(
+        self, graph_db, curation, monkeypatch, merged
+    ):
+        _add_node(graph_db, OTHER, "The Greys", "topic", claims=9)
+        _stub_assimilator(monkeypatch, status="rejected")
+
+        out = pages.propose_rename(NID, "Grey aliens", "The Greys", None, None)
+
+        assert out["status"] == "merged"
+        assert out["ok"] is True
+        assert out["merged_into"]["id"] == OTHER
+        # Survivor is the node that HOLDS the name, so its name needs no change.
+        assert merged == [(OTHER, [NID], "The Greys", None)]
+
+    def test_a_different_kind_of_thing_is_asked_about_first(
+        self, graph_db, curation, monkeypatch, merged
+    ):
+        """An exact name match between two topics is strong evidence of sameness.
+        Between a topic and a person it is more likely two things that read
+        alike - and the assimilator's merge does not check types at all."""
+        _add_node(graph_db, OTHER, "The Greys", "person", claims=9)
+        _stub_assimilator(monkeypatch, status="rejected")
+
+        out = pages.propose_rename(NID, "Grey aliens", "The Greys", None, None)
+
+        assert out["status"] == "clash"
+        assert out["ok"] is False
+        assert out["target"]["node_type"] == "person"
+        assert out["source"]["node_type"] == "topic"
+        assert merged == []
+
+    def test_a_different_kind_merges_when_confirmed(
+        self, graph_db, curation, monkeypatch, merged
+    ):
+        _add_node(graph_db, OTHER, "The Greys", "person", claims=9)
+        _stub_assimilator(monkeypatch, status="rejected")
+
+        out = pages.propose_rename(
+            NID, "Grey aliens", "The Greys", None, None, confirm_merge=True
+        )
+
+        assert out["status"] == "merged"
+        assert merged == [(OTHER, [NID], "The Greys", None)]
+
+    def test_a_retired_node_does_not_hold_a_name(
+        self, graph_db, curation, monkeypatch, merged
+    ):
+        """The assimilator clashes only on LIVE nodes, so a merged-away one must
+        not pull a rename into a merge with a node nobody can see."""
+        _add_node(graph_db, OTHER, "The Greys", "topic", retired="2026-01-01")
+        _stub_assimilator(monkeypatch, status="rejected")
+
+        out = pages.propose_rename(NID, "Grey aliens", "The Greys", None, None)
+
+        assert out["status"] == "rejected"
+        assert merged == []
+
+    def test_a_failed_merge_is_reported_as_such(self, graph_db, curation, monkeypatch):
+        from backend import curation as curation_module
+
+        _add_node(graph_db, OTHER, "The Greys", "topic", claims=9)
+        _stub_assimilator(monkeypatch, status="rejected")
+        monkeypatch.setattr(
+            curation_module,
+            "apply_merge",
+            lambda *a, **k: {"ok": False, "error": "db locked"},
+        )
+
+        out = pages.propose_rename(NID, "Grey aliens", "The Greys", None, None)
+        assert out["ok"] is False
+        assert out["note"] == "db locked"
+        assert out["name"] == "Grey aliens"
+
+
+class TestNameSuggestions:
+    """What makes the rename usable: the name being reached for usually exists
+    already, spelled a little differently."""
+
+    def test_the_best_match_comes_first(self, graph_db):
+        _add_node(graph_db, OTHER, "The Greys", claims=9)
+        _add_node(graph_db, "n3", "Greys of Zeta Reticuli", claims=40)
+        _add_node(graph_db, "n4", "Tall whites and the greys compared", claims=2)
+
+        names = [s["name"] for s in pages.name_suggestions("greys")]
+        # Nobody types the leading article, so "The Greys" has to rank with the
+        # names that start with the word, not below them - and the shorter name
+        # wins that tie. Ordered by name instead, the thing being looked for
+        # would sit last of the three.
+        assert names == [
+            "The Greys",
+            "Greys of Zeta Reticuli",
+            "Tall whites and the greys compared",
+        ]
+
+    def test_an_exact_name_beats_a_shorter_one(self, graph_db):
+        _add_node(graph_db, OTHER, "Greys", claims=1)
+        _add_node(graph_db, "n3", "Grey", claims=99)
+        assert pages.name_suggestions("greys")[0]["name"] == "Greys"
+
+    def test_an_alias_finds_it_and_says_so(self, graph_db):
+        _add_node(graph_db, OTHER, "The Greys", claims=9)
+        con = sqlite3.connect(graph_db)
+        con.execute("CREATE TABLE IF NOT EXISTS aliases (alias TEXT, node_id TEXT)")
+        con.execute(
+            "INSERT INTO aliases (alias, node_id) VALUES ('Zeta Reticulans', ?)",
+            (OTHER,),
+        )
+        con.commit()
+        con.close()
+
+        hit = pages.name_suggestions("Zeta")[0]
+        assert hit["name"] == "The Greys"
+        assert hit["via"] == "Zeta Reticulans"
+
+    def test_the_node_being_renamed_is_not_offered(self, graph_db):
+        assert pages.name_suggestions("Unidentified", exclude=NID) == []
+
+    def test_a_retired_node_is_not_offered(self, graph_db):
+        _add_node(graph_db, OTHER, "The Greys", retired="2026-01-01")
+        assert pages.name_suggestions("Greys") == []
+
+    def test_one_letter_asks_nothing(self, graph_db):
+        assert pages.name_suggestions("G") == []

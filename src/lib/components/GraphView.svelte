@@ -28,7 +28,10 @@
 
   // Optional node to open on mount (deep link: /graph/<node_id>), so the
   // curation card / any link can jump straight to a node's claims in context.
-  let { initialNodeId }: { initialNodeId?: string } = $props();
+  let {
+    initialNodeId,
+    canRename = false,
+  }: { initialNodeId?: string; canRename?: boolean } = $props();
 
   let stats = $state<GraphStats | null>(null);
   let unavailable = $state(false);
@@ -40,6 +43,7 @@
   let mergedOnly = $state(false);
   let selectedId = $state<string | null>(null);
   let selectedNode = $state<GraphNodeDetailT | null>(null);
+  let renameNotice = $state<string | null>(null);
   let loadingNode = $state(false);
   let detailView = $state<"claims" | "graph">("claims");
   let graphRefresh = $state(0);
@@ -111,6 +115,17 @@
     else p.delete("view");
     const qs = p.toString();
     history.replaceState(null, "", window.location.pathname + (qs ? `?${qs}` : ""));
+  }
+
+  /** A rename leaves the node where it is; a merge retires it, so the view has
+   *  to follow the survivor or it sits on a node that no longer exists. */
+  function afterRename(message: string, survivorId?: string) {
+    renameNotice = message;
+    if (survivorId) onMerged(survivorId);
+    else {
+      if (selectedId) selectNode(selectedId);
+      loadNodes();
+    }
   }
 
   function onMerged(survivorId: string) {
@@ -325,6 +340,18 @@
 
     <!-- Detail: a node's claims, or the scoped visual graph centred on it -->
     <div class="flex-1 flex flex-col min-h-0">
+      {#if renameNotice}
+        <!-- Above the detail, not inside it: after a merge the pane is showing
+             the SURVIVOR, and what happened to the other one needs saying. -->
+        <div class="flex items-start gap-2 border-b border-border bg-surface-alt px-4 py-2 text-xs text-on-surface">
+          <span class="flex-1">{renameNotice}</span>
+          <button
+            onclick={() => (renameNotice = null)}
+            aria-label="Dismiss"
+            class="rounded px-1 text-on-surface-muted hover:text-on-surface"
+          >×</button>
+        </div>
+      {/if}
       {#if selectedId}
         <div class="px-4 py-1.5 border-b border-border flex items-center gap-1 flex-none">
           <button
@@ -343,7 +370,12 @@
       {#if selectedId && detailView === "graph"}
         <GraphCanvas nodeId={selectedId} refreshKey={graphRefresh} onRecenter={selectNode} {onMerged} />
       {:else}
-        <GraphNodeDetail node={selectedNode} loading={loadingNode} />
+        <GraphNodeDetail
+          node={selectedNode}
+          loading={loadingNode}
+          {canRename}
+          onchanged={afterRename}
+        />
       {/if}
     </div>
   </div>

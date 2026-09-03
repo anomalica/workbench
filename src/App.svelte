@@ -896,7 +896,7 @@
         {#if appMode === "curate"}
           <CurationView />
         {:else}
-          <GraphView initialNodeId={graphNodeId} />
+          <GraphView initialNodeId={graphNodeId} canRename={liveBackend && canCurate} />
         {/if}
       </div>
     {:else if openingRecord && !selectedIngest}

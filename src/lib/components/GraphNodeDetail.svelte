@@ -1,7 +1,27 @@
 <script lang="ts">
   import type { GraphNodeDetail, GraphClaim } from "$lib/api";
+  import RenameEditor from "./RenameEditor.svelte";
 
-  let { node, loading = false }: { node: GraphNodeDetail | null; loading?: boolean } = $props();
+  let {
+    node,
+    loading = false,
+    canRename = false,
+    onchanged = () => {},
+  }: {
+    node: GraphNodeDetail | null;
+    loading?: boolean;
+    canRename?: boolean;
+    /** A rename or merge landed: the parent refreshes and, for a merge,
+     *  recentres on the node that survived. */
+    onchanged?: (message: string, survivorId?: string) => void;
+  } = $props();
+
+  let renaming = $state(false);
+
+  function changed(message: string, survivorId?: string) {
+    renaming = false;
+    onchanged(message, survivorId);
+  }
 
   // Group the node's claims by source record - the reviewer reads merges in the
   // context of which sources assert what about this entity.
@@ -32,7 +52,32 @@
       <span class="text-[10px] font-ui font-medium text-primary uppercase tracking-wide px-1.5 py-0.5 rounded bg-primary/10">
         {node.node_type}
       </span>
+      {#if canRename}
+        <!-- Here as well as on the topics list, because the topics list only
+             holds what has been proposed for a page - the duplicates worth
+             joining are usually not on it. -->
+        <button
+          onclick={() => (renaming = !renaming)}
+          title="Rename - the name is the page title and its address"
+          aria-label="Rename"
+          class="rounded p-1 {renaming ? 'bg-primary-container text-on-surface' : 'text-on-surface-muted hover:bg-surface-alt hover:text-primary'}"
+        >
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M16.5 4.5l3 3L8 19H5v-3L16.5 4.5z" />
+          </svg>
+        </button>
+      {/if}
     </div>
+
+    {#if renaming}
+      <div class="mt-3 rounded-lg border border-border bg-surface-alt px-4 py-3">
+        <RenameEditor
+          node={{ id: node.id, name: node.name, node_type: node.node_type, claims: node.claim_count }}
+          onchanged={changed}
+          oncancel={() => (renaming = false)}
+        />
+      </div>
+    {/if}
 
     <!-- Merge decisions: the whole point of the view. Prominent. -->
     <div class="mt-4 rounded-lg border border-border bg-surface-alt px-4 py-3">

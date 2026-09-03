@@ -317,3 +317,45 @@ def test_a_pair_the_rules_list_twice_is_one_entry_with_no_rules_score_beside_its
     [c] = curation.read_candidates()
     assert c["score"] == 0.9
     assert "rule_score" not in c
+
+
+def test_a_merge_names_the_database_it_is_pointed_at(monkeypatch, tmp_path):
+    """Without --db the command falls back to the assimilator's OWN default path,
+    which is not necessarily the one the workbench reads. A run pointed at a copy
+    of the graph then read the copy and wrote the real one, silently."""
+    import subprocess
+
+    db = tmp_path / "copy.db"
+    monkeypatch.setenv("GRAPH_DB_PATH", str(db))
+    seen: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        seen.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(curation.subprocess, "run", fake_run)
+    assert curation.apply_merge("survivor", ["victim"], "Canonical", by="workbench/x")[
+        "ok"
+    ]
+
+    argv = seen[0]
+    assert argv[argv.index("--db") + 1] == str(db)
+    assert argv[argv.index("--by") + 1] == "workbench/x"
+
+
+def test_an_undo_names_the_database_too(monkeypatch, tmp_path):
+    import subprocess
+
+    db = tmp_path / "copy.db"
+    monkeypatch.setenv("GRAPH_DB_PATH", str(db))
+    seen: list[list[str]] = []
+    monkeypatch.setattr(
+        curation.subprocess,
+        "run",
+        lambda cmd, **kw: (
+            seen.append(cmd),
+            subprocess.CompletedProcess(cmd, 0, stdout="", stderr=""),
+        )[1],
+    )
+    assert curation.undo_merge("some-merge-id")["ok"]
+    assert seen[0][seen[0].index("--db") + 1] == str(db)

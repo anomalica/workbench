@@ -437,12 +437,185 @@ def rename_outcome(proposal_id: str) -> dict | None:
     return {"status": row[0], "note": row[1]} if row else None
 
 
+def _live_node(node_id: str) -> dict | None:
+    """One live node as {id, name, node_type, claims}, or None."""
+    con = graph._open()
+    if con is None:
+        return None
+    try:
+        row = con.execute(
+            "SELECT id, name, node_type,"
+            " (SELECT COUNT(*) FROM claim_node_refs r WHERE r.node_id = n.id)"
+            " FROM nodes n WHERE id = ? AND retired_at IS NULL",
+            (node_id,),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    finally:
+        con.close()
+    return (
+        {"id": row[0], "name": row[1], "node_type": row[2], "claims": row[3]}
+        if row
+        else None
+    )
+
+
+def name_suggestions(q: str, exclude: str = "", limit: int = 8) -> list[dict]:
+    """Live nodes whose name or alias contains `q`, best match first.
+
+    Its own query rather than the browse endpoint's because the two want
+    different things: browse lists everything alphabetically and includes nodes
+    that have been merged away, while this is answering "is there already one of
+    these?" - so it is live nodes only, and ordered by how well they match
+    rather than by name, or the thing being looked for sits at position 40.
+    """
+    q = (q or "").strip()
+    if len(q) < 2:
+        return []
+    con = graph._open()
+    if con is None:
+        return []
+    like = f"%{q}%"
+    try:
+        rows = con.execute(
+            "SELECT n.id, n.name, n.node_type,"
+            " (SELECT COUNT(*) FROM claim_node_refs r WHERE r.node_id = n.id) AS claims,"
+            " (SELECT a.alias FROM aliases a WHERE a.node_id = n.id"
+            "  AND a.alias LIKE ? LIMIT 1) AS via"
+            " FROM nodes n WHERE n.retired_at IS NULL AND n.id <> ?"
+            " AND (n.name LIKE ? OR n.id IN"
+            "      (SELECT node_id FROM aliases WHERE alias LIKE ?))"
+            " LIMIT 200",
+            (like, exclude or "", like, like),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    finally:
+        con.close()
+
+    needle = q.casefold()
+    articles = ("the ", "a ", "an ")
+
+    def rank(name: str) -> int:
+        low = name.casefold()
+        if low == needle:
+            return 0
+        # A leading article is not what anybody types: somebody looking for "The
+        # Greys" types "greys", and without this it ranks below every name that
+        # merely begins with the word.
+        bare = next((low[len(a) :] for a in articles if low.startswith(a)), low)
+        if low.startswith(needle) or bare.startswith(needle):
+            return 1
+        return 2 if f" {needle}" in low else 3
+
+    out = [
+        {
+            "id": r[0],
+            "name": r[1],
+            "node_type": r[2],
+            "claims": r[3],
+            # Set when the hit came from an alias rather than the name, so the
+            # list can show WHY something with no visible match is in it.
+            "via": r[4] if r[4] and needle not in (r[1] or "").casefold() else None,
+            "exact": (r[1] or "").casefold() == needle,
+        }
+        for r in rows
+    ]
+    # Shorter first within a rank: the closer a name is in length to what was
+    # typed, the more likely it is the thing being reached for. Claim count only
+    # separates two names of the same length.
+    out.sort(
+        key=lambda n: (
+            rank(n["name"]),
+            len(n["name"]),
+            -n["claims"],
+            n["name"].casefold(),
+        )
+    )
+    return out[:limit]
+
+
+def _node_holding_name(name: str, other_than: str) -> dict | None:
+    """The live node already called `name`, if there is one - the same test the
+    assimilator clashes on, so the two never disagree about what is taken."""
+    con = graph._open()
+    if con is None:
+        return None
+    try:
+        row = con.execute(
+            "SELECT id FROM nodes WHERE name = ? AND retired_at IS NULL AND id <> ?",
+            (name, other_than),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return None
+    finally:
+        con.close()
+    return _live_node(row[0]) if row else None
+
+
+def _merge_into_the_name(
+    node_id: str, current_name: str, new_name: str, confirm: bool, by: str | None
+) -> dict:
+    """Renaming a node to a name another node already has says the two are one
+    thing, so do that: fold this node into the one already called that.
+
+    The survivor is the node that HOLDS the name - its name then needs no
+    changing, and the merge keeps the folded-in node's old name as an alias, so
+    the wording the sources use still resolves.
+
+    Guarded on node type. An exact match on a full node name is strong evidence
+    of sameness between two topics; between a topic and a person it is far more
+    likely to be a name that reads the same than a thing that is the same, and
+    the assimilator's merge does not check types at all. Different types need
+    somebody to say so.
+    """
+    from backend import curation
+
+    target = _node_holding_name(new_name, node_id)
+    if target is None:
+        # The clash is gone - a concurrent change. Report the rejection plainly
+        # rather than merging into whatever holds the name now.
+        return {
+            "ok": False,
+            "status": "rejected",
+            "note": "name already taken",
+            "name": current_name,
+        }
+    source_node = _live_node(node_id)
+    same_type = bool(source_node) and source_node["node_type"] == target["node_type"]
+    if not (same_type or confirm):
+        return {
+            "ok": False,
+            "status": "clash",
+            "note": "that name belongs to a different kind of thing",
+            "name": current_name,
+            "target": target,
+            "source": source_node,
+        }
+    result = curation.apply_merge(target["id"], [node_id], new_name, by=by)
+    if not result.get("ok"):
+        return {
+            "ok": False,
+            "status": "rejected",
+            "note": result.get("error") or "merge failed",
+            "name": current_name,
+        }
+    return {
+        "ok": True,
+        "status": "merged",
+        "name": new_name,
+        "note": None,
+        "merged_into": target,
+    }
+
+
 def propose_rename(
     node_id: str,
     current_name: str | None,
     new_name: str | None,
     reason: str | None,
     by: str | None,
+    confirm_merge: bool = False,
 ) -> dict:
     """Rename a graph node - the title its page will carry - via the assimilator.
 
@@ -516,6 +689,10 @@ def propose_rename(
             r.stderr.strip()[-400:] or r.stdout.strip()[-400:] or "rename failed"
         )
     status = outcome["status"]
+    if status == "rejected":
+        # Rejected means the name is another live node's. That is not a dead end
+        # - it is the reviewer saying these two are one thing.
+        return _merge_into_the_name(node_id, current_name, new_name, confirm_merge, by)
     # A non-zero exit here means some OTHER proposal file in the directory would
     # not parse. Ours has a recorded outcome, so report that outcome.
     return {

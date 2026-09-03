@@ -129,7 +129,13 @@ def read_candidates() -> list[dict]:
 
 def _run(module: str, args: list[str]) -> dict:
     """Shell an assimilator host command (writes the live DB). Returns
-    {ok: bool, error?: str}. Fail-closed: any non-zero exit / failure is ok=False."""
+    {ok: bool, error?: str}. Fail-closed: any non-zero exit / failure is ok=False.
+
+    The database is passed EXPLICITLY. Without it the command falls back to the
+    assimilator's own default path, which is not necessarily the one the
+    workbench reads (GRAPH_DB_PATH) - so a run pointed at a copy of the graph
+    read from the copy and wrote the real one. It silently did.
+    """
     ws = _path("ASSIMILATOR_WORKSPACE", _ANOMALICA / "assimilator" / "workspace")
     common = _path("ANOMALICA_COMMON_SRC", _ANOMALICA / "anomalica-common" / "src")
     env = {
@@ -140,7 +146,14 @@ def _run(module: str, args: list[str]) -> dict:
     }
     try:
         proc = subprocess.run(
-            [sys.executable, "-m", f"assimilator.{module}", *args],
+            [
+                sys.executable,
+                "-m",
+                f"assimilator.{module}",
+                "--db",
+                str(graph.graph_db_path()),
+                *args,
+            ],
             env=env,
             capture_output=True,
             text=True,
@@ -155,7 +168,12 @@ def _run(module: str, args: list[str]) -> dict:
     return {"ok": True}
 
 
-def apply_merge(survivor_id: str, victim_ids: list[str], canonical_name: str) -> dict:
+def apply_merge(
+    survivor_id: str,
+    victim_ids: list[str],
+    canonical_name: str,
+    by: str | None = None,
+) -> dict:
     """Merge victims into the survivor under canonical_name. Validated here;
     the assimilator does the re-pointing + records the reversible merge-log row."""
     if not survivor_id or not victim_ids or not canonical_name:
@@ -174,6 +192,7 @@ def apply_merge(survivor_id: str, victim_ids: list[str], canonical_name: str) ->
             ",".join(victim_ids),
             "--name",
             canonical_name,
+            *(["--by", by] if by else []),
         ],
     )
 

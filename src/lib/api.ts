@@ -1543,13 +1543,45 @@ export interface Topic {
   rename?: RenameOutcome | null;
 }
 
+/** A live node offered as "did you mean this one?" while renaming. Picking one
+ *  whose name matches exactly is how two nodes become one. */
+export interface GraphNodeRef {
+  id: string;
+  name: string;
+  node_type: string;
+  claims: number;
+}
+
+export interface NameSuggestion extends GraphNodeRef {
+  /** The alias the match came through, when the name itself does not contain
+   *  what was typed. */
+  via: string | null;
+  exact: boolean;
+}
+
+export async function fetchNameSuggestions(q: string, exclude: string): Promise<NameSuggestion[]> {
+  const res = await fetch(
+    readPath(
+      `/api/topics/name-suggestions?q=${encodeURIComponent(q)}&exclude=${encodeURIComponent(exclude)}`,
+    ),
+  );
+  if (!res.ok) return [];
+  return (await res.json()).suggestions ?? [];
+}
+
 /** What became of a proposed rename. `rejected` means the name is already
  *  another node's, which is a merge decision rather than a rename; `lost` means
  *  the node no longer resolves; `pending` means the assimilator has not run. */
 export interface RenameOutcome {
-  status: "pending" | "applied" | "rejected" | "lost";
+  status: "pending" | "applied" | "rejected" | "lost" | "merged" | "clash";
   proposed_name?: string;
   note?: string | null;
+  /** `merged`: the node this one was folded into. */
+  merged_into?: GraphNodeRef;
+  /** `clash`: the node holding the name, and this one, so the confirmation can
+   *  say what would be merged with what. */
+  target?: GraphNodeRef;
+  source?: GraphNodeRef;
 }
 
 export interface SeededTopic {
@@ -1623,11 +1655,18 @@ export async function renameTopic(
   name: string,
   newName: string,
   reason?: string,
+  confirmMerge = false,
 ): Promise<RenameOutcome & { ok: boolean; name: string }> {
   const res = await fetch("/api/topics/rename", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ node_id: nodeId, name, new_name: newName, reason }),
+    body: JSON.stringify({
+      node_id: nodeId,
+      name,
+      new_name: newName,
+      reason,
+      confirm_merge: confirmMerge,
+    }),
   });
   const payload = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(payload.detail ?? `Rename failed: ${res.status}`);

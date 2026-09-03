@@ -14,7 +14,6 @@
   import {
     fetchTopics,
     fetchTopicBrief,
-    renameTopic,
     seedTopic,
     unseedTopic,
     vetoTopic,
@@ -23,6 +22,7 @@
     type Topic,
   } from "$lib/api";
   import { STATIC_READS } from "$lib/api";
+  import RenameEditor from "./RenameEditor.svelte";
 
   let { canDecide = false }: { canDecide?: boolean } = $props();
 
@@ -67,13 +67,13 @@
     `https://anomalica.is/en/${page.kind}/${page.slug}/`;
   let showPublished = $state(false);
   let confirmVeto = $state<string | null>(null);
-  /** The node whose name is being edited, and the text in the box. Only one row
-   *  edits at a time - a name is read against its evidence, not in a batch. */
+  /** The node whose name is being edited. Only one row edits at a time - a
+   *  name is read against its evidence, not in a batch. */
   let renaming = $state<string | null>(null);
-  let renameDraft = $state("");
-  /** An outcome that is not "applied", kept until the next edit so a reviewer
-   *  reads WHY nothing changed rather than watching the name stay put. */
-  let renameResult = $state<{ node_id: string; message: string } | null>(null);
+  /** What a rename or merge did, ABOVE the list rather than on the row: a
+   *  merged node's row is gone by the time the message would show. */
+  let notice = $state<string | null>(null);
+
   const trailing = $derived(published.filter((p) => p.stale === true));
   /** A proposal that already has a page is not a proposal - it is the same
    *  subject in its finished state, and showing it in both lists reads as work
@@ -128,42 +128,14 @@
   }
 
   function startRename(t: Topic) {
-    renameResult = null;
+    notice = null;
     renaming = renaming === t.node_id ? null : t.node_id;
-    renameDraft = t.name;
   }
 
-  /** `rejected` and `lost` come back with a zero exit and no error: they are
-   *  answers, not failures, and each has its own next step. */
-  const RENAME_MESSAGE: Record<string, string> = {
-    rejected: "Another node already has that name. Two nodes wanting one name is a merge, not a rename.",
-    lost: "That node no longer resolves - the graph was rebuilt. Reload and try again.",
-    pending: "Queued. The assimilator has not applied it yet.",
-  };
-
-  async function saveRename(t: Topic) {
-    const proposed = renameDraft.trim();
-    if (!proposed || proposed === t.name) {
-      renaming = null;
-      return;
-    }
-    busy = true;
-    error = null;
-    try {
-      const outcome = await renameTopic(t.node_id, t.name, proposed);
-      renaming = null;
-      renameResult = outcome.ok
-        ? null
-        : {
-            node_id: t.node_id,
-            message: RENAME_MESSAGE[outcome.status] ?? outcome.note ?? outcome.status,
-          };
-      await load();
-    } catch (e) {
-      error = String(e);
-    } finally {
-      busy = false;
-    }
+  async function renamed(message: string) {
+    notice = message;
+    renaming = null;
+    await load();
   }
 
   async function addSeed() {
@@ -331,6 +303,12 @@
       </div>
     </div>
 
+    {#if notice}
+      <p class="mt-3 rounded border border-border bg-surface px-4 py-2 text-xs text-on-surface">
+        {notice}
+      </p>
+    {/if}
+
     <ul class="mt-3 flex flex-col gap-1.5">
       {#each shown as t (t.node_id)}
         <li class="rounded border border-border bg-surface-alt">
@@ -411,37 +389,12 @@
           </div>
 
           {#if renaming === t.node_id}
-            <div class="flex flex-wrap items-center gap-2 border-t border-border bg-surface px-4 py-2.5 text-xs">
-              <label class="text-on-surface-muted" for="rename-{t.node_id}">New name</label>
-              <input
-                id="rename-{t.node_id}"
-                bind:value={renameDraft}
-                onkeydown={(e) => {
-                  if (e.key === "Enter") saveRename(t);
-                  if (e.key === "Escape") renaming = null;
-                }}
-                disabled={busy}
-                class="min-w-64 flex-1 rounded border border-border bg-surface-alt px-2 py-1 text-sm text-on-surface"
+            <div class="border-t border-border bg-surface px-4 py-2.5">
+              <RenameEditor
+                node={{ id: t.node_id, name: t.name, node_type: t.node_type, claims: t.claims }}
+                onchanged={renamed}
+                oncancel={() => (renaming = null)}
               />
-              <button
-                onclick={() => saveRename(t)}
-                disabled={busy || !renameDraft.trim() || renameDraft.trim() === t.name}
-                class="rounded bg-primary px-2 py-1 text-on-primary disabled:opacity-50"
-              >Rename</button>
-              <button
-                onclick={() => (renaming = null)}
-                class="rounded px-2 py-1 text-on-surface-muted hover:text-on-surface"
-              >Cancel</button>
-              <p class="w-full text-on-surface-muted">
-                This name becomes the page's title and its web address. It is recorded
-                as a correction, so it survives the graph being rebuilt.
-              </p>
-            </div>
-          {/if}
-
-          {#if renameResult?.node_id === t.node_id}
-            <div class="border-t border-warning/30 bg-warning-container/30 px-4 py-2 text-xs text-on-surface">
-              {renameResult.message}
             </div>
           {/if}
 
