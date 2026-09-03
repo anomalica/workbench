@@ -1,16 +1,23 @@
 <script lang="ts">
-  // Topics: what earns a page, and what goes into it.
+  // Topics: every subject and the state it is in.
   //
-  // Two lists that look similar and are not. PROPOSED topics are what the graph
-  // found, and they arrive with their evidence because the decision is about the
-  // numbers, not the name - 259 claims from 2 sources is a different proposition
-  // from 259 claims from 40. SEEDED topics are named by a human before any
-  // material exists, and fill up; that inverts the reading, showing where the
-  // corpus is thin against what we care about.
+  // ONE list, not three. The three states - written, proposed, requested - used
+  // to be three separate blocks, with the written ones collapsed into a line of
+  // names at the top. That buried the subjects most likely to be duplicates of
+  // each other, which is what this tab is now for: a page that exists and a
+  // proposal for the same thing are only recognisable as one subject if they sit
+  // in the same list, next to each other, sorted by weight.
   //
-  // The brief is readable in full. A page is written from the brief and nothing
-  // else, so this is the only place to see what a page would actually be made of
-  // before spending a model call on it.
+  // The three states are genuinely different and the row says which:
+  // - WRITTEN is a page on the site. Removing it deletes something that exists.
+  // - PROPOSED is what the graph found on the evidence it holds. Rejecting it
+  //   deletes nothing.
+  // - REQUESTED is a name a human gave before there was material, which shows
+  //   where the corpus is thin against what we care about.
+  //
+  // The brief is readable in full on any row that has one. A page is written
+  // from the brief and nothing else, so this is the only place to see what a
+  // page would be made of before spending a model call on it.
   import {
     fetchTopics,
     fetchTopicBrief,
@@ -18,6 +25,7 @@
     unseedTopic,
     vetoTopic,
     type PublishedPage,
+    type RenameOutcome,
     type SeededTopic,
     type Topic,
   } from "$lib/api";
@@ -26,85 +34,196 @@
 
   let { canDecide = false }: { canDecide?: boolean } = $props();
 
-  /** Vetoing and seeding shell out to the assimilator, which the deployed
-   *  build has no way to reach - the controls would fail rather than do
+  /** Vetoing, seeding and renaming shell out to the assimilator, which the
+   *  deployed build has no way to reach - the controls would fail rather than do
    *  nothing. Reading is fine: the snapshot carries the list and the briefs. */
   const canWrite = $derived(canDecide && !STATIC_READS);
+
+  type State = "written" | "proposed" | "requested";
+
+  /** One subject, whatever state it is in. Everything a row can show or act on
+   *  is here, so the markup asks about `state` and never about which of the
+   *  three collections a row came from. */
+  type Row = {
+    key: string;
+    state: State;
+    name: string;
+    node_id: string | null;
+    node_type: string | null;
+    section: string | null;
+    slug: string | null;
+    claims: number | null;
+    sources: number | null;
+    subject_claims: number | null;
+    single_source: boolean;
+    has_brief: boolean;
+    /** Written only: its brief moved after the page was written. */
+    stale: boolean | null;
+    vetoed: boolean;
+    rename: RenameOutcome | null;
+    note: string | null;
+    url: string | null;
+  };
 
   let topics = $state<Topic[]>([]);
   let seeded = $state<SeededTopic[]>([]);
   let published = $state<PublishedPage[]>([]);
   let error = $state<string | null>(null);
   let busy = $state(false);
-  let openSlug = $state<string | null>(null);
+  let openKey = $state<string | null>(null);
   let brief = $state<Record<string, unknown> | null>(null);
   let briefLoading = $state(false);
   let newTopic = $state("");
-  let filter = $state<"all" | "single" | "nobrief">("all");
-
-  /** Everything still awaiting a page. Every count comes off THIS, so a filter
-   *  chip reports the same number whether or not it is the active one - the
-   *  counts used to be read off the filtered list, so "All" showed the size of
-   *  whatever filter was on and changed each time one was clicked. */
-  /** A page's identity is (section, slug), never the slug alone: an event and
-   *  a project of one name share a slug and are two pages. */
-  const pageKey = (t: { section: string; slug: string }) => `${t.section}/${t.slug}`;
-  const pending = $derived(topics.filter((t) => !publishedKeys.has(pageKey(t))));
-  const shown = $derived(
-    pending.filter((t) =>
-      filter === "single" ? t.single_source : filter === "nobrief" ? !t.has_brief : true,
-    ),
-  );
-  const counts = $derived({
-    all: pending.length,
-    single: pending.filter((t) => t.single_source).length,
-    nobrief: pending.filter((t) => !t.has_brief).length,
-  });
-  /** Where a written page lives on the site: /en/<kind>/<slug>/. The kind is
-   *  the node type pluralised and it is not optional - without it every link
-   *  404s, which is what shipping `/en/<slug>/` did. */
-  const pageUrl = (page: PublishedPage) =>
-    `https://anomalica.is/en/${page.kind}/${page.slug}/`;
-  let showPublished = $state(false);
-  let confirmVeto = $state<string | null>(null);
-  /** The node whose name is being edited. Only one row edits at a time - a
-   *  name is read against its evidence, not in a batch. */
+  let filter = $state<"all" | State | "single" | "nobrief" | "behind">("all");
+  let confirmRemove = $state<string | null>(null);
+  /** The row whose name is being edited. One at a time - a name is read against
+   *  its evidence, not in a batch. */
   let renaming = $state<string | null>(null);
-  /** What a rename or merge did, ABOVE the list rather than on the row: a
-   *  merged node's row is gone by the time the message would show. */
+  /** What a rename or merge did, above the list rather than on the row: a merged
+   *  row is gone by the time the message would show. */
   let notice = $state<string | null>(null);
 
-  const trailing = $derived(published.filter((p) => p.stale === true));
-  /** A proposal that already has a page is not a proposal - it is the same
-   *  subject in its finished state, and showing it in both lists reads as work
-   *  outstanding. */
+  /** Where a written page lives on the site: /en/<kind>/<slug>/. The kind is the
+   *  node type pluralised and it is not optional - without it every link 404s,
+   *  which is what shipping `/en/<slug>/` did. */
+  const pageUrl = (kind: string | null, slug: string) =>
+    kind ? `https://anomalica.is/en/${kind}/${slug}/` : null;
+
+  /** A page's identity is (section, slug), never the slug alone: an event and a
+   *  project of one name share a slug and are two pages. */
   const publishedKeys = $derived(new Set(published.map((p) => `${p.kind}/${p.slug}`)));
+
+  const rows = $derived.by((): Row[] => {
+    const written: Row[] = published.map((p) => ({
+      key: `w:${p.kind}/${p.slug}`,
+      state: "written" as State,
+      name: p.name,
+      node_id: p.node_id ?? null,
+      // The section a page sits in IS its node type pluralised, which is the
+      // nearest thing to a type a written page carries.
+      node_type: p.kind,
+      section: p.kind,
+      slug: p.slug,
+      claims: p.claims ?? null,
+      sources: null,
+      subject_claims: null,
+      single_source: false,
+      has_brief: p.stale !== null,
+      stale: p.stale,
+      vetoed: false,
+      rename: null,
+      note: null,
+      url: pageUrl(p.kind, p.slug),
+    }));
+    const proposed: Row[] = topics
+      .filter((t) => !publishedKeys.has(`${t.section}/${t.slug}`))
+      .map((t) => ({
+        key: `p:${t.node_id}`,
+        state: "proposed" as State,
+        name: t.name,
+        node_id: t.node_id,
+        node_type: t.node_type,
+        section: t.section,
+        slug: t.slug,
+        claims: t.claims,
+        sources: t.sources,
+        subject_claims: t.subject_claims,
+        single_source: t.single_source,
+        has_brief: t.has_brief,
+        stale: null,
+        vetoed: t.status === "vetoed",
+        rename: t.rename ?? null,
+        note: null,
+        url: null,
+      }));
+    const requested: Row[] = seeded.map((s) => ({
+      key: `r:${s.name}`,
+      state: "requested" as State,
+      name: s.name,
+      node_id: null,
+      node_type: null,
+      section: null,
+      slug: null,
+      claims: null,
+      sources: null,
+      subject_claims: null,
+      single_source: false,
+      has_brief: false,
+      stale: null,
+      vetoed: false,
+      rename: null,
+      note: s.note ?? null,
+      url: null,
+    }));
+    // Weight first, whatever the state: the biggest subject is the one most
+    // worth looking at, and interleaving is the point - a written page and a
+    // proposal for the same thing land next to each other.
+    return [...written, ...proposed, ...requested].sort(
+      (a, b) => (b.claims ?? -1) - (a.claims ?? -1) || a.name.localeCompare(b.name),
+    );
+  });
+
+  const matches = (r: Row, f: typeof filter) =>
+    f === "all"
+      ? true
+      : f === "single"
+        ? r.single_source
+        : f === "nobrief"
+          ? r.state !== "requested" && !r.has_brief
+          : f === "behind"
+            ? r.stale === true
+            : r.state === f;
+
+  const shown = $derived(rows.filter((r) => matches(r, filter)));
+  /** Counted off the WHOLE set, so a chip reports the same number whether or not
+   *  it is the active one. Read off the filtered list, "All" showed the size of
+   *  whatever filter was on and changed each time one was clicked. */
+  const chips = $derived(
+    (
+      [
+        ["all", "All"],
+        ["written", "Written"],
+        ["proposed", "Proposed"],
+        ["requested", "Requested"],
+        ["single", "One source"],
+        ["nobrief", "No brief"],
+        ["behind", "Behind brief"],
+      ] as const
+    ).map(([key, label]) => ({
+      key,
+      label,
+      count: rows.filter((r) => matches(r, key)).length,
+    })),
+  );
 
   async function load() {
     try {
       const d = await fetchTopics();
       topics = d.topics;
       seeded = d.seeded;
-      published = d.published ?? [];
+      published = d.published;
+      error = null;
     } catch (e) {
       error = String(e);
     }
   }
+
   $effect(() => {
     load();
   });
 
-  async function openBrief(t: Topic) {
-    if (openSlug === pageKey(t)) {
-      openSlug = null;
+  async function openBrief(r: Row) {
+    if (!r.section || !r.slug) return;
+    if (openKey === r.key) {
+      openKey = null;
       brief = null;
       return;
     }
-    openSlug = pageKey(t);
+    openKey = r.key;
     brief = null;
     briefLoading = true;
     try {
-      brief = await fetchTopicBrief(t.section, t.slug);
+      brief = await fetchTopicBrief(r.section, r.slug);
     } catch (e) {
       error = String(e);
     } finally {
@@ -112,30 +231,33 @@
     }
   }
 
-  async function doVeto(t: Topic) {
-    const reason = prompt(`Never make a page for "${t.name}"? Reason (recorded):`);
-    if (reason === null) return;
-    busy = true;
-    error = null;
-    try {
-      await vetoTopic([t.node_id], reason);
-      await load();
-    } catch (e) {
-      error = String(e);
-    } finally {
-      busy = false;
-    }
-  }
-
-  function startRename(t: Topic) {
+  function startRename(r: Row) {
     notice = null;
-    renaming = renaming === t.node_id ? null : t.node_id;
+    renaming = renaming === r.key ? null : r.key;
   }
 
   async function renamed(message: string) {
     notice = message;
     renaming = null;
     await load();
+  }
+
+  /** Written and proposed take the same decision - never a page for this
+   *  subject - and it lands in the curation ledger either way. What differs is
+   *  what happens next: a proposal simply stops being offered, while a page that
+   *  exists comes down at the next assembly. */
+  async function doVeto(r: Row) {
+    if (!r.node_id) return;
+    busy = true;
+    error = null;
+    try {
+      await vetoTopic([r.node_id], "");
+      await load();
+    } catch (e) {
+      error = String(e);
+    } finally {
+      busy = false;
+    }
   }
 
   async function addSeed() {
@@ -168,9 +290,6 @@
   function claimsList(b: Record<string, unknown> | null): any[] {
     return (b?.claims as any[]) ?? [];
   }
-  function page(b: Record<string, unknown> | null): any {
-    return (b?.page as any) ?? {};
-  }
   /** The brief's own account of what it left out and why. */
   function belonging(b: Record<string, unknown> | null): {
     verified?: number;
@@ -179,129 +298,67 @@
   } {
     return (b?.belonging as any) ?? {};
   }
+
+  /** A page's section is its node type pluralised, and the type is what tells a
+   *  person node from a topic of the same name - the whole point of one list.
+   *  A fixed map rather than trimming an "s": "people" is not "peoples". */
+  const SINGULAR: Record<string, string> = {
+    people: "person",
+    documents: "document",
+    events: "event",
+    places: "place",
+    organisations: "organisation",
+    objects: "object",
+    projects: "project",
+    topics: "topic",
+    matters: "matter",
+    concepts: "concept",
+  };
+
+  const STATE_CLASS: Record<State, string> = {
+    written: "bg-primary/10 text-primary",
+    proposed: "bg-surface text-on-surface-muted",
+    requested: "bg-warning-container text-on-warning-container",
+  };
 </script>
 
 <div class="flex-1 overflow-y-auto">
   <div class="mx-auto max-w-6xl px-6 py-6">
     <h2 class="font-ui text-lg text-on-surface">Topics</h2>
     <p class="mt-1 max-w-prose text-sm text-on-surface-muted">
-      Every subject and the state it is in: written, requested, or proposed on the
-      evidence the graph holds.
+      Every subject and the state it is in - written, proposed on the evidence the
+      graph holds, or requested before the material exists. Heaviest first.
     </p>
 
     {#if error}
       <p class="mt-4 rounded border border-error/40 px-3 py-2 text-sm text-error">{error}</p>
     {/if}
 
-    <!-- Written pages are the finished state, so they belong here - but as a
-         line, not a list. 275 names at the top is a wall, and it buried the
-         proposals the tab exists to work through. -->
-    <div class="mt-5 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-      <button
-        onclick={() => (showPublished = !showPublished)}
-        class="flex items-center gap-1.5 text-on-surface hover:text-primary"
-      >
-        <svg class="h-3.5 w-3.5 transition-transform {showPublished ? 'rotate-90' : ''}"
-             fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
-        </svg>
-        <span><span class="font-medium tabular-nums">{published.length}</span> written</span>
-      </button>
-      {#if trailing.length}
-        <!-- Not a warning. A page is stale the moment its brief changes, so a
-             busy graph restales pages by the hundred and the count says the
-             pipeline is working, not failing. What WOULD be a warning is a
-             number that never falls after a rebuild - which this badge cannot
-             show, so it does not pretend to. -->
-        <span
-          class="text-xs text-on-surface-muted"
-          title="Their brief changed after the page was written. Normal while the graph is moving - each rebuild restates them."
-        >{trailing.length} behind their brief</span>
-      {/if}
+    <div class="mt-5 flex flex-wrap items-center gap-1 text-xs">
+      {#each chips as c (c.key)}
+        <button
+          onclick={() => (filter = c.key)}
+          class="rounded px-2 py-1 {filter === c.key
+            ? 'bg-primary-container text-on-surface'
+            : 'text-on-surface-muted hover:bg-surface-alt'}"
+        >{c.label} <span class="tabular-nums">{c.count}</span></button>
+      {/each}
     </div>
 
-    {#if showPublished}
-      <ul class="mt-2 grid gap-x-6 gap-y-1 sm:grid-cols-2 lg:grid-cols-3">
-        {#each published as page (`${page.kind}/${page.slug}`)}
-          <li class="flex items-baseline gap-1.5 text-sm">
-            {#if page.kind}
-              <a
-                href={pageUrl(page)}
-                target="_blank"
-                rel="noopener"
-                class="truncate text-on-surface hover:text-primary hover:underline"
-              >{page.name}</a>
-            {:else}
-              <!-- No kind means no path to build, and a link that 404s is worse
-                   than none: it reads as the page being broken rather than
-                   unlocatable from here. -->
-              <span class="truncate text-on-surface">{page.name}</span>
-            {/if}
-            {#if page.stale}
-              <span class="shrink-0 text-[11px] text-warning" title="Written from a brief that has since changed.">behind</span>
-            {:else if page.stale === null}
-              <span class="shrink-0 text-[11px] text-on-surface-muted" title="The brief this page was written from is gone.">no brief</span>
-            {/if}
-          </li>
-        {/each}
-      </ul>
-    {/if}
-
-    <section class="mt-6 rounded border border-border bg-surface-alt px-4 py-4">
-      <h3 class="font-ui text-sm text-on-surface">Requested</h3>
-      <p class="mt-0.5 text-xs text-on-surface-muted">
-        Named before the material exists, so a thin one shows what to ingest next.
-      </p>
-
-      {#if seeded.length}
-        <ul class="mt-3 flex flex-col gap-1.5">
-          {#each seeded as s (s.name)}
-            <li class="flex items-baseline gap-3 text-sm">
-              <span class="font-medium text-on-surface">{s.name}</span>
-              {#if s.note}<span class="text-xs text-on-surface-muted">{s.note}</span>{/if}
-              {#if canWrite}
-                <button
-                  onclick={() => dropSeed(s.name)}
-                  disabled={busy}
-                  class="ml-auto text-xs text-on-surface-muted underline hover:text-error"
-                >remove</button>
-              {/if}
-            </li>
-          {/each}
-        </ul>
-      {:else}
-        <p class="mt-3 text-sm text-on-surface-muted">None yet.</p>
-      {/if}
-
-      {#if canWrite}
-        <div class="mt-4 flex flex-wrap items-center gap-2">
-          <input
-            bind:value={newTopic}
-            placeholder="Topic name, e.g. Summoning"
-            class="flex-1 min-w-48 rounded border border-border bg-surface px-2.5 py-1.5 text-sm text-on-surface"
-          />
-          <button
-            onclick={addSeed}
-            disabled={busy || !newTopic.trim()}
-            class="rounded bg-primary px-3 py-1.5 text-sm text-surface disabled:opacity-50"
-          >Add topic</button>
-        </div>
-      {/if}
-    </section>
-
-    <div class="mt-6 flex flex-wrap items-center gap-3">
-      <h3 class="font-ui text-sm text-on-surface">Proposed</h3>
-      <div class="flex gap-1 text-xs">
-        {#each [["all", `All ${counts.all}`], ["single", `One source ${counts.single}`], ["nobrief", `No brief ${counts.nobrief}`]] as [key, label]}
-          <button
-            onclick={() => (filter = key as any)}
-            class="rounded px-2 py-1 {filter === key
-              ? 'bg-primary-container text-on-surface'
-              : 'text-on-surface-muted hover:bg-surface-alt'}"
-          >{label}</button>
-        {/each}
+    {#if canWrite}
+      <div class="mt-3 flex flex-wrap items-center gap-2">
+        <input
+          bind:value={newTopic}
+          placeholder="Request a topic, e.g. Summoning"
+          class="min-w-48 flex-1 rounded border border-border bg-surface px-2.5 py-1.5 text-sm text-on-surface"
+        />
+        <button
+          onclick={addSeed}
+          disabled={busy || !newTopic.trim()}
+          class="rounded bg-primary px-3 py-1.5 text-sm text-on-primary disabled:opacity-50"
+        >Request</button>
       </div>
-    </div>
+    {/if}
 
     {#if notice}
       <p class="mt-3 rounded border border-border bg-surface px-4 py-2 text-xs text-on-surface">
@@ -310,62 +367,106 @@
     {/if}
 
     <ul class="mt-3 flex flex-col gap-1.5">
-      {#each shown as t (t.node_id)}
+      {#each shown as r (r.key)}
         <li class="rounded border border-border bg-surface-alt">
           <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-4 py-2.5">
-            <span class="font-medium text-on-surface">{t.name}</span>
-            <span class="text-xs uppercase text-on-surface-muted">{t.node_type}</span>
+            {#if r.url}
+              <a
+                href={r.url}
+                target="_blank"
+                rel="noopener"
+                class="font-medium text-on-surface hover:text-primary hover:underline"
+              >{r.name}</a>
+            {:else}
+              <span class="font-medium text-on-surface">{r.name}</span>
+            {/if}
 
-            <span class="text-xs tabular-nums text-on-surface-secondary">
-              {t.claims} claims / {t.sources} sources{#if t.subject_claims != null}
-                / {t.subject_claims} about it{/if}
-            </span>
+            <span
+              class="rounded-full px-1.5 text-[0.65rem] uppercase tracking-wide {STATE_CLASS[r.state]}"
+            >{r.state}</span>
+            {#if r.node_type}
+              <span class="text-xs uppercase text-on-surface-muted">
+                {r.state === "written" ? (SINGULAR[r.node_type] ?? r.node_type) : r.node_type}
+              </span>
+            {/if}
 
-            {#if t.single_source}
+            {#if r.claims != null}
+              <span class="text-xs tabular-nums text-on-surface-secondary">
+                {r.claims} claims{#if r.sources != null} / {r.sources} sources{/if}{#if r.subject_claims != null}
+                  / {r.subject_claims} about it{/if}
+              </span>
+            {/if}
+
+            {#if r.note}<span class="text-xs text-on-surface-muted">{r.note}</span>{/if}
+
+            {#if r.single_source}
               <!-- The gate's own test: a second work contributing under three
                    claims means one voice is carrying the page. -->
               <span class="rounded-full bg-warning-container px-1.5 text-xs text-on-warning-container">
                 one source
               </span>
             {/if}
-            {#if t.status === "vetoed"}
+            {#if r.vetoed}
               <span class="rounded-full bg-error/15 px-1.5 text-xs text-error">vetoed</span>
             {/if}
-            {#if !t.has_brief}
+            {#if r.stale === true}
+              <!-- Muted, not a warning. A page is behind the moment its brief
+                   changes, so a busy graph puts 207 of 263 in this state at once
+                   and an orange flag on four rows in five says the pipeline is
+                   failing when it is working. -->
+              <span
+                class="text-xs text-on-surface-muted"
+                title="Its brief changed after the page was written. Normal while the graph is moving."
+              >behind its brief</span>
+            {:else if r.stale === null && r.state === "written"}
+              <span
+                class="text-xs text-on-surface-muted"
+                title="The brief this page was written from is gone."
+              >no brief</span>
+            {/if}
+            {#if r.state === "proposed" && !r.has_brief}
               <span class="text-xs text-on-surface-muted">no brief yet</span>
             {/if}
-            {#if t.rename}
+            {#if r.rename}
               <!-- Only unlanded renames reach here; an applied one is just the
                    name. A reviewer who asked for a change is owed the answer. -->
               <span
                 class="rounded-full bg-warning-container px-1.5 text-xs text-on-warning-container"
-                title={t.rename.note ?? ""}
-              >rename {t.rename.status}: {t.rename.proposed_name}</span>
+                title={r.rename.note ?? ""}
+              >rename {r.rename.status}: {r.rename.proposed_name}</span>
             {/if}
 
             <div class="ml-auto flex items-center gap-1">
               <!-- Icons, with the word in the tooltip: the row is dense and
                    three labelled links across it read as a sentence. -->
-              <button
-                onclick={() => openBrief(t)}
-                title={openSlug === pageKey(t) ? "Hide the brief" : "Brief - everything a page would be written from"}
-                aria-label="Brief"
-                class="rounded p-1 {openSlug === pageKey(t) ? 'bg-primary-container text-on-surface' : 'text-on-surface-muted hover:bg-surface hover:text-primary'}"
-              >
-                <svg
-                  class="h-4 w-4 transition-transform {openSlug === pageKey(t) ? 'rotate-180' : ''}"
-                  fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"
-                >
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6" />
-                </svg>
-              </button>
-
-              {#if canWrite}
+              {#if r.section && r.slug}
                 <button
-                  onclick={() => startRename(t)}
+                  onclick={() => openBrief(r)}
+                  title={openKey === r.key
+                    ? "Hide the brief"
+                    : "Brief - everything the page is written from"}
+                  aria-label="Brief"
+                  class="rounded p-1 {openKey === r.key
+                    ? 'bg-primary-container text-on-surface'
+                    : 'text-on-surface-muted hover:bg-surface hover:text-primary'}"
+                >
+                  <svg
+                    class="h-4 w-4 transition-transform {openKey === r.key ? 'rotate-180' : ''}"
+                    fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"
+                  >
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6" />
+                  </svg>
+                </button>
+              {/if}
+
+              {#if canWrite && r.node_id}
+                <button
+                  onclick={() => startRename(r)}
                   title="Rename - the name is the page title and its address"
                   aria-label="Rename"
-                  class="rounded p-1 {renaming === t.node_id ? 'bg-primary-container text-on-surface' : 'text-on-surface-muted hover:bg-surface hover:text-primary'}"
+                  class="rounded p-1 {renaming === r.key
+                    ? 'bg-primary-container text-on-surface'
+                    : 'text-on-surface-muted hover:bg-surface hover:text-primary'}"
                 >
                   <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M16.5 4.5l3 3L8 19H5v-3L16.5 4.5z" />
@@ -373,48 +474,83 @@
                 </button>
               {/if}
 
-              {#if canDecide && t.status !== "vetoed"}
+              {#if canWrite && !r.vetoed}
+                <!-- A BIN where something exists to delete, an X where nothing
+                     does. Removing a written topic takes a page off the site;
+                     rejecting a proposal or a request removes an intention. -->
                 <button
-                  onclick={() => (confirmVeto = confirmVeto === t.node_id ? null : t.node_id)}
-                  title="Never write a page for this"
-                  aria-label="Never a page"
-                  class="rounded p-1 {confirmVeto === t.node_id ? 'bg-error/15 text-error' : 'text-on-surface-muted hover:bg-surface hover:text-error'}"
+                  onclick={() => (confirmRemove = confirmRemove === r.key ? null : r.key)}
+                  title={r.state === "written" ? "Take this page down" : "Never write a page for this"}
+                  aria-label={r.state === "written" ? "Delete page" : "Never a page"}
+                  class="rounded p-1 {confirmRemove === r.key
+                    ? 'bg-error/15 text-error'
+                    : 'text-on-surface-muted hover:bg-surface hover:text-error'}"
                 >
-                  <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
-                    <path stroke-linecap="round" d="M6 6l12 12M18 6L6 18" />
-                  </svg>
+                  {#if r.state === "written"}
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M5 7h14M10 7V5h4v2M6 7l1 12h10l1-12M10 11v5M14 11v5" />
+                    </svg>
+                  {:else}
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.75" viewBox="0 0 24 24" aria-hidden="true">
+                      <path stroke-linecap="round" d="M6 6l12 12M18 6L6 18" />
+                    </svg>
+                  {/if}
                 </button>
               {/if}
             </div>
           </div>
 
-          {#if renaming === t.node_id}
+          {#if renaming === r.key && r.node_id}
             <div class="border-t border-border bg-surface px-4 py-2.5">
               <RenameEditor
-                node={{ id: t.node_id, name: t.name, node_type: t.node_type, claims: t.claims }}
+                node={{
+                  id: r.node_id,
+                  name: r.name,
+                  node_type: r.node_type ?? undefined,
+                  claims: r.claims ?? 0,
+                }}
                 onchanged={renamed}
                 oncancel={() => (renaming = null)}
               />
             </div>
           {/if}
 
-          {#if confirmVeto === t.node_id}
+          {#if confirmRemove === r.key}
             <div class="flex flex-wrap items-center gap-2 border-t border-error/30 bg-error/5 px-4 py-2 text-xs">
-              <span class="text-on-surface">Never write a page for <strong>{t.name}</strong>?</span>
-              <span class="text-on-surface-muted">It stays in the graph; it stops being proposed.</span>
+              {#if r.state === "written"}
+                <span class="text-on-surface">Take <strong>{r.name}</strong> off the site?</span>
+                <span class="text-on-surface-muted">
+                  It is marked never-a-page now; the page itself comes down when the
+                  site is next assembled. The subject stays in the graph.
+                </span>
+              {:else if r.state === "proposed"}
+                <span class="text-on-surface">Never write a page for <strong>{r.name}</strong>?</span>
+                <span class="text-on-surface-muted">It stays in the graph; it stops being proposed.</span>
+              {:else}
+                <span class="text-on-surface">Drop the request for <strong>{r.name}</strong>?</span>
+                <span class="text-on-surface-muted">Nothing is deleted - the subject was only ever a name.</span>
+              {/if}
               <button
-                onclick={() => { confirmVeto = null; doVeto(t); }}
+                onclick={() => {
+                  confirmRemove = null;
+                  if (r.state === "requested") dropSeed(r.name);
+                  else doVeto(r);
+                }}
                 disabled={busy}
                 class="ml-auto rounded bg-error px-2 py-1 text-on-error disabled:opacity-50"
-              >Never a page</button>
+              >{r.state === "written"
+                  ? "Take it down"
+                  : r.state === "proposed"
+                    ? "Never a page"
+                    : "Drop it"}</button>
               <button
-                onclick={() => (confirmVeto = null)}
+                onclick={() => (confirmRemove = null)}
                 class="rounded px-2 py-1 text-on-surface-muted hover:text-on-surface"
               >Cancel</button>
             </div>
           {/if}
 
-          {#if openSlug === pageKey(t)}
+          {#if openKey === r.key}
             <div class="border-t border-border px-4 py-3">
               {#if briefLoading}
                 <p class="text-sm text-on-surface-muted">Loading the brief…</p>
@@ -454,7 +590,6 @@
                     </li>
                   {/each}
                 </ol>
-
               {/if}
             </div>
           {/if}

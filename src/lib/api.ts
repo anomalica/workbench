@@ -1599,6 +1599,10 @@ export interface PublishedPage {
   brief_hash: string;
   /** The brief moved after the page was written; null when the brief is gone. */
   stale: boolean | null;
+  /** The node the page was written about, found through its brief. Null when
+   *  the brief is gone - the page outlived the subject it came from. */
+  node_id: string | null;
+  claims: number | null;
 }
 
 export async function fetchTopics(): Promise<{

@@ -236,15 +236,6 @@ def _page_head(path: Path) -> tuple[str | None, str | None]:
     )
 
 
-def _brief_hash_of(section: str, slug: str) -> str | None:
-    """The CURRENT brief's hash for a page, so it can be told from the material
-    it was written from. A page is the pair, not the slug: two sections can
-    hold one slug, and they are different pages with different briefs."""
-    path = brief_path(section, slug)
-    head = _brief_head(path) if path else None
-    return head["brief_hash"] if head else None
-
-
 def published_pages() -> list[dict]:
     """Pages that already exist - the third thing a reviewer needs to see.
 
@@ -255,10 +246,21 @@ def published_pages() -> list[dict]:
     A page whose `brief_hash` no longer matches its brief is TRAILING: the
     material moved after the page was written. That is the same signal
     `assimilator doctor` reports, read here from the page itself.
+
+    Each page carries the NODE it was written about, found through its brief.
+    A written page is a subject like any other - it can be renamed, and it can
+    turn out to be a second page about something the graph already holds - and
+    without the node id it is a row nothing can act on.
     """
     root = content_pages_dir()
     if not root.is_dir():
         return []
+    # (section, slug) -> the brief, inverted from the node-keyed index. One pass
+    # over the briefs rather than a file read per page.
+    by_page = {
+        (ref["section"], ref["slug"]): {**ref, "node_id": nid}
+        for nid, ref in brief_index().items()
+    }
     out: list[dict] = []
     for path in sorted(root.rglob("*.en.md")):
         rel = path.relative_to(root)
@@ -269,7 +271,8 @@ def published_pages() -> list[dict]:
             continue
         slug = rel.stem.removesuffix(".en")
         kind = rel.parts[0] if len(rel.parts) > 1 else None
-        current = _brief_hash_of(kind, slug) if kind else None
+        brief = by_page.get((kind, slug)) if kind else None
+        current = brief["brief_hash"] if brief else None
         out.append(
             {
                 "slug": slug,
@@ -279,6 +282,8 @@ def published_pages() -> list[dict]:
                 # None when the brief has gone: the page outlived its source,
                 # which is a different condition from being out of date.
                 "stale": None if current is None else current != built_from,
+                "node_id": brief["node_id"] if brief else None,
+                "claims": brief["claim_total"] if brief else None,
             }
         )
     return out
