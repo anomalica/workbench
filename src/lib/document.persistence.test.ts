@@ -230,3 +230,53 @@ describe("what a draft costs in the browser", () => {
     expect(localStorage.getItem(`workbench:doc:${BOOK_HASH}`)).toBeNull();
   });
 });
+
+describe("a speaker introduced with where they are from", () => {
+  // `Scott Gordon [KXAS]` is a reporter and his station. The station reads with
+  // the line; the person is what the record stores and what another record
+  // reuses. A stored name carrying the station would make a second Scott Gordon
+  // the next time he files for somebody else.
+  const QUALIFIED = `---
+title: Test Ingest
+speakers:
+  - India Naftali
+---
+
+<!-- speaker: India Naftali -->
+00:00:01.0 Over to our reporter.
+
+<!-- speaker: Scott Gordon [KXAS] -->
+00:00:05.0 Thanks, I am at the scene.
+`;
+
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("stores the person, not the station", () => {
+    const doc = new DocumentStore();
+    doc.load(QUALIFIED, HASH);
+    doc.updateFrontmatterSpeakers(["India Naftali", "Scott Gordon [KXAS]"]);
+
+    const [fm] = [doc.current.slice(0, doc.current.indexOf("---", 4))];
+    expect(fm).toContain("- Scott Gordon\n");
+    expect(fm).not.toContain("KXAS");
+    // The body keeps the label as written: that is where the station belongs.
+    expect(doc.current).toContain("<!-- speaker: Scott Gordon [KXAS] -->");
+  });
+
+  it("does not list one person twice for two stations", () => {
+    const doc = new DocumentStore();
+    doc.load(QUALIFIED, HASH);
+    doc.updateFrontmatterSpeakers(["Scott Gordon [KXAS]", "Scott Gordon [NBC]"]);
+    const fm = doc.current.slice(0, doc.current.indexOf("---", 4));
+    expect(fm.match(/- Scott Gordon/g)).toHaveLength(1);
+  });
+
+  it("leaves a described speaker exactly as it is", () => {
+    const doc = new DocumentStore();
+    doc.load(QUALIFIED, HASH);
+    doc.updateFrontmatterSpeakers(["[audience member]"]);
+    expect(doc.current).toContain('- "[audience member]"');
+  });
+});

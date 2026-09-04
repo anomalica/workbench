@@ -364,6 +364,35 @@ export function isSpecialSpeaker(name: string): boolean {
   return (SPECIAL_SPEAKERS as readonly string[]).includes(name);
 }
 
+/** A trailing bracket on a NAMED speaker: who they are speaking for, or the
+ *  role they are speaking in - `Scott Gordon [KXAS]`, the reporter and his
+ *  station.
+ *
+ *  It reads with the line and belongs to this record. It is NOT part of who the
+ *  person is: the same reporter filing for somebody else next year is the same
+ *  person, and a name carrying the station would make a second one of him -
+ *  which is how a graph ends up with two entries for one man and a page built
+ *  from half his claims.
+ *
+ *  Distinct from a speaker who is ONLY a bracket - `[narrator]`, `[speaker 3]`,
+ *  `[audience member]` - which means the opposite: a description where a name
+ *  would go, and nobody to identify at all. Position is what separates them, so
+ *  the test is anchored: a qualifier follows a name, it never stands alone. */
+const SPEAKER_QUALIFIER = /^(.*\S)\s*\[([^\]]+)\]\s*$/;
+
+/** Who the speaker IS, with any trailing qualifier removed. Unchanged for a
+ *  plain name and for a bracket-only speaker, which has no name to find. */
+export function speakerIdentity(name: string): string {
+  const m = SPEAKER_QUALIFIER.exec(name.trim());
+  return m ? m[1] : name.trim();
+}
+
+/** The qualifier itself, or null. */
+export function speakerQualifier(name: string): string | null {
+  const m = SPEAKER_QUALIFIER.exec(name.trim());
+  return m ? m[2].trim() : null;
+}
+
 /** Check if a segment is irrelevant (speaker is [irrelevant]). */
 export function isSegmentIrrelevant(seg: Segment): boolean {
   return seg.speaker === SPEAKER_IRRELEVANT;
@@ -397,13 +426,19 @@ export function orderedNamedSpeakers(segments: Segment[], namedSpeakers: string[
     const name = segments[i].speaker;
     if (name && !firstSeen.has(name)) firstSeen.set(name, i);
   }
-  const namedSet = new Set(namedSpeakers);
+  // The list holds people - `Scott Gordon` - while a line may introduce him
+  // with where he is from - `Scott Gordon [KXAS]`. Compared as written, the two
+  // are different speakers: he would be listed once with no words and again as
+  // somebody nobody had named.
+  const namedSet = new Set(namedSpeakers.map(speakerIdentity));
   const withSegments = [...firstSeen.entries()]
-    .filter(([name]) => namedSet.has(name))
+    .filter(([name]) => namedSet.has(speakerIdentity(name)))
     .sort((a, b) => a[1] - b[1])
+    // The LABEL, not the identity: it is what the transcript says and what
+    // every count and filter downstream is keyed on.
     .map(([name]) => name);
-  const withSegmentsSet = new Set(withSegments);
-  const withoutSegments = namedSpeakers.filter((n) => !withSegmentsSet.has(n));
+  const present = new Set(withSegments.map(speakerIdentity));
+  const withoutSegments = namedSpeakers.filter((n) => !present.has(speakerIdentity(n)));
   return [...withSegments, ...withoutSegments];
 }
 

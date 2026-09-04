@@ -10,6 +10,20 @@ import { type DraftPatch, decodePatch, encodePatch, patchSize } from "./draft-pa
 
 const MAX_HISTORY = 200;
 
+/** The `speakers:` list is a list of PEOPLE, so a trailing qualifier comes off:
+ *  the body line says `Scott Gordon [KXAS]`, where the station reads with the
+ *  line, and the list says `Scott Gordon`, which is what another record reuses
+ *  and what extraction makes a node from. Deduped, because one person filing
+ *  under two stations is still one person. */
+function speakerIdentities(names: string[]): string[] {
+  const out: string[] = [];
+  for (const name of names) {
+    const id = speakerIdentity(name);
+    if (id && !out.includes(id)) out.push(id);
+  }
+  return out;
+}
+
 export class DocumentStore {
   original = $state("");
   current = $state("");
@@ -200,7 +214,12 @@ export class DocumentStore {
    *  don't corrupt other fields. */
   updateFrontmatterSpeakers(speakers: string[]) {
     const [rawFm, body] = splitFrontmatter(this.current);
-    const result = rewriteFrontmatterSpeakers(rawFm, speakers) + body;
+    // Identities, wherever the list is written from: this is the one door the
+    // `speakers:` list is written through, including a reviewer typing a name
+    // straight into the panel, and it is a list of PEOPLE. A line may introduce
+    // somebody with where they are from - `Scott Gordon [KXAS]` - and that
+    // belongs to the line, not to him.
+    const result = rewriteFrontmatterSpeakers(rawFm, speakerIdentities(speakers)) + body;
     if (result !== this.current) this.pushEdit(result);
   }
 
@@ -246,8 +265,12 @@ export class DocumentStore {
     // participant. It also fought the reviewer - deleting the name from the
     // list put it straight back on the next edit, over and over.
     const quotedOnly = new Set(quotedSpeakerCounts(newRuns, parsed.externals).map((r) => r.id));
-    const bodyNamed = namedSpeakersInOrder(newRuns).filter((n) => !quotedOnly.has(n));
-    const kept = currentNamed.filter((n) => !recordScopedSpeaker(n) && !quotedOnly.has(n));
+    const bodyNamed = speakerIdentities(
+      namedSpeakersInOrder(newRuns).filter((n) => !quotedOnly.has(n)),
+    );
+    const kept = speakerIdentities(
+      currentNamed.filter((n) => !recordScopedSpeaker(n) && !quotedOnly.has(n)),
+    );
     const merged = [...kept, ...bodyNamed.filter((n) => !kept.includes(n))];
     const same =
       merged.length === currentNamed.length && merged.every((n, i) => n === currentNamed[i]);
@@ -403,8 +426,12 @@ export class DocumentStore {
     // "Speaker N" entries, add any new names, rewrite only on change.
     const currentNamed = extractFrontmatterSpeakers(fm);
     const quotedOnly = new Set(quotedSpeakerCounts(next.runs, next.externals).map((r) => r.id));
-    const bodyNamed = namedSpeakersInOrder(next.runs).filter((n) => !quotedOnly.has(n));
-    const kept = currentNamed.filter((n) => !recordScopedSpeaker(n) && !quotedOnly.has(n));
+    const bodyNamed = speakerIdentities(
+      namedSpeakersInOrder(next.runs).filter((n) => !quotedOnly.has(n)),
+    );
+    const kept = speakerIdentities(
+      currentNamed.filter((n) => !recordScopedSpeaker(n) && !quotedOnly.has(n)),
+    );
     const merged = [...kept, ...bodyNamed.filter((n) => !kept.includes(n))];
     const same =
       merged.length === currentNamed.length && merged.every((n, i) => n === currentNamed[i]);
@@ -1220,6 +1247,7 @@ import {
   parseTranscript,
   serializeTranscript,
   extractFrontmatterSpeakers,
+  speakerIdentity,
   isAnonymousSpeaker,
   isDefaultSpeakerName,
 } from "$lib/transcript";

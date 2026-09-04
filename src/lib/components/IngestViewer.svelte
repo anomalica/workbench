@@ -52,7 +52,7 @@
   import CoverageStrip from "./CoverageStrip.svelte";
   import { DocumentStore } from "$lib/document.svelte";
   import { safeLocalSet } from "$lib/storage";
-  import { assignableSpecialSpeakers, parseTranscript, parseTimeToSeconds, secondsToTime, findActiveSegmentForTime, segmentAtTime, nextRelevantSegmentAfter, extractFrontmatterSpeakers, isSegmentIrrelevant, isSpecialSpeaker, nextSpeakerName, groupSegmentsBySpeaker, orderedNamedSpeakers, SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE, SPEAKER_GROUP } from "$lib/transcript";
+  import { assignableSpecialSpeakers, parseTranscript, parseTimeToSeconds, secondsToTime, findActiveSegmentForTime, segmentAtTime, nextRelevantSegmentAfter, extractFrontmatterSpeakers, isSegmentIrrelevant, isSpecialSpeaker, nextSpeakerName, groupSegmentsBySpeaker, orderedNamedSpeakers, speakerIdentity, SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE, SPEAKER_GROUP } from "$lib/transcript";
   import { nextSegmentBoundary, singleEndForCurrentTime } from "$lib/playback";
   import { resolveSourceAddress, resolvePeaksUrl } from "$lib/source-address";
   import { savePlayhead, loadPlayhead, shouldPersist } from "$lib/playhead";
@@ -3220,6 +3220,11 @@
   });
   let namedSpeakers = $derived(extractFrontmatterSpeakers(currentFrontmatter()));
   let namedSpeakersOrdered = $derived(orderedNamedSpeakers(segments, namedSpeakers));
+  /** The named list as identities. A speaker introduced with where they are
+   *  from - `Scott Gordon [KXAS]` - is the person the list already holds, and
+   *  offering him again under "other speakers" would ask the reviewer to choose
+   *  between a man and himself. */
+  let namedIdentitySet = $derived(() => new Set(namedSpeakers.map(speakerIdentity)));
 
   function addNamedSpeaker(name: string) {
     if (!namedSpeakers.includes(name)) {
@@ -5548,7 +5553,7 @@
                   {@const current = ""}
                   {@const nm = namedSpeakersOrdered.filter((s) => s !== current)}
                   {@const sp = assignableSpecialSpeakers(current)}
-                  {@const ot = allSpeakerNames().filter((s) => !namedSpeakers.includes(s) && !isSpecialSpeaker(s))}
+                  {@const ot = allSpeakerNames().filter((s) => !namedIdentitySet().has(speakerIdentity(s)) && !isSpecialSpeaker(s))}
                   {@const assign = (name: string) => {
                     const targets = segments
                       .filter((s) => selected.has(s.index))
@@ -5674,7 +5679,7 @@
                     {@const current = group.speaker}
                     {@const nm = namedSpeakersOrdered.filter((s) => s !== current)}
                     {@const sp = assignableSpecialSpeakers(current)}
-                    {@const ot = allSpeakerNames().filter((s) => s !== current && !namedSpeakers.includes(s) && !isSpecialSpeaker(s))}
+                    {@const ot = allSpeakerNames().filter((s) => s !== current && !namedIdentitySet().has(speakerIdentity(s)) && !isSpecialSpeaker(s))}
                     <div
                       onclick={(e) => e.stopPropagation()}
                       onkeydown={() => {}}
@@ -5817,7 +5822,7 @@
                           {@const current = segment.speaker}
                           {@const nm = namedSpeakersOrdered.filter((s) => s !== current)}
                           {@const sp = assignableSpecialSpeakers(current)}
-                          {@const ot = allSpeakerNames().filter((s) => s !== current && !namedSpeakers.includes(s) && !isSpecialSpeaker(s))}
+                          {@const ot = allSpeakerNames().filter((s) => s !== current && !namedIdentitySet().has(speakerIdentity(s)) && !isSpecialSpeaker(s))}
                           <div
                             onclick={(e) => e.stopPropagation()}
                             onkeydown={() => {}}

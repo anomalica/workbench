@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Segment } from "$lib/transcript";
-  import { anonymousLabel, asAnonymousSpeaker, assignableSpecialSpeakers, isAnonymousSpeaker, isDefaultSpeakerName, isSpecialSpeaker, SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE, SPEAKER_GROUP } from "$lib/transcript";
+  import { anonymousLabel, asAnonymousSpeaker, assignableSpecialSpeakers, isAnonymousSpeaker, isDefaultSpeakerName, isSpecialSpeaker, speakerIdentity, SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE, SPEAKER_GROUP } from "$lib/transcript";
   import SpeakerDot from "./SpeakerDot.svelte";
   import { fetchSpeakers } from "$lib/api";
   import { type KnownSpeaker, suggestSpeakers } from "$lib/speaker-suggest";
@@ -60,6 +60,11 @@
     total: number;
   }
 
+  /** Who the record's `speakers:` list names, as identities: a line may
+   *  introduce somebody with where they are from - `Scott Gordon [KXAS]` - and
+   *  the list holds the person. */
+  const namedIdentities = $derived(() => new Set(namedSpeakers.map(speakerIdentity)));
+
   // Speaker rows: pre-computed when given (word records), else built from
   // segments, sorted by first appearance.
   let speakerRows = $derived((): SpeakerRow[] => {
@@ -92,7 +97,7 @@
     speakerRows().filter(
       (r) =>
         (!isDefaultSpeakerName(r.id) && !isSpecialSpeaker(r.id) && !anonymous(r.id)) ||
-        (namedSpeakers.includes(r.id) && !anonymous(r.id)),
+        (namedIdentities().has(speakerIdentity(r.id)) && !anonymous(r.id)),
     ),
   );
   let unnamed = $derived(
@@ -104,7 +109,9 @@
 
   // Named speakers from frontmatter that don't have segments yet
   let unassignedNamed = $derived(
-    namedSpeakers.filter((n) => !speakerRows().some((r) => r.id === n)),
+    namedSpeakers.filter(
+      (n) => !speakerRows().some((r) => speakerIdentity(r.id) === speakerIdentity(n)),
+    ),
   );
 
   // New speaker input
