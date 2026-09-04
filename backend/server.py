@@ -646,6 +646,23 @@ class LocalIngestSource(IngestSource):
         )
         return True
 
+    @staticmethod
+    def _speaker_identity(name: str) -> str:
+        """The person, with any trailing qualifier removed.
+
+        A speaker may be introduced with where they are from - `Scott Gordon
+        [KXAS]`, the reporter and his station. That belongs to the line and to
+        that record; the person is Scott Gordon, and the person is what another
+        record reuses. Anchored deliberately: a name that is ONLY a bracket is a
+        DESCRIPTION with nobody to identify, and stripping it would turn one
+        into a person.
+
+        Applied here as well as at the point of writing, because a record whose
+        list was written before the rule existed still holds the qualified form.
+        """
+        m = re.match(r"^(.*\S)\s*\[[^\]]+\]$", name.strip())
+        return m.group(1) if m else name.strip()
+
     def known_speakers(self) -> list[dict]:
         """Every speaker name the corpus already uses, with how many ingests
         each appears in.
@@ -678,6 +695,7 @@ class LocalIngestSource(IngestSource):
                 # same thing written the old way.
                 if not name or name.startswith("[") or _DEFAULT_SPEAKER.match(name):
                     continue
+                name = self._speaker_identity(name)
                 counts[name] = counts.get(name, 0) + 1
         return [
             {"name": name, "ingests": n}
