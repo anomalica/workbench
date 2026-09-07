@@ -55,6 +55,7 @@
   import { assignableSpecialSpeakers, parseTranscript, parseTimeToSeconds, secondsToTime, findActiveSegmentForTime, segmentAtTime, nextRelevantSegmentAfter, extractFrontmatterSpeakers, isSegmentIrrelevant, isSpecialSpeaker, nextSpeakerName, groupSegmentsBySpeaker, orderedNamedSpeakers, speakerIdentity, SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE, SPEAKER_GROUP } from "$lib/transcript";
   import { nextSegmentBoundary, singleEndForCurrentTime } from "$lib/playback";
   import { resolveSourceAddress, resolvePeaksUrl } from "$lib/source-address";
+  import { fuzzyScore } from "$lib/fuzzy-search";
   import { savePlayhead, loadPlayhead, shouldPersist } from "$lib/playhead";
   import type { Segment } from "$lib/transcript";
   import SpeakerManager from "./SpeakerManager.svelte";
@@ -1767,21 +1768,27 @@
     wantedAuthor = "";
     await loadAllRecords();
   }
-  // Candidate targets: every OTHER record, filtered by the search text over
-  // title and creators. A record never links to itself.
+  // Candidate targets: every OTHER record, ranked by the search text over
+  // title and creators. A record never links to itself. Only ten survive, so
+  // the ranking is what decides whether the one you meant is on screen.
   let linkChoices = $derived.by(() => {
-    const q = linkSearch.trim().toLowerCase();
-    return (allRecords ?? [])
-      .filter((r) => r.content_hash !== ingest.content_hash)
-      .filter(
-        (r) =>
-          !q ||
-          r.title.toLowerCase().includes(q) ||
-          (r.creators ?? []).some((c) => c.toLowerCase().includes(q)),
-      )
+    const q = linkSearch.trim();
+    const others = (allRecords ?? []).filter((r) => r.content_hash !== ingest.content_hash);
+    if (!q) return others.slice(0, 10);
+    return others
+      .map((r) => ({
+        r,
+        score: fuzzyScore(q, [
+          { text: r.title, weight: 1 },
+          { text: (r.creators ?? []).join(" "), weight: 0.8 },
+        ]),
+      }))
+      .filter((c) => c.score !== null)
+      .sort((a, b) => b.score! - a.score!)
       // Ten is enough to recognise the one you meant; thirty made the dialog
       // tall enough to bury everything under it.
-      .slice(0, 10);
+      .slice(0, 10)
+      .map((c) => c.r);
   });
   let linkTitles = $derived(
     new Map((allRecords ?? []).map((r) => [r.content_hash, r.title])),
@@ -1841,16 +1848,21 @@
   let externalHashTyped = $derived(HASH_RE.exec(externalWhere.trim())?.[1] ?? null);
 
   let externalChoices = $derived.by(() => {
-    const q = externalWhere.trim().toLowerCase();
+    const q = externalWhere.trim();
     if (!q || externalTargetHash || externalHashTyped || /^https?:\/\//i.test(q)) return [];
     return (allRecords ?? [])
       .filter((r) => r.content_hash !== ingest.content_hash)
-      .filter(
-        (r) =>
-          r.title.toLowerCase().includes(q) ||
-          (r.creators ?? []).some((c) => c.toLowerCase().includes(q)),
-      )
-      .slice(0, 6);
+      .map((r) => ({
+        r,
+        score: fuzzyScore(q, [
+          { text: r.title, weight: 1 },
+          { text: (r.creators ?? []).join(" "), weight: 0.8 },
+        ]),
+      }))
+      .filter((c) => c.score !== null)
+      .sort((a, b) => b.score! - a.score!)
+      .slice(0, 6)
+      .map((c) => c.r);
   });
 
   function confirmExternal() {

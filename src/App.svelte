@@ -36,6 +36,7 @@
     type DateField,
     type SortKey,
   } from "$lib/browse-prefs";
+  import { prepareFields, scorePrepared } from "$lib/fuzzy-search";
   import InfrastructureView from "$lib/components/InfrastructureView.svelte";
   import HousekeepingView from "$lib/components/HousekeepingView.svelte";
   import PagesView from "$lib/components/PagesView.svelte";
@@ -246,6 +247,35 @@
     return i.date || "";
   }
 
+  /** What the search box searches, split up once. The list changes rarely and
+   *  the query changes on every letter, so this stays out of the keystroke. */
+  let searchable = $derived(
+    ingests.map((i) => ({
+      hash: i.content_hash,
+      fields: prepareFields([
+        { text: i.title, weight: 1 },
+        { text: i.creators.join(" "), weight: 0.8 },
+        { text: i.publisher, weight: 0.6 },
+        { text: i.date, weight: 0.5 },
+      ]),
+    })),
+  );
+
+  /** How well each record answers the search box, or null when the box is
+   *  empty. Scored once per record here rather than inside the filter so the
+   *  same number can order the results: a forgiving search has to put the
+   *  best match on top, or it just hands back a longer list to read through. */
+  let searchScores = $derived.by(() => {
+    const query = searchQuery.trim();
+    if (!query) return null;
+    const scores = new Map<string, number>();
+    for (const entry of searchable) {
+      const score = scorePrepared(query, entry.fields);
+      if (score !== null) scores.set(entry.hash, score);
+    }
+    return scores;
+  });
+
   let filteredIngests = $derived(
     ingests
       .filter((i) => {
@@ -259,18 +289,17 @@
           reviewedHashes.has(i.content_hash) && !needsVerifyHashes.has(i.content_hash);
         if (filterReviewed === "reviewed" && !isReviewed) return false;
         if (filterReviewed === "needs_review" && isReviewed) return false;
-        if (searchQuery.trim()) {
-          const q = searchQuery.toLowerCase();
-          return (
-            i.title.toLowerCase().includes(q) ||
-            i.date.includes(q) ||
-            i.publisher.toLowerCase().includes(q) ||
-            i.creators.some((c) => c.toLowerCase().includes(q))
-          );
-        }
+        if (searchScores && !searchScores.has(i.content_hash)) return false;
         return true;
       })
       .sort((a, b) => {
+        // A search asks a question, and the answer to it is an order: best
+        // match first, whatever column the reviewer last sorted by. Clearing
+        // the box gives that column back.
+        if (searchScores) {
+          const delta = searchScores.get(b.content_hash)! - searchScores.get(a.content_hash)!;
+          if (delta !== 0) return delta;
+        }
         // In the Needs review view, the digest-blocked records (digested under
         // the old gate, not yet signed off) are the priority - always on top.
         // Except when the reviewer has asked for a specific order: those
