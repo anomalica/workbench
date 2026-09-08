@@ -62,13 +62,16 @@ def ingests_repo(tmp_path):
         )
     )
     # Legacy /0 sidecar: no verdict, so digestibility recomputes from spans over
-    # the transcript's two content lines (1-indexed 6 and 7 in the full record).
+    # the transcript's two content lines. A span is a 0-based BODY line number,
+    # so those two lines are 0 and 1 - not the 6 and 7 they occupy in the file.
+    # This fixture said 6 and 7 and passed, because the recompute compared body
+    # spans against file line numbers; both sides being wrong agreed.
     (store / f"{LEGACY_TRANSCRIPT}.review.json").write_text(
         json.dumps(
             {
                 "schema": "anomalica/review-coverage/0",
                 "reviews": [
-                    {"by": "x", "spans": [{"from": 6, "to": 7, "kind": "observed"}]}
+                    {"by": "x", "spans": [{"from": 0, "to": 1, "kind": "observed"}]}
                 ],
             }
         )
