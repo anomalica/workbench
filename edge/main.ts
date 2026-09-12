@@ -26,7 +26,10 @@ import {
   type User,
   verifyState,
 } from "./lib/auth.ts";
-import { parse as parseYaml, stringify as stringifyYaml } from "jsr:@std/yaml@1";
+import {
+  parse as parseYaml,
+  stringify as stringifyYaml,
+} from "jsr:@std/yaml@1";
 import { signedUrl } from "./lib/bunny.ts";
 import {
   ApplyConflict,
@@ -53,7 +56,13 @@ import {
   GitHubClient,
   GitHubError,
 } from "./lib/github.ts";
-import { atLeast, DEFAULT_ROLE, parseRoles, type Role, roleOf } from "./lib/roles.ts";
+import {
+  atLeast,
+  DEFAULT_ROLE,
+  parseRoles,
+  type Role,
+  roleOf,
+} from "./lib/roles.ts";
 import {
   appendEntry,
   buildMergeEntry,
@@ -140,13 +149,17 @@ const json = (data: unknown, status = 200, headers: HeadersInit = {}) =>
 const err = (status: number, detail: string) => json({ detail }, status);
 const notFound = () => err(404, "Not found");
 
-function hasExactKeys(value: unknown, expected: string[]): value is Record<string, unknown> {
+function hasExactKeys(
+  value: unknown,
+  expected: string[],
+): value is Record<string, unknown> {
   if (value == null || typeof value !== "object" || Array.isArray(value)) {
     return false;
   }
   const keys = Object.keys(value).sort();
   const wanted = [...expected].sort();
-  return keys.length === wanted.length && keys.every((key, index) => key === wanted[index]);
+  return keys.length === wanted.length &&
+    keys.every((key, index) => key === wanted[index]);
 }
 
 function algorithmManifestVersion(raw: string): string | null {
@@ -161,8 +174,9 @@ function algorithmManifestVersion(raw: string): string | null {
     value.schema !== HOUSEKEEPING_MANIFEST_SCHEMA ||
     typeof value.algorithm_version !== "string" ||
     !ALGORITHM_VERSION_TOKEN.test(value.algorithm_version)
-  )
+  ) {
     return null;
+  }
   const canonical =
     `{ "algorithm_version": ${JSON.stringify(value.algorithm_version)}, ` +
     `"schema": ${JSON.stringify(HOUSEKEEPING_MANIFEST_SCHEMA)} }\n`;
@@ -170,7 +184,9 @@ function algorithmManifestVersion(raw: string): string | null {
 }
 
 function recordFrontmatter(text: string): Record<string, unknown> | null {
-  const match = text.match(/^---(?:\r\n|\n)([\s\S]*?)(?:\r\n|\n)---(?:\r\n|\n|$)/);
+  const match = text.match(
+    /^---(?:\r\n|\n)([\s\S]*?)(?:\r\n|\n)---(?:\r\n|\n|$)/,
+  );
   if (!match) return null;
   try {
     const value = parseYaml(match[1]);
@@ -188,13 +204,18 @@ function normaliseContentHash(value: unknown): string | null {
   return FULL_HASH.test(bare) ? bare : null;
 }
 
-function copyrightStatus(frontmatter: Record<string, unknown> | null): string | null {
+function copyrightStatus(
+  frontmatter: Record<string, unknown> | null,
+): string | null {
   if (!frontmatter) return null;
   if (typeof frontmatter["copyright.status"] === "string") {
     return frontmatter["copyright.status"] as string;
   }
   const copyright = frontmatter.copyright;
-  if (copyright != null && typeof copyright === "object" && !Array.isArray(copyright)) {
+  if (
+    copyright != null && typeof copyright === "object" &&
+    !Array.isArray(copyright)
+  ) {
     const status = (copyright as Record<string, unknown>).status;
     return typeof status === "string" ? status : null;
   }
@@ -214,7 +235,8 @@ async function housekeepingViewAt(
     HOUSEKEEPING_MANIFEST_PATH,
     ref,
   );
-  const algorithmVersion = manifestFile && algorithmManifestVersion(manifestFile.text);
+  const algorithmVersion = manifestFile &&
+    algorithmManifestVersion(manifestFile.text);
   if (algorithmVersion == null) throw new HousekeepingUnavailable();
 
   const bodyPath = await resolveBodyPathAt(env, deps, hash, ref);
@@ -235,10 +257,10 @@ async function housekeepingViewAt(
   } else {
     try {
       const decoded = JSON.parse(sidecarFile.text);
-      rawSidecar =
-        decoded != null && typeof decoded === "object" && !Array.isArray(decoded)
-          ? (decoded as Record<string, unknown>)
-          : null;
+      rawSidecar = decoded != null && typeof decoded === "object" &&
+          !Array.isArray(decoded)
+        ? (decoded as Record<string, unknown>)
+        : null;
     } catch {
       rawSidecar = null;
     }
@@ -248,7 +270,9 @@ async function housekeepingViewAt(
     } else if (rawSidecar.outcome !== "completed") dueReason = "incomplete";
     else {
       sidecar = rawSidecar as unknown as HousekeepingSidecar;
-      if (!validateV2Sidecar(sidecar) || sidecar.content_hash !== `sha256:${hash}`) {
+      if (
+        !validateV2Sidecar(sidecar) || sidecar.content_hash !== `sha256:${hash}`
+      ) {
         sidecar = null;
         dueReason = "invalid-sidecar";
       } else if (sidecar.input_sha256 !== inputSha) {
@@ -259,15 +283,20 @@ async function housekeepingViewAt(
     }
   }
 
-  const proposed =
-    sidecar && dueReason == null ? sidecar.items.filter((item) => item.status === "proposed") : [];
+  const proposed = sidecar && dueReason == null
+    ? sidecar.items.filter((item) => item.status === "proposed")
+    : [];
   const scopes = [
     ...new Set(
-      proposed.map((item) => (item.operation === "replace-token" ? "body" : "frontmatter")),
+      proposed.map((
+        item,
+      ) => (item.operation === "replace-token" ? "body" : "frontmatter")),
     ),
   ].sort();
   const previews = sidecar
-    ? Object.fromEntries(sidecar.items.map((item) => [item.id, previewItem(bodyFile.text, item)]))
+    ? Object.fromEntries(
+      sidecar.items.map((item) => [item.id, previewItem(bodyFile.text, item)]),
+    )
     : {};
   return {
     schema: "anomalica/housekeeping-view/1",
@@ -308,8 +337,15 @@ async function loadRoles(env: Env, deps: Deps): Promise<Record<string, Role>> {
   return parseRoles(file.text);
 }
 
-async function loadSidecar(env: Env, deps: Deps, hash: string): Promise<Sidecar | null> {
-  const file = await deps.github.getFile(env.ingestsRepo, `store/${hash}.verification.json`);
+async function loadSidecar(
+  env: Env,
+  deps: Deps,
+  hash: string,
+): Promise<Sidecar | null> {
+  const file = await deps.github.getFile(
+    env.ingestsRepo,
+    `store/${hash}.verification.json`,
+  );
   if (!file) return null;
   try {
     return JSON.parse(file.text) as Sidecar;
@@ -325,19 +361,37 @@ function authorOf(user: User): Author {
 // The canonical record body file: v2 records keep it in {hash}.v2.md (preferred
 // by the workbench's _scan + by-name/ symlink), else {hash}.md. Reviews write it
 // and the history reads it.
-async function resolveBodyPath(env: Env, deps: Deps, hash: string): Promise<string> {
+async function resolveBodyPath(
+  env: Env,
+  deps: Deps,
+  hash: string,
+): Promise<string> {
   const v2 = `store/${hash}.v2.md`;
-  return (await deps.github.getFile(env.ingestsRepo, v2)) ? v2 : `store/${hash}.md`;
+  return (await deps.github.getFile(env.ingestsRepo, v2))
+    ? v2
+    : `store/${hash}.md`;
 }
 
-async function resolveBodyPathAt(env: Env, deps: Deps, hash: string, ref: string): Promise<string> {
+async function resolveBodyPathAt(
+  env: Env,
+  deps: Deps,
+  hash: string,
+  ref: string,
+): Promise<string> {
   const v2 = `store/${hash}.v2.md`;
-  return (await deps.github.getFileAt(env.ingestsRepo, v2, ref)) ? v2 : `store/${hash}.md`;
+  return (await deps.github.getFileAt(env.ingestsRepo, v2, ref))
+    ? v2
+    : `store/${hash}.md`;
 }
 
 // --- handlers ---
 
-async function handleAuth(path: string, req: Request, env: Env, deps: Deps): Promise<Response> {
+async function handleAuth(
+  path: string,
+  req: Request,
+  env: Env,
+  deps: Deps,
+): Promise<Response> {
   const now = deps.nowSec();
   if (path === "/api/auth/login") {
     return Response.redirect(await loginRedirectUrl(env, now), 302);
@@ -404,7 +458,12 @@ async function handleGate(
       return err(409, "Cloze gate not available for this record");
     }
     const chosen = sample(pool, Math.min(CHALLENGES_PER_SESSION, pool.length));
-    const s = await startSession(env.sessionSecret, hash, chosen, deps.nowSec());
+    const s = await startSession(
+      env.sessionSecret,
+      hash,
+      chosen,
+      deps.nowSec(),
+    );
     return json({
       session_id: s.token,
       challenges: s.challenges,
@@ -490,10 +549,16 @@ async function handleGate(
       // pre-existing behaviour), never the body.
       if (env.serveGatedBody) {
         const bodyPath = await resolveBodyPathAt(env, deps, hash, ref);
-        const recordFile = await deps.github.getFileAt(env.ingestsRepo, bodyPath, ref);
+        const recordFile = await deps.github.getFileAt(
+          env.ingestsRepo,
+          bodyPath,
+          ref,
+        );
         const md = recordFile?.text;
         if (md != null && recordFile != null) {
-          const m = md.match(/^(---(?:\r\n|\n)[\s\S]*?(?:\r\n|\n)---(?:\r\n|\n|$))([\s\S]*)$/);
+          const m = md.match(
+            /^(---(?:\r\n|\n)[\s\S]*?(?:\r\n|\n)---(?:\r\n|\n|$))([\s\S]*)$/,
+          );
           out.raw_frontmatter = m ? m[1] : "";
           out.body = m ? m[2] : md;
           out.base_record_sha = recordFile.sha;
@@ -545,7 +610,11 @@ async function handleReviewWrite(
     return err(409, "Stale review base");
   }
   const bodyPath = await resolveBodyPathAt(env, deps, hash, body.base_ref);
-  const bodyFile = await deps.github.getFileAt(env.ingestsRepo, bodyPath, body.base_ref);
+  const bodyFile = await deps.github.getFileAt(
+    env.ingestsRepo,
+    bodyPath,
+    body.base_ref,
+  );
   if (bodyFile == null) return notFound();
   if (bodyFile.sha !== body.base_record_sha) {
     return err(409, "Stale review base");
@@ -557,8 +626,14 @@ async function handleReviewWrite(
   }
   const beforeCopyright = copyrightStatus(current);
   const afterCopyright = copyrightStatus(submitted);
-  if (afterCopyright != null && afterCopyright !== beforeCopyright && !atLeast(role, "admin")) {
-    return err(403, "Changing a record's copyright status is restricted to admins");
+  if (
+    afterCopyright != null && afterCopyright !== beforeCopyright &&
+    !atLeast(role, "admin")
+  ) {
+    return err(
+      403,
+      "Changing a record's copyright status is restricted to admins",
+    );
   }
 
   const spans = Array.isArray(body.spans) ? body.spans : [];
@@ -572,7 +647,11 @@ async function handleReviewWrite(
   ];
   if (spans.length || verdict?.observed_coverage != null) {
     const coveragePath = `store/${hash}.review.json`;
-    const coverageFile = await deps.github.getFileAt(env.ingestsRepo, coveragePath, body.base_ref);
+    const coverageFile = await deps.github.getFileAt(
+      env.ingestsRepo,
+      coveragePath,
+      body.base_ref,
+    );
     const sidecar = coverageFile
       ? JSON.parse(coverageFile.text)
       : { schema: "anomalica/review-coverage/0", reviews: [] };
@@ -669,8 +748,9 @@ async function handleHousekeepingDecide(
         !decision.item_id ||
         (decision.status !== "approved" && decision.status !== "rejected"),
     )
-  )
+  ) {
     return err(400, "Invalid housekeeping decision request");
+  }
   const decisions = new Map<string, "approved" | "rejected">();
   for (const decision of payload.decisions) {
     if (decisions.has(decision.item_id)) {
@@ -688,11 +768,19 @@ async function handleHousekeepingDecide(
     HOUSEKEEPING_MANIFEST_PATH,
     payload.viewed_ref,
   );
-  const manifestVersion = manifestFile && algorithmManifestVersion(manifestFile.text);
-  if (manifestVersion == null || manifestVersion !== HOUSEKEEPING_ALGORITHM_VERSION) {
+  const manifestVersion = manifestFile &&
+    algorithmManifestVersion(manifestFile.text);
+  if (
+    manifestVersion == null ||
+    manifestVersion !== HOUSEKEEPING_ALGORITHM_VERSION
+  ) {
     return err(503, "Housekeeping algorithm manifest unavailable");
   }
-  const sidecarFile = await deps.github.getFileAt(env.ingestsRepo, sidecarPath, payload.viewed_ref);
+  const sidecarFile = await deps.github.getFileAt(
+    env.ingestsRepo,
+    sidecarPath,
+    payload.viewed_ref,
+  );
   if (sidecarFile == null) return notFound();
   if (sidecarFile.sha !== payload.viewed_sidecar_sha) {
     return err(409, "Stale housekeeping proposal");
@@ -720,11 +808,16 @@ async function handleHousekeepingDecide(
     sidecar.input_sha256 !== payload.viewed_input_sha256 ||
     sidecar.algorithm_version !== payload.viewed_algorithm_version ||
     sidecar.algorithm_version !== manifestVersion
-  )
+  ) {
     return err(409, "Stale housekeeping proposal");
+  }
 
   const bodyPath = await resolveBodyPathAt(env, deps, hash, payload.viewed_ref);
-  const bodyFile = await deps.github.getFileAt(env.ingestsRepo, bodyPath, payload.viewed_ref);
+  const bodyFile = await deps.github.getFileAt(
+    env.ingestsRepo,
+    bodyPath,
+    payload.viewed_ref,
+  );
   if (bodyFile == null) return notFound();
   const current = bodyFile.text;
   if (`sha256:${await sha256Hex(current)}` !== sidecar.input_sha256) {
@@ -771,7 +864,10 @@ async function handleHousekeepingDecide(
       if (frontmatter.length) {
         const approvedIds = new Set(
           sidecar.items
-            .filter((item) => item.status === "approved" || decisions.get(item.id) === "approved")
+            .filter((item) =>
+              item.status === "approved" ||
+              decisions.get(item.id) === "approved"
+            )
             .map((item) => item.id),
         );
         const unmet = unmetDependencies(
@@ -788,7 +884,10 @@ async function handleHousekeepingDecide(
           status: "approved" as const,
         }));
         const result = await applyPatch(updated, approvedFrontmatter);
-        if (result.didNotApply.length || result.applied.length !== approvedFrontmatter.length) {
+        if (
+          result.didNotApply.length ||
+          result.applied.length !== approvedFrontmatter.length
+        ) {
           return err(409, "Stale housekeeping proposal");
         }
         updated = result.text;
@@ -962,7 +1061,11 @@ function commitSummary(message: string): string {
 // The review history of a record: every reviewer's edits to the canonical body,
 // from git. Live (not the static snapshot, which lags), public read. Reviewer
 // EMAIL is dropped - only name + date + summary reach the client.
-async function handleHistory(hash: string, env: Env, deps: Deps): Promise<Response> {
+async function handleHistory(
+  hash: string,
+  env: Env,
+  deps: Deps,
+): Promise<Response> {
   if (!FULL_HASH.test(hash)) return notFound();
   const bodyPath = await resolveBodyPath(env, deps, hash);
   const commits = await deps.github.listCommits(env.ingestsRepo, bodyPath);
@@ -1034,7 +1137,9 @@ async function route(req: Request, env: Env, deps: Deps): Promise<Response> {
   }
 
   // Gate (public reads + the possession challenge - no login needed to prove possession).
-  const gate = pathname.match(/^\/api\/ingests\/([^/]+)\/verification(?:\/(start|submit))?$/);
+  const gate = pathname.match(
+    /^\/api\/ingests\/([^/]+)\/verification(?:\/(start|submit))?$/,
+  );
   if (gate) {
     const [, hash, action] = gate;
     if (action === "start" || action === "submit") {
@@ -1063,7 +1168,9 @@ async function route(req: Request, env: Env, deps: Deps): Promise<Response> {
     if (resolvedRole == null) {
       resolvedRole = roleOf(user.login, await loadRoles(env, deps));
     }
-    return atLeast(resolvedRole, minimum) ? null : err(403, `Requires ${minimum} role`);
+    return atLeast(resolvedRole, minimum)
+      ? null
+      : err(403, `Requires ${minimum} role`);
   };
 
   // The caller's own role, so the UI can show the right affordances. Login-only:
@@ -1080,14 +1187,18 @@ async function route(req: Request, env: Env, deps: Deps): Promise<Response> {
     return handleReviewWrite(review[1], req, env, deps, user!, resolvedRole!);
   }
 
-  const housekeep = pathname.match(/^\/api\/ingests\/([^/]+)\/housekeeping\/decide$/);
+  const housekeep = pathname.match(
+    /^\/api\/ingests\/([^/]+)\/housekeeping\/decide$/,
+  );
   if (housekeep && method === "POST") {
     const denied = await denyUnless("reviewer");
     if (denied) return denied;
     return handleHousekeepingDecide(housekeep[1], req, env, deps, user!);
   }
 
-  const curate = pathname.match(/^\/api\/curation\/(merge|unmerge|reject|unreject)$/);
+  const curate = pathname.match(
+    /^\/api\/curation\/(merge|unmerge|reject|unreject)$/,
+  );
   if (curate && method === "POST") {
     const denied = await denyUnless("reviewer");
     if (denied) return denied;
@@ -1095,17 +1206,30 @@ async function route(req: Request, env: Env, deps: Deps): Promise<Response> {
   }
 
   // Article directives are an editor+ op (the four-tier op-split).
-  const directives = pathname.match(/^\/api\/articles\/([^/]+)\/([^/]+)\/directives$/);
+  const directives = pathname.match(
+    /^\/api\/articles\/([^/]+)\/([^/]+)\/directives$/,
+  );
   if (directives && method === "PUT") {
     const denied = await denyUnless("editor");
     if (denied) return denied;
-    return handleArticleDirectives(directives[1], directives[2], req, env, deps, user!);
+    return handleArticleDirectives(
+      directives[1],
+      directives[2],
+      req,
+      env,
+      deps,
+      user!,
+    );
   }
 
   return notFound();
 }
 
-export async function handleRequest(req: Request, env: Env, deps: Deps): Promise<Response> {
+export async function handleRequest(
+  req: Request,
+  env: Env,
+  deps: Deps,
+): Promise<Response> {
   try {
     return await route(req, env, deps);
   } catch (e) {

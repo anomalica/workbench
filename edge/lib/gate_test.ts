@@ -82,7 +82,9 @@ Deno.test("answer HMACs are salted per record (no cross-record dictionary)", asy
   const b = await startSession(SECRET, "b".repeat(64), POOL, 1000);
   const hmacsOf = (token: string) =>
     (
-      JSON.parse(atob(token.split(".")[0].replaceAll("-", "+").replaceAll("_", "/"))) as {
+      JSON.parse(
+        atob(token.split(".")[0].replaceAll("-", "+").replaceAll("_", "/")),
+      ) as {
         a: string[];
       }
     ).a;

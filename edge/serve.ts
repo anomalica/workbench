@@ -13,7 +13,13 @@
  */
 
 import * as BunnySDK from "@bunny.net/edgescript-sdk";
-import { buildDeps, type Deps, type Env, handleRequest, loadEnv } from "./main.ts";
+import {
+  buildDeps,
+  type Deps,
+  type Env,
+  handleRequest,
+  loadEnv,
+} from "./main.ts";
 
 let ctx: { env: Env; deps: Deps } | null = null;
 function context() {

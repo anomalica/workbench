@@ -7,7 +7,12 @@
  * either implementation, change both and run both.
  */
 
-import { assert, assertEquals, assertRejects, assertThrows } from "jsr:@std/assert@1";
+import {
+  assert,
+  assertEquals,
+  assertRejects,
+  assertThrows,
+} from "jsr:@std/assert@1";
 import {
   ApplyConflict,
   applyItems,
@@ -63,7 +68,11 @@ const MOVE_DATE = item({
   proposed: "2026-08-11",
 });
 
-function tokenItem(record: string, oldToken = "Speaker_1", newToken = "Alice"): HousekeepingV2Item {
+function tokenItem(
+  record: string,
+  oldToken = "Speaker_1",
+  newToken = "Alice",
+): HousekeepingV2Item {
   const bytes = new TextEncoder().encode(record);
   const needle = new TextEncoder().encode(oldToken);
   const bodyStart = new TextEncoder().encode(
@@ -103,14 +112,19 @@ function tokenItem(record: string, oldToken = "Speaker_1", newToken = "Alice"): 
 }
 
 Deno.test("v2 replaces the complete body token set at raw UTF-8 byte offsets", () => {
-  const record = "---\ntitle: 敦賀\n---\nSpeaker_1 met Speaker_10. Speaker_1 spoke.\n";
+  const record =
+    "---\ntitle: 敦賀\n---\nSpeaker_1 met Speaker_10. Speaker_1 spoke.\n";
   const item = tokenItem(record);
   const out = applyTokenReplacements(record, [item]);
-  assertEquals(out, "---\ntitle: 敦賀\n---\nAlice met Speaker_10. Alice spoke.\n");
+  assertEquals(
+    out,
+    "---\ntitle: 敦賀\n---\nAlice met Speaker_10. Alice spoke.\n",
+  );
 });
 
 Deno.test("v2 ignores the same whole token in frontmatter", () => {
-  const record = "---\ntitle: Speaker_1\n---\nSpeaker_1 spoke twice: Speaker_1.\n";
+  const record =
+    "---\ntitle: Speaker_1\n---\nSpeaker_1 spoke twice: Speaker_1.\n";
   assertEquals(
     applyTokenReplacements(record, [tokenItem(record)]),
     "---\ntitle: Speaker_1\n---\nAlice spoke twice: Alice.\n",
@@ -187,7 +201,9 @@ Deno.test("the body is never changed", async () => {
 
 Deno.test("untouched frontmatter keeps its original bytes", async () => {
   const out = await applyItems(RECORD, [MOVE_PUBLISHER]);
-  assert(out.includes("title: 'Eyewitnesses Talk to Dr. James E. McDonald (1967)'"));
+  assert(
+    out.includes("title: 'Eyewitnesses Talk to Dr. James E. McDonald (1967)'"),
+  );
   assert(out.includes("source_type: 'video'"));
   assert(out.includes("content_hash: 'sha256:abc123'"));
 });
@@ -217,16 +233,26 @@ Deno.test("a multiline field conflict aborts the complete apply", async () => {
     current: "2026-08-11",
     proposed: "1967",
   });
-  await assertRejects(() => applyPatch(withList, [MOVE_PUBLISHER, alsoValid]), ApplyConflict);
+  await assertRejects(
+    () => applyPatch(withList, [MOVE_PUBLISHER, alsoValid]),
+    ApplyConflict,
+  );
 });
 
 Deno.test("a patch conflict aborts when the record moved on", async () => {
-  const edited = RECORD.replace("publisher: 'Eyes On Cinema'", "publisher: 'BBC'");
-  await assertRejects(() => applyPatch(edited, [MOVE_PUBLISHER]), ApplyConflict);
+  const edited = RECORD.replace(
+    "publisher: 'Eyes On Cinema'",
+    "publisher: 'BBC'",
+  );
+  await assertRejects(
+    () => applyPatch(edited, [MOVE_PUBLISHER]),
+    ApplyConflict,
+  );
 });
 
 Deno.test("CRLF fences and body bytes are preserved", async () => {
-  const record = "---\r\ntitle: T\r\npublisher: 'Old'\r\n---\r\nOSSAP body.\r\n";
+  const record =
+    "---\r\ntitle: T\r\npublisher: 'Old'\r\n---\r\nOSSAP body.\r\n";
   const frontmatter = item({
     current: "Old",
     proposed: "New",
@@ -244,11 +270,17 @@ Deno.test("CRLF fences and body bytes are preserved", async () => {
 });
 
 Deno.test("a record with no frontmatter is refused", async () => {
-  await assertRejects(() => applyItems("just a body\n", [MOVE_PUBLISHER]), BodyChanged);
+  await assertRejects(
+    () => applyItems("just a body\n", [MOVE_PUBLISHER]),
+    BodyChanged,
+  );
 });
 
 Deno.test("set appends when the field is absent", async () => {
-  const out = await applyItems(RECORD.replace("date_published: '2026-08-11'\n", ""), [SET_YEAR]);
+  const out = await applyItems(
+    RECORD.replace("date_published: '2026-08-11'\n", ""),
+    [SET_YEAR],
+  );
   assert(out.includes('date_published: "1967"'));
   assertEquals(await bodyDigest(out), await bodyDigest(RECORD));
 });

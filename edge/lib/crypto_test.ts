@@ -26,7 +26,10 @@ Deno.test("hmac is deterministic and key-sensitive", async () => {
 Deno.test("signToken/verifyToken round-trips and rejects tampering", async () => {
   const secret = "edge-session-secret";
   const token = await signToken(secret, { user: "bob", role: "reviewer" });
-  assertEquals(await verifyToken(secret, token), { user: "bob", role: "reviewer" });
+  assertEquals(await verifyToken(secret, token), {
+    user: "bob",
+    role: "reviewer",
+  });
 
   // wrong secret rejected
   assertEquals(await verifyToken("nope", token), null);

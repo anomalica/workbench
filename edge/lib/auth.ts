@@ -36,7 +36,10 @@ export interface AuthConfig {
 type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
 
 /** Build the GitHub authorise redirect URL with a signed CSRF state token. */
-export async function loginRedirectUrl(cfg: AuthConfig, nowSec: number): Promise<string> {
+export async function loginRedirectUrl(
+  cfg: AuthConfig,
+  nowSec: number,
+): Promise<string> {
   const state = await signToken(cfg.sessionSecret, { k: "oauth", t: nowSec });
   const params = new URLSearchParams({
     client_id: cfg.clientId,
@@ -53,7 +56,10 @@ export async function verifyState(
   nowSec: number,
 ): Promise<boolean> {
   if (!state) return false;
-  const p = await verifyToken<{ k: string; t: number }>(cfg.sessionSecret, state);
+  const p = await verifyToken<{ k: string; t: number }>(
+    cfg.sessionSecret,
+    state,
+  );
   return !!p && p.k === "oauth" && nowSec - p.t <= STATE_MAX_AGE;
 }
 
@@ -81,12 +87,14 @@ export async function exchangeCode(
     Accept: "application/vnd.github+json",
     "User-Agent": "anomalica-workbench-edge",
   };
-  const profile = (await (await fetchImpl(`${GH_API}/user`, { headers: ghHeaders })).json()) as {
-    name?: string;
-    login?: string;
-    email?: string;
-    avatar_url?: string;
-  };
+  const profile =
+    (await (await fetchImpl(`${GH_API}/user`, { headers: ghHeaders }))
+      .json()) as {
+        name?: string;
+        login?: string;
+        email?: string;
+        avatar_url?: string;
+      };
 
   let email = profile.email ?? "";
   if (!email) {
@@ -133,7 +141,10 @@ export async function readSession(
 ): Promise<User | null> {
   const token = cookieValue(cookieHeader, SESSION_COOKIE);
   if (!token) return null;
-  const payload = await verifyToken<{ user: User; iat: number }>(cfg.sessionSecret, token);
+  const payload = await verifyToken<{ user: User; iat: number }>(
+    cfg.sessionSecret,
+    token,
+  );
   if (!payload || nowSec - payload.iat > SESSION_MAX_AGE) return null;
   return payload.user;
 }

@@ -66,7 +66,10 @@ export type AnyHousekeepingItem = HousekeepingV1Item | HousekeepingV2Item;
  * destroys data - setting date_published without the move that frees it
  * overwrites the upload date instead of relocating it.
  */
-export function unmetDependencies(items: HousekeepingV1Item[], approved: Set<string>): string[] {
+export function unmetDependencies(
+  items: HousekeepingV1Item[],
+  approved: Set<string>,
+): string[] {
   const byId = new Map(items.map((i) => [i.id, i]));
   const bad: string[] = [];
   for (const id of approved) {
@@ -109,7 +112,10 @@ export interface ApplyResult {
  * Compares the VALUE, not the raw line: the corpus quotes inconsistently and a
  * proposal must not fail merely because a value is written 'x' rather than "x".
  */
-function matches(lines: string[], item: HousekeepingV1Item): { ok: boolean; reason: string } {
+function matches(
+  lines: string[],
+  item: HousekeepingV1Item,
+): { ok: boolean; reason: string } {
   const span = fieldSpan(lines, item.field);
   const present = span ? lines[span[0]] : null;
   const unquote = (v: string) => v.replace(/^['"]+|['"]+$/g, "");
@@ -140,7 +146,8 @@ export class MultilineField extends Error {}
 const FIELD_LINE = /^([A-Za-z_][A-Za-z0-9_]*):(.*)$/;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 /** Same shape the edge already uses to split a record (main.ts). */
-const FRONTMATTER = /^(---(\r\n|\n))([\s\S]*?)(\r\n|\n)---((?:\r\n|\n)|$)([\s\S]*)$/;
+const FRONTMATTER =
+  /^(---(\r\n|\n))([\s\S]*?)(\r\n|\n)---((?:\r\n|\n)|$)([\s\S]*)$/;
 
 /**
  * Digest of everything after the frontmatter fence.
@@ -152,8 +159,14 @@ const FRONTMATTER = /^(---(\r\n|\n))([\s\S]*?)(\r\n|\n)---((?:\r\n|\n)|$)([\s\S]
  * anything is wrong.
  */
 export async function bodyDigest(text: string): Promise<string> {
-  const stripped = text.replace(/^---(?:\r\n|\n)[\s\S]*?(?:\r\n|\n)---(?:\r\n|\n|$)/, "");
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(stripped));
+  const stripped = text.replace(
+    /^---(?:\r\n|\n)[\s\S]*?(?:\r\n|\n)---(?:\r\n|\n|$)/,
+    "",
+  );
+  const buf = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(stripped),
+  );
   return Array.from(new Uint8Array(buf))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
@@ -211,7 +224,9 @@ function fieldSpan(lines: string[], name: string): [number, number] | null {
     const m = lines[i].match(FIELD_LINE);
     if (!m || m[1] !== name) continue;
     let j = i + 1;
-    while (j < lines.length && /^[ \t-]/.test(lines[j]) && lines[j].trim() !== "") j++;
+    while (
+      j < lines.length && /^[ \t-]/.test(lines[j]) && lines[j].trim() !== ""
+    ) j++;
     return [i, j];
   }
   return null;
@@ -228,7 +243,10 @@ function fieldSpan(lines: string[], name: string): [number, number] | null {
  * nobody agreed to touch. Splicing leaves every unapproved byte identical, so the
  * commit diff IS the approved items.
  */
-export async function applyItems(original: string, items: HousekeepingV1Item[]): Promise<string> {
+export async function applyItems(
+  original: string,
+  items: HousekeepingV1Item[],
+): Promise<string> {
   return (await applyPatch(original, items)).text;
 }
 
@@ -265,7 +283,9 @@ export async function applyPatch(
       const line = `${item.to_field}: ${scalar(item.proposed)}`;
       const dest = fieldSpan(lines, item.to_field);
       if (dest) {
-        throw new ApplyConflict(`${item.id}: destination ${item.to_field} already exists`);
+        throw new ApplyConflict(
+          `${item.id}: destination ${item.to_field} already exists`,
+        );
       }
       if (span) {
         lines[span[0]] = line;
@@ -277,8 +297,7 @@ export async function applyPatch(
     }
   }
 
-  const updated =
-    "---" +
+  const updated = "---" +
     split.newline +
     lines.join(split.newline) +
     split.newline +
@@ -340,7 +359,11 @@ const FULL_SHA = /^sha256:[a-f0-9]{64}$/;
 const ALGORITHM_VERSION = /^[A-Za-z0-9._-]+$/;
 const FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-function exactKeys(value: object, required: string[], optional: string[] = []): boolean {
+function exactKeys(
+  value: object,
+  required: string[],
+  optional: string[] = [],
+): boolean {
   const keys = Object.keys(value).sort();
   return (
     required.every((key) => keys.includes(key)) &&
@@ -358,7 +381,8 @@ function validEvidence(value: unknown): boolean {
     typeof evidence.reasoning === "string" &&
     evidence.reasoning.trim().length > 0 &&
     (evidence.sources === undefined ||
-      (Array.isArray(evidence.sources) && evidence.sources.every((v) => typeof v === "string"))) &&
+      (Array.isArray(evidence.sources) &&
+        evidence.sources.every((v) => typeof v === "string"))) &&
     (evidence.record_spans === undefined ||
       (Array.isArray(evidence.record_spans) &&
         evidence.record_spans.every((v) => typeof v === "string")))
@@ -377,8 +401,9 @@ export function validateV2Sidecar(sidecar: HousekeepingSidecar): boolean {
     !ALGORITHM_VERSION.test(sidecar.algorithm_version ?? "") ||
     sidecar.outcome !== "completed" ||
     !Array.isArray(sidecar.items)
-  )
+  ) {
     return false;
+  }
 
   const ids = new Set<string>();
   return sidecar.items.every((item) => {
@@ -393,8 +418,9 @@ export function validateV2Sidecar(sidecar: HousekeepingSidecar): boolean {
       !["high", "medium", "low"].includes(item.confidence) ||
       !["proposed", "approved", "rejected"].includes(item.status) ||
       !validEvidence(item.evidence)
-    )
+    ) {
       return false;
+    }
     if (ids.has(item.id)) return false;
     ids.add(item.id);
     if (item.operation === "replace-token") {
@@ -410,8 +436,9 @@ export function validateV2Sidecar(sidecar: HousekeepingSidecar): boolean {
         item.expected_count <= 0 ||
         !Array.isArray(item.occurrences) ||
         item.expected_count !== item.occurrences.length
-      )
+      ) {
         return false;
+      }
       let previousEnd = -1;
       for (const occurrence of item.occurrences) {
         if (
@@ -424,15 +451,17 @@ export function validateV2Sidecar(sidecar: HousekeepingSidecar): boolean {
           occurrence.start_byte < 0 ||
           occurrence.end_byte <= occurrence.start_byte ||
           occurrence.start_byte < previousEnd
-        )
+        ) {
           return false;
+        }
         previousEnd = occurrence.end_byte;
       }
       return true;
     }
     if (!["set", "clear", "move"].includes(item.operation)) return false;
-    const required =
-      item.operation === "move" ? [...FRONTMATTER_COMMON, "to_field"] : FRONTMATTER_COMMON;
+    const required = item.operation === "move"
+      ? [...FRONTMATTER_COMMON, "to_field"]
+      : FRONTMATTER_COMMON;
     if (!exactKeys(item, required, ["depends_on"])) return false;
     if (typeof item.field !== "string" || !FIELD_NAME.test(item.field)) {
       return false;
@@ -442,8 +471,9 @@ export function validateV2Sidecar(sidecar: HousekeepingSidecar): boolean {
       (typeof item.to_field !== "string" ||
         !FIELD_NAME.test(item.to_field) ||
         item.to_field === item.field)
-    )
+    ) {
       return false;
+    }
     return (
       item.depends_on === undefined ||
       (Array.isArray(item.depends_on) &&
@@ -453,16 +483,22 @@ export function validateV2Sidecar(sidecar: HousekeepingSidecar): boolean {
 }
 
 /** Validate and apply exact v2 byte spans without altering any other byte. */
-export function applyTokenReplacements(original: string, items: HousekeepingV2Item[]): string {
+export function applyTokenReplacements(
+  original: string,
+  items: HousekeepingV2Item[],
+): string {
   const bytes = new TextEncoder().encode(original);
   new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-  const frontmatter = original.match(/^---(?:\r\n|\n)[\s\S]*?(?:\r\n|\n)---(?:\r\n|\n|$)/);
+  const frontmatter = original.match(
+    /^---(?:\r\n|\n)[\s\S]*?(?:\r\n|\n)---(?:\r\n|\n|$)/,
+  );
   if (!frontmatter) {
     throw new InvalidReplacement("record has no parseable frontmatter");
   }
   const bodyStart = new TextEncoder().encode(frontmatter[0]).length;
 
-  const allSpans: { start: number; end: number; replacement: Uint8Array }[] = [];
+  const allSpans: { start: number; end: number; replacement: Uint8Array }[] =
+    [];
   for (const item of items) {
     if (JSON.stringify(Object.keys(item).sort()) !== JSON.stringify(V2_KEYS)) {
       throw new InvalidReplacement(`${item.id ?? "item"}: invalid item shape`);
@@ -503,7 +539,11 @@ export function applyTokenReplacements(original: string, items: HousekeepingV2It
     const oldBytes = new TextEncoder().encode(item.old_token);
     const newBytes = new TextEncoder().encode(item.new_token);
     const matches: TokenOccurrence[] = [];
-    for (let start = bodyStart; start <= bytes.length - oldBytes.length; start++) {
+    for (
+      let start = bodyStart;
+      start <= bytes.length - oldBytes.length;
+      start++
+    ) {
       if (!oldBytes.every((byte, i) => bytes[start + i] === byte)) continue;
       const end = start + oldBytes.length;
       if (!isAsciiWordByte(bytes[start - 1]) && !isAsciiWordByte(bytes[end])) {
@@ -515,12 +555,15 @@ export function applyTokenReplacements(original: string, items: HousekeepingV2It
       item.expected_count !== matches.length ||
       item.occurrences.some(
         (span, index) =>
-          JSON.stringify(Object.keys(span).sort()) !== JSON.stringify(["end_byte", "start_byte"]) ||
+          JSON.stringify(Object.keys(span).sort()) !==
+            JSON.stringify(["end_byte", "start_byte"]) ||
           span.start_byte !== matches[index].start_byte ||
           span.end_byte !== matches[index].end_byte,
       )
     ) {
-      throw new InvalidReplacement(`${item.id}: occurrences are not the complete body match set`);
+      throw new InvalidReplacement(
+        `${item.id}: occurrences are not the complete body match set`,
+      );
     }
     for (const span of item.occurrences) {
       if (
@@ -542,13 +585,20 @@ export function applyTokenReplacements(original: string, items: HousekeepingV2It
 
   allSpans.sort((a, b) => a.start - b.start || a.end - b.end);
   for (let i = 1; i < allSpans.length; i++) {
-    if (allSpans[i].start <= allSpans[i - 1].start || allSpans[i].start < allSpans[i - 1].end) {
-      throw new InvalidReplacement("replacement spans are duplicate, unordered, or overlapping");
+    if (
+      allSpans[i].start <= allSpans[i - 1].start ||
+      allSpans[i].start < allSpans[i - 1].end
+    ) {
+      throw new InvalidReplacement(
+        "replacement spans are duplicate, unordered, or overlapping",
+      );
     }
   }
   let output = bytes;
   for (const span of allSpans.toReversed()) {
-    const next = new Uint8Array(output.length - (span.end - span.start) + span.replacement.length);
+    const next = new Uint8Array(
+      output.length - (span.end - span.start) + span.replacement.length,
+    );
     next.set(output.subarray(0, span.start));
     next.set(span.replacement, span.start);
     next.set(output.subarray(span.end), span.start + span.replacement.length);

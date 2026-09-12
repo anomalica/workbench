@@ -1,5 +1,11 @@
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
-import { type FetchLike, fromBase64, GitHubClient, GitHubError, toBase64 } from "./github.ts";
+import {
+  type FetchLike,
+  fromBase64,
+  GitHubClient,
+  GitHubError,
+  toBase64,
+} from "./github.ts";
 
 Deno.test("base64 round-trips UTF-8 (unicode-safe)", () => {
   for (const s of ["", "hello", "Tic Tac", "敦賀 (げんぱつ)", "a\nb\tc"]) {
@@ -13,21 +19,30 @@ Deno.test("fromBase64 tolerates the API's line-wrapped content", () => {
 });
 
 Deno.test("fromBase64 refuses invalid UTF-8", () => {
-  assertRejects(() => Promise.resolve().then(() => fromBase64("/w==")), TypeError);
+  assertRejects(
+    () => Promise.resolve().then(() => fromBase64("/w==")),
+    TypeError,
+  );
 });
 
 Deno.test("getFile returns null on 404, decodes content otherwise", async () => {
-  const mk =
-    (status: number, content?: string): FetchLike =>
-    () =>
-      Promise.resolve({
-        status,
-        json: () => Promise.resolve(content ? { content: toBase64(content), sha: "abc" } : {}),
-      });
+  const mk = (status: number, content?: string): FetchLike => () =>
+    Promise.resolve({
+      status,
+      json: () =>
+        Promise.resolve(
+          content ? { content: toBase64(content), sha: "abc" } : {},
+        ),
+    });
   const missing = new GitHubClient("t", "anomalica", "main", mk(404));
   assertEquals(await missing.getFile("curation", "merges.yaml"), null);
 
-  const present = new GitHubClient("t", "anomalica", "main", mk(200, "op: merge\n"));
+  const present = new GitHubClient(
+    "t",
+    "anomalica",
+    "main",
+    mk(200, "op: merge\n"),
+  );
   assertEquals(await present.getFile("curation", "merges.yaml"), {
     text: "op: merge\n",
     sha: "abc",
@@ -81,7 +96,8 @@ Deno.test("editFile retries on a sha conflict then succeeds", async () => {
     getCount++;
     return Promise.resolve({
       status: 200,
-      json: () => Promise.resolve({ content: toBase64("base\n"), sha: `sha${getCount}` }),
+      json: () =>
+        Promise.resolve({ content: toBase64("base\n"), sha: `sha${getCount}` }),
     });
   };
   const gh = new GitHubClient("t", "anomalica", "main", fetchImpl);
@@ -132,8 +148,11 @@ Deno.test("listCommits maps the commits API, preserving the reviewer's notes", a
 });
 
 Deno.test("listCommits returns [] for a missing path (404)", async () => {
-  const gh = new GitHubClient("t", "anomalica", "main", () =>
-    Promise.resolve({ status: 404, json: () => Promise.resolve({}) }),
+  const gh = new GitHubClient(
+    "t",
+    "anomalica",
+    "main",
+    () => Promise.resolve({ status: 404, json: () => Promise.resolve({}) }),
   );
   assertEquals(await gh.listCommits("ingests", "store/nope.md"), []);
 });
@@ -241,7 +260,8 @@ Deno.test("commitFiles re-reads a raced ref and refuses a changed target path", 
     if (url.includes("/contents/")) {
       return Promise.resolve({
         status: 200,
-        json: () => Promise.resolve({ sha: refs === 1 ? "old" : "someone-else" }),
+        json: () =>
+          Promise.resolve({ sha: refs === 1 ? "old" : "someone-else" }),
       });
     }
     if (url.endsWith("/git/blobs")) {

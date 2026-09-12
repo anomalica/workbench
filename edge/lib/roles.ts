@@ -55,7 +55,10 @@ export function parseRoles(text: string): Record<string, Role> {
 }
 
 /** A login's role, defaulting to contributor when unlisted. */
-export function roleOf(login: string | undefined, roles: Record<string, Role>): Role {
+export function roleOf(
+  login: string | undefined,
+  roles: Record<string, Role>,
+): Role {
   if (!login) return DEFAULT_ROLE;
   return roles[login.toLowerCase()] ?? DEFAULT_ROLE;
 }

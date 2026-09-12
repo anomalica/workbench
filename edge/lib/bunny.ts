@@ -62,7 +62,9 @@ export async function signedUrl(
   for (const k of Object.keys(opts.params ?? {}).sort()) {
     parts.push(`${k}=${encodeURIComponent((opts.params ?? {})[k])}`);
   }
-  if (opts.tokenPath) parts.push(`token_path=${encodeURIComponent(opts.tokenPath)}`);
+  if (opts.tokenPath) {
+    parts.push(`token_path=${encodeURIComponent(opts.tokenPath)}`);
+  }
   if (userIp) parts.push(`ip=${encodeURIComponent(userIp)}`);
   parts.push(`expires=${expiresUnix}`);
   return `${scheme}://${host}${pathname}?${parts.join("&")}`;

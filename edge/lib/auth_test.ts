@@ -18,7 +18,10 @@ const CFG: AuthConfig = {
 
 Deno.test("login URL carries client_id, callback, scope, signed state", async () => {
   const url = new URL(await loginRedirectUrl(CFG, 1000));
-  assertEquals(url.origin + url.pathname, "https://github.com/login/oauth/authorize");
+  assertEquals(
+    url.origin + url.pathname,
+    "https://github.com/login/oauth/authorize",
+  );
   assertEquals(url.searchParams.get("client_id"), "cid");
   assertEquals(
     url.searchParams.get("redirect_uri"),
@@ -50,7 +53,10 @@ Deno.test("session cookie round-trips and expires", async () => {
   // far in the future -> expired
   assertEquals(await readSession(CFG, token, 1000 + 60 * 60 * 24 * 31), null);
   // wrong secret -> rejected
-  assertEquals(await readSession({ ...CFG, sessionSecret: "other" }, token, 1000), null);
+  assertEquals(
+    await readSession({ ...CFG, sessionSecret: "other" }, token, 1000),
+    null,
+  );
 });
 
 Deno.test("no/garbage cookie -> no session", async () => {
@@ -65,11 +71,15 @@ Deno.test("clearSessionCookie expires the cookie", () => {
 Deno.test("exchangeCode pulls profile + primary email (mocked GitHub)", async () => {
   const fetchImpl = (url: string, _init?: RequestInit): Promise<Response> => {
     if (url.endsWith("/access_token")) {
-      return Promise.resolve(new Response(JSON.stringify({ access_token: "gho_x" })));
+      return Promise.resolve(
+        new Response(JSON.stringify({ access_token: "gho_x" })),
+      );
     }
     if (url.endsWith("/user")) {
       return Promise.resolve(
-        new Response(JSON.stringify({ login: "rev", name: "Rev", avatar_url: "http://a" })),
+        new Response(
+          JSON.stringify({ login: "rev", name: "Rev", avatar_url: "http://a" }),
+        ),
       );
     }
     if (url.endsWith("/user/emails")) {

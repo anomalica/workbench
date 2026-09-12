@@ -7,7 +7,12 @@ const KEY = "test-security-key";
 const EXPIRES = 1700000000;
 
 Deno.test("vector A: per-file token, no params", async () => {
-  const url = await signedUrl(KEY, "example.b-cdn.net", "/sources/abc123.mp4", EXPIRES);
+  const url = await signedUrl(
+    KEY,
+    "example.b-cdn.net",
+    "/sources/abc123.mp4",
+    EXPIRES,
+  );
   assertEquals(
     url,
     "https://example.b-cdn.net/sources/abc123.mp4" +
@@ -16,9 +21,15 @@ Deno.test("vector A: per-file token, no params", async () => {
 });
 
 Deno.test("vector B: directory-scoped token (token_path)", async () => {
-  const url = await signedUrl(KEY, "example.b-cdn.net", "/sources/abc123.mp4", EXPIRES, {
-    tokenPath: "/sources/",
-  });
+  const url = await signedUrl(
+    KEY,
+    "example.b-cdn.net",
+    "/sources/abc123.mp4",
+    EXPIRES,
+    {
+      tokenPath: "/sources/",
+    },
+  );
   assertEquals(
     url,
     "https://example.b-cdn.net/sources/abc123.mp4" +

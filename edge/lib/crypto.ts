@@ -10,7 +10,10 @@ const decoder = new TextDecoder();
 export function b64urlEncode(bytes: Uint8Array): string {
   let bin = "";
   for (const b of bytes) bin += String.fromCharCode(b);
-  return btoa(bin).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+  return btoa(bin).replaceAll("+", "-").replaceAll("/", "_").replaceAll(
+    "=",
+    "",
+  );
 }
 
 export function b64urlDecode(text: string): Uint8Array {
@@ -33,7 +36,11 @@ async function hmacKey(secret: string): Promise<CryptoKey> {
 
 /** Raw HMAC-SHA256 of msg under secret, as URL-safe base64. */
 export async function hmac(secret: string, msg: string): Promise<string> {
-  const sig = await crypto.subtle.sign("HMAC", await hmacKey(secret), encoder.encode(msg));
+  const sig = await crypto.subtle.sign(
+    "HMAC",
+    await hmacKey(secret),
+    encoder.encode(msg),
+  );
   return b64urlEncode(new Uint8Array(sig));
 }
 
@@ -50,14 +57,20 @@ export function timingSafeEqual(a: string, b: string): boolean {
  * readable by the client (it is only signed, not encrypted), so NEVER put a
  * secret answer in it - store a one-way HMAC of the answer instead (see gate.ts).
  */
-export async function signToken(secret: string, payload: unknown): Promise<string> {
+export async function signToken(
+  secret: string,
+  payload: unknown,
+): Promise<string> {
   const body = b64urlEncode(encoder.encode(JSON.stringify(payload)));
   const sig = await hmac(secret, body);
   return `${body}.${sig}`;
 }
 
 /** Verify + decode a signToken token. Returns the payload, or null if tampered. */
-export async function verifyToken<T = unknown>(secret: string, token: string): Promise<T | null> {
+export async function verifyToken<T = unknown>(
+  secret: string,
+  token: string,
+): Promise<T | null> {
   const dot = token.indexOf(".");
   if (dot < 0) return null;
   const body = token.slice(0, dot);
@@ -74,5 +87,6 @@ export async function verifyToken<T = unknown>(secret: string, token: string): P
 /** SHA-256 of a string as lowercase hex (for the verification SHA fastpath). */
 export async function sha256Hex(text: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", encoder.encode(text));
-  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }

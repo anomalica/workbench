@@ -104,7 +104,9 @@ export class GitHubClient {
     const clean = path.split("/").map(encodeURIComponent).join("/");
     const res = await this.fetchImpl(
       `https://api.github.com/repos/${this.owner}/${repo}/commits` +
-        `?path=${clean}&sha=${encodeURIComponent(this.branch)}&per_page=${perPage}`,
+        `?path=${clean}&sha=${
+          encodeURIComponent(this.branch)
+        }&per_page=${perPage}`,
       { headers: this.headers() },
     );
     if (res.status === 404 || res.status === 409) return []; // 409: empty repo
@@ -132,18 +134,28 @@ export class GitHubClient {
   /** Read the branch head. */
   async getRef(repo: string): Promise<string> {
     const branchPath = this.branch.split("/").map(encodeURIComponent).join("/");
-    const res = await this.fetchImpl(this.api(repo, `git/ref/heads/${branchPath}`), {
-      headers: this.headers(),
-    });
+    const res = await this.fetchImpl(
+      this.api(repo, `git/ref/heads/${branchPath}`),
+      {
+        headers: this.headers(),
+      },
+    );
     if (res.status !== 200) throw new GitHubError(res.status, "get branch ref");
     return ((await res.json()) as { object: { sha: string } }).object.sha;
   }
 
   /** Read a file from one committed tree. Returns null if it does not exist. */
-  async getFileAt(repo: string, path: string, ref: string): Promise<FileState | null> {
-    const res = await this.fetchImpl(`${this.url(repo, path)}?ref=${encodeURIComponent(ref)}`, {
-      headers: this.headers(),
-    });
+  async getFileAt(
+    repo: string,
+    path: string,
+    ref: string,
+  ): Promise<FileState | null> {
+    const res = await this.fetchImpl(
+      `${this.url(repo, path)}?ref=${encodeURIComponent(ref)}`,
+      {
+        headers: this.headers(),
+      },
+    );
     if (res.status === 404) return null;
     if (res.status !== 200) {
       throw new GitHubError(res.status, `getFile ${path}`);
@@ -207,9 +219,19 @@ export class GitHubClient {
       const existing = await this.getFile(repo, path);
       const next = transform(existing?.text ?? "");
       try {
-        return await this.putFile(repo, path, next, message, author, existing?.sha);
+        return await this.putFile(
+          repo,
+          path,
+          next,
+          message,
+          author,
+          existing?.sha,
+        );
       } catch (err) {
-        if (err instanceof GitHubError && (err.status === 409 || err.status === 422)) {
+        if (
+          err instanceof GitHubError &&
+          (err.status === 409 || err.status === 422)
+        ) {
           lastErr = err;
           continue; // re-read and retry
         }
@@ -245,13 +267,17 @@ export class GitHubClient {
         throw new GitHubError(409, "branch changed");
       }
 
-      const parentCommit = await this.fetchImpl(this.api(repo, `git/commits/${parent}`), {
-        headers: this.headers(),
-      });
+      const parentCommit = await this.fetchImpl(
+        this.api(repo, `git/commits/${parent}`),
+        {
+          headers: this.headers(),
+        },
+      );
       if (parentCommit.status !== 200) {
         throw new GitHubError(parentCommit.status, "get parent commit");
       }
-      const baseTree = ((await parentCommit.json()) as { tree: { sha: string } }).tree.sha;
+      const baseTree =
+        ((await parentCommit.json()) as { tree: { sha: string } }).tree.sha;
 
       for (const change of changes) {
         const current = await this.fetchImpl(
@@ -268,7 +294,10 @@ export class GitHubClient {
             throw new GitHubError(409, `${change.path} changed`);
           }
         } else {
-          throw new GitHubError(current.status, `getFile ${change.path} at parent`);
+          throw new GitHubError(
+            current.status,
+            `getFile ${change.path} at parent`,
+          );
         }
       }
 
@@ -332,11 +361,14 @@ export class GitHubClient {
         continue;
       }
 
-      const update = await this.fetchImpl(this.api(repo, `git/refs/heads/${branchPath}`), {
-        method: "PATCH",
-        headers: this.headers(),
-        body: JSON.stringify({ sha: commitSha, force: false }),
-      });
+      const update = await this.fetchImpl(
+        this.api(repo, `git/refs/heads/${branchPath}`),
+        {
+          method: "PATCH",
+          headers: this.headers(),
+          body: JSON.stringify({ sha: commitSha, force: false }),
+        },
+      );
       if (update.status === 200) return commitSha;
       if (update.status === 409 || update.status === 422) {
         lastErr = new GitHubError(update.status, "ref conflict");

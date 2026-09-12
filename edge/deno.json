@@ -4,9 +4,12 @@
   },
   "tasks": {
     "test": "deno test --allow-env",
-    "check": "deno check serve.ts main.ts && deno lint",
+    "check": "deno fmt --check && deno check serve.ts main.ts && deno lint",
     "dev": "deno run --allow-net --allow-env --watch serve.ts",
     "bundle": "deno bundle serve.ts -o /tmp/edge-bundle.js"
+  },
+  "fmt": {
+    "include": ["**/*.ts"]
   },
   "lint": {
     "rules": { "tags": ["recommended"] }

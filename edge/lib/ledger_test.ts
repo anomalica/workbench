@@ -14,7 +14,12 @@ const MERGE = buildMergeEntry({
   by: "reviewer@example.com",
   canonicalName: "Tic Tac",
   survivor: { id: "s1", name: "Tic Tac", node_type: "object", aliases: [] },
-  victims: [{ id: "v1", name: "Tic-Tac UAP", node_type: "object", aliases: ["the Tic Tac"] }],
+  victims: [{
+    id: "v1",
+    name: "Tic-Tac UAP",
+    node_type: "object",
+    aliases: ["the Tic Tac"],
+  }],
 });
 
 Deno.test("merge entry: op-first key order, no document-end marker", () => {
@@ -59,5 +64,8 @@ Deno.test("appendEntry builds a multi-doc stream", () => {
 });
 
 Deno.test("isoSeconds drops millis, keeps Z", () => {
-  assertEquals(isoSeconds(new Date("2026-06-21T05:37:52.123Z")), "2026-06-21T05:37:52Z");
+  assertEquals(
+    isoSeconds(new Date("2026-06-21T05:37:52.123Z")),
+    "2026-06-21T05:37:52Z",
+  );
 });

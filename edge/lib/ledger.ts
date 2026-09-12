@@ -83,7 +83,11 @@ export function buildRejectEntry(opts: {
   };
 }
 
-export function buildUnrejectEntry(rejectionId: string, by: string | null, at: string) {
+export function buildUnrejectEntry(
+  rejectionId: string,
+  by: string | null,
+  at: string,
+) {
   return { op: "unreject" as const, rejection_id: rejectionId, at, by };
 }
 
@@ -99,7 +103,9 @@ export function serialiseEntry(entry: unknown): string {
 
 /** Append an entry to existing ledger text (empty string if the file is new). */
 export function appendEntry(existing: string, entry: unknown): string {
-  const base = existing.length && !existing.endsWith("\n") ? existing + "\n" : existing;
+  const base = existing.length && !existing.endsWith("\n")
+    ? existing + "\n"
+    : existing;
   return base + serialiseEntry(entry);
 }
 
