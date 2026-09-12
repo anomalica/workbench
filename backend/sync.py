@@ -19,20 +19,59 @@ rebases:
 - diverged (ahead AND behind) is reported and left for the watcher,
   which integrates on its next push.
 
-The status snapshot drives the header indicator so any divergence is
-visible instead of silent. GIT_LOCK serialises this loop against the
-request handlers' commits within this process; cross-process safety
-comes from never rebasing.
+The status snapshot drives the header indicator so any divergence is visible
+instead of silent. The repository writer lock serialises this loop against
+request commits both within this process and across local Anomalica processes
+that share the clone.
 """
 
 from __future__ import annotations
 
+import fcntl
 import subprocess
 import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
 GIT_LOCK = threading.RLock()
+_LOCK_STATE = threading.local()
+
+
+@contextmanager
+def repository_write_lock(repo_dir: Path):
+    """The cross-process writer lock shared by every local ingests mutator."""
+    repo_dir = Path(repo_dir)
+    with GIT_LOCK:
+        depth = getattr(_LOCK_STATE, "depth", 0)
+        if depth:
+            _LOCK_STATE.depth = depth + 1
+            try:
+                yield
+            finally:
+                _LOCK_STATE.depth -= 1
+            return
+
+        common = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            cwd=repo_dir,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        common_dir = Path(common)
+        if not common_dir.is_absolute():
+            common_dir = (repo_dir / common_dir).resolve()
+        lock_path = common_dir / "anomalica-write.lock"
+        with lock_path.open("a+") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            _LOCK_STATE.depth = 1
+            try:
+                yield
+            finally:
+                _LOCK_STATE.depth = 0
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
 
 SYNC_INTERVAL_SECONDS = 180
 
@@ -90,7 +129,7 @@ class SyncManager:
     def sync_once(self) -> dict:
         """One fetch + observe round. Fast-forwards when purely behind;
         nudges a plain push when purely ahead; never rebases."""
-        with GIT_LOCK:
+        with repository_write_lock(self.repo_dir):
             fetch = self._run("fetch", "origin")
             if fetch.returncode != 0:
                 self.offline = True

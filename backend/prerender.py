@@ -140,52 +140,33 @@ def _gate_summary(summary: dict) -> dict:
     return {k: v for k, v in summary.items() if k != "source_hash"}
 
 
-def _gate_housekeeping(sidecar: dict) -> dict:
-    """A gated record's housekeeping sidecar with items about non-public fields
-    removed.
-
-    A proposal carries the CURRENT and PROPOSED values of a frontmatter field, so
-    publishing one publishes that field. The same allow-list that decides which
-    frontmatter a gated record may ship therefore decides which proposals it may
-    ship - otherwise a proposal about `description` would leak the publisher blurb
-    the frontmatter gate just withheld.
-
-    Item ids are preserved, so an approval posted from the public tab still
-    addresses the same item in the full sidecar the writer reads."""
-    items = [
-        i
-        for i in (sidecar.get("items") or [])
-        if isinstance(i, dict)
-        and i.get("field") in GATED_FRONTMATTER_ALLOW
-        and (i.get("to_field") is None or i.get("to_field") in GATED_FRONTMATTER_ALLOW)
-    ]
-    return {**sidecar, "items": items, "gated": True}
+def _gate_housekeeping(view: dict) -> dict:
+    """Project a gated record to the exact access-summary tagged variant."""
+    return {
+        "schema": view["schema"],
+        "access": "summary",
+        "state": view["state"],
+        "due_reason": view["due_reason"],
+        "outstanding_count": view["outstanding_count"],
+        "scopes": view["scopes"],
+        "deep_link": view["deep_link"],
+        "sidecar": None,
+    }
 
 
-def _housekeeping_for(h: str, record_text: str | None = None) -> dict | None:
+def _housekeeping_for(
+    h: str, record_text: str | None = None, viewed_ref: str | None = None
+) -> dict | None:
     """The record's housekeeping sidecar, with each item's preview lines.
 
     The preview is the exact frontmatter the commit will remove and add, computed
     from the live record. Snapshot readers get the same thing the live API serves,
     so the online tab is not a degraded view."""
-    from anomalica_common import housekeeping as hkc
     from backend import server
 
-    path = server.ingests_path / "store" / f"{h}.housekeeping.json"
-    if not path.exists():
+    if not isinstance(server.source, server.LocalIngestSource):
         return None
-    try:
-        payload = json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError):
-        return None
-    if record_text:
-        sc = hkc.load_sidecar_file(path)
-        if sc is not None:
-            previews = {i.id: hkc.preview_item(record_text, i) for i in sc.items}
-            for raw in payload.get("items") or []:
-                if raw.get("id") in previews:
-                    raw["preview"] = previews[raw["id"]]
-    return payload
+    return server._housekeeping_view_local(h, viewed_ref)
 
 
 def _gate_digest_quotes(digest: dict) -> dict:
@@ -353,6 +334,22 @@ def _prerender_records(base: Path, only: set[str] | None = None) -> dict:
     from backend import server
 
     summaries = server.source.list_ingests()
+    snapshot_ref: str | None = None
+    committed_details: dict[str, tuple[tuple[Path, str, bytes], dict]] = {}
+    if isinstance(server.source, server.LocalIngestSource):
+        snapshot_ref = server.source.current_ref()
+        committed_summaries = []
+        for summary in summaries:
+            h = summary["content_hash"]
+            record = server.source.record_at_ref(h, snapshot_ref)
+            if record is None:
+                continue
+            detail = server.source._ingest_from_content(h, record[2].decode("utf-8"))
+            committed_details[h] = (record, detail)
+            committed_summaries.append(
+                {**summary, "copyright_status": detail.get("copyright_status")}
+            )
+        summaries = committed_summaries
     _write(
         base / "ingests.json",
         [
@@ -361,7 +358,7 @@ def _prerender_records(base: Path, only: set[str] | None = None) -> dict:
         ],
     )  # the list = metadata only, no bodies, no gate answers
 
-    _write(base / "housekeeping.json", _housekeeping_queue(summaries))
+    _write(base / "housekeeping.json", _housekeeping_queue(summaries, snapshot_ref))
 
     digest_map = _build_digest_map(server)
     counts = {"records": 0, "record_public": 0, "digests": 0, "coverage": 0, "media": 0}
@@ -373,8 +370,20 @@ def _prerender_records(base: Path, only: set[str] | None = None) -> dict:
         if only is not None and h not in only:
             continue  # incremental: only re-render the changed records' files
 
-        detail = server.source.get_ingest(h)
+        if isinstance(server.source, server.LocalIngestSource):
+            committed = committed_details.get(h)
+            detail = committed[1] if committed is not None else None
+            if committed is not None and detail is not None:
+                record = committed[0]
+                detail["base_record_sha"] = record[1]
+                detail["base_ref"] = snapshot_ref
+        else:
+            detail = server.source.get_ingest(h)
         if detail is not None:
+            # The detail bytes and their access decision must describe the same
+            # committed snapshot. A dirty worktree summary must not make a
+            # committed restricted body public (or hide a committed public one).
+            public = serves_verbatim(detail.get("copyright_status"))
             if not public:
                 # gated: no body, no raw frontmatter, whitelisted metadata only
                 detail = _gate_record_detail(detail)
@@ -405,7 +414,7 @@ def _prerender_records(base: Path, only: set[str] | None = None) -> dict:
             src = server.ingests_path / "store"
             f = next(iter(sorted(src.glob(f"{h}*.md"))), None)
             raw_md = f.read_text(errors="replace") if f else ""
-        hk = _housekeeping_for(h, raw_md)
+        hk = _housekeeping_for(h, raw_md, snapshot_ref)
         if hk is not None:
             _write(
                 base / "ingests" / h / "housekeeping.json",
@@ -422,7 +431,7 @@ def _prerender_records(base: Path, only: set[str] | None = None) -> dict:
     return counts
 
 
-def _housekeeping_queue(summaries: list[dict]) -> dict:
+def _housekeeping_queue(summaries: list[dict], viewed_ref: str | None = None) -> dict:
     """The Housekeeping tab's index: one row per record that has a sidecar.
 
     Counts only - no field values - so the index itself carries nothing gated and
@@ -430,18 +439,23 @@ def _housekeeping_queue(summaries: list[dict]) -> dict:
     rows = []
     for s in summaries:
         h = s["content_hash"]
-        hk = _housekeeping_for(h)
+        hk = _housekeeping_for(h, viewed_ref=viewed_ref)
         if hk is None:
             continue
-        items = hk.get("items") or []
+        sidecar = hk.get("sidecar") or {}
+        items = sidecar.get("items") or []
+        current = hk.get("state") == "current"
         rows.append(
             {
                 "content_hash": h,
                 "title": s.get("title"),
                 "copyright_status": s.get("copyright_status"),
-                "checked_at": hk.get("checked_at"),
-                "checker_version": hk.get("checker_version"),
-                "proposed": sum(1 for i in items if i.get("status") == "proposed"),
+                "checked_at": sidecar.get("checked_at"),
+                "algorithm_version": hk.get("viewed_algorithm_version"),
+                "current": current,
+                "state": hk.get("state"),
+                "due_reason": hk.get("due_reason"),
+                "proposed": hk.get("outstanding_count", 0),
                 "approved": sum(1 for i in items if i.get("status") == "approved"),
                 "rejected": sum(1 for i in items if i.get("status") == "rejected"),
             }

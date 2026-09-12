@@ -29,12 +29,19 @@ INGESTS = Path(
 )
 
 RUNNER = """
-import { applyItems } from "./lib/housekeeping.ts";
+import { applyPatch, applyTokenReplacements } from "./lib/housekeeping.ts";
 const cases = JSON.parse(await Deno.readTextFile(Deno.args[0]));
 const out = [];
 for (const c of cases) {
   try {
-    out.push({ name: c.name, text: await applyItems(c.original, c.items) });
+    // The edge validates before it persists approval, so its guarded helper takes
+    // proposed replacement items; Python's shared helper takes approved items.
+    const replacements = c.items
+      .filter(i => i.operation === "replace-token")
+      .map(i => ({ ...i, status: "proposed" }));
+    const frontmatter = c.items.filter(i => i.operation !== "replace-token");
+    const replaced = applyTokenReplacements(c.original, replacements);
+    out.push({ name: c.name, text: (await applyPatch(replaced, frontmatter)).text });
   } catch (e) {
     out.push({ name: c.name, error: String(e && e.constructor && e.constructor.name) });
   }
@@ -80,14 +87,21 @@ def _to_items(dicts: list[dict]) -> list[hk.Item]:
         hk.Item(
             id=d["id"],
             check=d["check"],
-            field=d["field"],
+            field=d.get("field"),
             operation=d["operation"],
-            current=d["current"],
-            proposed=d["proposed"],
+            current=d.get("current"),
+            proposed=d.get("proposed"),
             confidence=d["confidence"],
             evidence=hk.Evidence(reasoning=d["evidence"]["reasoning"]),
             status=d["status"],
             to_field=d.get("to_field"),
+            scope=d.get("scope"),
+            old_token=d.get("old_token"),
+            new_token=d.get("new_token"),
+            case_sensitive=d.get("case_sensitive"),
+            token_boundary=d.get("token_boundary"),
+            occurrences=d.get("occurrences") or [],
+            expected_count=d.get("expected_count"),
         )
         for d in dicts
     ]
@@ -117,6 +131,8 @@ def _cases(tmp_path: Path) -> list[dict]:
                     "name": record.name,
                     "original": record.read_text(errors="replace"),
                     "items": [_json_item(i) for i in sc.items],
+                    "input_sha256": sc.input_sha256
+                    or hk.input_sha256(record.read_bytes()),
                 }
             )
 
@@ -154,22 +170,47 @@ def _cases(tmp_path: Path) -> list[dict]:
             ],
         ),
     ):
-        cases.append({"name": name, "original": SYNTHETIC, "items": items})
+        cases.append(
+            {
+                "name": name,
+                "original": SYNTHETIC,
+                "items": items,
+                "input_sha256": hk.input_sha256(SYNTHETIC.encode()),
+            }
+        )
     return cases
 
 
 def _json_item(i: hk.Item) -> dict:
-    return {
+    common = {
         "id": i.id,
         "check": i.check,
-        "field": i.field,
-        "to_field": i.to_field,
         "operation": i.operation,
+        "confidence": i.confidence,
+        "evidence": {
+            "reasoning": i.evidence.reasoning,
+            "sources": i.evidence.sources,
+            "record_spans": i.evidence.record_spans,
+        },
+        "status": i.status,
+    }
+    if i.operation == "replace-token":
+        return {
+            **common,
+            "scope": i.scope,
+            "old_token": i.old_token,
+            "new_token": i.new_token,
+            "case_sensitive": i.case_sensitive,
+            "token_boundary": i.token_boundary,
+            "occurrences": i.occurrences,
+            "expected_count": i.expected_count,
+        }
+    return {
+        **common,
+        "field": i.field,
         "current": i.current,
         "proposed": i.proposed,
-        "confidence": i.confidence,
-        "evidence": {"reasoning": i.evidence.reasoning},
-        "status": i.status,
+        **({"to_field": i.to_field} if i.to_field is not None else {}),
     }
 
 
@@ -204,11 +245,19 @@ def test_python_and_typescript_apply_identically(tmp_path: Path):
         src = tmp_path / "rec.md"
         src.write_text(case["original"])
         try:
-            py_out = {"text": hk.apply_items(src, items)}
+            py_out = {
+                "text": hk.apply_items(
+                    src, items, expected_input_sha256=case["input_sha256"]
+                )
+            }
         except hk.MultilineField:
             py_out = {"error": "MultilineField"}
         except hk.BodyChanged:
             py_out = {"error": "BodyChanged"}
+        except hk.StaleInput:
+            py_out = {"error": "StaleInput"}
+        except hk.ApplyConflict:
+            py_out = {"error": "ApplyConflict"}
 
         got = ts[case["name"]]
         if py_out.get("text") != got.get("text") or (

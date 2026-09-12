@@ -27,6 +27,9 @@
     fetchCoverage,
     provenanceOf,
     submitVerification,
+    unlockedIngestFromVerification,
+    reviewBaseFor,
+    type UnlockedIngest,
     hashFile,
     STATIC_READS,
   } from "$lib/api";
@@ -82,6 +85,7 @@
     applyPageMarkers,
   } from "$lib/page-markers";
   import EditableMetadata from "./EditableMetadata.svelte";
+  import HousekeepingWarning from "./HousekeepingWarning.svelte";
   import ReviewHistory from "./ReviewHistory.svelte";
   import { hasWordTimestamps, parseWords, nextRelevantWordStartAfter, speakerWordCounts, quotedSpeakerCounts } from "$lib/transcript-words";
   import { imageRefsInBody } from "$lib/image-captions";
@@ -97,6 +101,9 @@
     user,
     isAdmin = false,
     canTag = false,
+    housekeepingOpen = 0,
+    housekeepingScopes = [],
+    housekeepingDue = false,
     reviewed = false,
     needsVerify = false,
     hasNext = false,
@@ -107,6 +114,8 @@
     onback,
     ontuning,
     onreload,
+    onhousekeeping,
+    onhousekeepingaccess,
   }: {
     ingest: IngestDetail;
     digest?: DigestDocument | null;
@@ -116,6 +125,10 @@
     isAdmin?: boolean;
     /** Whether this reviewer may say what the record is about. */
     canTag?: boolean;
+    /** Undecided metadata proposals that should be reviewed before editing. */
+    housekeepingOpen?: number;
+    housekeepingScopes?: ("frontmatter" | "body")[];
+    housekeepingDue?: boolean;
     reviewed?: boolean;
     /** Review carried from a re-ingest, not yet re-verified - show a banner. */
     needsVerify?: boolean;
@@ -132,6 +145,10 @@
     ontuning?: () => void;
     /** Open the record that superseded this one (re-ingest while open). */
     onreload?: (contentHash: string) => void;
+    /** Open this record directly in the Housekeeping review queue. */
+    onhousekeeping?: () => void;
+    /** Preserve the one-shot full view returned after possession verification. */
+    onhousekeepingaccess?: (view: import("$lib/api").HousekeepingFullView) => void;
   } = $props();
 
   const doc = new DocumentStore();
@@ -139,10 +156,13 @@
   // For a gated record, the public snapshot withholds body + raw_frontmatter;
   // they arrive only after a possession proof (unlockGatedBody) and then override
   // the empty snapshot values so the editor + write-back see the real record.
-  let unlockedBody = $state<string | null>(null);
-  let unlockedRawFm = $state<string | null>(null);
+  let unlockedIngest = $state<UnlockedIngest | null>(null);
+  let activeUnlock = $derived(
+    unlockedIngest?.content_hash === ingest.content_hash ? unlockedIngest : null,
+  );
   let rawMarkdown = $derived(
-    (unlockedRawFm ?? ingest.raw_frontmatter) + (unlockedBody ?? ingest.body),
+    (activeUnlock?.raw_frontmatter ?? ingest.raw_frontmatter) +
+      (activeUnlock?.body ?? ingest.body),
   );
 
   // Only reload when we're actually looking at a different ingest.
@@ -1235,7 +1255,7 @@
 
   // A gated record online: the snapshot withheld the body, so proving possession
   // also has to FETCH it. true exactly when there's a hidden body to unlock.
-  let gatedBodyWithheld = $derived(STATIC_READS && !isPublic && !ingest.body && !unlockedBody);
+  let gatedBodyWithheld = $derived(STATIC_READS && !isPublic && !ingest.body && !activeUnlock);
 
   // Prove possession to the edge and, on a pass, pull back the withheld body +
   // raw_frontmatter (the public snapshot omits them for gated records). Loads the
@@ -1250,15 +1270,22 @@
   }): Promise<boolean> {
     unlocking = true;
     try {
-      const out = await submitVerification(ingest.content_hash, proof);
+      const requestedHash = ingest.content_hash;
+      const out = await submitVerification(requestedHash, proof);
       if (!out.passed) return false;
-      if (typeof out.body === "string") {
-        unlockedRawFm = out.raw_frontmatter ?? ingest.raw_frontmatter;
-        unlockedBody = out.body;
+      if (ingest.content_hash !== requestedHash) return false;
+      if (out.housekeeping?.access === "full") onhousekeepingaccess?.(out.housekeeping);
+      const unlocked = unlockedIngestFromVerification(requestedHash, out);
+      // A static gated body is useful for editing only when the edge returned
+      // the exact save identity for those bytes. Never unlock text that would
+      // later be submitted against the stale public-snapshot identity.
+      if (typeof out.body === "string" && !unlocked) return false;
+      if (unlocked) {
+        unlockedIngest = unlocked;
         // Same hash, so the load-effect won't re-run; load the now-available body
         // explicitly and mark it loaded.
-        doc.load((unlockedRawFm ?? "") + unlockedBody, ingest.content_hash);
-        lastLoadedHash = ingest.content_hash;
+        doc.load(unlocked.raw_frontmatter + unlocked.body, requestedHash);
+        lastLoadedHash = requestedHash;
       }
       accessGranted = true;
       return true;
@@ -3107,9 +3134,15 @@
     // Two-phase on the local backend so the slow push reports as its own
     // step; the edge deploy writes straight to GitHub in one call.
     submitPhase = "saving";
-    const result = await submitReview(ingest.content_hash, doc.current, reviewNotes, spans, verdict, {
-      deferPush: !STATIC_READS,
-    });
+    const result = await submitReview(
+      ingest.content_hash,
+      doc.current,
+      reviewNotes,
+      reviewBaseFor(ingest.content_hash, ingest, unlockedIngest),
+      spans,
+      verdict,
+      { deferPush: !STATIC_READS },
+    );
     let synced = result.synced !== false;
     let syncDetail = result.syncDetail || "";
     if (result.ok && !STATIC_READS) {
@@ -3726,6 +3759,14 @@
   role="presentation"
   ondragover={(e) => e.preventDefault()}
   ondrop={(e) => e.preventDefault()}>
+  {#if (housekeepingOpen > 0 || housekeepingDue) && onhousekeeping}
+    <HousekeepingWarning
+      count={housekeepingOpen}
+      scopes={housekeepingScopes}
+      due={housekeepingDue}
+      onopen={onhousekeeping}
+    />
+  {/if}
   <!-- Superseded-while-open banner: this record was re-ingested underneath the
        open view, so its source no longer resolves and edits would target a
        retired record. Prompt a reload to the new version. -->
@@ -3744,7 +3785,7 @@
     </div>
   {/if}
   <!-- Title bar -->
-  <div class="px-4 py-3 border-b border-border bg-surface-alt flex items-center gap-3">
+  <div class="px-4 py-3 border-b border-border bg-surface-alt flex items-center gap-3 overflow-x-auto">
     <button
       onclick={onback}
       class="p-2 rounded text-on-surface-muted hover:text-on-surface hover:bg-surface transition-colors cursor-pointer flex-none"
@@ -4638,7 +4679,7 @@
           >
             <div class="w-full">
               <div id="yt-player" class="w-full h-auto aspect-video"></div>
-              <div class="flex items-center gap-1 px-3 py-2">
+              <div class="flex flex-wrap items-center gap-1 px-3 py-2">
                 <span class="text-[10px] font-ui uppercase tracking-wide text-white/40 mr-1 flex-none">Speed</span>
                 {#each playbackRates as rate (rate)}
                   <button
@@ -4910,7 +4951,7 @@
           Meta
         </button>
 
-        <div class="ml-auto flex items-center gap-1">
+        <div class="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-1">
           <!-- How loudly other people's highlights are drawn, at three
                volumes: hidden, a hairline, or the palette. Hairline by default -
                while reading, a highlight only has to register as present, and

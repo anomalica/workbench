@@ -6,6 +6,7 @@ verified separately; here it's the file layout + that it reuses graph/curation).
 import json
 import os
 import sqlite3
+import subprocess
 
 import pytest
 import yaml
@@ -279,6 +280,97 @@ def test_records_prerender_never_writes_a_verification_sidecar(records_repo, tmp
     base = tmp_path / "out" / "api"
     prerender._prerender_records(base)
     assert not list(base.rglob("*verification*"))
+
+
+def test_local_prerender_detail_uses_committed_bytes_and_identity(
+    tmp_path, monkeypatch
+):
+    from backend import server
+
+    repo = tmp_path / "ingests"
+    store = repo / "store"
+    store.mkdir(parents=True)
+    record_path = store / f"{H_PUB}.md"
+    committed = (
+        f"---\ncontent_hash: {H_PUB}\ncopyright:\n  status: restricted\n"
+        "title: Committed title\n---\nCommitted body\n"
+    )
+    record_path.write_text(committed)
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "store"], cwd=repo, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-qm",
+            "fixture",
+        ],
+        cwd=repo,
+        check=True,
+    )
+    ref = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    blob = subprocess.run(
+        ["git", "rev-parse", f"{ref}:store/{H_PUB}.md"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    record_path.write_text(
+        committed.replace("restricted", "public_domain").replace(
+            "Committed", "Dirty", 2
+        )
+    )
+    source = server.LocalIngestSource(repo)
+    monkeypatch.setattr(server, "source", source)
+    monkeypatch.setattr(server, "ingests_path", repo)
+    monkeypatch.setattr(server, "digests_path", tmp_path / "digests")
+    full_housekeeping = {
+        "schema": "anomalica/housekeeping-view/1",
+        "access": "full",
+        "state": "current",
+        "due_reason": None,
+        "outstanding_count": 1,
+        "scopes": ["body"],
+        "deep_link": f"/housekeeping?record={H_PUB}",
+        "sidecar": {"items": []},
+        "viewed_sidecar_sha": "a" * 40,
+        "viewed_ref": ref,
+        "viewed_content_hash": f"sha256:{H_PUB}",
+        "viewed_input_sha256": f"sha256:{'b' * 64}",
+        "viewed_algorithm_version": "1",
+        "previews": {},
+    }
+    monkeypatch.setattr(
+        prerender, "_housekeeping_for", lambda *_args, **_kwargs: full_housekeeping
+    )
+
+    base = tmp_path / "out" / "api"
+    prerender._prerender_records(base)
+    detail = json.loads((base / "ingests" / f"{H_PUB}.json").read_text())
+
+    assert detail["frontmatter"]["title"] == "Committed title"
+    assert detail["body"] == ""
+    assert detail["copyright_status"] == "restricted"
+    assert detail["base_record_sha"] == blob
+    assert detail["base_ref"] == ref
+    housekeeping = json.loads(
+        (base / "ingests" / H_PUB / "housekeeping.json").read_text()
+    )
+    assert housekeeping["access"] == "summary"
+    assert housekeeping["sidecar"] is None
+    assert "viewed_ref" not in housekeeping
 
 
 def test_prerender_records_only_renders_just_the_named_record(

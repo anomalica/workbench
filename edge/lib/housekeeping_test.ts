@@ -7,14 +7,17 @@
  * either implementation, change both and run both.
  */
 
-import { assert, assertEquals, assertRejects } from "jsr:@std/assert";
+import { assert, assertEquals, assertRejects, assertThrows } from "jsr:@std/assert@1";
 import {
+  ApplyConflict,
   applyItems,
+  applyPatch,
+  applyTokenReplacements,
   BodyChanged,
   bodyDigest,
   type HousekeepingItem,
-  applyPatch,
-  MultilineField,
+  type HousekeepingV2Item,
+  InvalidReplacement,
   scalar,
   unmetDependencies,
 } from "./housekeeping.ts";
@@ -59,6 +62,96 @@ const MOVE_DATE = item({
   current: "2026-08-11",
   proposed: "2026-08-11",
 });
+
+function tokenItem(record: string, oldToken = "Speaker_1", newToken = "Alice"): HousekeepingV2Item {
+  const bytes = new TextEncoder().encode(record);
+  const needle = new TextEncoder().encode(oldToken);
+  const bodyStart = new TextEncoder().encode(
+    record.match(/^---\n[\s\S]*?\n---\n/)?.[0] ?? "",
+  ).length;
+  const occurrences = [];
+  for (let i = bodyStart; i <= bytes.length - needle.length; i++) {
+    const isWord = (byte: number | undefined) =>
+      byte !== undefined &&
+      ((byte >= 48 && byte <= 57) ||
+        (byte >= 65 && byte <= 90) ||
+        byte === 95 ||
+        (byte >= 97 && byte <= 122));
+    if (
+      needle.every((byte, j) => bytes[i + j] === byte) &&
+      !isWord(bytes[i - 1]) &&
+      !isWord(bytes[i + needle.length])
+    ) {
+      occurrences.push({ start_byte: i, end_byte: i + needle.length });
+    }
+  }
+  return {
+    id: "speaker-1",
+    check: "speaker-name",
+    operation: "replace-token",
+    scope: "body",
+    old_token: oldToken,
+    new_token: newToken,
+    case_sensitive: true,
+    token_boundary: "ascii-word",
+    occurrences,
+    expected_count: occurrences.length,
+    confidence: "high",
+    evidence: { reasoning: "Named in the transcript" },
+    status: "proposed",
+  };
+}
+
+Deno.test("v2 replaces the complete body token set at raw UTF-8 byte offsets", () => {
+  const record = "---\ntitle: 敦賀\n---\nSpeaker_1 met Speaker_10. Speaker_1 spoke.\n";
+  const item = tokenItem(record);
+  const out = applyTokenReplacements(record, [item]);
+  assertEquals(out, "---\ntitle: 敦賀\n---\nAlice met Speaker_10. Alice spoke.\n");
+});
+
+Deno.test("v2 ignores the same whole token in frontmatter", () => {
+  const record = "---\ntitle: Speaker_1\n---\nSpeaker_1 spoke twice: Speaker_1.\n";
+  assertEquals(
+    applyTokenReplacements(record, [tokenItem(record)]),
+    "---\ntitle: Speaker_1\n---\nAlice spoke twice: Alice.\n",
+  );
+});
+
+Deno.test("v2 refuses incomplete, extra-key, and overlapping replacements", () => {
+  const bodyOnly = "---\ntitle: T\n---\nSpeaker_1 spoke twice: Speaker_1.\n";
+  const incomplete = tokenItem(bodyOnly);
+  incomplete.occurrences.pop();
+  incomplete.expected_count--;
+  assertThrows(
+    () => applyTokenReplacements(bodyOnly, [incomplete]),
+    InvalidReplacement,
+    "complete body match set",
+  );
+
+  const extra = {
+    ...tokenItem(bodyOnly),
+    extra: true,
+  } as unknown as HousekeepingV2Item;
+  assertThrows(
+    () => applyTokenReplacements(bodyOnly, [extra]),
+    InvalidReplacement,
+    "invalid item shape",
+  );
+
+  const duplicate = tokenItem(bodyOnly);
+  assertThrows(
+    () =>
+      applyTokenReplacements(bodyOnly, [
+        duplicate,
+        {
+          ...duplicate,
+          id: "two",
+        },
+      ]),
+    InvalidReplacement,
+    "overlapping",
+  );
+});
 const SET_YEAR = item({
   id: "y",
   field: "date_published",
@@ -75,7 +168,12 @@ Deno.test("a move relocates the field and its value", async () => {
 });
 
 Deno.test("only approved items are applied", async () => {
-  const out = await applyItems(RECORD, [{ ...MOVE_PUBLISHER, status: "rejected" }]);
+  const out = await applyItems(RECORD, [
+    {
+      ...MOVE_PUBLISHER,
+      status: "rejected",
+    },
+  ]);
   assertEquals(out, RECORD);
 });
 
@@ -106,11 +204,7 @@ Deno.test("a quote in a value is escaped", () => {
   assertEquals(scalar('a "quoted" name'), '"a \\"quoted\\" name"');
 });
 
-Deno.test("a multiline field does not apply, and does not abort the rest", async () => {
-  // The record is not the shape the proposal assumed. It is reported as
-  // not-applied rather than raised: raising would discard items that WOULD have
-  // applied, and a structural mismatch is the same class of event as any other
-  // "the record moved on".
+Deno.test("a multiline field conflict aborts the complete apply", async () => {
   const withList = RECORD.replace(
     "publisher: 'Eyes On Cinema'",
     "publisher:\n  - Eyes On Cinema\n  - Someone Else",
@@ -123,24 +217,30 @@ Deno.test("a multiline field does not apply, and does not abort the rest", async
     current: "2026-08-11",
     proposed: "1967",
   });
-  const r = await applyPatch(withList, [MOVE_PUBLISHER, alsoValid]);
-  assertEquals(
-    r.didNotApply.map((d) => d.item.id),
-    ["i"],
-  );
-  assertEquals(
-    r.applied.map((i) => i.id),
-    ["ok"],
-    "the other item still applied",
-  );
+  await assertRejects(() => applyPatch(withList, [MOVE_PUBLISHER, alsoValid]), ApplyConflict);
 });
 
-Deno.test("a patch does not apply when the record moved on", async () => {
+Deno.test("a patch conflict aborts when the record moved on", async () => {
   const edited = RECORD.replace("publisher: 'Eyes On Cinema'", "publisher: 'BBC'");
-  const r = await applyPatch(edited, [MOVE_PUBLISHER]);
-  assertEquals(r.applied.length, 0);
-  assertEquals(r.text, edited, "an unmatched patch leaves the record untouched");
-  assertEquals(r.didNotApply.length, 1);
+  await assertRejects(() => applyPatch(edited, [MOVE_PUBLISHER]), ApplyConflict);
+});
+
+Deno.test("CRLF fences and body bytes are preserved", async () => {
+  const record = "---\r\ntitle: T\r\npublisher: 'Old'\r\n---\r\nOSSAP body.\r\n";
+  const frontmatter = item({
+    current: "Old",
+    proposed: "New",
+    operation: "set",
+    to_field: undefined,
+  });
+  assertEquals(
+    await applyItems(record, [frontmatter]),
+    '---\r\ntitle: T\r\npublisher: "New"\r\n---\r\nOSSAP body.\r\n',
+  );
+  assertEquals(
+    applyTokenReplacements(record, [tokenItem(record, "OSSAP", "AAWSAP")]),
+    "---\r\ntitle: T\r\npublisher: 'Old'\r\n---\r\nAAWSAP body.\r\n",
+  );
 });
 
 Deno.test("a record with no frontmatter is refused", async () => {
@@ -155,7 +255,12 @@ Deno.test("set appends when the field is absent", async () => {
 
 Deno.test("clear removes the field", async () => {
   const out = await applyItems(RECORD, [
-    item({ id: "c1", field: "publisher", operation: "clear", to_field: undefined }),
+    item({
+      id: "c1",
+      field: "publisher",
+      operation: "clear",
+      to_field: undefined,
+    }),
   ]);
   assert(!out.includes("publisher:"));
   assert(out.includes("source_type: 'video'"));
@@ -174,7 +279,11 @@ Deno.test("the guard catches a parser fault that swallows a body line", async ()
 Deno.test("a dependent item cannot be approved without its prerequisite", () => {
   // Setting date_published without the move that frees it overwrites the upload
   // date instead of relocating it - so this is refused, not warned about.
-  const move = item({ id: "m", field: "date_published", to_field: "posted_date" });
+  const move = item({
+    id: "m",
+    field: "date_published",
+    to_field: "posted_date",
+  });
   const set = item({
     id: "s",
     field: "date_published",

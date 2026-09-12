@@ -19,13 +19,17 @@ import random
 import re
 import secrets
 import string
+import subprocess
 import time
+import tempfile
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 from datetime import datetime
 from datetime import timezone as dt_timezone
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
+import yaml
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 
@@ -52,7 +56,7 @@ from backend import (
     tags,
 )
 from backend.auth import setup_auth
-from backend.sync import GIT_LOCK, SyncManager
+from backend.sync import GIT_LOCK, SyncManager, repository_write_lock
 from anomalica_common import housekeeping as hk
 
 FULL_HASH_LENGTH = 64
@@ -236,9 +240,126 @@ def _date_sort_key(value: str | None) -> float:
 # `Speaker 3` from diarisation: a cluster id, not a person's name.
 _DEFAULT_SPEAKER = re.compile(r"^\[?\s*Speaker\s+\d+\s*\]?$", re.IGNORECASE)
 
-# Far enough into a queued record to pass its frontmatter, not so far that a
-# body without a title is read in full.
-_QUEUE_HEAD_LINES = 40
+_SOURCE_TYPES = frozenset({"pdf", "audio", "video", "web", "ebook", "image"})
+_SOURCE_KEY_FIELDS = (
+    "source_id",
+    "source_url",
+    "reference",
+    "url",
+    "fetched_url",
+    "also_published_at",
+)
+_YT_ID_RE = re.compile(r"(?:v=|youtu\.be/|/shorts/|/embed/)([A-Za-z0-9_-]{11})")
+_MEDIA_ASSET_ID_RE = re.compile(r"/(\d{6,})/-1/")
+_TRACKING_PARAMS = frozenset(
+    {
+        "t",
+        "si",
+        "feature",
+        "list",
+        "index",
+        "pp",
+        "ab_channel",
+        "start",
+        "app",
+        "_tp",
+        "origin",
+        "utm_source",
+        "utm_medium",
+        "utm_campaign",
+        "utm_term",
+        "utm_content",
+        "fbclid",
+        "gclid",
+    }
+)
+
+
+def _canonical_source_key(value: object) -> str | None:
+    """Match scheduler source identities without importing the scheduler."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.startswith("youtube:"):
+        return text
+    youtube = _YT_ID_RE.search(text)
+    if youtube:
+        return f"youtube:{youtube.group(1)}"
+    if text.startswith(("http://", "https://")):
+        parsed = urlparse(text)
+        if parsed.netloc.lower().endswith("media.defense.gov"):
+            asset = _MEDIA_ASSET_ID_RE.search(parsed.path)
+            if asset:
+                return f"media.defense.gov:{asset.group(1)}"
+        query = [
+            (key, val)
+            for key, val in parse_qsl(parsed.query)
+            if key not in _TRACKING_PARAMS
+        ]
+        return urlunparse(
+            (
+                parsed.scheme,
+                parsed.netloc.lower(),
+                parsed.path.rstrip("/"),
+                "",
+                urlencode(query),
+                "",
+            )
+        )
+    return text
+
+
+def _source_keys(frontmatter: dict) -> set[str]:
+    keys: set[str] = set()
+    provenance = frontmatter.get("provenance")
+    sources = (
+        [frontmatter, provenance] if isinstance(provenance, dict) else [frontmatter]
+    )
+    for fields in sources:
+        for name in _SOURCE_KEY_FIELDS:
+            value = fields.get(name)
+            values = value if isinstance(value, list) else [value]
+            for candidate in values:
+                canonical = _canonical_source_key(candidate)
+                if canonical:
+                    keys.add(canonical)
+    identifiers = (
+        provenance.get("identifiers") if isinstance(provenance, dict) else None
+    )
+    if isinstance(identifiers, dict):
+        for scheme, native in identifiers.items():
+            canonical = _canonical_source_key(f"{scheme}:{native}")
+            if canonical:
+                keys.add(canonical)
+    return keys
+
+
+def _yaml_frontmatter(text: str) -> tuple[dict | None, str]:
+    match = re.match(r"^---\r?\n(.*?)\r?\n---(?:\r?\n|$)(.*)$", text, re.DOTALL)
+    if not match:
+        return None, text
+    try:
+        parsed = yaml.safe_load(match.group(1))
+    except yaml.YAMLError:
+        return None, match.group(2)
+    return (parsed if isinstance(parsed, dict) else None), match.group(2)
+
+
+def _valid_intake_date(value: object) -> bool:
+    try:
+        parsed = (
+            value
+            if isinstance(value, datetime)
+            else datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        )
+    except (TypeError, ValueError):
+        return False
+    return (
+        parsed.tzinfo is not None
+        and parsed.utcoffset() == dt_timezone.utc.utcoffset(parsed)
+    )
 
 
 class IngestSource(ABC):
@@ -249,16 +370,9 @@ class IngestSource(ABC):
     def list_ingests(self) -> list[dict]:
         """Return a summary index of every available ingest."""
 
-    def queued_titles(self) -> list[str]:
-        """Titles of records ingested but not yet in the store.
-
-        A real stage between "we do not hold this" and "it is a record": the
-        ingester has produced it and it is waiting to be promoted. Only the
-        local clone can see the queue, so the default is empty rather than
-        abstract - a source without one is not broken, it just has nothing
-        in flight.
-        """
-        return []
+    def intake_queue(self) -> dict[str, list[dict]]:
+        """Pending transient intake and blocked data errors, when locally visible."""
+        return {"pending": [], "errors": []}
 
     @abstractmethod
     def get_ingest(self, full_hash: str) -> dict | None:
@@ -275,6 +389,10 @@ class IngestSource(ABC):
         author_name: str,
         author_email: str,
         notes: str,
+        extra_paths: list[Path] | None = None,
+        include_record: bool = True,
+        include_coverage: bool = True,
+        expected_ref: str | None = None,
     ) -> None:
         """Commit the current state of the file as a review. COMMIT-ONLY:
         pushing is the operations auto-push watcher's job (the single
@@ -341,6 +459,10 @@ def normalise_hash(value: str | None) -> str | None:
     return value if FULL_HASH_PATTERN.match(value) else None
 
 
+def _stale() -> HTTPException:
+    return HTTPException(status_code=409, detail="Viewed record is stale")
+
+
 class LocalIngestSource(IngestSource):
     """Reads ingests directly from a local clone of ingests.
 
@@ -353,6 +475,7 @@ class LocalIngestSource(IngestSource):
 
     def __init__(self, repo_path: Path):
         self.store = repo_path / "store"
+        self._ref_path_hints: dict[str, tuple[dict[str, Path], list[Path]]] = {}
 
     def _scan(self) -> dict[str, tuple[Path, dict]]:
         """Walk the store, return {content_hash: (path, frontmatter)}."""
@@ -540,7 +663,7 @@ class LocalIngestSource(IngestSource):
         # A moved-from path no longer exists on disk; `git add` stages its
         # deletion only if it is tracked, and errors on an untracked missing
         # path - so filter those out rather than aborting the whole commit.
-        with GIT_LOCK:
+        with repository_write_lock(repo_dir):
             rel_paths = []
             for p in paths:
                 rel = str(p.relative_to(repo_dir))
@@ -704,27 +827,151 @@ class LocalIngestSource(IngestSource):
             )
         ]
 
-    def queued_titles(self) -> list[str]:
-        """Titles from `ingests/queue/*.md`, read from the frontmatter head.
+    def intake_queue(self) -> dict[str, list[dict]]:
+        """Project valid scheduler-owned untracked stubs without mutating them."""
+        root = self.store.parent
+        queue_dir = root / "queue"
+        if not queue_dir.exists():
+            return {"pending": [], "errors": []}
 
-        Only the first lines of each file: the queue holds whole records and
-        this needs one field from each. Bounded rather than parsed, so a
-        malformed record costs its own title and nothing else.
-        """
-        titles: list[str] = []
-        for path in sorted(self.store.parent.glob("queue/*.md")):
+        tracked = subprocess.run(
+            ["git", "ls-files", "-z", "--", "queue/*.md"],
+            cwd=root,
+            capture_output=True,
+            check=False,
+        )
+        if tracked.returncode != 0:
+            return {
+                "pending": [],
+                "errors": [
+                    {
+                        "path": "queue/",
+                        "title": None,
+                        "reason": "Cannot verify which intake stubs are Git-untracked.",
+                    }
+                ],
+            }
+        tracked_paths = {
+            item.decode("utf-8", errors="replace")
+            for item in tracked.stdout.split(b"\0")
+            if item
+        }
+
+        candidates: list[dict] = []
+        errors: list[dict] = []
+        for path in sorted(queue_dir.glob("*.md")):
+            relative = path.relative_to(root).as_posix()
+            if relative in tracked_paths:
+                continue
             try:
-                with path.open(errors="replace") as handle:
-                    for _ in range(_QUEUE_HEAD_LINES):
-                        line = handle.readline()
-                        if not line:
-                            break
-                        if line.startswith("title:"):
-                            titles.append(line[len("title:") :].strip().strip("'\""))
-                            break
+                frontmatter, body = _yaml_frontmatter(path.read_text())
+            except OSError as exc:
+                errors.append({"path": relative, "title": None, "reason": str(exc)})
+                continue
+            title = frontmatter.get("title") if frontmatter else None
+            reason = None
+            if frontmatter is None:
+                reason = "Invalid YAML frontmatter."
+            elif any(
+                name in frontmatter
+                for name in ("content_hash", "ingested", "ingested_at")
+            ):
+                continue
+            elif body.strip():
+                reason = "Pending intake stubs must be frontmatter-only."
+            elif (
+                not isinstance(frontmatter.get("title"), str)
+                or not frontmatter["title"].strip()
+            ):
+                reason = "Pending intake requires a display title."
+            elif frontmatter.get("source_type") not in _SOURCE_TYPES:
+                reason = "Pending intake has an invalid source_type."
+            elif (
+                not isinstance(frontmatter.get("source_id"), str)
+                or not frontmatter["source_id"].strip()
+            ):
+                reason = "Pending intake requires a canonical source_id."
+            elif (
+                _canonical_source_key(frontmatter["source_id"])
+                != frontmatter["source_id"].strip()
+            ):
+                reason = "Pending intake source_id is not canonical."
+            elif not _valid_intake_date(frontmatter.get("intake_date")):
+                reason = "Pending intake requires a UTC ISO 8601 intake_date."
+            elif not any(
+                isinstance(frontmatter.get(name), str) and frontmatter[name].strip()
+                for name in ("source_url", "reference", "asset_path")
+            ):
+                reason = "Pending intake requires an acquisition locator."
+            if reason:
+                errors.append({"path": relative, "title": title, "reason": reason})
+                continue
+            candidates.append(
+                {
+                    "path": relative,
+                    "title": frontmatter["title"].strip(),
+                    "source_id": frontmatter["source_id"].strip(),
+                    "keys": _source_keys(frontmatter),
+                }
+            )
+
+        candidate_paths_by_key: dict[str, set[str]] = {}
+        for candidate in candidates:
+            for key in candidate["keys"]:
+                candidate_paths_by_key.setdefault(key, set()).add(candidate["path"])
+        duplicate_paths = {
+            path
+            for paths in candidate_paths_by_key.values()
+            if len(paths) > 1
+            for path in paths
+        }
+
+        live_paths_by_key: dict[str, set[str]] = {}
+        for record_path in sorted(self.store.glob("*.md")):
+            try:
+                frontmatter, _body = _yaml_frontmatter(record_path.read_text())
             except OSError:
                 continue
-        return titles
+            if not frontmatter or frontmatter.get("superseded_by"):
+                continue
+            relative = record_path.relative_to(root).as_posix()
+            for key in _source_keys(frontmatter):
+                live_paths_by_key.setdefault(key, set()).add(relative)
+
+        pending: list[dict] = []
+        for candidate in candidates:
+            if candidate["path"] in duplicate_paths:
+                errors.append(
+                    {
+                        "path": candidate["path"],
+                        "title": candidate["title"],
+                        "reason": "Duplicate transient intake candidates share this source identity.",
+                    }
+                )
+                continue
+            live_matches = {
+                path
+                for key in candidate["keys"]
+                for path in live_paths_by_key.get(key, set())
+            }
+            if len(live_matches) == 1:
+                continue
+            if len(live_matches) > 1:
+                errors.append(
+                    {
+                        "path": candidate["path"],
+                        "title": candidate["title"],
+                        "reason": "Source identity ambiguously matches multiple live records.",
+                    }
+                )
+                continue
+            pending.append(
+                {key: candidate[key] for key in ("path", "title", "source_id")}
+            )
+        return {
+            "pending": pending,
+            "errors": sorted(errors, key=lambda item: item["path"]),
+        }
 
     def list_ingests(self) -> list[dict]:
         ingests: list[dict] = []
@@ -851,6 +1098,9 @@ class LocalIngestSource(IngestSource):
         with open(md_path) as f:
             content = f.read()
 
+        return self._ingest_from_content(full_hash, content)
+
+    def _ingest_from_content(self, full_hash: str, content: str) -> dict:
         frontmatter, body, raw_frontmatter = parse_frontmatter(content)
         # The spec field is `creators`; older records used `authors`. Pop both
         # so neither shows again in the generic frontmatter panel.
@@ -890,90 +1140,295 @@ class LocalIngestSource(IngestSource):
             f.write(content)
         return True
 
+    def current_ref(self) -> str:
+        import subprocess
+
+        return subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=self.store.parent,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+
+    def file_at_ref(self, path: Path, ref: str) -> tuple[str, bytes] | None:
+        import subprocess
+
+        rel = str(path.relative_to(self.store.parent))
+        blob = subprocess.run(
+            ["git", "rev-parse", f"{ref}:{rel}"],
+            cwd=self.store.parent,
+            capture_output=True,
+            text=True,
+        )
+        if blob.returncode != 0:
+            return None
+        content = subprocess.run(
+            ["git", "show", f"{ref}:{rel}"],
+            cwd=self.store.parent,
+            capture_output=True,
+            check=True,
+        ).stdout
+        return blob.stdout.strip(), content
+
+    def housekeeping_snapshot(
+        self, ref: str
+    ) -> tuple[
+        dict[str, tuple[Path, str, bytes]],
+        dict[Path, tuple[str, bytes]],
+    ]:
+        """Read the committed housekeeping tree with one Git batch process."""
+        tree = subprocess.run(
+            [
+                "git",
+                "ls-tree",
+                "-r",
+                "-z",
+                ref,
+                "--",
+                "housekeeping-algorithm.json",
+                "store",
+            ],
+            cwd=self.store.parent,
+            capture_output=True,
+            check=True,
+        ).stdout
+        entries: list[tuple[Path, str]] = []
+        for raw_entry in tree.split(b"\0"):
+            if not raw_entry:
+                continue
+            metadata, raw_path = raw_entry.split(b"\t", 1)
+            _mode, kind, raw_blob = metadata.split(b" ", 2)
+            if kind != b"blob":
+                continue
+            relative = raw_path.decode("utf-8")
+            path = self.store.parent / relative
+            if relative == "housekeeping-algorithm.json" or (
+                path.parent == self.store
+                and (path.suffix == ".md" or path.name.endswith(".housekeeping.json"))
+            ):
+                entries.append((path, raw_blob.decode("ascii")))
+
+        process = subprocess.Popen(
+            ["git", "cat-file", "--batch"],
+            cwd=self.store.parent,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        output, error = process.communicate(
+            "".join(f"{blob}\n" for _path, blob in entries).encode("ascii")
+        )
+        if process.returncode != 0:
+            raise subprocess.CalledProcessError(
+                process.returncode, process.args, output=output, stderr=error
+            )
+
+        content_by_blob: dict[str, bytes] = {}
+        offset = 0
+        for _path, expected_blob in entries:
+            newline = output.index(b"\n", offset)
+            header = output[offset:newline].decode("ascii").split()
+            if len(header) != 3 or header[0] != expected_blob or header[1] != "blob":
+                raise RuntimeError("Unexpected git cat-file batch response")
+            size = int(header[2])
+            start = newline + 1
+            end = start + size
+            content_by_blob[expected_blob] = output[start:end]
+            offset = end + 1
+
+        files = {path: (blob, content_by_blob[blob]) for path, blob in entries}
+        records: dict[str, tuple[Path, str, bytes]] = {}
+        for path, (blob, raw) in files.items():
+            if path.parent != self.store or path.suffix != ".md":
+                continue
+            frontmatter, _body, _raw_frontmatter = parse_frontmatter(
+                raw.decode("utf-8")
+            )
+            content_hash = normalise_hash(frontmatter.get("content_hash"))
+            if content_hash and not frontmatter.get("superseded_by"):
+                records[content_hash] = (path, blob, raw)
+        return records, files
+
+    def record_at_ref(self, full_hash: str, ref: str) -> tuple[Path, str, bytes] | None:
+        cached = self._ref_path_hints.get(ref)
+        if cached is None:
+            worktree = {**self._scan_archived(), **self._scan()}
+            hints = {content_hash: entry[0] for content_hash, entry in worktree.items()}
+            listed = subprocess.run(
+                ["git", "ls-tree", "-r", "--name-only", ref, "--", "store"],
+                cwd=self.store.parent,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.splitlines()
+            paths = []
+            for rel in listed:
+                path = self.store.parent / rel
+                if (
+                    path.parent in {self.store, self.store / "v1"}
+                    and path.suffix == ".md"
+                ):
+                    paths.append(path)
+            cached = (hints, paths)
+            # Refs are immutable. Keep only the active snapshot's path index.
+            self._ref_path_hints = {ref: cached}
+        hints, paths = cached
+        hinted = hints.get(full_hash)
+        candidates = ([hinted] if hinted is not None else []) + [
+            path for path in paths if path != hinted
+        ]
+        for path in candidates:
+            loaded = self.file_at_ref(path, ref)
+            if loaded is None:
+                continue
+            blob, raw = loaded
+            frontmatter, _, _ = parse_frontmatter(raw.decode("utf-8"))
+            if normalise_hash(frontmatter.get("content_hash")) == full_hash:
+                return path, blob, raw
+        return None
+
+    def _commit_bytes_locked(
+        self,
+        changes: dict[Path, bytes],
+        message: str,
+        author_name: str,
+        author_email: str,
+        expected_ref: str,
+    ) -> str:
+        """Build a path-limited commit, CAS HEAD, then materialise its paths."""
+        import subprocess
+
+        repo_dir = self.store.parent
+        branch = subprocess.run(
+            ["git", "symbolic-ref", "-q", "HEAD"],
+            cwd=repo_dir,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        if not branch or self.current_ref() != expected_ref:
+            raise RuntimeError("stale or detached HEAD")
+        env = {
+            **os.environ,
+            "GIT_AUTHOR_NAME": author_name,
+            "GIT_AUTHOR_EMAIL": author_email,
+        }
+        rel_changes = {
+            str(path.relative_to(repo_dir)): content
+            for path, content in changes.items()
+        }
+        with tempfile.TemporaryDirectory(prefix="workbench-git-index-") as td:
+            index_env = {**env, "GIT_INDEX_FILE": str(Path(td) / "index")}
+            subprocess.run(
+                ["git", "read-tree", expected_ref],
+                cwd=repo_dir,
+                check=True,
+                env=index_env,
+            )
+            for rel, content in rel_changes.items():
+                blob = (
+                    subprocess.run(
+                        ["git", "hash-object", "-w", "--stdin"],
+                        cwd=repo_dir,
+                        input=content,
+                        capture_output=True,
+                        check=True,
+                    )
+                    .stdout.decode()
+                    .strip()
+                )
+                subprocess.run(
+                    [
+                        "git",
+                        "update-index",
+                        "--add",
+                        "--cacheinfo",
+                        f"100644,{blob},{rel}",
+                    ],
+                    cwd=repo_dir,
+                    check=True,
+                    env=index_env,
+                )
+            tree = subprocess.run(
+                ["git", "write-tree"],
+                cwd=repo_dir,
+                capture_output=True,
+                text=True,
+                check=True,
+                env=index_env,
+            ).stdout.strip()
+            commit = subprocess.run(
+                ["git", "commit-tree", tree, "-p", expected_ref],
+                cwd=repo_dir,
+                input=message,
+                capture_output=True,
+                text=True,
+                check=True,
+                env=index_env,
+            ).stdout.strip()
+            subprocess.run(
+                ["git", "update-ref", branch, commit, expected_ref],
+                cwd=repo_dir,
+                check=True,
+                env=index_env,
+            )
+            paths = list(rel_changes)
+            subprocess.run(
+                ["git", "checkout-index", "-f", "--", *paths],
+                cwd=repo_dir,
+                check=True,
+                env=index_env,
+            )
+
+        self._reviewed_cache = None
+        return commit
+
     def commit_review(
         self,
         full_hash: str,
         author_name: str,
         author_email: str,
         notes: str,
+        extra_paths: list[Path] | None = None,
+        include_record: bool = True,
+        include_coverage: bool = True,
+        expected_ref: str | None = None,
     ) -> None:
-        import subprocess
+        with repository_write_lock(self.store.parent):
+            expected_ref = expected_ref or self.current_ref()
+            entry = self._scan().get(full_hash)
+            if entry is None:
+                return
+            md_path, frontmatter = entry
+            changes: dict[Path, bytes] = {}
+            if include_record:
+                changes[md_path] = md_path.read_bytes()
+            coverage_path = self._coverage_path(full_hash)
+            if include_coverage and coverage_path.exists():
+                changes[coverage_path] = coverage_path.read_bytes()
+            for path in extra_paths or []:
+                changes[path] = path.read_bytes()
 
-        entry = self._scan().get(full_hash)
-        if entry is None:
-            return
-        md_path, frontmatter = entry
-        title = frontmatter.get("title", full_hash[:12])
-
-        env = {
-            **os.environ,
-            "GIT_AUTHOR_NAME": author_name,
-            "GIT_AUTHOR_EMAIL": author_email,
-        }
-
-        repo_dir = self.store.parent
-        paths = [str(md_path.relative_to(repo_dir))]
-        # Review-coverage sidecar travels in the same commit as the review
-        # it belongs to, so the audit trail stays one-commit-per-review.
-        coverage_path = self._coverage_path(full_hash)
-        if coverage_path.exists():
-            paths.append(str(coverage_path.relative_to(repo_dir)))
-
-        # Reviewed-Record trailers: one per identity the record carries
-        # at review time. Format is `<kind>:<value>` with kind in
-        # {url, sha256, content}, per architecture/review-workbench.md.
-        # Strongest available identity wins on scan, so emitting all
-        # makes the review survive future re-ingestions that rotate the
-        # weaker identities.
-        trailers: list[str] = []
-        source_url = (frontmatter.get("source_url") or "").strip()
-        if source_url:
-            trailers.append(f"Reviewed-Record: url:{source_url}")
-        source_hash = normalise_hash(frontmatter.get("source_hash"))
-        if source_hash:
-            trailers.append(f"Reviewed-Record: sha256:{source_hash}")
-        trailers.append(f"Reviewed-Record: content:{full_hash}")
-
-        # Hold the git lock across stage+commit+push so the background sync
-        # thread can never rebase the clone mid-commit.
-        with GIT_LOCK:
-            subprocess.run(
-                ["git", "add", *paths],
-                cwd=repo_dir,
-                check=True,
-                env=env,
+            no_changes = all(
+                (loaded := self.file_at_ref(path, expected_ref)) is not None
+                and loaded[1] == content
+                for path, content in changes.items()
             )
-
-            # If save_ingest wrote the same bytes that were already on disk,
-            # there's nothing staged. That's the "approved as-is" case -
-            # record it as an empty commit so the review is still part of the
-            # audit trail and shows up in the same git log as
-            # content-changing reviews.
-            diff = subprocess.run(
-                ["git", "diff", "--cached", "--quiet"],
-                cwd=repo_dir,
-                env=env,
-            )
-            no_changes = diff.returncode == 0
-
-            message = f"review: {title}"
+            message = f"review: {frontmatter.get('title', full_hash[:12])}"
             if no_changes:
                 message += " (approved as-is)"
             if notes:
                 message += f"\n\n{notes}"
+            source_url = (frontmatter.get("source_url") or "").strip()
+            trailers = [f"Reviewed-Record: url:{source_url}"] if source_url else []
+            source_hash = normalise_hash(frontmatter.get("source_hash"))
+            if source_hash:
+                trailers.append(f"Reviewed-Record: sha256:{source_hash}")
+            trailers.append(f"Reviewed-Record: content:{full_hash}")
             message += "\n\n" + "\n".join(trailers)
-
-            cmd = ["git", "commit", "-m", message]
-            if no_changes:
-                cmd.append("--allow-empty")
-            subprocess.run(cmd, cwd=repo_dir, check=True, env=env)
-
-            # Invalidate the cached review index so the new commit shows up
-            # in /api/me/reviews on the next read.
-            self._reviewed_cache = None
-            # COMMIT-ONLY: the operations auto-push watcher (the single
-            # pusher for this clone) sees the new reflog entry and pushes
-            # within seconds; the submit flow observes it via wait_for_push.
+            self._commit_bytes_locked(
+                changes, message, author_name, author_email, expected_ref
+            )
 
     # Per-email list of (kind, value, iso_ts) trailers. Cross-referenced
     # against record frontmatter identities in reviewed_by_email.
@@ -1616,7 +2071,7 @@ def remove_role(login: str, request: Request) -> JSONResponse:
     return JSONResponse({"roles": updated})
 
 
-def _records_held() -> list[dict]:
+def _records_held(intake: dict[str, list[dict]] | None = None) -> list[dict]:
     """Every record we hold, with how far along the pipeline it is.
 
     The infrastructure graph names ~800 works and the question about each is
@@ -1624,9 +2079,8 @@ def _records_held() -> list[dict]:
     ingested, reviewed, digested. Matching is by title because that is all a
     citation gives us - works are named in prose, not by hash.
 
-    Queued records are included: they have been acquired and ingested but are
-    not in the store yet, which is a real stage between "we do not have it" and
-    "it is in the corpus".
+    Pending intake stubs are included only as acquisition intent. They are not
+    records and carry no review state.
     """
     held = [
         {
@@ -1639,7 +2093,10 @@ def _records_held() -> list[dict]:
         }
         for r in source.list_ingests()
     ]
-    return held + [{"title": t, "queued": True} for t in source.queued_titles()]
+    intake = source.intake_queue() if intake is None else intake
+    return held + [
+        {"title": candidate["title"], "queued": True} for candidate in intake["pending"]
+    ]
 
 
 @app.get("/api/infrastructure")
@@ -1650,10 +2107,12 @@ def infrastructure_summary(request: Request) -> JSONResponse:
     is to say what is in it - see backend/infrastructure.py.
     """
     _require_user(request)
+    intake = source.intake_queue()
     return JSONResponse(
         {
-            "summary": infrastructure.summary(records_held=_records_held()),
+            "summary": infrastructure.summary(records_held=_records_held(intake)),
             "records": infrastructure.records(),
+            "intake_errors": intake["errors"],
         }
     )
 
@@ -1945,7 +2404,18 @@ def get_ingest(full_hash: str) -> JSONResponse:
     if not FULL_HASH_PATTERN.match(full_hash):
         raise HTTPException(status_code=404, detail="Not found")
 
-    ingest = source.get_ingest(full_hash)
+    if isinstance(source, LocalIngestSource):
+        base_ref = source.current_ref()
+        record = source.record_at_ref(full_hash, base_ref)
+        if record is None:
+            ingest = None
+        else:
+            _path, base_record_sha, raw = record
+            ingest = source._ingest_from_content(full_hash, raw.decode("utf-8"))
+            ingest["base_record_sha"] = base_record_sha
+            ingest["base_ref"] = base_ref
+    else:
+        ingest = source.get_ingest(full_hash)
     if ingest is None:
         raise HTTPException(status_code=404, detail="Not found")
 
@@ -3908,7 +4378,8 @@ def _guard_copyright_change(full_hash: str, content: str, user: dict) -> None:
 def submit_review(full_hash: str, body: dict, request: Request) -> JSONResponse:
     """Submit a review: save changes and commit with reviewer identity.
 
-    Expects {"content": "...", "notes": "...",
+    Expects {"content": "...", "notes": "...", "base_record_sha": "...",
+    "base_ref": "...",
     "spans": [{"from": 0, "to": 4, "kind": "played"|"observed"}]}.
     `spans` is optional: contiguous line ranges of the record body (at
     submission time) the reviewer covered. `kind` distinguishes weak
@@ -3929,51 +4400,152 @@ def submit_review(full_hash: str, body: dict, request: Request) -> JSONResponse:
     notes = body.get("notes", "").strip()
     spans = _validate_spans(body.get("spans"))
     obs_cov, digestible_flag, total_units = _validate_verdict(body.get("verdict"))
+    base_record_sha = body.get("base_record_sha")
+    base_ref = body.get("base_ref")
+    if not isinstance(base_record_sha, str) or not re.fullmatch(
+        r"[0-9a-f]{40}|[0-9a-f]{64}", base_record_sha
+    ):
+        raise HTTPException(status_code=400, detail="Missing base_record_sha")
+    if not isinstance(base_ref, str) or not re.fullmatch(
+        r"[0-9a-f]{40}|[0-9a-f]{64}", base_ref
+    ):
+        raise HTTPException(status_code=400, detail="Missing base_ref")
+    submitted_hash = normalise_hash(parse_frontmatter(content)[0].get("content_hash"))
+    if submitted_hash != full_hash:
+        raise HTTPException(status_code=409, detail="Record identity cannot be changed")
 
-    # Contributors (the default for any authenticated-but-unlisted login) cannot
-    # commit to live data: their edit is queued as a proposal for a reviewer to
-    # approve. Reviewers and editors commit directly, as before.
-    if not roles.at_least(_role_of_user(user), "reviewer"):
-        entry = proposals.enqueue(
-            ingests_path,
-            record_hash=full_hash,
-            content=content,
-            author=user,
-            notes=notes,
-            spans=spans,
-            verdict=body.get("verdict"),
-        )
-        return JSONResponse(
-            {"submitted": True, "status": "pending", "proposal_id": entry["id"]},
-            status_code=202,
-        )
-
-    _guard_copyright_change(full_hash, content, user)
-
-    if not source.save_ingest(full_hash, content):
-        raise HTTPException(status_code=404, detail="Not found")
-
-    if spans or obs_cov is not None:
-        source.append_coverage(
-            full_hash=full_hash,
-            email=user["email"],
-            spans=spans,
-            notes=notes,
-            observed_coverage=obs_cov,
-            digestible=digestible_flag,
-            total_units=total_units,
-        )
-
-    # Git commit with reviewer as author. COMMIT-ONLY: the operations
-    # auto-push watcher is the single pusher for the ingests clone (two
-    # concurrent rebasers corrupted FETCH_HEAD); the client's second phase
-    # (POST /api/sync/push) OBSERVES the watcher landing the commit.
-    source.commit_review(
-        full_hash=full_hash,
-        author_name=user["name"],
-        author_email=user["email"],
-        notes=notes,
+    # The lock starts before the authoritative reread. A housekeeping commit that
+    # wins first changes the ref (and often the bytes), so this editor conflicts
+    # instead of replacing its result with an older whole-record snapshot.
+    lock = (
+        repository_write_lock(source.store.parent)
+        if isinstance(source, LocalIngestSource)
+        else GIT_LOCK
     )
+    with lock:
+        if isinstance(source, LocalIngestSource):
+            if source.current_ref() != base_ref:
+                raise _stale()
+            current = source.record_at_ref(full_hash, base_ref)
+            if current is None:
+                raise HTTPException(status_code=404, detail="Not found")
+            md_path, current_blob, current_raw = current
+            if current_blob != base_record_sha or md_path.read_bytes() != current_raw:
+                raise _stale()
+
+        # Contributors cannot commit to live data, but their proposal must still
+        # be tied to the record they actually viewed.
+        if not roles.at_least(_role_of_user(user), "reviewer"):
+            entry = proposals.enqueue(
+                ingests_path,
+                record_hash=full_hash,
+                content=content,
+                author=user,
+                notes=notes,
+                spans=spans,
+                verdict=body.get("verdict"),
+            )
+            return JSONResponse(
+                {"submitted": True, "status": "pending", "proposal_id": entry["id"]},
+                status_code=202,
+            )
+
+        _guard_copyright_change(full_hash, content, user)
+        if isinstance(source, LocalIngestSource):
+            changes = {md_path: content.encode("utf-8")}
+            if spans or obs_cov is not None:
+                coverage_path = source._coverage_path(full_hash)
+                coverage_file = source.file_at_ref(coverage_path, base_ref)
+                committed_coverage = coverage_file[1] if coverage_file else None
+                if coverage_path.exists():
+                    if (
+                        committed_coverage is None
+                        or coverage_path.read_bytes() != committed_coverage
+                    ):
+                        raise _stale()
+                elif committed_coverage is not None:
+                    raise _stale()
+                coverage = (
+                    json.loads(committed_coverage)
+                    if committed_coverage is not None
+                    else {"schema": COVERAGE_SCHEMA, "reviews": []}
+                )
+                review_entry = {
+                    "by": user["email"],
+                    "at": datetime.now(dt_timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "spans": [
+                        {
+                            "from": span["from"],
+                            "to": span["to"],
+                            "kind": span.get("kind", "observed"),
+                        }
+                        for span in spans
+                    ],
+                    "parent_commit": base_ref,
+                }
+                if notes:
+                    review_entry["notes"] = notes
+                coverage["reviews"].append(review_entry)
+                if obs_cov is not None:
+                    coverage["schema"] = COVERAGE_SCHEMA_V1
+                    coverage["observed_coverage"] = obs_cov
+                    coverage["digestible"] = bool(digestible_flag)
+                    if total_units is not None:
+                        coverage["total_units"] = total_units
+                changes[coverage_path] = (
+                    json.dumps(coverage, indent=2, ensure_ascii=False) + "\n"
+                ).encode()
+
+            submitted_frontmatter = parse_frontmatter(content)[0]
+            title = submitted_frontmatter.get("title", full_hash[:12])
+            message = f"review: {title}"
+            if all(
+                (loaded := source.file_at_ref(path, base_ref)) is not None
+                and loaded[1] == value
+                for path, value in changes.items()
+            ):
+                message += " (approved as-is)"
+            if notes:
+                message += f"\n\n{notes}"
+            trailers = []
+            source_url = (submitted_frontmatter.get("source_url") or "").strip()
+            if source_url:
+                trailers.append(f"Reviewed-Record: url:{source_url}")
+            source_hash = normalise_hash(submitted_frontmatter.get("source_hash"))
+            if source_hash:
+                trailers.append(f"Reviewed-Record: sha256:{source_hash}")
+            trailers.append(f"Reviewed-Record: content:{full_hash}")
+            message += "\n\n" + "\n".join(trailers)
+            try:
+                source._commit_bytes_locked(
+                    changes,
+                    message,
+                    user["name"],
+                    user["email"],
+                    base_ref,
+                )
+            except (RuntimeError, subprocess.CalledProcessError) as exc:
+                raise _stale() from exc
+        else:
+            if not source.save_ingest(full_hash, content):
+                raise HTTPException(status_code=404, detail="Not found")
+            if spans or obs_cov is not None:
+                source.append_coverage(
+                    full_hash=full_hash,
+                    email=user["email"],
+                    spans=spans,
+                    notes=notes,
+                    observed_coverage=obs_cov,
+                    digestible=digestible_flag,
+                    total_units=total_units,
+                )
+            source.commit_review(
+                full_hash=full_hash,
+                author_name=user["name"],
+                author_email=user["email"],
+                notes=notes,
+                include_coverage=bool(spans or obs_cov is not None),
+            )
 
     return JSONResponse(
         {"submitted": True, "synced": False, "sync_detail": "auto-push pending"}
@@ -4230,7 +4802,13 @@ def verification_submit(full_hash: str, body: dict) -> JSONResponse:
         and submitted_sha.lower() == sidecar["sha256"].lower()
     ):
         return JSONResponse(
-            {"passed": True, "method": "sha256", "score": None, "needed": None}
+            {
+                "passed": True,
+                "method": "sha256",
+                "score": None,
+                "needed": None,
+                "housekeeping": _housekeeping_view_local(full_hash),
+            }
         )
 
     session_id = body.get("session_id")
@@ -4255,14 +4833,16 @@ def verification_submit(full_hash: str, body: dict) -> JSONResponse:
 
     _verification_sessions.pop(session_id, None)
 
-    return JSONResponse(
-        {
-            "passed": correct >= needed,
-            "method": "cloze",
-            "score": correct,
-            "needed": needed,
-        }
-    )
+    passed = correct >= needed
+    response = {
+        "passed": passed,
+        "method": "cloze",
+        "score": correct,
+        "needed": needed,
+    }
+    if passed:
+        response["housekeeping"] = _housekeeping_view_local(full_hash)
+    return JSONResponse(response)
 
 
 # --- Housekeeping decisions -------------------------------------------------
@@ -4276,50 +4856,205 @@ def _housekeeping_sidecar_path(full_hash: str) -> Path:
     return ingests_path / "store" / f"{full_hash}.housekeeping.json"
 
 
+HOUSEKEEPING_VIEW_SCHEMA = "anomalica/housekeeping-view/1"
+HOUSEKEEPING_DECISION_SCHEMA = "anomalica/housekeeping-decision/1"
+HOUSEKEEPING_MANIFEST_SCHEMA = "anomalica/housekeeping-algorithm/1"
+HOUSEKEEPING_ALGORITHM_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _load_housekeeping_bytes(raw: bytes) -> hk.Sidecar | None:
+    with tempfile.TemporaryDirectory(prefix="workbench-housekeeping-") as td:
+        path = Path(td) / "sidecar.json"
+        path.write_bytes(raw)
+        return hk.load_sidecar_file(path)
+
+
+def _replacement_preview(item: hk.Item) -> dict[str, list[str]]:
+    return {
+        "removed": [item.old_token] if item.old_token is not None else [],
+        "added": [item.new_token] if item.new_token is not None else [],
+    }
+
+
+def _housekeeping_view_local(
+    full_hash: str,
+    viewed_ref: str | None = None,
+    manifest_file: tuple[str, bytes] | None = None,
+    snapshot: tuple[
+        dict[str, tuple[Path, str, bytes]],
+        dict[Path, tuple[str, bytes]],
+    ]
+    | None = None,
+) -> dict:
+    if not isinstance(source, LocalIngestSource):
+        raise HTTPException(status_code=501, detail="Local housekeeping unavailable")
+    ref = viewed_ref or source.current_ref()
+    record = (
+        snapshot[0].get(full_hash) if snapshot else source.record_at_ref(full_hash, ref)
+    )
+    if record is None:
+        raise HTTPException(status_code=404, detail="Record not found")
+    _record_path, _record_blob, record_raw = record
+    input_sha256 = hk.input_sha256(record_raw)
+
+    manifest_path = source.store.parent / "housekeeping-algorithm.json"
+    manifest_file = (
+        manifest_file
+        or (snapshot[1].get(manifest_path) if snapshot else None)
+        or source.file_at_ref(manifest_path, ref)
+    )
+    if manifest_file is None:
+        raise HTTPException(status_code=503, detail="Housekeeping manifest unavailable")
+    try:
+        manifest = json.loads(manifest_file[1])
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise HTTPException(
+            status_code=503, detail="Housekeeping manifest unavailable"
+        ) from exc
+    canonical_manifest = (
+        f'{{ "algorithm_version": {json.dumps(manifest.get("algorithm_version"))}, '
+        f'"schema": {json.dumps(HOUSEKEEPING_MANIFEST_SCHEMA)} }}\n'
+    ).encode()
+    if (
+        manifest_file[1] != canonical_manifest
+        or set(manifest) != {"algorithm_version", "schema"}
+        or manifest.get("schema") != HOUSEKEEPING_MANIFEST_SCHEMA
+        or not isinstance(manifest.get("algorithm_version"), str)
+        or not HOUSEKEEPING_ALGORITHM_PATTERN.fullmatch(manifest["algorithm_version"])
+    ):
+        raise HTTPException(status_code=503, detail="Housekeeping manifest unavailable")
+    algorithm_version = manifest["algorithm_version"]
+
+    sidecar_path = _housekeeping_sidecar_path(full_hash)
+    sidecar_file = (
+        snapshot[1].get(sidecar_path)
+        if snapshot
+        else source.file_at_ref(sidecar_path, ref)
+    )
+    sidecar_sha = sidecar_file[0] if sidecar_file else None
+    raw_sidecar = sidecar_file[1] if sidecar_file else None
+    payload: dict | None = None
+    sc: hk.Sidecar | None = None
+    due_reason: str | None
+    if raw_sidecar is None:
+        due_reason = "missing-sidecar"
+    else:
+        try:
+            decoded = json.loads(raw_sidecar)
+            payload = decoded if isinstance(decoded, dict) else None
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            payload = None
+        if payload is None:
+            due_reason = "invalid-sidecar"
+        elif payload.get("schema") != hk.SCHEMA:
+            due_reason = "unsupported-schema"
+        elif payload.get("outcome") != "completed":
+            due_reason = "incomplete"
+        else:
+            sc = _load_housekeeping_bytes(raw_sidecar)
+            if sc is None or sc.content_hash != f"sha256:{full_hash}":
+                due_reason = "invalid-sidecar"
+            elif sc.input_sha256 != input_sha256:
+                due_reason = "input-mismatch"
+            elif sc.algorithm_version != algorithm_version:
+                due_reason = "algorithm-mismatch"
+            else:
+                due_reason = None
+
+    previews: dict[str, dict[str, list[str]]] = {}
+    if payload is not None and sc is not None:
+        text = record_raw.decode("utf-8")
+        previews = {
+            item.id: (
+                _replacement_preview(item)
+                if item.operation == "replace-token"
+                else hk.preview_item(text, item)
+            )
+            for item in sc.items
+        }
+
+    if sc is not None and len({item.id for item in sc.items}) != len(sc.items):
+        sc = None
+        previews = {}
+        due_reason = "invalid-sidecar"
+
+    proposed = [
+        item
+        for item in (sc.items if sc and due_reason is None else [])
+        if item.status == "proposed"
+    ]
+    scopes = sorted(
+        {
+            "body" if item.operation == "replace-token" else "frontmatter"
+            for item in proposed
+        }
+    )
+    return {
+        "schema": HOUSEKEEPING_VIEW_SCHEMA,
+        "access": "full",
+        "viewed_sidecar_sha": sidecar_sha,
+        "viewed_ref": ref,
+        "viewed_content_hash": f"sha256:{full_hash}",
+        "viewed_input_sha256": input_sha256,
+        "viewed_algorithm_version": algorithm_version,
+        "state": "current" if due_reason is None else "due",
+        "due_reason": due_reason,
+        "outstanding_count": len(proposed),
+        "scopes": scopes,
+        "deep_link": f"/housekeeping?record={full_hash}",
+        "sidecar": payload,
+        "previews": previews,
+    }
+
+
+_housekeeping_queue_cache: dict[str, dict] = {}
+
+
 @app.get("/api/housekeeping")
 def housekeeping_queue() -> JSONResponse:
     """Records with a housekeeping sidecar. Counts only - no field values - so it
     carries nothing gated and is the same for every reader."""
+    if not isinstance(source, LocalIngestSource):
+        raise HTTPException(status_code=501, detail="Local housekeeping unavailable")
+    snapshot_ref = source.current_ref()
+    cached = _housekeeping_queue_cache.get(snapshot_ref)
+    if cached is not None:
+        return JSONResponse(cached)
+    snapshot = source.housekeeping_snapshot(snapshot_ref)
+    manifest_file = snapshot[1].get(source.store.parent / "housekeeping-algorithm.json")
     rows = []
     for s in source.list_ingests():
         h = s["content_hash"]
-        sc = hk.load_sidecar_file(_housekeeping_sidecar_path(h))
-        if sc is None:
-            continue
+        view = _housekeeping_view_local(h, snapshot_ref, manifest_file, snapshot)
+        sidecar = view.get("sidecar") or {}
+        items = sidecar.get("items") or []
         rows.append(
             {
                 "content_hash": h,
                 "title": s.get("title"),
                 "copyright_status": s.get("copyright_status"),
-                "checked_at": sc.checked_at,
-                "checker_version": sc.checker_version,
-                "proposed": sum(1 for i in sc.items if i.status == "proposed"),
-                "approved": sum(1 for i in sc.items if i.status == "approved"),
-                "rejected": sum(1 for i in sc.items if i.status == "rejected"),
+                "checked_at": sidecar.get("checked_at"),
+                "algorithm_version": view["viewed_algorithm_version"],
+                "current": view["state"] == "current",
+                "state": view["state"],
+                "due_reason": view["due_reason"],
+                "proposed": view["outstanding_count"],
+                "approved": sum(1 for i in items if i.get("status") == "approved"),
+                "rejected": sum(1 for i in items if i.get("status") == "rejected"),
             }
         )
     rows.sort(key=lambda r: (-r["proposed"], r.get("title") or ""))
-    return JSONResponse({"queue": rows})
+    value = {"queue": rows}
+    _housekeeping_queue_cache.clear()
+    _housekeeping_queue_cache[snapshot_ref] = value
+    return JSONResponse(value)
 
 
 @app.get("/api/ingests/{full_hash}/housekeeping")
 def housekeeping_sidecar(full_hash: str) -> JSONResponse:
-    p = _housekeeping_sidecar_path(full_hash)
-    if not p.exists():
-        raise HTTPException(status_code=404, detail="No housekeeping sidecar")
-    payload = json.loads(p.read_text())
-    entry = source._scan().get(full_hash) if hasattr(source, "_scan") else None
-    if entry is not None:
-        # The exact frontmatter lines each item removes and adds, computed from
-        # the LIVE record so the preview and the commit cannot disagree.
-        text = entry[0].read_text(errors="replace")
-        sc = hk.load_sidecar_file(p)
-        if sc is not None:
-            previews = {i.id: hk.preview_item(text, i) for i in sc.items}
-            for raw in payload.get("items") or []:
-                if raw.get("id") in previews:
-                    raw["preview"] = previews[raw["id"]]
-    return JSONResponse(payload)
+    if not FULL_HASH_PATTERN.match(full_hash):
+        raise HTTPException(status_code=404, detail="Not found")
+    return JSONResponse(_housekeeping_view_local(full_hash))
 
 
 @app.post("/api/ingests/{full_hash}/housekeeping/decide")
@@ -4331,87 +5066,147 @@ async def housekeeping_decide(full_hash: str, request: Request) -> JSONResponse:
     reader find an unexplained frontmatter change."""
     user = _require_role(request, "reviewer")
     payload = await request.json()
-    decisions = {
-        d["item_id"]: d["status"]
-        for d in (payload.get("decisions") or [])
-        if d.get("status") in ("approved", "rejected")
+    if not isinstance(source, LocalIngestSource):
+        raise HTTPException(status_code=501, detail="Local housekeeping unavailable")
+
+    required = {
+        "schema",
+        "viewed_sidecar_sha",
+        "viewed_ref",
+        "viewed_content_hash",
+        "viewed_input_sha256",
+        "viewed_algorithm_version",
+        "decisions",
     }
-    if not decisions:
-        raise HTTPException(status_code=400, detail="No decisions given")
-
-    p = _housekeeping_sidecar_path(full_hash)
-    sc = hk.load_sidecar_file(p)
-    if sc is None:
-        raise HTTPException(status_code=404, detail="No housekeeping sidecar")
-
-    unknown = set(decisions) - {i.id for i in sc.items}
-    if unknown:
-        raise HTTPException(
-            status_code=400, detail=f"Unknown item(s): {sorted(unknown)}"
+    if (
+        set(payload) != required
+        or payload.get("schema") != HOUSEKEEPING_DECISION_SCHEMA
+    ):
+        raise HTTPException(status_code=400, detail="Invalid housekeeping decision")
+    viewed_fields = required - {"schema", "decisions"}
+    if any(
+        not isinstance(payload.get(field), str) or not payload[field]
+        for field in viewed_fields
+    ):
+        raise HTTPException(status_code=400, detail="Missing viewed identity")
+    if (
+        not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", payload["viewed_sidecar_sha"])
+        or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", payload["viewed_ref"])
+        or not re.fullmatch(r"sha256:[0-9a-f]{64}", payload["viewed_content_hash"])
+        or not re.fullmatch(r"sha256:[0-9a-f]{64}", payload["viewed_input_sha256"])
+        or not HOUSEKEEPING_ALGORITHM_PATTERN.fullmatch(
+            payload["viewed_algorithm_version"]
         )
+    ):
+        raise HTTPException(status_code=400, detail="Invalid viewed identity")
+    raw_decisions = payload.get("decisions")
+    if not isinstance(raw_decisions, list) or not raw_decisions:
+        raise HTTPException(status_code=400, detail="No decisions given")
+    decisions: dict[str, str] = {}
+    for decision in raw_decisions:
+        if (
+            not isinstance(decision, dict)
+            or set(decision) != {"item_id", "status"}
+            or not isinstance(decision.get("item_id"), str)
+            or not decision["item_id"]
+            or decision.get("status") not in {"approved", "rejected"}
+            or decision["item_id"] in decisions
+        ):
+            raise HTTPException(status_code=400, detail="Invalid or duplicate decision")
+        decisions[decision["item_id"]] = decision["status"]
 
-    for item in sc.items:
-        if item.id in decisions:
-            # A decision on an already-decided item is refused rather than
-            # silently re-applied: the record has already moved underneath it.
+    sidecar_path = _housekeeping_sidecar_path(full_hash)
+    with repository_write_lock(source.store.parent):
+        if source.current_ref() != payload["viewed_ref"]:
+            raise _stale()
+        view = _housekeeping_view_local(full_hash)
+        if (
+            any(view[field] != payload[field] for field in viewed_fields)
+            or view["state"] != "current"
+        ):
+            raise HTTPException(status_code=409, detail="Stale housekeeping proposal")
+        record = source.record_at_ref(full_hash, view["viewed_ref"])
+        sidecar_file = source.file_at_ref(sidecar_path, view["viewed_ref"])
+        if record is None or sidecar_file is None:
+            raise HTTPException(status_code=409, detail="Stale housekeeping proposal")
+        md_path, _record_blob, record_raw = record
+        _sidecar_blob, committed_sidecar = sidecar_file
+        if (
+            md_path.read_bytes() != record_raw
+            or not sidecar_path.exists()
+            or sidecar_path.read_bytes() != committed_sidecar
+        ):
+            raise HTTPException(status_code=409, detail="Stale housekeeping proposal")
+        sc = _load_housekeeping_bytes(committed_sidecar)
+        if sc is None:
+            raise HTTPException(status_code=409, detail="Stale housekeeping proposal")
+
+        unknown = set(decisions) - {i.id for i in sc.items}
+        if unknown:
+            raise HTTPException(
+                status_code=400, detail=f"Unknown item(s): {sorted(unknown)}"
+            )
+        for item in sc.items:
+            if item.id not in decisions:
+                continue
             if item.status != "proposed":
                 raise HTTPException(
                     status_code=409, detail=f"{item.id} is already {item.status}"
                 )
             item.status = decisions[item.id]
 
-    approved_ids = {
-        i.id for i in sc.items if i.id in decisions and i.status == "approved"
-    }
-    unmet = hk.unmet_dependencies(sc.items, approved_ids)
-    if unmet:
-        # Not advisory: the dependent case exists because applying it alone
-        # destroys data - setting date_published without the move that frees it
-        # overwrites the upload date instead of relocating it.
-        raise HTTPException(
-            status_code=400,
-            detail=f"These need their prerequisite approved too: {unmet}",
-        )
+        approved = [i for i in sc.items if i.id in decisions and i.status == "approved"]
+        unmet = hk.unmet_dependencies(sc.items, {i.id for i in approved})
+        if unmet:
+            raise HTTPException(
+                status_code=400,
+                detail=f"These need their prerequisite approved too: {unmet}",
+            )
 
-    approved = [i for i in sc.items if i.id in decisions and i.status == "approved"]
-    did_not_apply: list[dict] = []
-    entry = source._scan().get(full_hash) if hasattr(source, "_scan") else None
-    if approved:
-        if entry is None:
-            raise HTTPException(status_code=404, detail="Record not found")
-        md_path, _ = entry
+        if approved:
+            with tempfile.TemporaryDirectory(
+                prefix="workbench-housekeeping-apply-"
+            ) as td:
+                apply_path = Path(td) / md_path.name
+                apply_path.write_bytes(record_raw)
+                try:
+                    result = hk.apply_patch(
+                        apply_path, approved, expected_input_sha256=sc.input_sha256
+                    )
+                except (hk.StaleInput, hk.ApplyConflict) as exc:
+                    raise HTTPException(status_code=409, detail=str(exc)) from exc
+                except hk.BodyChanged as exc:
+                    raise HTTPException(status_code=500, detail=str(exc)) from exc
+                except (hk.MultilineField, ValueError) as exc:
+                    raise HTTPException(status_code=422, detail=str(exc)) from exc
+            if result.did_not_apply or len(result.applied) != len(approved):
+                raise HTTPException(
+                    status_code=409, detail="Stale housekeeping proposal"
+                )
+
+        changes = {sidecar_path: sc.to_json().encode()}
+        if approved:
+            changes[md_path] = result.text.encode()
+        frontmatter = parse_frontmatter(record_raw.decode("utf-8"))[0]
+        title = frontmatter.get("title", full_hash[:12])
+        note = f"housekeeping: {len(approved)} applied, {len(decisions) - len(approved)} rejected"
+        message = f"review: {title}\n\n{note}\n\nReviewed-Record: content:{full_hash}"
         try:
-            result = hk.apply_patch(md_path, approved)
-        except hk.BodyChanged as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-        except hk.MultilineField as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        # An item that no longer matches the record is NOT an error - the record
-        # moved on since the proposal was written. It goes back to `proposed` and
-        # is reported, so the reviewer can re-run housekeeping rather than having
-        # a stale change silently overwrite a newer edit.
-        stale = {i.id for i, _ in result.did_not_apply}
-        for item in sc.items:
-            if item.id in stale:
-                item.status = "proposed"
-        if result.applied and not source.save_ingest(full_hash, result.text):
-            raise HTTPException(status_code=404, detail="Record not found")
-        did_not_apply = [
-            {"item_id": i.id, "reason": why} for i, why in result.did_not_apply
-        ]
-
-    hk.write_sidecar_file(p, sc)
-    source.commit_review(
-        full_hash=full_hash,
-        author_name=user["name"],
-        author_email=user["email"],
-        notes=f"housekeeping: {len(approved)} applied, "
-        f"{len(decisions) - len(approved)} rejected",
-    )
+            source._commit_bytes_locked(
+                changes,
+                message,
+                user["name"],
+                user["email"],
+                view["viewed_ref"],
+            )
+        except (RuntimeError, subprocess.CalledProcessError) as exc:
+            raise HTTPException(
+                status_code=409, detail="Stale housekeeping proposal"
+            ) from exc
     return JSONResponse(
         {
             "applied": len(approved),
             "rejected": len(decisions) - len(approved),
-            "did_not_apply": did_not_apply,
+            "did_not_apply": [],
         }
     )

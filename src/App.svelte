@@ -6,6 +6,7 @@
     unarchiveIngest,
     fetchIngest,
     fetchDigest,
+    fetchHousekeeping,
     fetchCurrentUser,
     fetchMyRole,
     fetchProposals,
@@ -19,6 +20,7 @@
     IngestSummary,
     IngestDetail,
     DigestDocument,
+    HousekeepingView as HousekeepingViewData,
     SyncStatus,
     User,
   } from "$lib/api";
@@ -148,6 +150,12 @@
   let showArchived = $state(false);
   let selectedIngest = $state<IngestDetail | null>(null);
   let selectedDigest = $state<DigestDocument | null>(null);
+  let selectedHousekeepingOpen = $state(0);
+  let selectedHousekeepingScopes = $state<("frontmatter" | "body")[]>([]);
+  let selectedHousekeepingDue = $state(false);
+  let housekeepingHash = $state<string | null>(null);
+  let selectedHousekeepingView = $state<HousekeepingViewData | null>(null);
+  let ingestRequestGeneration = 0;
   // Relevance-tuning mode for the open record (highlight annotation page).
   let tuningOpen = $state(false);
   let sourceFile = $state<File | null>(null);
@@ -514,13 +522,20 @@
   }
 
   async function selectIngest(hash: string, file: File | null = null) {
+    const generation = ++ingestRequestGeneration;
     try {
-      const [ingest, digest] = await Promise.all([
+      const [ingest, digest, housekeeping] = await Promise.all([
         fetchIngest(hash),
         fetchDigest(hash).catch(() => null),
+        fetchHousekeeping(hash).catch(() => null),
       ]);
+      if (generation !== ingestRequestGeneration) return;
       selectedIngest = ingest;
       selectedDigest = digest;
+      selectedHousekeepingView = housekeeping;
+      selectedHousekeepingOpen = housekeeping?.outstanding_count ?? 0;
+      selectedHousekeepingScopes = housekeeping?.scopes ?? [];
+      selectedHousekeepingDue = housekeeping?.state === "due";
       sourceFile = file;
       tuningOpen = false;
       error = null;
@@ -531,9 +546,10 @@
       const fragment = window.location.hash || "";
       history.pushState(null, "", `/${publicHash}${fragment}`);
     } catch (e) {
+      if (generation !== ingestRequestGeneration) return;
       error = `Failed to load ingest: ${hash}`;
     } finally {
-      openingRecord = false;
+      if (generation === ingestRequestGeneration) openingRecord = false;
     }
   }
 
@@ -546,8 +562,13 @@
   }
 
   function goBack() {
+    ingestRequestGeneration++;
     selectedIngest = null;
     selectedDigest = null;
+    selectedHousekeepingOpen = 0;
+    selectedHousekeepingScopes = [];
+    selectedHousekeepingDue = false;
+    selectedHousekeepingView = null;
     sourceFile = null;
     tuningOpen = false;
     error = null;
@@ -600,9 +621,11 @@
     history.pushState(null, "", "/models");
   }
 
-  function showHousekeeping() {
+  function showHousekeeping(contentHash: string | null = null) {
+    housekeepingHash = contentHash;
     appMode = "housekeeping";
-    history.pushState(null, "", "/housekeeping");
+    const query = contentHash ? `?record=${encodeURIComponent(contentHash)}` : "";
+    history.pushState(null, "", `/housekeeping${query}`);
   }
 
   function showPages() {
@@ -631,6 +654,7 @@
     // No `&& !STATIC_READS` guard, unlike the local-only tabs: housekeeping reads
     // from the snapshot, so /housekeeping must resolve in the deployed workbench.
     if (path === "housekeeping") {
+      housekeepingHash = new URLSearchParams(window.location.search).get("record");
       appMode = "housekeeping";
       return; // HousekeepingView fetches its own queue
     }
@@ -713,21 +737,21 @@
 </script>
 
 <div class="h-screen flex flex-col">
-  <header class="bg-teal-950/95 backdrop-blur-sm px-6 py-2 font-ui flex items-center gap-3 flex-none">
+  <header class="bg-teal-950/95 backdrop-blur-sm px-3 sm:px-6 py-2 font-ui flex items-center gap-2 sm:gap-3 flex-none min-w-0">
     <a
       href="/"
       onclick={(e) => { e.preventDefault(); goBack(); }}
-      class="flex items-center gap-3 {selectedIngest ? 'cursor-pointer hover:opacity-80' : ''} transition-opacity"
+      class="flex-none flex items-center gap-3 {selectedIngest ? 'cursor-pointer hover:opacity-80' : ''} transition-opacity"
       title={selectedIngest ? 'Back to ingest list' : ''}
     >
       <img src="/logo-darkmode.svg" alt="Anomalica" class="h-4" />
-      <span class="text-bone/60 text-sm leading-none mt-auto">Workbench</span>
+      <span class="hidden sm:inline text-bone/60 text-sm leading-none mt-auto">Workbench</span>
     </a>
     <!-- Destinations run in PIPELINE ORDER: source material becomes an ingest,
          a model digests it, the assimilator merges those digests into the graph.
          The nav is the pipeline, so a reader can see where each surface sits in
          it without being told. -->
-    <nav class="flex items-center gap-1 ml-2">
+    <nav class="flex flex-1 sm:flex-none min-w-0 items-center gap-1 overflow-x-auto sm:ml-2">
       <button
         onclick={showRecords}
         class="text-sm font-ui px-2.5 py-1 rounded cursor-pointer transition-colors
@@ -744,7 +768,7 @@
       {/if}
       {#if canHousekeep}
         <button
-          onclick={showHousekeeping}
+          onclick={() => showHousekeeping()}
           class="text-sm font-ui px-2.5 py-1 rounded cursor-pointer transition-colors
             {appMode === 'housekeeping' ? 'bg-bone/15 text-bone' : 'text-bone/50 hover:text-bone/80 hover:bg-bone/10'}"
           title="Proposed frontmatter corrections awaiting approval, one item at a time"
@@ -771,8 +795,9 @@
         >Infrastructure</button>
       {/if}
     </nav>
-    <div class="flex-1"></div>
-    {#if syncStatus}
+    <div class="hidden sm:block flex-1"></div>
+    <div class="hidden lg:contents">
+      {#if syncStatus}
       {#if syncStatus.offline}
         <span
           class="flex items-center gap-1.5 text-xs font-ui font-medium px-2 py-1 rounded bg-warning/20 text-warning"
@@ -806,7 +831,8 @@
           Synced
         </span>
       {/if}
-    {/if}
+      {/if}
+    </div>
     {#if canReview}
       <button
         onclick={showInbox}
@@ -888,7 +914,7 @@
         {/if}
       </div>
     {:else}
-      <a href="/api/auth/login" class="text-bone/60 text-sm hover:text-bone transition-colors">Log in</a>
+      <a href="/api/auth/login" class="flex-none text-bone/60 text-sm hover:text-bone transition-colors">Log in</a>
     {/if}
   </header>
 
@@ -896,7 +922,13 @@
     {#if appMode === "digests"}
       <DigestsView />
     {:else if appMode === "housekeeping"}
-      <HousekeepingView canDecide={liveBackend && canHousekeep} />
+      <HousekeepingView
+        canDecide={canHousekeep}
+        initialHash={housekeepingHash}
+        initialView={housekeepingHash === selectedIngest?.content_hash
+          ? selectedHousekeepingView
+          : null}
+      />
     {:else if appMode === "pages"}
       <PagesView canDecide={liveBackend && canCurate} />
     {:else if appMode === "infrastructure"}
@@ -956,6 +988,9 @@
         {user}
         isAdmin={myRole === "admin"}
         canTag={liveBackend && canHousekeep}
+        housekeepingOpen={selectedHousekeepingOpen}
+        housekeepingScopes={selectedHousekeepingScopes}
+        housekeepingDue={selectedHousekeepingDue}
         reviewed={reviewedHashes.has(selectedIngest.content_hash) &&
           !needsVerifyHashes.has(selectedIngest.content_hash)}
         needsVerify={needsVerifyHashes.has(selectedIngest.content_hash)}
@@ -973,6 +1008,14 @@
         onback={goBack}
         ontuning={() => (tuningOpen = true)}
         onreload={(contentHash) => selectIngest(contentHash)}
+        onhousekeeping={() => showHousekeeping(selectedIngest!.content_hash)}
+        onhousekeepingaccess={(view) => {
+          if (view.viewed_content_hash !== `sha256:${selectedIngest!.content_hash}`) return;
+          selectedHousekeepingView = view;
+          selectedHousekeepingOpen = view.outstanding_count;
+          selectedHousekeepingScopes = view.scopes;
+          selectedHousekeepingDue = view.state === "due";
+        }}
       />
     {:else}
       <div class="flex-1 flex flex-col min-h-0">

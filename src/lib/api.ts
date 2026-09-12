@@ -87,6 +87,10 @@ export function provenanceOf(r: {
 export interface IngestDetail {
   content_hash: string;
   public_hash: string;
+  /** Git identity of the exact record bytes returned by this GET. */
+  base_record_sha: string;
+  /** Git commit whose tree supplied base_record_sha and the displayed record. */
+  base_ref: string;
   copyright_status: CopyrightStatus;
   creators: string[];
   frontmatter: Record<string, string>;
@@ -533,6 +537,7 @@ export async function submitReview(
   fullHash: string,
   content: string,
   notes: string,
+  base: Pick<IngestDetail, "base_record_sha" | "base_ref">,
   spans?: KindedSpan[],
   verdict?: { observed_coverage: number; digestible: boolean; total_units: number },
   options?: { deferPush?: boolean },
@@ -547,6 +552,8 @@ export async function submitReview(
       body: JSON.stringify({
         content,
         notes,
+        base_record_sha: base.base_record_sha,
+        base_ref: base.base_ref,
         ...(spans && spans.length > 0 ? { spans } : {}),
         ...(verdict ? { verdict } : {}),
         // Two-phase submit (local backend): save+commit now, push as its own
@@ -598,6 +605,50 @@ export interface VerificationResult {
   expires_in?: number;
   body?: string;
   raw_frontmatter?: string;
+  /** Git identity of body/raw_frontmatter when a gated record is unlocked. */
+  base_record_sha?: string;
+  /** Git commit whose tree supplied the unlocked record bytes. */
+  base_ref?: string;
+  housekeeping?: HousekeepingView;
+}
+
+export interface UnlockedIngest {
+  content_hash: string;
+  body: string;
+  raw_frontmatter: string;
+  base_record_sha: string;
+  base_ref: string;
+}
+
+/** Retain a complete unlocked record snapshot, never text without its identity. */
+export function unlockedIngestFromVerification(
+  contentHash: string,
+  result: VerificationResult,
+): UnlockedIngest | null {
+  if (
+    !result.passed ||
+    typeof result.body !== "string" ||
+    typeof result.base_record_sha !== "string" ||
+    typeof result.base_ref !== "string"
+  ) {
+    return null;
+  }
+  return {
+    content_hash: contentHash,
+    body: result.body,
+    raw_frontmatter: result.raw_frontmatter ?? "",
+    base_record_sha: result.base_record_sha,
+    base_ref: result.base_ref,
+  };
+}
+
+/** Use an unlock only for the record it belongs to; changing records resets it. */
+export function reviewBaseFor(
+  contentHash: string,
+  snapshot: Pick<IngestDetail, "base_record_sha" | "base_ref">,
+  unlocked: UnlockedIngest | null,
+): Pick<IngestDetail, "base_record_sha" | "base_ref"> {
+  return unlocked?.content_hash === contentHash ? unlocked : snapshot;
 }
 
 /** Prove possession to the gate (a source-file SHA-256, or a cloze session +
@@ -1366,12 +1417,21 @@ export interface InfrastructureRecord {
   claims: number;
 }
 
+export interface IntakeQueueError {
+  path: string;
+  title: string | null;
+  reason: string;
+}
+
 export async function fetchInfrastructure(): Promise<{
   summary: InfrastructureSummary | null;
   records: InfrastructureRecord[];
+  intake_errors?: IntakeQueueError[];
 }> {
   const res = await fetch("/api/infrastructure");
-  if (res.status === 503 || res.status === 404) return { summary: null, records: [] };
+  if (res.status === 503 || res.status === 404) {
+    return { summary: null, records: [], intake_errors: [] };
+  }
   if (!res.ok) throw new Error(`Failed to fetch infrastructure summary: ${res.status}`);
   return res.json();
 }
@@ -1420,13 +1480,16 @@ export interface HousekeepingRow {
   title: string | null;
   copyright_status: string | null;
   checked_at: string | null;
-  checker_version: number;
+  checker_version?: number;
+  algorithm_version?: string;
+  /** True only for a completed v2 pass over the exact current record bytes. */
+  current?: boolean;
   proposed: number;
   approved: number;
   rejected: number;
 }
 
-export interface HousekeepingItem {
+export interface HousekeepingFrontmatterItem {
   id: string;
   check: string;
   field: string;
@@ -1439,18 +1502,71 @@ export interface HousekeepingItem {
   status: "proposed" | "approved" | "rejected";
   /** Items that must be approved alongside this one, or it destroys data. */
   depends_on?: string[];
-  /** The exact frontmatter lines the commit will remove and add. */
-  preview?: { removed: string[]; added: string[] };
 }
 
-export interface HousekeepingSidecar {
-  content_hash: string;
-  checked_at: string;
-  checker_version: number;
-  items: HousekeepingItem[];
-  /** True when the copyright allow-list withheld items about gated fields. */
-  gated?: boolean;
+export interface HousekeepingTokenItem {
+  id: string;
+  check: string;
+  operation: "replace-token";
+  scope: "body";
+  old_token: string;
+  new_token: string;
+  case_sensitive: true;
+  token_boundary: "ascii-word";
+  occurrences: { start_byte: number; end_byte: number }[];
+  expected_count: number;
+  confidence: "high" | "medium" | "low";
+  evidence: { reasoning: string; sources: string[]; record_spans: string[] };
+  status: "proposed" | "approved" | "rejected";
 }
+
+export type HousekeepingItem = HousekeepingFrontmatterItem | HousekeepingTokenItem;
+
+export interface HousekeepingSidecar {
+  schema: "anomalica/housekeeping/1" | "anomalica/housekeeping/2";
+  content_hash: string;
+  input_sha256?: string;
+  checked_at: string;
+  checker_version?: number;
+  algorithm_version?: string;
+  outcome?: "completed";
+  items: HousekeepingItem[];
+}
+
+export type HousekeepingDueReason =
+  | "missing-sidecar"
+  | "invalid-sidecar"
+  | "unsupported-schema"
+  | "incomplete"
+  | "input-mismatch"
+  | "algorithm-mismatch";
+
+interface HousekeepingViewBase {
+  schema: "anomalica/housekeeping-view/1";
+  state: "current" | "due";
+  due_reason: HousekeepingDueReason | null;
+  outstanding_count: number;
+  scopes: ("frontmatter" | "body")[];
+  deep_link: string;
+  sidecar: HousekeepingSidecar | null;
+}
+
+export interface HousekeepingSummaryView extends HousekeepingViewBase {
+  access: "summary";
+  sidecar: null;
+}
+
+export interface HousekeepingFullView extends HousekeepingViewBase {
+  access: "full";
+  viewed_sidecar_sha: string | null;
+  viewed_ref: string;
+  viewed_content_hash: string;
+  viewed_input_sha256: string;
+  viewed_algorithm_version: string;
+  previews: Record<string, { removed: string[]; added: string[] }>;
+}
+
+export type HousekeepingView = HousekeepingSummaryView | HousekeepingFullView;
 
 export async function fetchHousekeepingQueue(): Promise<HousekeepingRow[]> {
   const res = await fetch(readPath("/api/housekeeping"));
@@ -1497,7 +1613,7 @@ export async function fetchRelations(contentHash: string): Promise<RecordRelatio
   return res.json();
 }
 
-export async function fetchHousekeeping(contentHash: string): Promise<HousekeepingSidecar | null> {
+export async function fetchHousekeeping(contentHash: string): Promise<HousekeepingView | null> {
   const h = contentHash.replace(/^sha256:/, "");
   const res = await fetch(readPath(`/api/ingests/${h}/housekeeping`));
   if (res.status === 404) return null;
@@ -1508,13 +1624,29 @@ export async function fetchHousekeeping(contentHash: string): Promise<Housekeepi
 /** Record per-item decisions. Never readPath: this is always a live write. */
 export async function decideHousekeeping(
   contentHash: string,
+  view: HousekeepingFullView,
   decisions: { item_id: string; status: "approved" | "rejected" }[],
 ): Promise<{ applied: number; rejected: number }> {
+  if (!view.viewed_sidecar_sha) throw new Error("Housekeeping view has no committed sidecar");
+  if (
+    decisions.length === 0 ||
+    new Set(decisions.map((decision) => decision.item_id)).size !== decisions.length
+  ) {
+    throw new Error("Housekeeping decisions must be non-empty and unique");
+  }
   const h = contentHash.replace(/^sha256:/, "");
   const res = await fetch(`/api/ingests/${h}/housekeeping/decide`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ decisions }),
+    body: JSON.stringify({
+      schema: "anomalica/housekeeping-decision/1",
+      viewed_sidecar_sha: view.viewed_sidecar_sha,
+      viewed_ref: view.viewed_ref,
+      viewed_content_hash: view.viewed_content_hash,
+      viewed_input_sha256: view.viewed_input_sha256,
+      viewed_algorithm_version: view.viewed_algorithm_version,
+      decisions,
+    }),
   });
   if (!res.ok) throw new Error(`Failed to record decisions: ${res.status}`);
   return res.json();

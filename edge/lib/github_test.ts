@@ -1,5 +1,5 @@
-import { assert, assertEquals } from "jsr:@std/assert@1";
-import { type FetchLike, fromBase64, GitHubClient, toBase64 } from "./github.ts";
+import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
+import { type FetchLike, fromBase64, GitHubClient, GitHubError, toBase64 } from "./github.ts";
 
 Deno.test("base64 round-trips UTF-8 (unicode-safe)", () => {
   for (const s of ["", "hello", "Tic Tac", "敦賀 (げんぱつ)", "a\nb\tc"]) {
@@ -10,6 +10,10 @@ Deno.test("base64 round-trips UTF-8 (unicode-safe)", () => {
 Deno.test("fromBase64 tolerates the API's line-wrapped content", () => {
   const wrapped = toBase64("x".repeat(100)).replace(/(.{20})/g, "$1\n");
   assertEquals(fromBase64(wrapped), "x".repeat(100));
+});
+
+Deno.test("fromBase64 refuses invalid UTF-8", () => {
+  assertRejects(() => Promise.resolve().then(() => fromBase64("/w==")), TypeError);
 });
 
 Deno.test("getFile returns null on 404, decodes content otherwise", async () => {
@@ -104,7 +108,11 @@ Deno.test("listCommits maps the commits API, preserving the reviewer's notes", a
         Promise.resolve([
           {
             commit: {
-              author: { name: "Mark", email: "m@x.com", date: "2026-06-22T02:35:31Z" },
+              author: {
+                name: "Mark",
+                email: "m@x.com",
+                date: "2026-06-22T02:35:31Z",
+              },
               message: "review: fix names\n\nReviewed up to 20%",
             },
           },
@@ -128,4 +136,150 @@ Deno.test("listCommits returns [] for a missing path (404)", async () => {
     Promise.resolve({ status: 404, json: () => Promise.resolve({}) }),
   );
   assertEquals(await gh.listCommits("ingests", "store/nope.md"), []);
+});
+
+Deno.test("commitFiles creates one two-file commit and advances the ref with CAS", async () => {
+  const calls: {
+    url: string;
+    method: string;
+    body?: Record<string, unknown>;
+  }[] = [];
+  let blob = 0;
+  const fetchImpl: FetchLike = (url, init) => {
+    const method = init?.method ?? "GET";
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    calls.push({ url, method, body });
+    if (url.includes("/git/ref/heads/main")) {
+      return Promise.resolve({
+        status: 200,
+        json: () => Promise.resolve({ object: { sha: "parent" } }),
+      });
+    }
+    if (url.endsWith("/git/commits/parent")) {
+      return Promise.resolve({
+        status: 200,
+        json: () => Promise.resolve({ tree: { sha: "base" } }),
+      });
+    }
+    if (url.includes("/contents/")) {
+      const sha = url.includes("record.md") ? "record-old" : "sidecar-old";
+      return Promise.resolve({
+        status: 200,
+        json: () => Promise.resolve({ sha }),
+      });
+    }
+    if (url.endsWith("/git/blobs")) {
+      blob++;
+      return Promise.resolve({
+        status: 201,
+        json: () => Promise.resolve({ sha: `blob-${blob}` }),
+      });
+    }
+    if (url.endsWith("/git/trees")) {
+      return Promise.resolve({
+        status: 201,
+        json: () => Promise.resolve({ sha: "tree-new" }),
+      });
+    }
+    if (url.endsWith("/git/commits")) {
+      return Promise.resolve({
+        status: 201,
+        json: () => Promise.resolve({ sha: "commit-new" }),
+      });
+    }
+    if (url.includes("/git/refs/heads/main")) {
+      return Promise.resolve({ status: 200, json: () => Promise.resolve({}) });
+    }
+    throw new Error(`unexpected ${method} ${url}`);
+  };
+  const gh = new GitHubClient("t", "anomalica", "main", fetchImpl);
+  assertEquals(
+    await gh.commitFiles(
+      "ingests",
+      [
+        {
+          path: "store/record.md",
+          text: "new record",
+          expectedSha: "record-old",
+        },
+        {
+          path: "store/sidecar.json",
+          text: "new sidecar",
+          expectedSha: "sidecar-old",
+        },
+      ],
+      "housekeeping",
+      { name: "R", email: "r@x.com" },
+    ),
+    "commit-new",
+  );
+  const tree = calls.find((call) => call.url.endsWith("/git/trees"))!.body!;
+  assertEquals((tree.tree as unknown[]).length, 2);
+  const commit = calls.find((call) => call.url.endsWith("/git/commits"))!.body!;
+  assertEquals(commit.parents, ["parent"]);
+  const patch = calls.find((call) => call.method === "PATCH")!.body!;
+  assertEquals(patch, { sha: "commit-new", force: false });
+});
+
+Deno.test("commitFiles re-reads a raced ref and refuses a changed target path", async () => {
+  let refs = 0;
+  let patches = 0;
+  const fetchImpl: FetchLike = (url, init) => {
+    if (url.includes("/git/ref/heads/main")) {
+      refs++;
+      return Promise.resolve({
+        status: 200,
+        json: () => Promise.resolve({ object: { sha: `parent-${refs}` } }),
+      });
+    }
+    if (/\/git\/commits\/parent-\d$/.test(url)) {
+      return Promise.resolve({
+        status: 200,
+        json: () => Promise.resolve({ tree: { sha: "base" } }),
+      });
+    }
+    if (url.includes("/contents/")) {
+      return Promise.resolve({
+        status: 200,
+        json: () => Promise.resolve({ sha: refs === 1 ? "old" : "someone-else" }),
+      });
+    }
+    if (url.endsWith("/git/blobs")) {
+      return Promise.resolve({
+        status: 201,
+        json: () => Promise.resolve({ sha: "blob" }),
+      });
+    }
+    if (url.endsWith("/git/trees")) {
+      return Promise.resolve({
+        status: 201,
+        json: () => Promise.resolve({ sha: "tree" }),
+      });
+    }
+    if (url.endsWith("/git/commits")) {
+      return Promise.resolve({
+        status: 201,
+        json: () => Promise.resolve({ sha: "commit" }),
+      });
+    }
+    if (init?.method === "PATCH") {
+      patches++;
+      return Promise.resolve({ status: 409, json: () => Promise.resolve({}) });
+    }
+    throw new Error(`unexpected ${url}`);
+  };
+  const gh = new GitHubClient("t", "anomalica", "main", fetchImpl);
+  await assertRejects(
+    () =>
+      gh.commitFiles(
+        "ingests",
+        [{ path: "store/record.md", text: "new", expectedSha: "old" }],
+        "housekeeping",
+        { name: "R", email: "r@x.com" },
+      ),
+    GitHubError,
+    "changed",
+  );
+  assertEquals(patches, 0);
+  assertEquals(refs, 3);
 });

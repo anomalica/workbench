@@ -22,6 +22,8 @@ const CLAIM_ID = "abcdef12-3456-4789-abcd-ef0123456789"; // 36-char uuid form
 const INGEST: IngestDetail = {
   content_hash: "f".repeat(64),
   public_hash: "f".repeat(56),
+  base_record_sha: "b".repeat(40),
+  base_ref: "c".repeat(40),
   copyright_status: "public_domain",
   creators: [],
   frontmatter: { title: "Deep-link Test Record", source_type: "web" },

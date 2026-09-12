@@ -10,6 +10,8 @@ import backend.server as server
 from backend import proposals
 
 HASH = "a" * 64
+BASE = {"base_record_sha": "b" * 40, "base_ref": "c" * 40}
+CONTENT = f"---\ncontent_hash: {HASH}\n---\nedited body\n"
 
 
 class StubSource:
@@ -66,7 +68,8 @@ def test_contributor_submit_is_queued_not_committed(env):
     client_as, stub, ingests = env
     client = client_as("newbie")  # unlisted -> contributor
     res = client.put(
-        f"/api/ingests/{HASH}", json={"content": "edited body", "notes": "typo"}
+        f"/api/ingests/{HASH}",
+        json={"content": CONTENT, "notes": "typo", **BASE},
     )
     assert res.status_code == 202
     assert res.json()["status"] == "pending"
@@ -79,7 +82,8 @@ def test_reviewer_submit_commits_directly(env):
     client_as, stub, ingests = env
     client = client_as("rev")
     res = client.put(
-        f"/api/ingests/{HASH}", json={"content": "edited body", "notes": ""}
+        f"/api/ingests/{HASH}",
+        json={"content": CONTENT, "notes": "", **BASE},
     )
     assert res.status_code == 200
     assert stub.saved is True and stub.committed is True
@@ -89,7 +93,7 @@ def test_reviewer_submit_commits_directly(env):
 def test_editor_submit_commits_directly(env):
     client_as, stub, _ = env
     res = client_as("boss").put(
-        f"/api/ingests/{HASH}", json={"content": "b", "notes": ""}
+        f"/api/ingests/{HASH}", json={"content": CONTENT, "notes": "", **BASE}
     )
     assert res.status_code == 200
     assert stub.committed is True

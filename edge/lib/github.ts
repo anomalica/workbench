@@ -1,7 +1,8 @@
 /**
- * GitHub contents-API client - the serverless write path (the production
+ * GitHub API client - the serverless write path (the production
  * GitHubIngestSource the FastAPI stub stands in for). No local clone, no volume:
- * reads + commits go straight through the API with a service-account token.
+ * reads + commits go straight through the Contents and Git Data APIs with a
+ * service-account token.
  *
  * Used for: reviewer corrections -> the ingests repo, and curation decisions ->
  * the curation ledger. Writes are read-modify-write with an optimistic-lock
@@ -11,7 +12,7 @@
  */
 
 const encoder = new TextEncoder();
-const decoder = new TextDecoder();
+const decoder = new TextDecoder("utf-8", { fatal: true });
 
 /** Standard base64 (padded) of a UTF-8 string - the contents API content field. */
 export function toBase64(text: string): string {
@@ -44,6 +45,19 @@ export interface FileState {
   sha: string;
 }
 
+export interface AtomicFileChange {
+  path: string;
+  text: string;
+  /** Blob sha read before constructing the change. Null means the path must not exist. */
+  expectedSha: string | null;
+}
+
+export interface CommitFilesOptions {
+  /** Commit the change only while the branch still names the commit the client viewed. */
+  expectedRef?: string;
+  retries?: number;
+}
+
 export class GitHubError extends Error {
   constructor(
     public status: number,
@@ -65,6 +79,10 @@ export class GitHubClient {
   private url(repo: string, path: string): string {
     const clean = path.split("/").map(encodeURIComponent).join("/");
     return `https://api.github.com/repos/${this.owner}/${repo}/contents/${clean}`;
+  }
+
+  private api(repo: string, path: string): string {
+    return `https://api.github.com/repos/${this.owner}/${repo}/${path}`;
   }
 
   private headers(): HeadersInit {
@@ -90,9 +108,14 @@ export class GitHubClient {
       { headers: this.headers() },
     );
     if (res.status === 404 || res.status === 409) return []; // 409: empty repo
-    if (res.status !== 200) throw new GitHubError(res.status, `listCommits ${path}`);
+    if (res.status !== 200) {
+      throw new GitHubError(res.status, `listCommits ${path}`);
+    }
     const body = (await res.json()) as {
-      commit: { author: { name: string; email: string; date: string }; message: string };
+      commit: {
+        author: { name: string; email: string; date: string };
+        message: string;
+      };
     }[];
     return body.map((c) => ({
       by: c.commit.author.name,
@@ -106,16 +129,32 @@ export class GitHubClient {
     }));
   }
 
-  /** Read a file. Returns null if it does not exist (404). */
-  async getFile(repo: string, path: string): Promise<FileState | null> {
-    const res = await this.fetchImpl(
-      `${this.url(repo, path)}?ref=${encodeURIComponent(this.branch)}`,
-      { headers: this.headers() },
-    );
+  /** Read the branch head. */
+  async getRef(repo: string): Promise<string> {
+    const branchPath = this.branch.split("/").map(encodeURIComponent).join("/");
+    const res = await this.fetchImpl(this.api(repo, `git/ref/heads/${branchPath}`), {
+      headers: this.headers(),
+    });
+    if (res.status !== 200) throw new GitHubError(res.status, "get branch ref");
+    return ((await res.json()) as { object: { sha: string } }).object.sha;
+  }
+
+  /** Read a file from one committed tree. Returns null if it does not exist. */
+  async getFileAt(repo: string, path: string, ref: string): Promise<FileState | null> {
+    const res = await this.fetchImpl(`${this.url(repo, path)}?ref=${encodeURIComponent(ref)}`, {
+      headers: this.headers(),
+    });
     if (res.status === 404) return null;
-    if (res.status !== 200) throw new GitHubError(res.status, `getFile ${path}`);
+    if (res.status !== 200) {
+      throw new GitHubError(res.status, `getFile ${path}`);
+    }
     const body = (await res.json()) as { content: string; sha: string };
     return { text: fromBase64(body.content), sha: body.sha };
+  }
+
+  /** Read a file from the configured branch. */
+  getFile(repo: string, path: string): Promise<FileState | null> {
+    return this.getFileAt(repo, path, this.branch);
   }
 
   /** Create or update a file. Pass the prior sha to update; omit to create. */
@@ -178,5 +217,133 @@ export class GitHubClient {
       }
     }
     throw lastErr ?? new GitHubError(409, "editFile: exhausted retries");
+  }
+
+  /**
+   * Commit several files together, then advance the branch only if its ref still
+   * names the parent we read. If an unrelated commit wins the race, rebuild on
+   * its head; if any changed path moved, fail stale rather than overwrite it.
+   */
+  async commitFiles(
+    repo: string,
+    changes: AtomicFileChange[],
+    message: string,
+    author: Author,
+    options: CommitFilesOptions = {},
+  ): Promise<string> {
+    if (changes.length === 0) throw new Error("commitFiles: no changes");
+    if (new Set(changes.map((change) => change.path)).size !== changes.length) {
+      throw new Error("commitFiles: duplicate path");
+    }
+
+    let lastErr: unknown;
+    const retries = options.retries ?? 4;
+    const branchPath = this.branch.split("/").map(encodeURIComponent).join("/");
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      const parent = await this.getRef(repo);
+      if (options.expectedRef !== undefined && parent !== options.expectedRef) {
+        throw new GitHubError(409, "branch changed");
+      }
+
+      const parentCommit = await this.fetchImpl(this.api(repo, `git/commits/${parent}`), {
+        headers: this.headers(),
+      });
+      if (parentCommit.status !== 200) {
+        throw new GitHubError(parentCommit.status, "get parent commit");
+      }
+      const baseTree = ((await parentCommit.json()) as { tree: { sha: string } }).tree.sha;
+
+      for (const change of changes) {
+        const current = await this.fetchImpl(
+          `${this.url(repo, change.path)}?ref=${encodeURIComponent(parent)}`,
+          { headers: this.headers() },
+        );
+        if (current.status === 404) {
+          if (change.expectedSha !== null) {
+            throw new GitHubError(409, `${change.path} changed`);
+          }
+        } else if (current.status === 200) {
+          const sha = ((await current.json()) as { sha: string }).sha;
+          if (sha !== change.expectedSha) {
+            throw new GitHubError(409, `${change.path} changed`);
+          }
+        } else {
+          throw new GitHubError(current.status, `getFile ${change.path} at parent`);
+        }
+      }
+
+      const treeEntries: {
+        path: string;
+        mode: "100644";
+        type: "blob";
+        sha: string;
+      }[] = [];
+      for (const change of changes) {
+        const blob = await this.fetchImpl(this.api(repo, "git/blobs"), {
+          method: "POST",
+          headers: this.headers(),
+          body: JSON.stringify({
+            content: toBase64(change.text),
+            encoding: "base64",
+          }),
+        });
+        if (blob.status !== 201) {
+          throw new GitHubError(blob.status, `create blob ${change.path}`);
+        }
+        treeEntries.push({
+          path: change.path,
+          mode: "100644",
+          type: "blob",
+          sha: ((await blob.json()) as { sha: string }).sha,
+        });
+      }
+
+      const tree = await this.fetchImpl(this.api(repo, "git/trees"), {
+        method: "POST",
+        headers: this.headers(),
+        body: JSON.stringify({ base_tree: baseTree, tree: treeEntries }),
+      });
+      if (tree.status !== 201) {
+        throw new GitHubError(tree.status, "create tree");
+      }
+      const treeSha = ((await tree.json()) as { sha: string }).sha;
+
+      const commit = await this.fetchImpl(this.api(repo, "git/commits"), {
+        method: "POST",
+        headers: this.headers(),
+        body: JSON.stringify({
+          message,
+          tree: treeSha,
+          parents: [parent],
+          author,
+          committer: author,
+        }),
+      });
+      if (commit.status !== 201) {
+        throw new GitHubError(commit.status, "create commit");
+      }
+      const commitSha = ((await commit.json()) as { sha: string }).sha;
+
+      // GitHub's ref update has no If-Match input. Re-read before PATCH so a
+      // raced branch is revalidated rather than relying only on non-fast-forward
+      // rejection after constructing a commit from an obsolete parent.
+      if ((await this.getRef(repo)) !== parent) {
+        lastErr = new GitHubError(409, "ref conflict");
+        continue;
+      }
+
+      const update = await this.fetchImpl(this.api(repo, `git/refs/heads/${branchPath}`), {
+        method: "PATCH",
+        headers: this.headers(),
+        body: JSON.stringify({ sha: commitSha, force: false }),
+      });
+      if (update.status === 200) return commitSha;
+      if (update.status === 409 || update.status === 422) {
+        lastErr = new GitHubError(update.status, "ref conflict");
+        continue;
+      }
+      throw new GitHubError(update.status, "update branch ref");
+    }
+    throw lastErr ?? new GitHubError(409, "commitFiles: exhausted retries");
   }
 }
