@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -92,13 +93,18 @@ def _housekeeping_view(client: TestClient) -> dict:
     return response.json()
 
 
-def _decide(client: TestClient, view: dict, status: str = "rejected"):
+def _decide(
+    client: TestClient,
+    view: dict,
+    status: str = "rejected",
+    item_id: str = "publisher",
+):
     return client.post(
         f"/api/ingests/{HASH}/housekeeping/decide",
         json={
             "schema": "anomalica/housekeeping-decision/1",
             **{key: value for key, value in view.items() if key.startswith("viewed_")},
-            "decisions": [{"item_id": "publisher", "status": status}],
+            "decisions": [{"item_id": item_id, "status": status}],
         },
     )
 
@@ -300,6 +306,28 @@ def test_ordinary_save_with_exact_blob_and_ref_commits(local_api):
     assert _git(repo, "show", "--name-only", "--format=", "HEAD").splitlines() == [
         str(record.relative_to(repo))
     ]
+    assert _git(repo, "diff", "--cached", "--name-only", "HEAD") == ""
+
+
+def test_successive_ordinary_saves_do_not_leave_reverse_staged_changes(local_api):
+    client, repo, record, _sidecar = local_api
+
+    for body in ("First editor body.", "Second editor body."):
+        viewed = client.get(f"/api/ingests/{HASH}").json()
+        response = client.put(
+            f"/api/ingests/{HASH}",
+            json={
+                "content": RECORD.replace("Body.", body),
+                "notes": "",
+                "base_record_sha": viewed["base_record_sha"],
+                "base_ref": viewed["base_ref"],
+            },
+        )
+
+        assert response.status_code == 200
+        assert _git(repo, "diff", "--cached", "--name-only", "HEAD") == ""
+
+    assert record.read_text().endswith("Second editor body.\n")
 
 
 def test_housekeeping_commit_makes_an_open_ordinary_editor_stale(local_api):
@@ -321,6 +349,40 @@ def test_housekeeping_commit_makes_an_open_ordinary_editor_stale(local_api):
     assert response.status_code == 409
     assert 'publisher: "New publisher"' in record.read_text()
     assert "Older editor body" not in record.read_text()
+
+
+def test_successive_housekeeping_commits_do_not_leave_reverse_staged_changes(
+    local_api,
+):
+    client, repo, _record, sidecar = local_api
+    sc = _sidecar()
+    sc.items.append(
+        hk.Item(
+            id="publisher-two",
+            check="publisher",
+            field="publisher",
+            operation="set",
+            current="Old publisher",
+            proposed="Other publisher",
+            confidence="high",
+            evidence=hk.Evidence(reasoning="A second proposal for the test."),
+        )
+    )
+    hk.write_sidecar_file(sidecar, sc)
+    _git(repo, "add", "--", str(sidecar.relative_to(repo)))
+    _git(repo, "commit", "-q", "-m", "second proposal")
+
+    assert _decide(client, _housekeeping_view(client)).status_code == 200
+    assert _git(repo, "diff", "--cached", "--name-only", "HEAD") == ""
+    assert (
+        _decide(
+            client,
+            _housekeeping_view(client),
+            item_id="publisher-two",
+        ).status_code
+        == 200
+    )
+    assert _git(repo, "diff", "--cached", "--name-only", "HEAD") == ""
 
 
 def test_housekeeping_ref_cas_failure_leaves_both_files_unchanged(
@@ -352,6 +414,55 @@ def test_housekeeping_ref_cas_failure_leaves_both_files_unchanged(
     assert head == before_ref
     assert record.read_bytes() == before_record
     assert sidecar.read_bytes() == before_sidecar
+
+
+def test_index_refresh_failure_happens_before_ref_cas_and_releases_lock(
+    local_api, monkeypatch
+):
+    client, repo, record, sidecar = local_api
+    view = _housekeeping_view(client)
+    before_ref = _git(repo, "rev-parse", "HEAD")
+    before_record = record.read_bytes()
+    before_sidecar = sidecar.read_bytes()
+    original_run = subprocess.run
+
+    def fail_ordinary_index_refresh(command, **kwargs):
+        index_file = kwargs.get("env", {}).get("GIT_INDEX_FILE", "")
+        if command[:2] == ["git", "update-index"] and index_file.endswith("index.lock"):
+            raise subprocess.CalledProcessError(1, command)
+        return original_run(command, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", fail_ordinary_index_refresh)
+    response = _decide(client, view)
+
+    assert response.status_code == 409
+    assert _git(repo, "rev-parse", "HEAD") == before_ref
+    assert record.read_bytes() == before_record
+    assert sidecar.read_bytes() == before_sidecar
+    assert not (repo / ".git" / "index.lock").exists()
+
+
+def test_index_publish_failure_rolls_back_ref_and_releases_lock(local_api, monkeypatch):
+    client, repo, record, sidecar = local_api
+    view = _housekeeping_view(client)
+    before_ref = _git(repo, "rev-parse", "HEAD")
+    before_record = record.read_bytes()
+    before_sidecar = sidecar.read_bytes()
+    original_replace = os.replace
+
+    def fail_index_publish(source, destination):
+        if str(source).endswith("index.lock"):
+            raise OSError("index publish failed")
+        return original_replace(source, destination)
+
+    monkeypatch.setattr(os, "replace", fail_index_publish)
+    response = _decide(client, view)
+
+    assert response.status_code == 409
+    assert _git(repo, "rev-parse", "HEAD") == before_ref
+    assert record.read_bytes() == before_record
+    assert sidecar.read_bytes() == before_sidecar
+    assert not (repo / ".git" / "index.lock").exists()
 
 
 @pytest.mark.parametrize(
@@ -462,7 +573,7 @@ def test_rejection_commit_contains_only_sidecar_and_preserves_other_changes(loca
     _git(repo, "add", "--", "staged.txt")
     unstaged = repo / "unstaged.txt"
     unstaged.write_text("unstaged\n")
-    index_tree = _git(repo, "write-tree")
+    staged_blob = _git(repo, "rev-parse", ":staged.txt")
     view = _housekeeping_view(client)
 
     response = _decide(client, view)
@@ -471,6 +582,30 @@ def test_rejection_commit_contains_only_sidecar_and_preserves_other_changes(loca
     assert _git(repo, "show", "--name-only", "--format=", "HEAD").splitlines() == [
         str(sidecar.relative_to(repo))
     ]
-    assert _git(repo, "write-tree") == index_tree
+    assert _git(repo, "rev-parse", ":staged.txt") == staged_blob
+    assert _git(repo, "diff", "--cached", "--name-only", "HEAD") == "staged.txt"
     assert unstaged.read_text() == "unstaged\n"
     assert record.read_text() == RECORD
+
+
+def test_commit_preserves_a_staged_edit_to_its_target_path(local_api):
+    _client, repo, record, _sidecar = local_api
+    staged_content = RECORD.replace("Body.", "User-staged body.")
+    committed_content = RECORD.replace("Body.", "Workbench body.")
+    record.write_text(staged_content)
+    _git(repo, "add", "--", str(record.relative_to(repo)))
+
+    server.source._commit_bytes_locked(
+        {record: committed_content.encode()},
+        "Workbench edit\n",
+        "Reviewer",
+        "reviewer@example.invalid",
+        server.source.current_ref(),
+    )
+
+    assert record.read_text() == committed_content
+    assert _git(repo, "show", f":{record.relative_to(repo)}") == staged_content.rstrip()
+    assert (
+        _git(repo, "show", f"HEAD:{record.relative_to(repo)}")
+        == committed_content.rstrip()
+    )

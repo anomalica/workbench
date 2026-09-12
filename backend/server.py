@@ -18,6 +18,7 @@ import os
 import random
 import re
 import secrets
+import shutil
 import string
 import subprocess
 import time
@@ -1317,6 +1318,7 @@ class LocalIngestSource(IngestSource):
             str(path.relative_to(repo_dir)): content
             for path, content in changes.items()
         }
+        target_blobs: dict[str, str] = {}
         with tempfile.TemporaryDirectory(prefix="workbench-git-index-") as td:
             index_env = {**env, "GIT_INDEX_FILE": str(Path(td) / "index")}
             subprocess.run(
@@ -1349,6 +1351,7 @@ class LocalIngestSource(IngestSource):
                     check=True,
                     env=index_env,
                 )
+                target_blobs[rel] = blob
             tree = subprocess.run(
                 ["git", "write-tree"],
                 cwd=repo_dir,
@@ -1366,19 +1369,93 @@ class LocalIngestSource(IngestSource):
                 check=True,
                 env=index_env,
             ).stdout.strip()
-            subprocess.run(
-                ["git", "update-ref", branch, commit, expected_ref],
-                cwd=repo_dir,
-                check=True,
-                env=index_env,
+            index_path = Path(
+                subprocess.run(
+                    ["git", "rev-parse", "--git-path", "index"],
+                    cwd=repo_dir,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                ).stdout.strip()
             )
-            paths = list(rel_changes)
-            subprocess.run(
-                ["git", "checkout-index", "-f", "--", *paths],
-                cwd=repo_dir,
-                check=True,
-                env=index_env,
-            )
+            if not index_path.is_absolute():
+                index_path = repo_dir / index_path
+            index_lock = index_path.with_name(f"{index_path.name}.lock")
+            try:
+                lock_fd = os.open(
+                    index_lock,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    index_path.stat().st_mode,
+                )
+            except FileExistsError as exc:
+                raise RuntimeError("ordinary Git index is locked") from exc
+
+            owns_index_lock = True
+            try:
+                with os.fdopen(lock_fd, "wb") as destination:
+                    with index_path.open("rb") as ordinary_index:
+                        shutil.copyfileobj(ordinary_index, destination)
+                    destination.flush()
+                    os.fsync(destination.fileno())
+
+                ordinary_env = {**env, "GIT_INDEX_FILE": str(index_lock)}
+                for rel, blob in target_blobs.items():
+                    unchanged = subprocess.run(
+                        [
+                            "git",
+                            "diff-index",
+                            "--cached",
+                            "--quiet",
+                            expected_ref,
+                            "--",
+                            rel,
+                        ],
+                        cwd=repo_dir,
+                        env=ordinary_env,
+                    )
+                    if unchanged.returncode == 0:
+                        subprocess.run(
+                            [
+                                "git",
+                                "update-index",
+                                "--add",
+                                "--cacheinfo",
+                                f"100644,{blob},{rel}",
+                            ],
+                            cwd=repo_dir,
+                            check=True,
+                            env=ordinary_env,
+                        )
+                    elif unchanged.returncode != 1:
+                        unchanged.check_returncode()
+
+                subprocess.run(
+                    ["git", "update-ref", branch, commit, expected_ref],
+                    cwd=repo_dir,
+                    check=True,
+                    env=index_env,
+                )
+                try:
+                    os.replace(index_lock, index_path)
+                except OSError as exc:
+                    subprocess.run(
+                        ["git", "update-ref", branch, expected_ref, commit],
+                        cwd=repo_dir,
+                        check=True,
+                        env=index_env,
+                    )
+                    raise RuntimeError("could not publish ordinary Git index") from exc
+                owns_index_lock = False
+                paths = list(rel_changes)
+                subprocess.run(
+                    ["git", "checkout-index", "-f", "--", *paths],
+                    cwd=repo_dir,
+                    check=True,
+                    env=index_env,
+                )
+            finally:
+                if owns_index_lock:
+                    index_lock.unlink(missing_ok=True)
 
         self._reviewed_cache = None
         return commit
