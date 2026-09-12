@@ -268,7 +268,13 @@ Deno.test("commitFiles creates one two-file commit and advances the ref with CAS
       "housekeeping",
       { name: "R", email: "r@x.com" },
     ),
-    "commit-new",
+    {
+      commitSha: "commit-new",
+      fileShas: {
+        "store/record.md": "blob-1",
+        "store/sidecar.json": "blob-2",
+      },
+    },
   );
   const tree = calls.find((call) => call.url.endsWith("/git/trees"))!.body!;
   assertEquals((tree.tree as unknown[]).length, 2);

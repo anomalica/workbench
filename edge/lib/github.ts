@@ -63,6 +63,11 @@ export interface CommitFilesOptions {
   retries?: number;
 }
 
+export interface CommitFilesResult {
+  commitSha: string;
+  fileShas: Record<string, string>;
+}
+
 export class GitHubError extends Error {
   constructor(
     public status: number,
@@ -304,7 +309,7 @@ export class GitHubClient {
     message: string,
     author: Author,
     options: CommitFilesOptions = {},
-  ): Promise<string> {
+  ): Promise<CommitFilesResult> {
     if (changes.length === 0) throw new Error("commitFiles: no changes");
     if (new Set(changes.map((change) => change.path)).size !== changes.length) {
       throw new Error("commitFiles: duplicate path");
@@ -421,7 +426,14 @@ export class GitHubClient {
           body: JSON.stringify({ sha: commitSha, force: false }),
         },
       );
-      if (update.status === 200) return commitSha;
+      if (update.status === 200) {
+        return {
+          commitSha,
+          fileShas: Object.fromEntries(
+            treeEntries.map((entry) => [entry.path, entry.sha]),
+          ),
+        };
+      }
       if (update.status === 409 || update.status === 422) {
         lastErr = new GitHubError(update.status, "ref conflict");
         continue;

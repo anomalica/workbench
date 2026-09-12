@@ -29,6 +29,38 @@ export interface CoverageReview {
   parent_commit?: string;
 }
 
+/** Positional spans from before a body-changing refresh do not describe the
+ * current document. Keep them in history, but never project them onto new text. */
+export function reviewsSinceCarryover(
+  reviews: CoverageReview[],
+  carryoverAt: string | undefined,
+): CoverageReview[] {
+  if (!carryoverAt) return reviews;
+  return reviews.filter((review) => isCoverageOnCurrentBody(review.at, carryoverAt));
+}
+
+export function isCoverageOnCurrentBody(
+  savedAt: string | undefined,
+  carryoverAt: string | undefined,
+): boolean {
+  if (!carryoverAt) return true;
+  const cutoff = Date.parse(carryoverAt);
+  if (!Number.isFinite(cutoff)) return true;
+  return typeof savedAt === "string" && Date.parse(savedAt) >= cutoff;
+}
+
+/** Browser-local spans are safe only when they name this exact document base.
+ * Legacy unbound drafts remain usable unless an in-place refresh is known. */
+export function isCoverageForDocument(
+  savedFingerprint: unknown,
+  currentFingerprint: number,
+  carryoverAt: string | undefined,
+): boolean {
+  return typeof savedFingerprint === "number"
+    ? savedFingerprint === currentFingerprint
+    : !carryoverAt;
+}
+
 /** Strip frontmatter, returning just the record body. */
 export function bodyOf(docText: string): string {
   const match = docText.match(/^---\n[\s\S]*?\n---\n([\s\S]*)$/);

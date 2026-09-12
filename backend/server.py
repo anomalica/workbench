@@ -4499,6 +4499,8 @@ def submit_review(full_hash: str, body: dict, request: Request) -> JSONResponse:
         if isinstance(source, LocalIngestSource)
         else GIT_LOCK
     )
+    new_base_ref: str | None = None
+    new_base_record_sha: str | None = None
     with lock:
         if isinstance(source, LocalIngestSource):
             if source.current_ref() != base_ref:
@@ -4594,7 +4596,18 @@ def submit_review(full_hash: str, body: dict, request: Request) -> JSONResponse:
             trailers.append(f"Reviewed-Record: content:{full_hash}")
             message += "\n\n" + "\n".join(trailers)
             try:
-                source._commit_bytes_locked(
+                new_base_record_sha = (
+                    subprocess.run(
+                        ["git", "hash-object", "--stdin"],
+                        cwd=source.store.parent,
+                        input=content.encode("utf-8"),
+                        capture_output=True,
+                        check=True,
+                    )
+                    .stdout.decode()
+                    .strip()
+                )
+                new_base_ref = source._commit_bytes_locked(
                     changes,
                     message,
                     user["name"],
@@ -4624,9 +4637,15 @@ def submit_review(full_hash: str, body: dict, request: Request) -> JSONResponse:
                 include_coverage=bool(spans or obs_cov is not None),
             )
 
-    return JSONResponse(
-        {"submitted": True, "synced": False, "sync_detail": "auto-push pending"}
-    )
+    response: dict[str, object] = {
+        "submitted": True,
+        "synced": False,
+        "sync_detail": "auto-push pending",
+    }
+    if new_base_ref is not None and new_base_record_sha is not None:
+        response["base_ref"] = new_base_ref
+        response["base_record_sha"] = new_base_record_sha
+    return JSONResponse(response)
 
 
 @app.post("/api/sync/push")

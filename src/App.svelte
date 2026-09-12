@@ -152,7 +152,6 @@
   let selectedDigest = $state<DigestDocument | null>(null);
   let selectedHousekeepingOpen = $state(0);
   let selectedHousekeepingScopes = $state<("frontmatter" | "body")[]>([]);
-  let selectedHousekeepingDue = $state(false);
   let housekeepingHash = $state<string | null>(null);
   let selectedHousekeepingView = $state<HousekeepingViewData | null>(null);
   let ingestRequestGeneration = 0;
@@ -535,7 +534,6 @@
       selectedHousekeepingView = housekeeping;
       selectedHousekeepingOpen = housekeeping?.outstanding_count ?? 0;
       selectedHousekeepingScopes = housekeeping?.scopes ?? [];
-      selectedHousekeepingDue = housekeeping?.state === "due";
       sourceFile = file;
       tuningOpen = false;
       error = null;
@@ -567,7 +565,6 @@
     selectedDigest = null;
     selectedHousekeepingOpen = 0;
     selectedHousekeepingScopes = [];
-    selectedHousekeepingDue = false;
     selectedHousekeepingView = null;
     sourceFile = null;
     tuningOpen = false;
@@ -990,7 +987,6 @@
         canTag={liveBackend && canHousekeep}
         housekeepingOpen={selectedHousekeepingOpen}
         housekeepingScopes={selectedHousekeepingScopes}
-        housekeepingDue={selectedHousekeepingDue}
         reviewed={reviewedHashes.has(selectedIngest.content_hash) &&
           !needsVerifyHashes.has(selectedIngest.content_hash)}
         needsVerify={needsVerifyHashes.has(selectedIngest.content_hash)}
@@ -1014,7 +1010,6 @@
           selectedHousekeepingView = view;
           selectedHousekeepingOpen = view.outstanding_count;
           selectedHousekeepingScopes = view.scopes;
-          selectedHousekeepingDue = view.state === "due";
         }}
       />
     {:else}

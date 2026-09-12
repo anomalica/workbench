@@ -17,7 +17,42 @@ import {
   segmentBounds,
   playedSegmentPositions,
   observedPercent,
+  isCoverageForDocument,
+  isCoverageOnCurrentBody,
+  reviewsSinceCarryover,
 } from "./coverage";
+
+describe("reviewsSinceCarryover", () => {
+  const review = (at: string) => ({ by: "reviewer", at, spans: [{ from: 1, to: 2 }] });
+
+  it("does not project pre-refresh line spans onto a changed body", () => {
+    expect(
+      reviewsSinceCarryover(
+        [review("2026-07-04T06:34:39Z"), review("2026-09-03T00:00:00Z")],
+        "2026-09-02T07:42:38Z",
+      ),
+    ).toEqual([review("2026-09-03T00:00:00Z")]);
+  });
+
+  it("keeps all reviews when there was no body-changing refresh", () => {
+    const reviews = [review("2026-07-04T06:34:39Z")];
+    expect(reviewsSinceCarryover(reviews, undefined)).toBe(reviews);
+  });
+
+  it("rejects undated coverage after a hash-stable refresh", () => {
+    expect(isCoverageOnCurrentBody(undefined, "2026-09-02T07:42:38Z")).toBe(false);
+    expect(
+      isCoverageOnCurrentBody("2026-09-03T00:00:00Z", "2026-09-02T07:42:38Z"),
+    ).toBe(true);
+  });
+
+  it("binds browser-local spans to the exact document base", () => {
+    expect(isCoverageForDocument(123, 123, "2026-09-02T07:42:38Z")).toBe(true);
+    expect(isCoverageForDocument(122, 123, "2026-09-02T07:42:38Z")).toBe(false);
+    expect(isCoverageForDocument(undefined, 123, "2026-09-02T07:42:38Z")).toBe(false);
+    expect(isCoverageForDocument(undefined, 123, undefined)).toBe(true);
+  });
+});
 
 describe("observedPercent", () => {
   it("floors so editor-top and submit show the SAME percent for one coverage", () => {

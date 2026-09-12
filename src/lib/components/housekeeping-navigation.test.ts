@@ -69,10 +69,9 @@ describe("housekeeping record navigation", () => {
     expect(onopen).toHaveBeenCalledOnce();
   });
 
-  it("shows a separate non-blocking advisory when the housekeeping tuple is due", () => {
-    render(HousekeepingWarning, { props: { count: 0, due: true, onopen: vi.fn() } });
-    expect(screen.getByText("Housekeeping is due for this record.")).toBeTruthy();
-    expect(screen.getByText(/You can keep editing/)).toBeTruthy();
+  it("does not present pipeline freshness as an actionable proposal", () => {
+    render(HousekeepingWarning, { props: { count: 0, onopen: vi.fn() } });
+    expect(screen.queryByLabelText("Outstanding housekeeping proposals")).toBeNull();
   });
 
   it("opens the requested record and reads previews outside the raw sidecar", async () => {

@@ -5,6 +5,7 @@ import { sha256Hex, verifyToken } from "./lib/crypto.ts";
 import {
   type AtomicFileChange,
   type Author,
+  type CommitFilesResult,
   type DirectoryEntry,
   type FileState,
   GitHubError,
@@ -128,7 +129,7 @@ class FakeGitHub {
     message: string,
     _author: Author,
     options?: { expectedRef?: string },
-  ): Promise<string> {
+  ): Promise<CommitFilesResult> {
     if (
       options?.expectedRef !== undefined && options.expectedRef !== this.ref
     ) {
@@ -149,7 +150,12 @@ class FakeGitHub {
       this.shas.set(key, "d".repeat(40));
     }
     this.atomicCommits.push({ changes, message });
-    return Promise.resolve("atomicsha");
+    return Promise.resolve({
+      commitSha: "atomicsha",
+      fileShas: Object.fromEntries(
+        changes.map((change) => [change.path, "d".repeat(40)]),
+      ),
+    });
   }
   commits = new Map<
     string,
@@ -647,7 +653,11 @@ Deno.test("review PUT needs auth, then commits the corrected record", async () =
     ENV,
     deps(gh),
   );
-  assertEquals((await ok.json()).submitted, true);
+  assertEquals(await ok.json(), {
+    submitted: true,
+    base_ref: "atomicsha",
+    base_record_sha: "d".repeat(40),
+  });
   assertEquals(
     gh.files.get(`ingests/store/${HASH}.md`),
     `---\ncontent_hash: sha256:${HASH}\n---\ncorrected body\n`,

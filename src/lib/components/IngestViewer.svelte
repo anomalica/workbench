@@ -50,10 +50,13 @@
     segmentBounds,
     playedSegmentPositions,
     observedPercent,
+    isCoverageForDocument,
+    reviewsSinceCarryover,
   } from "$lib/coverage";
   import type { CoverageSpan, KindedSpan, PlayWindow } from "$lib/coverage";
   import CoverageStrip from "./CoverageStrip.svelte";
   import { DocumentStore } from "$lib/document.svelte";
+  import { fingerprint } from "$lib/draft-patch";
   import { safeLocalSet } from "$lib/storage";
   import { assignableSpecialSpeakers, parseTranscript, parseTimeToSeconds, secondsToTime, findActiveSegmentForTime, segmentAtTime, nextRelevantSegmentAfter, extractFrontmatterSpeakers, isSegmentIrrelevant, isSpecialSpeaker, nextSpeakerName, groupSegmentsBySpeaker, orderedNamedSpeakers, speakerIdentity, SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE, SPEAKER_GROUP } from "$lib/transcript";
   import { nextSegmentBoundary, singleEndForCurrentTime } from "$lib/playback";
@@ -103,7 +106,6 @@
     canTag = false,
     housekeepingOpen = 0,
     housekeepingScopes = [],
-    housekeepingDue = false,
     reviewed = false,
     needsVerify = false,
     hasNext = false,
@@ -128,7 +130,6 @@
     /** Undecided metadata proposals that should be reviewed before editing. */
     housekeepingOpen?: number;
     housekeepingScopes?: ("frontmatter" | "body")[];
-    housekeepingDue?: boolean;
     reviewed?: boolean;
     /** Review carried from a re-ingest, not yet re-verified - show a banner. */
     needsVerify?: boolean;
@@ -157,6 +158,11 @@
   // they arrive only after a possession proof (unlockGatedBody) and then override
   // the empty snapshot values so the editor + write-back see the real record.
   let unlockedIngest = $state<UnlockedIngest | null>(null);
+  let submittedReviewBase = $state<{
+    content_hash: string;
+    base_record_sha: string;
+    base_ref: string;
+  } | null>(null);
   let activeUnlock = $derived(
     unlockedIngest?.content_hash === ingest.content_hash ? unlockedIngest : null,
   );
@@ -180,6 +186,7 @@
       return;
     }
     lastLoadedHash = hash;
+    submittedReviewBase = null;
     const key = `workbench:doc:${hash}`;
     const hasSaved = localStorage.getItem(key) !== null;
     console.log(`[load-effect #${run}] loading`, { hash: hash.slice(0, 12), hasSaved, mdLen: md.length });
@@ -2972,6 +2979,8 @@
   let coverageRestoredHash = "";
   $effect(() => {
     const hash = ingest.content_hash;
+    const carryoverAt = ingest.frontmatter["review_carryover.at"];
+    const baseFingerprint = fingerprint(doc.original);
     if (hash === coverageRestoredHash) return;
     coverageRestoredHash = hash;
     playWindow = null;
@@ -2981,9 +2990,13 @@
       const raw = localStorage.getItem(coverageStorageKey(hash));
       if (raw) {
         const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) {
+        if (Array.isArray(parsed) && !carryoverAt) {
           observed = parsed; // legacy single-tier format
-        } else if (parsed && typeof parsed === "object") {
+        } else if (
+          parsed &&
+          typeof parsed === "object" &&
+          isCoverageForDocument(parsed.baseFingerprint, baseFingerprint, carryoverAt)
+        ) {
           if (Array.isArray(parsed.observed)) observed = parsed.observed;
           if (Array.isArray(parsed.played)) played = parsed.played;
         }
@@ -3023,7 +3036,10 @@
         // best-effort
       }
     } else {
-      safeLocalSet(coverageStorageKey(hash), JSON.stringify({ observed, played }));
+      safeLocalSet(
+        coverageStorageKey(hash),
+        JSON.stringify({ observed, played, baseFingerprint: fingerprint(doc.original) }),
+      );
     }
   });
 
@@ -3082,6 +3098,7 @@
     if (el) el.scrollIntoView({ block: "center", behavior: "smooth" });
   }
 
+  let coverageFetchGeneration = 0;
   $effect(() => {
     const hash = ingest.content_hash;
     const email = user?.email;
@@ -3090,9 +3107,13 @@
       myPlayedSpans = [];
       return;
     }
+    const carryoverAt = ingest.frontmatter["review_carryover.at"];
+    const generation = ++coverageFetchGeneration;
     fetchCoverage(hash).then((reviews) => {
-      if (ingest.content_hash !== hash) return;
-      const mine = reviews.filter((r) => r.by === email).flatMap((r) => r.spans);
+      if (ingest.content_hash !== hash || generation !== coverageFetchGeneration) return;
+      const mine = reviewsSinceCarryover(reviews, carryoverAt)
+        .filter((r) => r.by === email)
+        .flatMap((r) => r.spans);
       // Spans without a kind predate the tiers - treat as observed.
       const observed = mergeSpans(mine.filter((s) => (s.kind ?? "observed") === "observed"));
       myObservedSpans = observed;
@@ -3105,6 +3126,8 @@
 
   async function handleSubmit() {
     if (!user) return;
+    const submittedHash = ingest.content_hash;
+    const submittedDocument = doc.current;
     // Refuse to submit while the recompute disagrees with the saved verdict: the
     // observation basis has shifted (e.g. highlight markers changed the word
     // count), so a submit would divide the same observed spans by a different
@@ -3135,10 +3158,12 @@
     // step; the edge deploy writes straight to GitHub in one call.
     submitPhase = "saving";
     const result = await submitReview(
-      ingest.content_hash,
-      doc.current,
+      submittedHash,
+      submittedDocument,
       reviewNotes,
-      reviewBaseFor(ingest.content_hash, ingest, unlockedIngest),
+      submittedReviewBase?.content_hash === ingest.content_hash
+        ? submittedReviewBase
+        : reviewBaseFor(ingest.content_hash, ingest, unlockedIngest),
       spans,
       verdict,
       { deferPush: !STATIC_READS },
@@ -3162,7 +3187,19 @@
     } else {
       submitPhase = null;
     }
+    if (result.ok && ingest.content_hash !== submittedHash) {
+      onreviewedchange?.(submittedHash, true);
+      return;
+    }
     if (result.ok) {
+      coverageFetchGeneration++;
+      if (result.baseRef && result.baseRecordSha) {
+        submittedReviewBase = {
+          content_hash: submittedHash,
+          base_ref: result.baseRef,
+          base_record_sha: result.baseRecordSha,
+        };
+      }
       // Committed locally but not pushed to origin - the live site will not
       // see this review until sync succeeds. Loud, never silent.
       syncWarning = !synced
@@ -3180,14 +3217,16 @@
       );
       pendingRuns = [];
       playedRuns = [];
-      localStorage.removeItem(coverageStorageKey(ingest.content_hash));
+      localStorage.removeItem(coverageStorageKey(submittedHash));
       // Set the submitted content as the new baseline without resetting position
-      doc.original = doc.current;
-      doc.past = [];
-      doc.future = [];
-      localStorage.removeItem(doc.storageKey);
+      doc.original = submittedDocument;
+      if (doc.current === submittedDocument) {
+        doc.past = [];
+        doc.future = [];
+        localStorage.removeItem(doc.storageKey);
+      }
       // Backend auto-marks reviewed on submit; mirror it locally.
-      onreviewedchange?.(ingest.content_hash, true);
+      onreviewedchange?.(submittedHash, true);
     } else {
       submitError = result.error ?? "Failed to submit";
     }
@@ -3759,11 +3798,10 @@
   role="presentation"
   ondragover={(e) => e.preventDefault()}
   ondrop={(e) => e.preventDefault()}>
-  {#if (housekeepingOpen > 0 || housekeepingDue) && onhousekeeping}
+  {#if housekeepingOpen > 0 && onhousekeeping}
     <HousekeepingWarning
       count={housekeepingOpen}
       scopes={housekeepingScopes}
-      due={housekeepingDue}
       onopen={onhousekeeping}
     />
   {/if}

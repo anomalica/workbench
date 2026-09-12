@@ -40,6 +40,22 @@ describe("canonical write identities", () => {
     });
   });
 
+  it("returns the committed identity for another submit in the same editor", async () => {
+    const fresh = { base_ref: "d".repeat(40), base_record_sha: "e".repeat(40) };
+    captureFetch({ submitted: true, ...fresh });
+
+    const result = await submitReview("a".repeat(64), "record", "", {
+      base_record_sha: "b".repeat(40),
+      base_ref: "c".repeat(40),
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      baseRef: fresh.base_ref,
+      baseRecordSha: fresh.base_record_sha,
+    });
+  });
+
   it("submits fresh unlock identities and resets them when the record changes", async () => {
     const firstHash = "a".repeat(64);
     const secondHash = "d".repeat(64);

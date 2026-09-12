@@ -545,7 +545,14 @@ export async function submitReview(
   spans?: KindedSpan[],
   verdict?: { observed_coverage: number; digestible: boolean; total_units: number },
   options?: { deferPush?: boolean },
-): Promise<{ ok: boolean; error?: string; synced?: boolean; syncDetail?: string }> {
+): Promise<{
+  ok: boolean;
+  error?: string;
+  synced?: boolean;
+  syncDetail?: string;
+  baseRef?: string;
+  baseRecordSha?: string;
+}> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), SUBMIT_TIMEOUT_MS);
   let res: Response;
@@ -587,6 +594,8 @@ export async function submitReview(
       ok: true,
       synced: data.synced !== false,
       syncDetail: data.sync_detail || "",
+      baseRef: data.base_ref,
+      baseRecordSha: data.base_record_sha,
     };
   }
   const data = await res.json().catch(() => ({}));

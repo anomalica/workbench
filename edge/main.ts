@@ -52,6 +52,7 @@ import {
   type AtomicFileChange,
   type Author,
   type CommitFilesOptions,
+  type CommitFilesResult,
   type DirectoryEntry,
   type FileState,
   GitHubClient,
@@ -133,7 +134,7 @@ interface GitHubLike {
     message: string,
     author: Author,
     options?: CommitFilesOptions,
-  ): Promise<string>;
+  ): Promise<CommitFilesResult>;
 }
 
 export interface Deps {
@@ -720,8 +721,9 @@ async function handleReviewWrite(
       expectedSha: coverageFile?.sha ?? null,
     });
   }
+  let committed: CommitFilesResult;
   try {
-    await deps.github.commitFiles(
+    committed = await deps.github.commitFiles(
       env.ingestsRepo,
       changes,
       `review: ${hash.slice(0, 12)}${notes ? ` - ${notes}` : ""}`,
@@ -734,7 +736,11 @@ async function handleReviewWrite(
     }
     throw e;
   }
-  return json({ submitted: true });
+  return json({
+    submitted: true,
+    base_ref: committed.commitSha,
+    base_record_sha: committed.fileShas[bodyPath],
+  });
 }
 
 /**

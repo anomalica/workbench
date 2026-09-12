@@ -302,6 +302,10 @@ def test_ordinary_save_with_exact_blob_and_ref_commits(local_api):
         },
     )
     assert response.status_code == 200
+    assert response.json()["base_ref"] == _git(repo, "rev-parse", "HEAD")
+    assert response.json()["base_record_sha"] == _git(
+        repo, "rev-parse", f"HEAD:{record.relative_to(repo)}"
+    )
     assert record.read_text().endswith("Editor body.\n")
     assert _git(repo, "show", "--name-only", "--format=", "HEAD").splitlines() == [
         str(record.relative_to(repo))
@@ -311,9 +315,9 @@ def test_ordinary_save_with_exact_blob_and_ref_commits(local_api):
 
 def test_successive_ordinary_saves_do_not_leave_reverse_staged_changes(local_api):
     client, repo, record, _sidecar = local_api
+    viewed = client.get(f"/api/ingests/{HASH}").json()
 
     for body in ("First editor body.", "Second editor body."):
-        viewed = client.get(f"/api/ingests/{HASH}").json()
         response = client.put(
             f"/api/ingests/{HASH}",
             json={
@@ -326,6 +330,7 @@ def test_successive_ordinary_saves_do_not_leave_reverse_staged_changes(local_api
 
         assert response.status_code == 200
         assert _git(repo, "diff", "--cached", "--name-only", "HEAD") == ""
+        viewed = response.json()
 
     assert record.read_text().endswith("Second editor body.\n")
 
