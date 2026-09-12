@@ -45,6 +45,11 @@ export interface FileState {
   sha: string;
 }
 
+export interface DirectoryEntry {
+  name: string;
+  type: "blob" | "tree";
+}
+
 export interface AtomicFileChange {
   path: string;
   text: string;
@@ -167,6 +172,53 @@ export class GitHubClient {
   /** Read a file from the configured branch. */
   getFile(repo: string, path: string): Promise<FileState | null> {
     return this.getFileAt(repo, path, this.branch);
+  }
+
+  /** List one directory in a committed tree without downloading its files. */
+  async listDirectoryAt(
+    repo: string,
+    path: string,
+    ref: string,
+  ): Promise<DirectoryEntry[]> {
+    const commit = await this.fetchImpl(
+      this.api(repo, `git/commits/${encodeURIComponent(ref)}`),
+      { headers: this.headers() },
+    );
+    if (commit.status === 404) return [];
+    if (commit.status !== 200) {
+      throw new GitHubError(commit.status, `listDirectory ${path}`);
+    }
+    let tree = ((await commit.json()) as { tree: { sha: string } }).tree.sha;
+    for (const part of path.split("/").filter(Boolean)) {
+      const res = await this.fetchImpl(
+        this.api(repo, `git/trees/${encodeURIComponent(tree)}`),
+        { headers: this.headers() },
+      );
+      if (res.status === 404) return [];
+      if (res.status !== 200) {
+        throw new GitHubError(res.status, `listDirectory ${path}`);
+      }
+      const body = (await res.json()) as {
+        tree: { path: string; type: "blob" | "tree"; sha: string }[];
+      };
+      const next = body.tree.find((entry) =>
+        entry.path === part && entry.type === "tree"
+      );
+      if (!next) return [];
+      tree = next.sha;
+    }
+    const res = await this.fetchImpl(
+      this.api(repo, `git/trees/${encodeURIComponent(tree)}`),
+      { headers: this.headers() },
+    );
+    if (res.status === 404) return [];
+    if (res.status !== 200) {
+      throw new GitHubError(res.status, `listDirectory ${path}`);
+    }
+    const body = (await res.json()) as {
+      tree: { path: string; type: "blob" | "tree" }[];
+    };
+    return body.tree.map((entry) => ({ name: entry.path, type: entry.type }));
   }
 
   /** Create or update a file. Pass the prior sha to update; omit to create. */

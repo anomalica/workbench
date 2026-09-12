@@ -17,6 +17,8 @@ NID = "11111111-1111-1111-1111-111111111111"
 
 H_PUB = "a" * 64
 H_GATED = "b" * 64
+H_GATED_PUBLIC = H_GATED[:56]
+SOURCE_GATED = "c" * 64
 
 
 @pytest.fixture
@@ -181,8 +183,11 @@ def records_repo(tmp_path, monkeypatch):
                 },
                 {
                     "content_hash": H_GATED,
+                    "public_hash": H_GATED_PUBLIC,
                     "copyright_status": "restricted",
                     "title": "rec-gated",
+                    "source_hash": f"sha256:{SOURCE_GATED}",
+                    "review_carryover": {"at": "2026-01-01", "from": "d" * 64},
                 },
             ]
 
@@ -190,11 +195,13 @@ def records_repo(tmp_path, monkeypatch):
             status = "public_domain" if h == H_PUB else "restricted"
             return {
                 "content_hash": h,
+                "public_hash": h[:56],
                 "copyright_status": status,
                 "body": f"BODY {h[:4]}",
                 "raw_frontmatter": f"title: rec\ndescription: SECRET BLURB {h[:4]}\n",
                 "frontmatter": {
                     "title": "rec",
+                    "content_hash": h,
                     "copyright.status": status,
                     "description": f"SECRET BLURB {h[:4]}",  # free-text, must drop when gated
                     "word_timestamps": [
@@ -241,7 +248,13 @@ def test_records_prerender_gates_body_keeps_short_quotes(records_repo, tmp_path)
 
     # The list ships both records as metadata.
     listed = json.loads((base / "ingests.json").read_text())
-    assert {r["content_hash"] for r in listed} == {H_PUB, H_GATED}
+    public_row = next(r for r in listed if r["title"] == "rec-pub")
+    assert public_row["content_hash"] == H_PUB
+    gated_row = next(r for r in listed if r["title"] == "rec-gated")
+    assert gated_row["public_hash"] == H_GATED_PUBLIC
+    assert "content_hash" not in gated_row
+    assert "source_hash" not in gated_row
+    assert "review_carryover" not in gated_row
 
     # PUBLIC record: body + digest quote present.
     pub = json.loads((base / "ingests" / f"{H_PUB}.json").read_text())
@@ -256,7 +269,10 @@ def test_records_prerender_gates_body_keeps_short_quotes(records_repo, tmp_path)
     # GATED record: body emptied + no verbatim frontmatter (raw dropped; free-text
     # description + the verbatim word_timestamps transcript gone; only whitelisted
     # structured metadata remains) - BUT the digest's short attributed quotes stay.
-    gated = json.loads((base / "ingests" / f"{H_GATED}.json").read_text())
+    gated = json.loads((base / "ingests" / f"{H_GATED_PUBLIC}.json").read_text())
+    assert not (base / "ingests" / f"{H_GATED}.json").exists()
+    assert gated["public_hash"] == H_GATED_PUBLIC
+    assert "content_hash" not in gated
     assert gated["body"] == ""
     assert gated["raw_frontmatter"] == ""
     assert "description" not in gated["frontmatter"]
@@ -265,7 +281,9 @@ def test_records_prerender_gates_body_keeps_short_quotes(records_repo, tmp_path)
     )  # full transcript = body, gated
     assert gated["frontmatter"]["title"] == "rec"  # structured metadata kept
     assert gated["frontmatter"]["copyright.status"] == "restricted"
-    gated_digest = json.loads((base / "ingests" / H_GATED / "digest.json").read_text())
+    gated_digest = json.loads(
+        (base / "ingests" / H_GATED_PUBLIC / "digest.json").read_text()
+    )
     claim = gated_digest["domain_claims"][0]
     # Quotes are gated with the body. The old policy kept them public as lawful
     # short quotation, but nothing enforced shortness: on 2026-08-19 the gated
@@ -319,7 +337,7 @@ def test_local_prerender_detail_uses_committed_bytes_and_identity(
         capture_output=True,
         text=True,
     ).stdout.strip()
-    blob = subprocess.run(
+    subprocess.run(
         ["git", "rev-parse", f"{ref}:store/{H_PUB}.md"],
         cwd=repo,
         check=True,
@@ -358,19 +376,21 @@ def test_local_prerender_detail_uses_committed_bytes_and_identity(
 
     base = tmp_path / "out" / "api"
     prerender._prerender_records(base)
-    detail = json.loads((base / "ingests" / f"{H_PUB}.json").read_text())
+    public_hash = H_PUB[:56]
+    detail = json.loads((base / "ingests" / f"{public_hash}.json").read_text())
 
     assert detail["frontmatter"]["title"] == "Committed title"
     assert detail["body"] == ""
     assert detail["copyright_status"] == "restricted"
-    assert detail["base_record_sha"] == blob
-    assert detail["base_ref"] == ref
+    assert "base_record_sha" not in detail
+    assert "base_ref" not in detail
     housekeeping = json.loads(
-        (base / "ingests" / H_PUB / "housekeeping.json").read_text()
+        (base / "ingests" / public_hash / "housekeeping.json").read_text()
     )
     assert housekeeping["access"] == "summary"
     assert housekeeping["sidecar"] is None
     assert "viewed_ref" not in housekeeping
+    assert housekeeping["deep_link"] == f"/housekeeping?record={public_hash}"
 
 
 def test_prerender_records_only_renders_just_the_named_record(
@@ -379,18 +399,26 @@ def test_prerender_records_only_renders_just_the_named_record(
     # the on-review incremental refresh: re-render ONE record, not the other.
     out = tmp_path / "out"
     monkeypatch.setenv("SNAPSHOT_DIR", str(out))
+    stale = out / "api" / "ingests" / H_GATED / "media"
+    stale.mkdir(parents=True)
+    (stale / "old.jpg").write_text("previously public image")
     prerender.prerender_records_only(hashes=[H_PUB])
     api = out / "api"
     # the named record's detail was (re)rendered...
     assert (api / "ingests" / f"{H_PUB}.json").exists()
     # ...the other record's detail was NOT...
-    assert not (api / "ingests" / f"{H_GATED}.json").exists()
+    assert not (api / "ingests" / f"{H_GATED_PUBLIC}.json").exists()
+    assert not (api / "ingests" / H_GATED).exists()
     # ...but the list (cheap, reflects review state) is always written + has both.
     listed = json.loads((api / "ingests.json").read_text())
-    assert {r["content_hash"] for r in listed} == {H_PUB, H_GATED}
+    public_row = next(r for r in listed if r["title"] == "rec-pub")
+    gated_row = next(r for r in listed if r["title"] == "rec-gated")
+    assert public_row["content_hash"] == H_PUB
+    assert gated_row["public_hash"] == H_GATED_PUBLIC
+    assert "content_hash" not in gated_row
 
 
-class TestListDoesNotLeakTheGateAnswer:
+class TestGatedSnapshotDoesNotLeakPossessionIdentifiers:
     """`source_hash` is the sha256 of the original file, and the edge accepts a
     bare matching hash as proof of possession - no upload. Publishing it for a
     gated record publishes the gate's own answer.
@@ -403,16 +431,57 @@ class TestListDoesNotLeakTheGateAnswer:
         from backend.prerender import _gate_summary
 
         row = {
-            "content_hash": "a" * 64,
+            "content_hash": H_GATED,
+            "public_hash": H_GATED_PUBLIC,
             "title": "Communion",
             "copyright_status": "restricted",
-            "source_hash": "sha256:" + "b" * 64,
+            "source_hash": "sha256:" + SOURCE_GATED,
+            "review_carryover": {"at": "2026-01-01", "from": "d" * 64},
         }
         gated = _gate_summary(row)
         assert "source_hash" not in gated
-        # Everything else survives - this is a removal, not a whitelist.
         assert gated["title"] == "Communion"
-        assert gated["content_hash"] == row["content_hash"]
+        assert gated["public_hash"] == H_GATED_PUBLIC
+        assert "content_hash" not in gated
+        assert "review_carryover" not in gated
+
+    def test_no_gated_hash_or_source_sha_occurs_anywhere_in_snapshot(
+        self, records_repo, tmp_path
+    ):
+        base = tmp_path / "out" / "api"
+        stale = base / "ingests" / H_GATED / "media"
+        stale.mkdir(parents=True)
+        (stale / "old.jpg").write_text("previously public image")
+        topic = base / "topics" / "records" / "brief.json"
+        topic.parent.mkdir(parents=True)
+        topic.write_text(
+            json.dumps(
+                {
+                    "claims": [
+                        {
+                            "provenance": {
+                                "content_hash": H_GATED,
+                                "source_hash": f"sha256:{SOURCE_GATED}",
+                            }
+                        }
+                    ]
+                }
+            )
+        )
+        prerender._prerender_records(base)
+        assert not (base / "ingests" / H_GATED).exists()
+        projected_topic = json.loads(topic.read_text())
+        assert projected_topic["claims"][0]["provenance"] == {
+            "public_hash": H_GATED_PUBLIC
+        }
+        paths_and_content = "\n".join(
+            str(path.relative_to(base)) + "\n" + path.read_text(errors="replace")
+            for path in base.rglob("*")
+            if path.is_file()
+        )
+        assert H_GATED not in paths_and_content
+        assert SOURCE_GATED not in paths_and_content
+        assert H_GATED_PUBLIC in paths_and_content
 
     def test_only_gated_records_are_stripped(self):
         # A public record's source_hash is not a secret; nothing gates on it.

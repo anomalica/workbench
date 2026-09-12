@@ -13,10 +13,10 @@ mirror the live API and the SPA can point at either):
   api/curation/candidates.json          - enriched + decided-filtered
   api/curation/merges.json              - active merges (cluster/un-merge view)
   api/ingests.json                      - the records list (metadata only, no bodies)
-  api/ingests/<hash>.json               - record detail; body ONLY for public records
-  api/ingests/<hash>/digest.json        - digest (claims + entities); verbatim `quote` PUBLIC RECORDS ONLY
-  api/ingests/<hash>/coverage.json      - review coverage (spans/notes)
-  api/ingests/<hash>/media/<file>       - extracted images; PUBLIC RECORDS ONLY
+  api/ingests/<id>.json                 - record detail; public id for gated records
+  api/ingests/<id>/digest.json          - digest; verbatim `quote` PUBLIC RECORDS ONLY
+  api/ingests/<id>/coverage.json        - review coverage (spans/notes)
+  api/ingests/<id>/media/<file>         - extracted images; PUBLIC RECORDS ONLY
 
 COPYRIGHT: ONE allow-list decides everything verbatim - body, frontmatter, images,
 and each claim's `quote`. A digest's claim `text` is our own paraphrase and stays
@@ -63,6 +63,7 @@ from backend import curation, graph
 # verbatim QUOTES are a separate, already-all-public policy - see _prerender_records.)
 # DO NOT widen without Mark's sign-off: a leak to the public CDN is irreversible.
 SNAPSHOT_PUBLIC = frozenset({"public_domain", "open_licence", "publicly_accessible"})
+PUBLIC_HASH_LENGTH = 56
 
 
 def serves_verbatim(status: str | None) -> bool:
@@ -93,7 +94,6 @@ GATED_FRONTMATTER_ALLOW = frozenset(
         # gated record publishes the gate's own answer, so anyone can copy it out
         # of the public index and pass. It was shipped for 16 of the 19 gated
         # records. Public records may still carry it - they are not gated on it.
-        "content_hash",
         "public_hash",
         "provenance",
         "schema",
@@ -106,14 +106,53 @@ GATED_FRONTMATTER_ALLOW = frozenset(
     }
 )
 
+GATED_SUMMARY_ALLOW = frozenset(
+    {
+        "public_hash",
+        "title",
+        "schema_version",
+        "creators",
+        "date",
+        "date_ingested",
+        "source_type",
+        "document_type",
+        "source_url",
+        "source_file",
+        "provenance",
+        "publisher",
+        "copyright_status",
+        "digestible",
+        "observed_coverage",
+        "digested",
+        "pipeline_version",
+        "pipeline_current",
+    }
+)
+
+GATED_DETAIL_ALLOW = frozenset(
+    {
+        "public_hash",
+        "copyright_status",
+        "creators",
+        "observed_coverage",
+        "digestible",
+    }
+)
+
+
+def _public_hash(value: str | None) -> str:
+    return (value or "").removeprefix("sha256:")[:PUBLIC_HASH_LENGTH]
+
 
 def _gate_record_detail(detail: dict) -> dict:
     """A gated record's detail with all verbatim source text removed: empty body,
     no raw_frontmatter (the verbatim YAML header), and the parsed frontmatter
     whitelisted to safe structured metadata. Allow-list, fail-safe."""
     fm = detail.get("frontmatter") or {}
+    public_hash = detail.get("public_hash") or _public_hash(detail.get("content_hash"))
     return {
-        **detail,
+        **{k: v for k, v in detail.items() if k in GATED_DETAIL_ALLOW},
+        "public_hash": public_hash,
         "body": "",
         "raw_frontmatter": "",
         "frontmatter": {k: v for k, v in fm.items() if k in GATED_FRONTMATTER_ALLOW},
@@ -121,7 +160,7 @@ def _gate_record_detail(detail: dict) -> dict:
 
 
 def _gate_summary(summary: dict) -> dict:
-    """A gated record's LIST row with the possession-gate answer removed.
+    """A gated record's LIST row projected from safe structured metadata.
 
     `source_hash` is the sha256 of the original file, and the edge accepts a bare
     matching hash string as proof of possession - no upload. Publishing it for a
@@ -134,13 +173,17 @@ def _gate_summary(summary: dict) -> dict:
     leak closed is exactly what happened here - the surface that was checked was
     the surface that had been fixed.
 
-    Only gated records are stripped. A public record's `source_hash` is not a
-    secret: nothing is gated on it.
+    This is an allow-list, not a removal: `review_carryover.from` is another full
+    record hash, and future summary fields must not become public by accident.
     """
-    return {k: v for k, v in summary.items() if k != "source_hash"}
+    return {
+        **{k: v for k, v in summary.items() if k in GATED_SUMMARY_ALLOW},
+        "public_hash": summary.get("public_hash")
+        or _public_hash(summary.get("content_hash")),
+    }
 
 
-def _gate_housekeeping(view: dict) -> dict:
+def _gate_housekeeping(view: dict, public_hash: str | None = None) -> dict:
     """Project a gated record to the exact access-summary tagged variant."""
     return {
         "schema": view["schema"],
@@ -149,7 +192,7 @@ def _gate_housekeeping(view: dict) -> dict:
         "due_reason": view["due_reason"],
         "outstanding_count": view["outstanding_count"],
         "scopes": view["scopes"],
-        "deep_link": view["deep_link"],
+        "deep_link": f"/housekeeping?record={public_hash}" if public_hash else "",
         "sidecar": None,
     }
 
@@ -193,6 +236,60 @@ def _gate_digest_quotes(digest: dict) -> dict:
             for c in claims
         ]
     return out
+
+
+def _public_projection(value, replacements: dict[str, str], secrets: set[str]):
+    """Remove possession identifiers from any public snapshot value.
+
+    Record hashes become their public 56-character identifiers. Distinct source
+    hashes have no public substitute and are removed/redacted. This final pass is
+    deliberately snapshot-wide: topic briefs and future cross-record projections
+    must not reintroduce an identifier removed from the Records files.
+    """
+    if isinstance(value, dict):
+        out = {}
+        for key, item in value.items():
+            bare = item.removeprefix("sha256:") if isinstance(item, str) else None
+            if key in {"source_hash", "sha256"} and bare in secrets:
+                continue
+            if key in {"content_hash", "viewed_content_hash"} and bare in replacements:
+                out["public_hash"] = replacements[bare]
+                continue
+            out[key] = _public_projection(item, replacements, secrets)
+        return out
+    if isinstance(value, list):
+        return [_public_projection(item, replacements, secrets) for item in value]
+    if isinstance(value, str):
+        projected = value
+        for secret, public in replacements.items():
+            projected = projected.replace(secret, public)
+        for secret in secrets - replacements.keys():
+            projected = projected.replace(secret, "[redacted]")
+        return projected
+    return value
+
+
+def _scrub_snapshot(base: Path, summaries: list[dict]) -> None:
+    gated = [s for s in summaries if not serves_verbatim(s.get("copyright_status"))]
+    replacements = {
+        str(s["content_hash"]).removeprefix("sha256:"): (
+            s.get("public_hash") or _public_hash(s.get("content_hash"))
+        )
+        for s in gated
+        if s.get("content_hash")
+    }
+    secrets = set(replacements)
+    for summary in gated:
+        source_hash = str(summary.get("source_hash") or "").removeprefix("sha256:")
+        if re.fullmatch(r"[a-f0-9]{64}", source_hash):
+            secrets.add(source_hash)
+    if not secrets:
+        return
+    for path in base.rglob("*.json"):
+        data = json.loads(path.read_text())
+        projected = _public_projection(data, replacements, secrets)
+        if projected != data:
+            _write(path, projected)
 
 
 def snapshot_dir() -> Path:
@@ -365,8 +462,18 @@ def _prerender_records(base: Path, only: set[str] | None = None) -> dict:
     for s in summaries:
         h = s["content_hash"]
         public = serves_verbatim(s.get("copyright_status"))
+        output_id = h if public else (s.get("public_hash") or _public_hash(h))
         counts["records"] += 1
         counts["record_public"] += int(public)
+        if not public:
+            # Remove artefacts left by an earlier public build, including during
+            # an incremental render that is updating a different record.
+            stale_detail = base / "ingests" / f"{h}.json"
+            if stale_detail.exists():
+                stale_detail.unlink()
+            stale_dir = base / "ingests" / h
+            if stale_dir.exists():
+                shutil.rmtree(stale_dir)
         if only is not None and h not in only:
             continue  # incremental: only re-render the changed records' files
 
@@ -387,7 +494,7 @@ def _prerender_records(base: Path, only: set[str] | None = None) -> dict:
             if not public:
                 # gated: no body, no raw frontmatter, whitelisted metadata only
                 detail = _gate_record_detail(detail)
-            _write(base / "ingests" / f"{h}.json", detail)
+            _write(base / "ingests" / f"{output_id}.json", detail)
 
         yaml_path = digest_map.get(h)
         if yaml_path is not None:
@@ -401,7 +508,7 @@ def _prerender_records(base: Path, only: set[str] | None = None) -> dict:
             digest = server._filter_digest(_yaml.safe_load(yaml_path.read_text()) or {})
             if not public:
                 digest = _gate_digest_quotes(digest)
-            _write(base / "ingests" / h / "digest.json", digest)
+            _write(base / "ingests" / output_id / "digest.json", digest)
             counts["digests"] += 1
 
         raw_md = ""
@@ -417,17 +524,18 @@ def _prerender_records(base: Path, only: set[str] | None = None) -> dict:
         hk = _housekeeping_for(h, raw_md, snapshot_ref)
         if hk is not None:
             _write(
-                base / "ingests" / h / "housekeeping.json",
-                hk if public else _gate_housekeeping(hk),
+                base / "ingests" / output_id / "housekeeping.json",
+                hk if public else _gate_housekeeping(hk, output_id),
             )
             counts["housekeeping"] = counts.get("housekeeping", 0) + 1
 
         coverage = server.source.load_coverage(h)
         if coverage is not None:
-            _write(base / "ingests" / h / "coverage.json", coverage)
+            _write(base / "ingests" / output_id / "coverage.json", coverage)
             counts["coverage"] += 1
 
         counts["media"] += _copy_record_media(base, h, public)
+    _scrub_snapshot(base, summaries)
     return counts
 
 
@@ -445,9 +553,12 @@ def _housekeeping_queue(summaries: list[dict], viewed_ref: str | None = None) ->
         sidecar = hk.get("sidecar") or {}
         items = sidecar.get("items") or []
         current = hk.get("state") == "current"
+        public = serves_verbatim(s.get("copyright_status"))
         rows.append(
             {
-                "content_hash": h,
+                ("content_hash" if public else "public_hash"): (
+                    h if public else (s.get("public_hash") or _public_hash(h))
+                ),
                 "title": s.get("title"),
                 "copyright_status": s.get("copyright_status"),
                 "checked_at": sidecar.get("checked_at"),

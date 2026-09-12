@@ -52,6 +52,7 @@ import {
   type AtomicFileChange,
   type Author,
   type CommitFilesOptions,
+  type DirectoryEntry,
   type FileState,
   GitHubClient,
   GitHubError,
@@ -74,6 +75,7 @@ import {
 } from "./lib/ledger.ts";
 
 const FULL_HASH = /^[a-f0-9]{64}$/;
+const PUBLIC_HASH = /^[a-f0-9]{56}$/;
 const EXT = /^[a-z0-9]{1,8}$/;
 // Article identity for the directive-write route. Strict kebab-case so a path
 // segment can never escape content/pages/ (no dots, slashes, or "..").
@@ -107,6 +109,11 @@ interface GitHubLike {
   getFile(repo: string, path: string): Promise<FileState | null>;
   getFileAt(repo: string, path: string, ref: string): Promise<FileState | null>;
   getRef(repo: string): Promise<string>;
+  listDirectoryAt(
+    repo: string,
+    path: string,
+    ref: string,
+  ): Promise<DirectoryEntry[]>;
   editFile(
     repo: string,
     path: string,
@@ -354,6 +361,38 @@ async function loadSidecar(
   }
 }
 
+/** Resolve the public record id inside the private repository. Public gate and
+ * history routes never accept a full hash, which also removes the old 32-bit
+ * suffix oracle. A collision fails closed. */
+async function resolvePublicHash(
+  env: Env,
+  deps: Deps,
+  publicHash: string,
+): Promise<string | null> {
+  if (!PUBLIC_HASH.test(publicHash)) return null;
+  const ref = await deps.github.getRef(env.ingestsRepo);
+  const entries = await deps.github.listDirectoryAt(
+    env.ingestsRepo,
+    "store",
+    ref,
+  );
+  const matches = new Set<string>();
+  for (const entry of entries) {
+    if (entry.type !== "blob") continue;
+    const match = entry.name.match(/^([a-f0-9]{64})(?:\.v2)?\.md$/);
+    if (match?.[1].startsWith(publicHash)) matches.add(match[1]);
+  }
+  return matches.size === 1 ? [...matches][0] : null;
+}
+
+async function resolveWriteHash(
+  env: Env,
+  deps: Deps,
+  hash: string,
+): Promise<string | null> {
+  return FULL_HASH.test(hash) ? hash : await resolvePublicHash(env, deps, hash);
+}
+
 function authorOf(user: User): Author {
   return { name: user.name || user.login || "reviewer", email: user.email };
 }
@@ -425,13 +464,14 @@ async function handleAuth(
 }
 
 async function handleGate(
-  hash: string,
+  publicHash: string,
   action: string,
   req: Request,
   env: Env,
   deps: Deps,
 ): Promise<Response> {
-  if (!FULL_HASH.test(hash)) return notFound();
+  const hash = await resolvePublicHash(env, deps, publicHash);
+  if (!hash) return notFound();
   const sidecar = await loadSidecar(env, deps, hash);
 
   if (action === "") {
@@ -460,7 +500,7 @@ async function handleGate(
     const chosen = sample(pool, Math.min(CHALLENGES_PER_SESSION, pool.length));
     const s = await startSession(
       env.sessionSecret,
-      hash,
+      publicHash,
       chosen,
       deps.nowSec(),
     );
@@ -493,7 +533,7 @@ async function handleGate(
     } else {
       const result = await scoreSession(
         env.sessionSecret,
-        hash,
+        publicHash,
         body.session_id ?? "",
         body.responses ?? {},
         deps.nowSec(),
@@ -1062,11 +1102,12 @@ function commitSummary(message: string): string {
 // from git. Live (not the static snapshot, which lags), public read. Reviewer
 // EMAIL is dropped - only name + date + summary reach the client.
 async function handleHistory(
-  hash: string,
+  publicHash: string,
   env: Env,
   deps: Deps,
 ): Promise<Response> {
-  if (!FULL_HASH.test(hash)) return notFound();
+  const hash = await resolvePublicHash(env, deps, publicHash);
+  if (!hash) return notFound();
   const bodyPath = await resolveBodyPath(env, deps, hash);
   const commits = await deps.github.listCommits(env.ingestsRepo, bodyPath);
   return json({
@@ -1184,7 +1225,9 @@ async function route(req: Request, env: Env, deps: Deps): Promise<Response> {
   if (review && method === "PUT") {
     const denied = await denyUnless("reviewer");
     if (denied) return denied;
-    return handleReviewWrite(review[1], req, env, deps, user!, resolvedRole!);
+    const hash = await resolveWriteHash(env, deps, review[1]);
+    if (!hash) return notFound();
+    return handleReviewWrite(hash, req, env, deps, user!, resolvedRole!);
   }
 
   const housekeep = pathname.match(
@@ -1193,7 +1236,9 @@ async function route(req: Request, env: Env, deps: Deps): Promise<Response> {
   if (housekeep && method === "POST") {
     const denied = await denyUnless("reviewer");
     if (denied) return denied;
-    return handleHousekeepingDecide(housekeep[1], req, env, deps, user!);
+    const hash = await resolveWriteHash(env, deps, housekeep[1]);
+    if (!hash) return notFound();
+    return handleHousekeepingDecide(hash, req, env, deps, user!);
   }
 
   const curate = pathname.match(

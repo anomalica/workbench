@@ -28,6 +28,7 @@ POLL_SECONDS (default 15), SSH_AUTH_SOCK (for git over ssh).
 from __future__ import annotations
 
 import mimetypes
+import json
 import os
 import re
 import socket
@@ -35,6 +36,7 @@ import subprocess
 import sys
 import time
 import urllib.parse
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -114,6 +116,21 @@ def _put(rel: str, body: bytes) -> int:
     return 0
 
 
+def _delete(rel: str) -> int:
+    req = urllib.request.Request(
+        f"https://{STORAGE_HOST}/{ZONE}/{rel}",
+        method="DELETE",
+        headers={"AccessKey": STORAGE_KEY},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as response:
+            return response.status
+    except urllib.error.HTTPError as error:
+        return error.code
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 def _purge(url: str) -> None:
     req = urllib.request.Request(
         f"https://api.bunny.net/purge?url={urllib.parse.quote(url, safe='')}",
@@ -131,12 +148,25 @@ def push_record_files(hashes: set[str]) -> int:
     ingests.json, and purge each. Returns the count of files pushed."""
     api = SNAPSHOT / "api"
     rels = ["ingests.json"]
+    listed = json.loads((api / "ingests.json").read_text())
+    gated_ids = {
+        row["public_hash"]
+        for row in listed
+        if "content_hash" not in row and row.get("public_hash")
+    }
     for h in hashes:
+        output_id = h[:56] if h[:56] in gated_ids else h
         rels += [
-            f"ingests/{h}.json",
-            f"ingests/{h}/digest.json",
-            f"ingests/{h}/coverage.json",
+            f"ingests/{output_id}.json",
+            f"ingests/{output_id}/digest.json",
+            f"ingests/{output_id}/coverage.json",
+            f"ingests/{output_id}/housekeeping.json",
         ]
+        if output_id != h:
+            # Storage uploads do not remove objects whose public path changed.
+            for obsolete in (f"api/ingests/{h}.json", f"api/ingests/{h}/"):
+                _delete(obsolete)
+                _purge(f"https://{PULL_HOST}/{obsolete}")
     pushed = 0
     for rel in rels:
         f = api / rel

@@ -1,10 +1,11 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { parse, parseAll } from "jsr:@std/yaml@1";
 import { makeSessionCookie, type User } from "./lib/auth.ts";
-import { sha256Hex } from "./lib/crypto.ts";
+import { sha256Hex, verifyToken } from "./lib/crypto.ts";
 import {
   type AtomicFileChange,
   type Author,
+  type DirectoryEntry,
   type FileState,
   GitHubError,
 } from "./lib/github.ts";
@@ -28,6 +29,7 @@ const ENV: Env = {
 };
 const NOW = 1000;
 const HASH = "a".repeat(64);
+const PUBLIC_HASH = HASH.slice(0, 56);
 const REF = "b".repeat(40);
 const FILE_SHA = "c".repeat(40);
 const ALGORITHM_MANIFEST =
@@ -73,6 +75,23 @@ class FakeGitHub {
   }
   getRef(_repo: string): Promise<string> {
     return Promise.resolve(this.ref);
+  }
+  listDirectoryAt(
+    repo: string,
+    path: string,
+    _ref: string,
+  ): Promise<DirectoryEntry[]> {
+    const prefix = `${repo}/${path}/`;
+    return Promise.resolve(
+      [...this.files.keys()]
+        .filter((key) =>
+          key.startsWith(prefix) && !key.slice(prefix.length).includes("/")
+        )
+        .map((key) => ({
+          name: key.slice(prefix.length),
+          type: "blob" as const,
+        })),
+    );
   }
   getFile(repo: string, path: string): Promise<FileState | null> {
     return this.getFileAt(repo, path, this.ref);
@@ -190,7 +209,7 @@ Deno.test("gate info reports availability from the private sidecar", async () =>
     JSON.stringify(sidecar(10)),
   );
   const res = await handleRequest(
-    req(`/api/ingests/${HASH}/verification`),
+    req(`/api/ingests/${PUBLIC_HASH}/verification`),
     ENV,
     deps(gh),
   );
@@ -202,7 +221,7 @@ Deno.test("gate info reports availability from the private sidecar", async () =>
 
 Deno.test("gate info: no sidecar -> not available (ungated record)", async () => {
   const res = await handleRequest(
-    req(`/api/ingests/${HASH}/verification`),
+    req(`/api/ingests/${PUBLIC_HASH}/verification`),
     ENV,
     deps(new FakeGitHub()),
   );
@@ -218,13 +237,22 @@ Deno.test("gate start never leaks answers; submit all-correct -> signed Bunny UR
   );
 
   const startRes = await handleRequest(
-    req(`/api/ingests/${HASH}/verification/start`, { method: "POST" }),
+    req(`/api/ingests/${PUBLIC_HASH}/verification/start`, { method: "POST" }),
     ENV,
     deps(gh),
   );
   const started = await startRes.json();
   assertEquals(started.challenges.length, 10);
   assert(!JSON.stringify(started).includes("word0"), "answer leaked");
+  const token = await verifyToken<{ h: string }>(
+    ENV.sessionSecret,
+    started.session_id,
+  );
+  assertEquals(token?.h, PUBLIC_HASH);
+  assert(
+    !JSON.stringify(token).includes(HASH),
+    "full record hash leaked in session token",
+  );
 
   // Answer them all correctly (challenge.before is `b<i>`, the test answer `word<i>`).
   const responses: Record<string, string> = {};
@@ -233,7 +261,7 @@ Deno.test("gate start never leaks answers; submit all-correct -> signed Bunny UR
     responses[String(c.id)] = `word${i}`;
   }
   const submitRes = await handleRequest(
-    req(`/api/ingests/${HASH}/verification/submit`, {
+    req(`/api/ingests/${PUBLIC_HASH}/verification/submit`, {
       method: "POST",
       body: JSON.stringify({
         session_id: started.session_id,
@@ -256,6 +284,33 @@ Deno.test("gate start never leaks answers; submit all-correct -> signed Bunny UR
   assertEquals(out.expires_in, 300);
 });
 
+Deno.test("public gate rejects full hashes instead of exposing a suffix oracle", async () => {
+  const gh = new FakeGitHub();
+  gh.put(
+    "ingests",
+    `store/${HASH}.verification.json`,
+    JSON.stringify(sidecar(10)),
+  );
+  const res = await handleRequest(
+    req(`/api/ingests/${HASH}/verification`),
+    ENV,
+    deps(gh),
+  );
+  assertEquals(res.status, 404);
+});
+
+Deno.test("public gate fails closed on a public-hash collision", async () => {
+  const gh = new FakeGitHub();
+  const collision = PUBLIC_HASH + "b".repeat(8);
+  gh.put("ingests", `store/${collision}.md`, "---\ntitle: Collision\n---\n");
+  const res = await handleRequest(
+    req(`/api/ingests/${PUBLIC_HASH}/verification`),
+    ENV,
+    deps(gh),
+  );
+  assertEquals(res.status, 404);
+});
+
 Deno.test("gate submit: SHA fastpath passes without a session", async () => {
   const gh = new FakeGitHub();
   gh.put(
@@ -264,7 +319,7 @@ Deno.test("gate submit: SHA fastpath passes without a session", async () => {
     JSON.stringify(sidecar(10, { sha256: "DEADBEEF" })),
   );
   const res = await handleRequest(
-    req(`/api/ingests/${HASH}/verification/submit`, {
+    req(`/api/ingests/${PUBLIC_HASH}/verification/submit`, {
       method: "POST",
       body: JSON.stringify({ sha256: "deadbeef" }),
     }),
@@ -303,7 +358,7 @@ Deno.test("gate success fails closed when the algorithm manifest is non-canonica
   );
   gh.put("ingests", "housekeeping-algorithm.json", ALGORITHM_MANIFEST + "\n");
   const res = await handleRequest(
-    req(`/api/ingests/${HASH}/verification/submit`, {
+    req(`/api/ingests/${PUBLIC_HASH}/verification/submit`, {
       method: "POST",
       body: JSON.stringify({ sha256: "x" }),
     }),
@@ -327,7 +382,7 @@ Deno.test("gate submit pass: serves the gated body from the canonical .v2 record
   gh.put("ingests", `store/${HASH}.v2.md`, v2);
 
   const res = await handleRequest(
-    req(`/api/ingests/${HASH}/verification/submit`, {
+    req(`/api/ingests/${PUBLIC_HASH}/verification/submit`, {
       method: "POST",
       body: JSON.stringify({ sha256: "deadbeef" }),
     }),
@@ -354,7 +409,7 @@ Deno.test("gate submit: SERVE_GATED_BODY off -> a pass returns NO body (copyrigh
   );
   gh.put("ingests", `store/${HASH}.v2.md`, "---\ntitle: x\n---\nSECRET BODY\n");
   const res = await handleRequest(
-    req(`/api/ingests/${HASH}/verification/submit`, {
+    req(`/api/ingests/${PUBLIC_HASH}/verification/submit`, {
       method: "POST",
       body: JSON.stringify({ sha256: "deadbeef" }),
     }),
@@ -380,7 +435,7 @@ Deno.test("gate submit FAIL: never returns the gated body (no leak)", async () =
     "---\ntitle: secret\n---\nSECRET BODY\n",
   );
   const startRes = await handleRequest(
-    req(`/api/ingests/${HASH}/verification/start`, { method: "POST" }),
+    req(`/api/ingests/${PUBLIC_HASH}/verification/start`, { method: "POST" }),
     ENV,
     deps(gh),
   );
@@ -388,7 +443,7 @@ Deno.test("gate submit FAIL: never returns the gated body (no leak)", async () =
   const responses: Record<string, string> = {};
   for (const c of started.challenges) responses[String(c.id)] = "WRONG";
   const res = await handleRequest(
-    req(`/api/ingests/${HASH}/verification/submit`, {
+    req(`/api/ingests/${PUBLIC_HASH}/verification/submit`, {
       method: "POST",
       body: JSON.stringify({ session_id: started.session_id, responses }),
     }),
@@ -584,7 +639,7 @@ Deno.test("review PUT needs auth, then commits the corrected record", async () =
   assertEquals(unauth.status, 401);
 
   const ok = await handleRequest(
-    req(`/api/ingests/${HASH}`, {
+    req(`/api/ingests/${PUBLIC_HASH}`, {
       method: "PUT",
       headers: { cookie: await cookie() },
       body: payload,
@@ -786,7 +841,7 @@ Deno.test("review history: public read, maps git commits, drops reviewer email",
     },
   ]);
   const res = await handleRequest(
-    req(`/api/ingests/${HASH}/history`),
+    req(`/api/ingests/${PUBLIC_HASH}/history`),
     ENV,
     deps(gh),
   ); // no cookie
@@ -823,7 +878,7 @@ Deno.test("review history: surfaces reviewer notes, strips identity trailers", a
     },
   ]);
   const res = await handleRequest(
-    req(`/api/ingests/${HASH}/history`),
+    req(`/api/ingests/${PUBLIC_HASH}/history`),
     ENV,
     deps(gh),
   );
@@ -863,6 +918,7 @@ Deno.test("a GitHub write failure surfaces a 502, not a bare 500", async () => {
     getFileAt: (_repo: string, _path: string, _ref: string) =>
       Promise.resolve(null),
     getRef: () => Promise.resolve(REF),
+    listDirectoryAt: () => Promise.resolve([]),
     editFile: () => Promise.reject(new GitHubError(401, "Bad credentials")),
     commitFiles: () => Promise.reject(new GitHubError(401, "Bad credentials")),
     listCommits: () => Promise.resolve([]),

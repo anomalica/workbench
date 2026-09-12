@@ -124,7 +124,10 @@ import type { KnownSpeaker } from "$lib/speaker-suggest";
 export async function fetchIngests(): Promise<IngestSummary[]> {
   const res = await fetch(readPath("/api/ingests"));
   if (!res.ok) throw new Error(`Failed to fetch ingests: ${res.status}`);
-  return res.json();
+  const rows = (await res.json()) as IngestSummary[];
+  // Gated static rows expose only the public identifier. Keep one internal UI
+  // key without putting the possession hash back into the public JSON.
+  return rows.map((row) => ({ ...row, content_hash: row.content_hash ?? row.public_hash }));
 }
 
 /** Speaker names already used anywhere in the corpus, commonest first. Fetched
@@ -204,7 +207,8 @@ export async function setArticleDirectives(
 export async function fetchIngest(hash: string): Promise<IngestDetail> {
   const res = await fetch(readPath(`/api/ingests/${hash}`));
   if (!res.ok) throw new Error(`Failed to fetch ingest: ${res.status}`);
-  return res.json();
+  const detail = (await res.json()) as IngestDetail;
+  return { ...detail, content_hash: detail.content_hash ?? detail.public_hash };
 }
 
 /** Digest interchange format (schema: anomalica/digest/1).
@@ -655,7 +659,7 @@ export function reviewBaseFor(
  *  responses). Always dynamic - the live edge serves it; the static snapshot
  *  never carries the gated body. */
 export async function submitVerification(
-  fullHash: string,
+  recordHash: string,
   proof: {
     sha256?: string;
     session_id?: string;
@@ -663,7 +667,7 @@ export async function submitVerification(
     ext?: string;
   },
 ): Promise<VerificationResult> {
-  const res = await fetch(`/api/ingests/${fullHash}/verification/submit`, {
+  const res = await fetch(`/api/ingests/${recordHash}/verification/submit`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(proof),
@@ -1572,7 +1576,11 @@ export async function fetchHousekeepingQueue(): Promise<HousekeepingRow[]> {
   const res = await fetch(readPath("/api/housekeeping"));
   if (res.status === 404) return [];
   if (!res.ok) throw new Error(`Failed to fetch housekeeping queue: ${res.status}`);
-  return (await res.json()).queue ?? [];
+  const rows = ((await res.json()).queue ?? []) as HousekeepingRow[];
+  return rows.map((row) => ({
+    ...row,
+    content_hash: row.content_hash ?? (row as HousekeepingRow & { public_hash?: string }).public_hash ?? "",
+  }));
 }
 
 /** EXPERIMENTAL. A record the assimilator judged to share a subject with

@@ -49,6 +49,44 @@ Deno.test("getFile returns null on 404, decodes content otherwise", async () => 
   });
 });
 
+Deno.test("listDirectoryAt resolves a committed subtree", async () => {
+  const seen: string[] = [];
+  const fetchImpl: FetchLike = (url) => {
+    seen.push(url);
+    if (url.endsWith("/git/commits/commit")) {
+      return Promise.resolve({
+        status: 200,
+        json: () => Promise.resolve({ tree: { sha: "root" } }),
+      });
+    }
+    if (url.endsWith("/git/trees/root")) {
+      return Promise.resolve({
+        status: 200,
+        json: () =>
+          Promise.resolve({
+            tree: [{ path: "store", type: "tree", sha: "tree" }],
+          }),
+      });
+    }
+    return Promise.resolve({
+      status: 200,
+      json: () =>
+        Promise.resolve({
+          tree: [
+            { path: "a.md", type: "blob", sha: "a" },
+            { path: "v1", type: "tree", sha: "b" },
+          ],
+        }),
+    });
+  };
+  const gh = new GitHubClient("t", "anomalica", "main", fetchImpl);
+  assertEquals(await gh.listDirectoryAt("ingests", "store", "commit"), [
+    { name: "a.md", type: "blob" },
+    { name: "v1", type: "tree" },
+  ]);
+  assertEquals(seen.length, 3);
+});
+
 Deno.test("editFile creates a missing file (no sha sent)", async () => {
   const seen: { method?: string; body: Record<string, unknown> }[] = [];
   const fetchImpl: FetchLike = (_url, init) => {

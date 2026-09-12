@@ -33,7 +33,7 @@ def test_gated_housekeeping_is_the_exact_summary_variant():
         "deep_link": "/housekeeping?record=abc",
         "previews": {"a": {"removed": ["secret"], "added": []}},
     }
-    summary = _gate_housekeeping(full)
+    summary = _gate_housekeeping(full, "abc")
     assert summary == {
         "schema": "anomalica/housekeeping-view/1",
         "access": "summary",
@@ -54,6 +54,7 @@ def test_the_allow_list_is_unchanged_by_housekeeping():
     redistributor check only fires on YouTube channels."""
     assert "posted_by" not in GATED_FRONTMATTER_ALLOW
     assert "source_hash" not in GATED_FRONTMATTER_ALLOW
+    assert "content_hash" not in GATED_FRONTMATTER_ALLOW
 
 
 def test_prerender_marks_only_the_exact_current_v2_tuple_current(tmp_path, monkeypatch):
