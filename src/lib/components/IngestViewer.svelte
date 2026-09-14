@@ -86,6 +86,8 @@
     claimedPages,
     pageMarkerLines,
     applyPageMarkers,
+    printedPageAnchors,
+    renderEpubPrintedPageMarkers,
   } from "$lib/page-markers";
   import EditableMetadata from "./EditableMetadata.svelte";
   import HousekeepingWarning from "./HousekeepingWarning.svelte";
@@ -1132,6 +1134,7 @@
   /** How many page markers precede each body line. The prose renders block by
    *  block, so a block cannot count its own place in the record. */
   let markersBeforeLine = $derived(pageMarkerLines(currentBody()));
+  let printedPageAnchorLines = $derived(printedPageAnchors(currentBody()));
   let isWeb = $derived(ingest.frontmatter.source_type === "web");
   let isAudio = $derived(ingest.frontmatter.source_type === "audio");
   let isVideo = $derived(ingest.frontmatter.source_type === "video");
@@ -2063,6 +2066,14 @@
     // know which marker of the whole record each one is.
     body = applyPageMarkers(body, pageMarkers, markersBefore(lineOffset));
     body = pairImageCaptions(body);
+    if (isEbook) {
+      let sequence = 1;
+      for (const anchor of printedPageAnchorLines) {
+        if (anchor.line >= lineOffset) break;
+        sequence = anchor.sequence;
+      }
+      body = renderEpubPrintedPageMarkers(body, sequence);
+    }
     // PDFs emit file_page with an adjacent printed_page when the printed
     // number differs - collapse the pair into ONE divider labelled with the
     // printed page (the real page), keeping data-file-page for the
@@ -2111,14 +2122,8 @@
         if (trimmed === "page_break") {
           return `\n\n<div class="page-marker"><span class="page-label">Page break</span></div>\n\n`;
         }
-        // Page marker (ebooks): printed_page stands alone - EPUB pagebreaks
-        // have no file_page - and must render as a visible divider.
-        const printedMatch = trimmed.match(/^printed_page:\s*([A-Za-z0-9]+)$/);
-        if (printedMatch) {
-          return `\n\n<div class="page-marker" data-printed-page="${printedMatch[1]}"><span class="page-label">Page ${printedMatch[1]}</span></div>\n\n`;
-        }
         // Structural markers: suppress in body (used for nav, not display)
-        if (/^(chapter|chapter_title|speaker)\s*:/.test(trimmed)) {
+        if (/^(chapter|chapter_title|speaker|printed_page_sequence)\s*:/.test(trimmed)) {
           return "";
         }
         // Image with extracted file: render as an <img> from the media
@@ -2381,21 +2386,24 @@
   // its page. Off by default; page-level only (exact-text highlighting is
   // out - sandbox="" on licensed EPUB content stays).
   let followSource = $state(false);
-  let epubPageAnchor = $state<string | null>(null);
+  let epubPageAnchor = $state<{ page: string; sequence: number } | null>(null);
   let pageAnchorLines = $derived.by(() => {
-    const out: { line: number; page: string; kind: "printed" | "file" }[] = [];
+    const out: {
+      line: number;
+      page: string;
+      sequence: number;
+      kind: "printed" | "file";
+    }[] = printedPageAnchorLines.map((anchor) => ({
+      ...anchor,
+      kind: "printed" as const,
+    }));
     const lines = currentBody().split("\n");
     for (let i = 0; i < lines.length; i++) {
       const t = lines[i].trim();
-      let m = t.match(/^<!--\s*printed_page:\s*([A-Za-z0-9]+)\s*-->$/);
-      if (m) {
-        out.push({ line: i, page: m[1], kind: "printed" });
-        continue;
-      }
-      m = t.match(/^<!--\s*file_page:\s*(\d+)\s*-->$/);
-      if (m) out.push({ line: i, page: m[1], kind: "file" });
+      const m = t.match(/^<!--\s*file_page:\s*(\d+)\s*-->$/);
+      if (m) out.push({ line: i, page: m[1], sequence: 1, kind: "file" });
     }
-    return out;
+    return out.sort((left, right) => left.line - right.line);
   });
   let canFollowSource = $derived(
     (isEbook && !!epubSource) || (isPdf && (!!localSourceFile || !!localSourceUrl)),
@@ -2404,11 +2412,11 @@
   /** Jump the source pane to the page containing the clicked block. */
   function followBlockToSource(lineFrom: number) {
     if (!followSource || !canFollowSource) return;
-    let printed: string | null = null;
+    let printed: { page: string; sequence: number } | null = null;
     let filePage: number | null = null;
     for (const a of pageAnchorLines) {
       if (a.line > lineFrom) break;
-      if (a.kind === "printed") printed = a.page;
+      if (a.kind === "printed") printed = { page: a.page, sequence: a.sequence };
       else filePage = parseInt(a.page, 10);
     }
     if (isEbook && printed) epubPageAnchor = printed;

@@ -4,6 +4,8 @@ import {
   claimedPages,
   applyPageMarkers,
   pageMarkerLines,
+  printedPageAnchors,
+  renderEpubPrintedPageMarkers,
 } from "$lib/page-markers";
 
 describe("readPageMarkers", () => {
@@ -56,6 +58,33 @@ describe("readPageMarkers", () => {
 
   it("treats an empty record as nothing to distrust", () => {
     expect(readPageMarkers([], 10).trustworthy).toBe(true);
+  });
+});
+
+describe("EPUB printed-page sequences", () => {
+  const body = `first
+<!-- printed_page: 4 -->
+second
+<!-- printed_page_sequence: 2 -->
+<!-- printed_page: 4 -->
+third
+<!-- printed_page_sequence: 1 -->
+<!-- printed_page: 303 -->`;
+
+  it("carries sequence transitions into page identities", () => {
+    expect(printedPageAnchors(body)).toEqual([
+      { line: 1, page: "4", sequence: 1 },
+      { line: 4, page: "4", sequence: 2 },
+      { line: 7, page: "303", sequence: 1 },
+    ]);
+  });
+
+  it("renders markers inline without exposing structural transitions", () => {
+    const rendered = renderEpubPrintedPageMarkers(body);
+    expect(rendered).not.toContain("printed_page_sequence");
+    expect(rendered).toContain('data-printed-page-sequence="1"');
+    expect(rendered).toContain('data-printed-page-sequence="2"');
+    expect(rendered).not.toContain('<div class="page-marker"');
   });
 });
 

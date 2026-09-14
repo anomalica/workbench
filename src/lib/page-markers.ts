@@ -91,6 +91,8 @@ export function readPageMarkers(claimed: number[], pageCount: number | null): Pa
  */
 const COMMENT = /<!--([\s\S]*?)-->/g;
 const FILE_PAGE_LINE = /(?:^|\n)[ \t]*file_page:[ \t]*(\d+)[ \t]*(?=\n|$)/;
+const PRINTED_PAGE = /^printed_page:\s*([A-Za-z0-9]+)$/;
+const PRINTED_PAGE_SEQUENCE = /^printed_page_sequence:\s*(\d+)$/;
 
 function claimedIn(comment: string): number | null {
   const m = comment.match(FILE_PAGE_LINE);
@@ -146,4 +148,49 @@ export function pageMarkerLines(body: string): Map<number, number> {
     at.set(line, ordinal++);
   }
   return at;
+}
+
+export interface PrintedPageAnchor {
+  line: number;
+  page: string;
+  sequence: number;
+}
+
+/** Printed-page locations with the sequence state active at each marker. */
+export function printedPageAnchors(body: string): PrintedPageAnchor[] {
+  const out: PrintedPageAnchor[] = [];
+  let sequence = 1;
+  for (const match of body.matchAll(COMMENT)) {
+    const content = match[1].trim();
+    const transition = content.match(PRINTED_PAGE_SEQUENCE);
+    if (transition) {
+      sequence = Number(transition[1]);
+      continue;
+    }
+    const page = content.match(PRINTED_PAGE);
+    if (!page) continue;
+    out.push({
+      line: body.slice(0, match.index).split("\n").length - 1,
+      page: page[1],
+      sequence,
+    });
+  }
+  return out;
+}
+
+/** Render EPUB pagebreaks inline so a mid-paragraph marker stays inline. */
+export function renderEpubPrintedPageMarkers(body: string, initialSequence = 1): string {
+  let sequence = initialSequence;
+  return body.replace(COMMENT, (whole, inner: string) => {
+    const content = inner.trim();
+    const transition = content.match(PRINTED_PAGE_SEQUENCE);
+    if (transition) {
+      sequence = Number(transition[1]);
+      return "";
+    }
+    const page = content.match(PRINTED_PAGE);
+    if (!page) return whole;
+    const sequenceLabel = sequence === 1 ? "" : `, sequence ${sequence}`;
+    return `<span class="printed-page-marker" data-printed-page="${page[1]}" data-printed-page-sequence="${sequence}" title="Printed page ${page[1]}${sequenceLabel}">page ${page[1]}</span>`;
+  });
 }

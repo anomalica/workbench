@@ -54,6 +54,10 @@ export function flattenEpubToHtml(parsed: ParsedEpub): string {
   const parser = new DOMParser();
   const styles: string[] = [];
   const bodies: string[] = [];
+  const pageSequences: { seen: Set<string>; last: number | null }[] = [
+    { seen: new Set(), last: null },
+  ];
+  let currentPageSequence = 0;
 
   parsed.chapters.forEach((chapter, index) => {
     let doc: Document;
@@ -71,7 +75,7 @@ export function flattenEpubToHtml(parsed: ParsedEpub): string {
       styles.push(style.textContent || "");
     }
 
-    // Normalise EPUB3 pagebreak markers to id="page_{label}" anchors so the
+    // Normalise EPUB3 pagebreak markers to sequence-aware anchors so the
     // sandboxed iframe can be jumped to a page by URL fragment. The label
     // priority mirrors the ingester's printed_page extraction exactly
     // (epub_extract._pagebreak_label: title, else the trailing number/roman
@@ -81,7 +85,27 @@ export function flattenEpubToHtml(parsed: ParsedEpub): string {
       walk(doc.body, (el) => {
         if (!isPagebreak(el)) return;
         const label = pagebreakLabel(el);
-        if (label) el.id = `page_${label}`;
+        if (!label) return;
+        const number = /^\d+$/.test(label) ? Number(label) : null;
+        if (number !== null) {
+          const continuation = pageSequences.findIndex(
+            (state, sequence) =>
+              sequence !== currentPageSequence && state.last === number - 1,
+          );
+          if (continuation >= 0) {
+            currentPageSequence = continuation;
+          } else {
+            const current = pageSequences[currentPageSequence];
+            const collision = pageSequences.some((state) => state.seen.has(label));
+            if (current.last !== null && number < current.last && collision) {
+              pageSequences.push({ seen: new Set(), last: null });
+              currentPageSequence = pageSequences.length - 1;
+            }
+          }
+          pageSequences[currentPageSequence].last = number;
+        }
+        pageSequences[currentPageSequence].seen.add(label);
+        el.id = epubPageAnchorId(currentPageSequence + 1, label);
       });
     }
 
@@ -106,6 +130,10 @@ export function flattenEpubToHtml(parsed: ParsedEpub): string {
   `;
 
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${builtinStyles}</style><style>${combinedStyles}</style></head><body>${bodies.join("")}</body></html>`;
+}
+
+export function epubPageAnchorId(sequence: number, label: string): string {
+  return `page_${sequence}_${label}`;
 }
 
 function escapeHtml(s: string): string {
