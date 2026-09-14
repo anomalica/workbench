@@ -23,6 +23,14 @@ def _record(content_hash: str, body: str) -> str:
     return f"---\nschema: anomalica/record/1\ncontent_hash: {content_hash}\ntitle: T\n---\n{body}"
 
 
+def _carried_record(content_hash: str, body: str) -> str:
+    return (
+        f"---\nschema: anomalica/record/1\ncontent_hash: {content_hash}\ntitle: T\n"
+        f"review_carryover:\n  at: 2026-01-02T00:00:00Z\n  from: {content_hash}\n"
+        f"  had_text_edits: true\n---\n{body}"
+    )
+
+
 @pytest.fixture
 def ingests_repo(tmp_path):
     repo = tmp_path / "ingests"
@@ -104,3 +112,99 @@ def test_list_ingests_exposes_digestibility(ingests_repo):
     # No sidecar -> unreviewed, not digestible.
     assert by_hash[NO_SIDECAR]["digestible"] is False
     assert by_hash[NO_SIDECAR]["observed_coverage"] == 0.0
+
+
+def test_changed_body_without_review_carryover_invalidates_prior_review(ingests_repo):
+    record = ingests_repo / "store" / "full.md"
+    record.write_text(_record(VERDICT_FULL, "Re-extracted body.\n"))
+    subprocess.run(["git", "add", str(record)], cwd=ingests_repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "refresh record"],
+        cwd=ingests_repo,
+        check=True,
+    )
+
+    source = LocalIngestSource(ingests_repo)
+    assert source.load_coverage(VERDICT_FULL) is None
+
+    sidecar_path = ingests_repo / "store" / f"{VERDICT_FULL}.review.json"
+    sidecar = json.loads(sidecar_path.read_text())
+    sidecar["reviews"][0]["notes"] = "uncommitted sidecar edit"
+    sidecar_path.write_text(json.dumps(sidecar))
+    assert source.load_coverage(VERDICT_FULL) is None
+
+    detail = source.get_ingest(VERDICT_FULL)
+    assert detail is not None
+    assert detail["digestible"] is False
+    assert detail["observed_coverage"] == 0.0
+    summary = next(
+        item for item in source.list_ingests() if item["content_hash"] == VERDICT_FULL
+    )
+    assert summary["digestible"] is False
+    assert summary["observed_coverage"] == 0.0
+    assert VERDICT_FULL not in source.reviewed_by_email("t@example.invalid")
+
+
+def test_review_after_carryover_restores_current_coverage(ingests_repo):
+    store = ingests_repo / "store"
+    record = store / "full.md"
+    sidecar_path = store / f"{VERDICT_FULL}.review.json"
+    record.write_text(_carried_record(VERDICT_FULL, "Re-extracted body.\n"))
+    subprocess.run(["git", "add", str(record)], cwd=ingests_repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "refresh record"],
+        cwd=ingests_repo,
+        check=True,
+    )
+
+    source = LocalIngestSource(ingests_repo)
+    assert source.load_coverage(VERDICT_FULL) is None
+
+    sidecar = json.loads(sidecar_path.read_text())
+    sidecar["reviews"].append({"by": "x", "at": "2026-01-03T00:00:00Z", "spans": []})
+    sidecar_path.write_text(json.dumps(sidecar))
+    subprocess.run(
+        ["git", "add", str(record), str(sidecar_path)], cwd=ingests_repo, check=True
+    )
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "review refreshed record"],
+        cwd=ingests_repo,
+        check=True,
+    )
+    assert source.load_coverage(VERDICT_FULL) is not None
+
+
+def test_body_and_stale_sidecar_changed_together_remain_invalid(ingests_repo):
+    store = ingests_repo / "store"
+    record = store / "full.md"
+    sidecar_path = store / f"{VERDICT_FULL}.review.json"
+    reviewed_parent = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=ingests_repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    sidecar = json.loads(sidecar_path.read_text())
+    sidecar["reviews"][0]["parent_commit"] = reviewed_parent
+    sidecar_path.write_text(json.dumps(sidecar))
+    subprocess.run(["git", "add", str(sidecar_path)], cwd=ingests_repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "bind review"],
+        cwd=ingests_repo,
+        check=True,
+    )
+
+    record.write_text(_record(VERDICT_FULL, "Re-extracted body.\n"))
+    sidecar["reviews"][0]["notes"] = "reformatted during refresh"
+    sidecar_path.write_text(json.dumps(sidecar))
+    subprocess.run(
+        ["git", "add", str(record), str(sidecar_path)], cwd=ingests_repo, check=True
+    )
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "refresh record and metadata"],
+        cwd=ingests_repo,
+        check=True,
+    )
+
+    assert LocalIngestSource(ingests_repo).load_coverage(VERDICT_FULL) is None

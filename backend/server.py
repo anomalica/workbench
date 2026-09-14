@@ -1003,7 +1003,9 @@ class LocalIngestSource(IngestSource):
         ingests: list[dict] = []
         digested_hashes = self._digested_content_hashes()
         manifest = self._pipeline_versions()
-        for content_hash, (md_path, frontmatter) in self._scan().items():
+        index = self._scan()
+        current_coverage = self._current_coverages(index)
+        for content_hash, (md_path, frontmatter) in index.items():
             # Supersession: a retired re-acquisition is hidden from the browse
             # list (decision 0040). The flag is the source of truth; the file's
             # store/v1/ move is a derived convenience.
@@ -1015,7 +1017,7 @@ class LocalIngestSource(IngestSource):
                 creators = []
             # Digestibility: read the coverage sidecar; only read the record
             # body when the legacy recompute path needs it (no stored verdict).
-            sidecar = self.load_coverage(content_hash)
+            sidecar = current_coverage.get(content_hash)
             record_text = (
                 md_path.read_text() if _needs_body_for_digestibility(sidecar) else None
             )
@@ -1560,7 +1562,14 @@ class LocalIngestSource(IngestSource):
                 by_kind_value[key] = ts
 
         out: dict[str, str] = {}
-        for content_hash, (_, frontmatter) in self._scan().items():
+        index = self._scan()
+        current_coverage = self._current_coverages(index)
+        for content_hash, (_, frontmatter) in index.items():
+            if (
+                self._load_coverage_file(content_hash) is not None
+                and current_coverage.get(content_hash) is None
+            ):
+                continue
             candidates: list[str] = []
             source_url = (frontmatter.get("source_url") or "").strip()
             if source_url:
@@ -1761,6 +1770,247 @@ class LocalIngestSource(IngestSource):
     def _coverage_path(self, full_hash: str) -> Path:
         return self.store / f"{full_hash}.review.json"
 
+    def _load_coverage_file(self, full_hash: str) -> dict | None:
+        path = self._coverage_path(full_hash)
+        if not path.exists():
+            return None
+        with open(path) as f:
+            return json.load(f)
+
+    @staticmethod
+    def _coverage_matches_record(
+        sidecar: dict, record_text: str, reviewed_record_text: str
+    ) -> bool:
+        frontmatter, current_body, _ = parse_frontmatter(record_text)
+        carryover_at = frontmatter.get("review_carryover.at")
+        if carryover_at:
+            try:
+                marker = datetime.fromisoformat(
+                    str(carryover_at).replace("Z", "+00:00")
+                )
+            except (TypeError, ValueError):
+                return False
+            if not _valid_intake_date(marker):
+                return False
+            resolved = False
+            for review in sidecar.get("reviews") or []:
+                try:
+                    reviewed_at = datetime.fromisoformat(
+                        str(review.get("at", "")).replace("Z", "+00:00")
+                    )
+                except (TypeError, ValueError):
+                    continue
+                if _valid_intake_date(reviewed_at) and reviewed_at >= marker:
+                    resolved = True
+                    break
+            if not resolved:
+                return False
+        return parse_frontmatter(reviewed_record_text)[1] == current_body
+
+    @staticmethod
+    def _git_blob_batch(repo_dir: Path, specs: list[str]) -> dict[str, str]:
+        if not specs:
+            return {}
+        proc = subprocess.run(
+            ["git", "cat-file", "--batch"],
+            cwd=repo_dir,
+            input=("\n".join(specs) + "\n").encode(),
+            capture_output=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            return {}
+        out: dict[str, str] = {}
+        data = proc.stdout
+        position = 0
+        for spec in specs:
+            line_end = data.find(b"\n", position)
+            if line_end < 0:
+                return {}
+            header = data[position:line_end].decode(errors="replace")
+            position = line_end + 1
+            if header.endswith(" missing"):
+                continue
+            parts = header.rsplit(" ", 2)
+            if len(parts) != 3 or parts[1] != "blob" or not parts[2].isdigit():
+                return {}
+            size = int(parts[2])
+            blob = data[position : position + size]
+            position += size + 1
+            try:
+                out[spec] = blob.decode("utf-8")
+            except UnicodeDecodeError:
+                continue
+        return out
+
+    def _current_coverages(
+        self, index: dict[str, tuple[Path, dict]]
+    ) -> dict[str, dict]:
+        """Validate all sidecars with three Git processes, independent of size."""
+        repo_dir = self.store.parent
+        candidates: dict[str, tuple[dict, Path, str]] = {}
+        for full_hash, (md_path, _) in index.items():
+            sidecar = self._load_coverage_file(full_hash)
+            if sidecar is None:
+                continue
+            coverage_rel = str(self._coverage_path(full_hash).relative_to(repo_dir))
+            candidates[coverage_rel] = (sidecar, md_path, md_path.read_text())
+        if not candidates:
+            return {}
+
+        paths = list(candidates)
+        status = subprocess.run(
+            ["git", "status", "--porcelain", "-z", "--", *paths],
+            cwd=repo_dir,
+            capture_output=True,
+            check=False,
+        )
+        if status.returncode != 0:
+            return {}
+        dirty = {
+            item[3:].decode(errors="replace").split(" -> ")[-1]
+            for item in status.stdout.split(b"\0")
+            if len(item) > 3
+        }
+
+        revisions: dict[str, str] = {}
+        legacy_paths: list[str] = []
+        for coverage_rel, (sidecar, md_path, _) in candidates.items():
+            reviews = sidecar.get("reviews") or []
+            parent_commit = reviews[-1].get("parent_commit") if reviews else None
+            if isinstance(parent_commit, str) and re.fullmatch(
+                r"[0-9a-f]{40}|[0-9a-f]{64}", parent_commit
+            ):
+                revisions[coverage_rel] = parent_commit
+            elif coverage_rel not in dirty:
+                legacy_paths.append(coverage_rel)
+
+        if legacy_paths:
+            history = subprocess.run(
+                [
+                    "git",
+                    "log",
+                    "--format=COMMIT %H",
+                    "--name-only",
+                    "--",
+                    *legacy_paths,
+                ],
+                cwd=repo_dir,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if history.returncode != 0:
+                return {}
+            commit = ""
+            for line in history.stdout.splitlines():
+                if line.startswith("COMMIT "):
+                    commit = line.removeprefix("COMMIT ")
+                elif line in candidates and line not in revisions:
+                    revisions[line] = commit
+
+        specs_by_path = {
+            coverage_rel: f"{revision}:{candidates[coverage_rel][1].relative_to(repo_dir)}"
+            for coverage_rel, revision in revisions.items()
+            if revision
+        }
+
+        blobs = self._git_blob_batch(repo_dir, list(specs_by_path.values()))
+        current: dict[str, dict] = {}
+        for coverage_rel, spec in specs_by_path.items():
+            reviewed_record = blobs.get(spec)
+            sidecar, _, record_text = candidates[coverage_rel]
+            if reviewed_record is not None and self._coverage_matches_record(
+                sidecar, record_text, reviewed_record
+            ):
+                full_hash = coverage_rel.removesuffix(".review.json").rsplit("/", 1)[-1]
+                current[full_hash] = sidecar
+        return current
+
+    def _current_coverage(
+        self, full_hash: str, record_text: str, md_path: Path | None = None
+    ) -> dict | None:
+        """Return coverage only when it describes the current record body.
+
+        The stable content hash identifies the source asset, not extraction output.
+        A refresh can therefore rewrite the body without moving its sidecar. Compare
+        with the body committed at the sidecar's latest revision so that an old
+        verdict cannot silently survive that rewrite. A dirty sidecar is current
+        only when its latest review carries a parent commit whose body still
+        matches; arbitrary uncommitted edits therefore cannot revive stale review.
+        """
+        sidecar = self._load_coverage_file(full_hash)
+        if sidecar is None:
+            return None
+
+        if md_path is None:
+            entry = self._scan().get(full_hash) or self._scan_archived().get(full_hash)
+            if entry is None:
+                return None
+            md_path, _ = entry
+        repo_dir = self.store.parent
+        coverage_path = self._coverage_path(full_hash)
+        coverage_rel = str(coverage_path.relative_to(repo_dir))
+        record_rel = str(md_path.relative_to(repo_dir))
+
+        reviews = sidecar.get("reviews") or []
+        parent_commit = reviews[-1].get("parent_commit") if reviews else None
+        if isinstance(parent_commit, str) and re.fullmatch(
+            r"[0-9a-f]{40}|[0-9a-f]{64}", parent_commit
+        ):
+            reviewed_record = subprocess.run(
+                ["git", "show", f"{parent_commit}:{record_rel}"],
+                cwd=repo_dir,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            return (
+                sidecar
+                if reviewed_record.returncode == 0
+                and self._coverage_matches_record(
+                    sidecar, record_text, reviewed_record.stdout
+                )
+                else None
+            )
+
+        dirty = subprocess.run(
+            ["git", "status", "--porcelain", "--", coverage_rel],
+            cwd=repo_dir,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if dirty.returncode != 0 or dirty.stdout.strip():
+            return None
+
+        revision = subprocess.run(
+            ["git", "log", "-1", "--format=%H", "--", coverage_rel],
+            cwd=repo_dir,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        commit = revision.stdout.strip() if revision.returncode == 0 else ""
+        if not commit:
+            return None
+        reviewed_record = subprocess.run(
+            ["git", "show", f"{commit}:{record_rel}"],
+            cwd=repo_dir,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if reviewed_record.returncode != 0:
+            return None
+        return (
+            sidecar
+            if self._coverage_matches_record(
+                sidecar, record_text, reviewed_record.stdout
+            )
+            else None
+        )
+
     def supersession(self, full_hash: str) -> dict:
         # Uses the scan's already-parsed frontmatter, so no body is read. A
         # re-ingested record moves to store/v1/ carrying superseded_by; the
@@ -1868,11 +2118,10 @@ class LocalIngestSource(IngestSource):
         return True
 
     def load_coverage(self, full_hash: str) -> dict | None:
-        path = self._coverage_path(full_hash)
-        if not path.exists():
+        entry = self._scan().get(full_hash) or self._scan_archived().get(full_hash)
+        if entry is None:
             return None
-        with open(path) as f:
-            return json.load(f)
+        return self._current_coverage(full_hash, entry[0].read_text())
 
     def append_coverage(
         self,
@@ -1905,7 +2154,7 @@ class LocalIngestSource(IngestSource):
         if self._scan().get(full_hash) is None:
             return False
 
-        sidecar = self.load_coverage(full_hash) or {
+        sidecar = self._load_coverage_file(full_hash) or {
             "schema": COVERAGE_SCHEMA,
             "reviews": [],
         }
