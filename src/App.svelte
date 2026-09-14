@@ -157,8 +157,20 @@
   let housekeepingHash = $state<string | null>(null);
   let selectedHousekeepingView = $state<HousekeepingViewData | null>(null);
   let ingestRequestGeneration = 0;
-  // Relevance-tuning mode for the open record (highlight annotation page).
+  // Human-gold review for the open record. #gold makes evaluation links
+  // reloadable without putting the private review state in the URL.
   let tuningOpen = $state(false);
+  $effect(() => {
+    const syncGoldRoute = () => {
+      if (selectedIngest) tuningOpen = window.location.hash === "#gold";
+    };
+    window.addEventListener("popstate", syncGoldRoute);
+    window.addEventListener("hashchange", syncGoldRoute);
+    return () => {
+      window.removeEventListener("popstate", syncGoldRoute);
+      window.removeEventListener("hashchange", syncGoldRoute);
+    };
+  });
   let sourceFile = $state<File | null>(null);
   let error = $state<string | null>(null);
   let loading = $state(true);
@@ -537,7 +549,7 @@
       selectedHousekeepingOpen = housekeeping?.outstanding_count ?? 0;
       selectedHousekeepingScopes = housekeeping?.scopes ?? [];
       sourceFile = file;
-      tuningOpen = false;
+      tuningOpen = window.location.hash === "#gold";
       error = null;
       // Put the public hash in the URL so password managers can associate
       // with it. Preserve any existing fragment (e.g. #claim-<uuid> from a
@@ -559,6 +571,18 @@
 
   function handleNoMatch(hash: string, file: File) {
     error = `No ingest found for ${file.name} (hash: ${hash.slice(0, 12)}...)`;
+  }
+
+  function openGoldReview() {
+    if (!selectedIngest) return;
+    tuningOpen = true;
+    history.pushState(null, "", `/${selectedIngest.public_hash}#gold`);
+  }
+
+  function closeGoldReview() {
+    if (!selectedIngest) return;
+    tuningOpen = false;
+    history.replaceState(null, "", `/${selectedIngest.public_hash}`);
   }
 
   function goBack() {
@@ -996,7 +1020,7 @@
       <TuningView
         ingest={selectedIngest}
         {user}
-        onback={() => (tuningOpen = false)}
+        onback={closeGoldReview}
       />
     {:else if selectedIngest}
       <IngestViewer
@@ -1023,7 +1047,7 @@
           refreshIngestSummaries();
         }}
         onback={goBack}
-        ontuning={() => (tuningOpen = true)}
+        ontuning={openGoldReview}
         onreload={(contentHash) => selectIngest(contentHash)}
         onhousekeeping={() => showHousekeeping(selectedIngest!.content_hash)}
         onhousekeepingaccess={(view) => {
