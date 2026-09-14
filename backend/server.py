@@ -4503,13 +4503,18 @@ def submit_review(full_hash: str, body: dict, request: Request) -> JSONResponse:
     new_base_record_sha: str | None = None
     with lock:
         if isinstance(source, LocalIngestSource):
-            if source.current_ref() != base_ref:
-                raise _stale()
-            current = source.record_at_ref(full_hash, base_ref)
-            if current is None:
+            current_ref = source.current_ref()
+            viewed = source.record_at_ref(full_hash, base_ref)
+            current = source.record_at_ref(full_hash, current_ref)
+            if viewed is None or current is None:
                 raise HTTPException(status_code=404, detail="Not found")
+            _viewed_path, viewed_blob, _viewed_raw = viewed
             md_path, current_blob, current_raw = current
-            if current_blob != base_record_sha or md_path.read_bytes() != current_raw:
+            if (
+                viewed_blob != base_record_sha
+                or current_blob != base_record_sha
+                or md_path.read_bytes() != current_raw
+            ):
                 raise _stale()
 
         # Contributors cannot commit to live data, but their proposal must still
@@ -4534,8 +4539,16 @@ def submit_review(full_hash: str, body: dict, request: Request) -> JSONResponse:
             changes = {md_path: content.encode("utf-8")}
             if spans or obs_cov is not None:
                 coverage_path = source._coverage_path(full_hash)
-                coverage_file = source.file_at_ref(coverage_path, base_ref)
-                committed_coverage = coverage_file[1] if coverage_file else None
+                viewed_coverage_file = source.file_at_ref(coverage_path, base_ref)
+                current_coverage_file = source.file_at_ref(coverage_path, current_ref)
+                viewed_coverage = (
+                    viewed_coverage_file[1] if viewed_coverage_file else None
+                )
+                committed_coverage = (
+                    current_coverage_file[1] if current_coverage_file else None
+                )
+                if committed_coverage != viewed_coverage:
+                    raise _stale()
                 if coverage_path.exists():
                     if (
                         committed_coverage is None
@@ -4579,7 +4592,7 @@ def submit_review(full_hash: str, body: dict, request: Request) -> JSONResponse:
             title = submitted_frontmatter.get("title", full_hash[:12])
             message = f"review: {title}"
             if all(
-                (loaded := source.file_at_ref(path, base_ref)) is not None
+                (loaded := source.file_at_ref(path, current_ref)) is not None
                 and loaded[1] == value
                 for path, value in changes.items()
             ):
@@ -4612,7 +4625,7 @@ def submit_review(full_hash: str, body: dict, request: Request) -> JSONResponse:
                     message,
                     user["name"],
                     user["email"],
-                    base_ref,
+                    current_ref,
                 )
             except (RuntimeError, subprocess.CalledProcessError) as exc:
                 raise _stale() from exc

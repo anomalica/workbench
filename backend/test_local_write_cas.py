@@ -335,6 +335,33 @@ def test_successive_ordinary_saves_do_not_leave_reverse_staged_changes(local_api
     assert record.read_text().endswith("Second editor body.\n")
 
 
+def test_housekeeping_proposal_does_not_make_an_open_ordinary_editor_stale(local_api):
+    client, repo, record, sidecar = local_api
+    viewed = client.get(f"/api/ingests/{HASH}").json()
+    proposal = sidecar.read_text().replace(
+        "The source identifies it.", "A newer housekeeping proposal."
+    )
+    sidecar.write_text(proposal)
+    _git(repo, "add", str(sidecar.relative_to(repo)))
+    _git(repo, "commit", "-q", "-m", "update housekeeping proposal")
+
+    response = client.put(
+        f"/api/ingests/{HASH}",
+        json={
+            "content": RECORD.replace("Body.", "Editor body."),
+            "notes": "",
+            "base_record_sha": viewed["base_record_sha"],
+            "base_ref": viewed["base_ref"],
+            "spans": [{"from": 0, "to": 0, "kind": "observed"}],
+        },
+    )
+
+    assert response.status_code == 200
+    assert record.read_text().endswith("Editor body.\n")
+    assert "A newer housekeeping proposal." in sidecar.read_text()
+    assert _git(repo, "rev-parse", "HEAD^") != viewed["base_ref"]
+
+
 def test_housekeeping_commit_makes_an_open_ordinary_editor_stale(local_api):
     client, _repo, record, _sidecar = local_api
     editor_view = client.get(f"/api/ingests/{HASH}").json()
