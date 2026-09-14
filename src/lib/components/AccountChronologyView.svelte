@@ -213,13 +213,28 @@
     );
   });
 
+  let selectedSuggestionData = $derived(data?.suggestions[selectedSuggestion]);
+
   function formatTime(milliseconds: number | null): string {
-    if (milliseconds === null) return "unlocatable";
+    if (milliseconds === null) return "claim has no usable timestamp";
     const hours = Math.floor(milliseconds / 3_600_000);
     const minutes = Math.floor((milliseconds % 3_600_000) / 60_000);
     const seconds = Math.floor((milliseconds % 60_000) / 1000);
     const millis = milliseconds % 1000;
     return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}.${String(millis).padStart(3, "0")}`;
+  }
+
+  function assignmentFor(claim: AccountChronologyClaim): string {
+    return (
+      accountFor(claim) ??
+      (claim.position === null
+        ? "claim has no usable timestamp"
+        : "not inside an account you have marked")
+    );
+  }
+
+  function claimsFor(accountId: string): AccountChronologyClaim[] {
+    return (data?.claims ?? []).filter((claim) => accountFor(claim) === accountId);
   }
 
   function addRelation() {
@@ -316,11 +331,15 @@
         <span title={data.digest_sha256}>digest {data.digest_sha256.slice(0, 12)}</span>
         <span title={data.pre_digest_sha256}>pre-digest {data.pre_digest_sha256.slice(0, 12)}</span>
         <span>{data.claims.length} claims</span>
-        <span>{data.claims.filter((claim) => claim.position === null).length} unlocatable</span>
+        <span>{data.claims.filter((claim) => claim.position === null).length} where claim has no usable timestamp</span>
       </div>
     </header>
 
     <section class="space-y-3">
+      <div>
+        <h3 class="font-semibold">1. Reviewed suggestions</h3>
+        <p class="text-xs text-on-surface-muted">Use the reviewed account descriptions as guidance. They are non-scoreable and do not assign claims.</p>
+      </div>
       <div class="flex flex-wrap items-end gap-2">
         <label class="min-w-64 flex-1 text-xs text-on-surface-muted">
           Legacy reviewed account description (non-scoreable)
@@ -331,6 +350,37 @@
           </select>
         </label>
         <button class="border border-outline px-3 py-2 text-sm" onclick={addSuggestedAccount}>Add legacy account</button>
+      </div>
+      {#if selectedSuggestionData}
+        <article class="space-y-2 border border-outline-variant bg-surface p-3 text-sm">
+          <h4 class="font-medium">{selectedSuggestionData.title}</h4>
+          {#if selectedSuggestionData.subject}<p><span class="text-on-surface-muted">Subject:</span> {selectedSuggestionData.subject}</p>{/if}
+          {#if selectedSuggestionData.summary}<p>{selectedSuggestionData.summary}</p>{/if}
+          <div class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-on-surface-muted">
+            {#if selectedSuggestionData.nested_within}<span>Nested within: {selectedSuggestionData.nested_within}</span>{/if}
+            {#if selectedSuggestionData.approx_when}<span>When: {selectedSuggestionData.approx_when}</span>{/if}
+            {#if selectedSuggestionData.approx_where}<span>Where: {selectedSuggestionData.approx_where}</span>{/if}
+          </div>
+        </article>
+      {/if}
+      <div class="space-y-2">
+        <h4 class="text-sm font-medium">Backend-supplied claim evidence</h4>
+        <p class="text-xs text-on-surface-muted">These claim texts and quotes are safe review evidence; account membership is determined by the boundaries below.</p>
+        {#each data.claims.slice(0, 3) as claim (claim.id)}
+          <div class="space-y-1 border-l-2 border-outline-variant pl-3 text-xs">
+            <p>{claim.text}</p>
+            {#if claim.quote}<blockquote class="text-on-surface-muted">{claim.quote}</blockquote>{/if}
+          </div>
+        {/each}
+      </div>
+    </section>
+
+    <section class="space-y-3 border-t border-outline-variant pt-4">
+      <div>
+        <h3 class="font-semibold">2. Account boundaries and nesting</h3>
+        <p class="text-xs text-on-surface-muted">Mark exact media-time spans. The narrowest containing account receives each timestamped claim.</p>
+      </div>
+      <div class="flex flex-wrap items-end gap-2">
         <label class="min-w-52 text-xs text-on-surface-muted">
           New account title
           <input bind:value={customTitle} class="mt-1 w-full border border-outline-variant bg-surface px-2 py-2 text-sm text-on-surface" />
@@ -372,9 +422,39 @@
     </section>
 
     <section class="space-y-3 border-t border-outline-variant pt-4">
+      <div>
+        <h3 class="font-semibold">3. Account claim previews</h3>
+        <p class="text-xs text-on-surface-muted">Check a sample of the claims assigned by the boundaries above before setting chronology.</p>
+      </div>
+      {#each accounts as account (account.id)}
+        <article class="border border-outline-variant bg-surface p-3">
+          <div class="flex flex-wrap items-baseline justify-between gap-2">
+            <h4 class="font-medium">{account.title || account.id}</h4>
+            <span class="text-xs text-on-surface-muted">{claimsFor(account.id).length} claims</span>
+          </div>
+          {#if claimsFor(account.id).length === 0}
+            <p class="mt-2 text-xs text-on-surface-muted">No claims are inside these boundaries.</p>
+          {:else}
+            <div class="mt-2 divide-y divide-outline-variant border-t border-outline-variant">
+              {#each claimsFor(account.id).slice(0, 3) as claim (claim.id)}
+                <div class="space-y-1 py-2 text-xs">
+                  <p><span class="font-mono text-on-surface-muted">{formatTime(claim.position)}</span> {claim.text}</p>
+                  {#if claim.quote}<blockquote class="border-l-2 border-outline pl-2 text-on-surface-muted">{claim.quote}</blockquote>{/if}
+                </div>
+              {/each}
+            </div>
+            {#if claimsFor(account.id).length > 3}
+              <p class="text-xs text-on-surface-muted">Previewing 3 of {claimsFor(account.id).length} assigned claims.</p>
+            {/if}
+          {/if}
+        </article>
+      {/each}
+    </section>
+
+    <section class="space-y-3 border-t border-outline-variant pt-4">
       <div class="flex items-center justify-between gap-3">
         <div>
-          <h3 class="font-semibold">Account-scoped chronology</h3>
+          <h3 class="font-semibold">4. Account-scoped chronology</h3>
           <p class="text-xs text-on-surface-muted">Record before, reverse order, unknown order, or simultaneous pairs. Both claims must belong to the selected account.</p>
         </div>
         <button class="border border-outline px-3 py-2 text-sm disabled:opacity-40" disabled={accounts.length === 0} onclick={addRelation}>Add pair</button>
@@ -407,23 +487,21 @@
       {/each}
     </section>
 
-    <section class="space-y-3 border-t border-outline-variant pt-4">
-      <div class="flex flex-wrap items-center gap-3">
-        <h3 class="font-semibold">Claim assignment check</h3>
-        <input bind:value={claimFilter} placeholder="Filter claims" class="min-w-60 flex-1 border border-outline-variant bg-surface px-2 py-1.5 text-sm" />
+    <details class="border-t border-outline-variant pt-4">
+      <summary class="cursor-pointer font-semibold">All {data.claims.length} claim assignments</summary>
+      <div class="mt-3 space-y-3">
+        <input bind:value={claimFilter} aria-label="Filter claim assignments" placeholder="Filter claims" class="w-full border border-outline-variant bg-surface px-2 py-1.5 text-sm" />
+        <div class="max-h-[36rem] overflow-auto border border-outline-variant">
+          {#each visibleClaims as claim (claim.id)}
+            <div class="grid grid-cols-[10rem_14rem_minmax(0,1fr)] gap-2 border-b border-outline-variant px-3 py-2 text-xs last:border-b-0">
+              <span class="font-mono">{formatTime(claim.position)}</span>
+              <span class="font-medium" title={assignmentFor(claim)}>{assignmentFor(claim)}</span>
+              <span>{claim.text}</span>
+            </div>
+          {/each}
+        </div>
       </div>
-      <div class="max-h-[36rem] overflow-auto border border-outline-variant">
-        {#each visibleClaims as claim (claim.id)}
-          <div class="grid grid-cols-[6rem_8rem_minmax(0,1fr)] gap-2 border-b border-outline-variant px-3 py-2 text-xs last:border-b-0">
-            <span class="font-mono">{formatTime(claim.position)}</span>
-            <span class="truncate font-medium" title={accountFor(claim) ?? (claim.position === null ? "unlocatable" : "outside")}>
-              {accountFor(claim) ?? (claim.position === null ? "unlocatable" : "outside")}
-            </span>
-            <span>{claim.text}</span>
-          </div>
-        {/each}
-      </div>
-    </section>
+    </details>
 
     {#if error}<p class="text-sm text-error">{error}</p>{/if}
     {#if draftNotice}<p class="text-sm text-warning">{draftNotice}</p>{/if}

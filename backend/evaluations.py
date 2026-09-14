@@ -6,6 +6,8 @@ import fcntl
 import hashlib
 import json
 import os
+import re
+import subprocess
 import tempfile
 import threading
 from contextlib import contextmanager
@@ -23,7 +25,7 @@ class EvaluationNotFound(EvaluationError):
     """No supported detail adapter exists for this evaluation."""
 
 
-SCHEMA = "anomalica/evaluation-registry/1"
+SCHEMA = "anomalica/evaluation-registry/2"
 STATUSES = [
     "proposed",
     "ready-for-human-review",
@@ -43,6 +45,7 @@ GOLD_STATUSES = [
 SEARCH_ID = "search-reranker-minilm-vs-granite"
 SEARCH_JUDGEMENT_ARTIFACT = "search-reranker-minilm-vs-granite-human-judgements"
 ACCOUNT_ID = "account-chronology"
+DIGEST_ID = "digest-evaluation-corpus"
 AUDIO_EXCLUSIVE_ID = "audio-community1-exclusive"
 PDF_NATIVE_ID = "pdf-native-text-extraction"
 STATE_SCHEMA = "anomalica/evaluation-state/1"
@@ -59,6 +62,8 @@ EXPECTED_MODELS = {
     ),
 }
 _WRITE_LOCK = threading.Lock()
+_ID = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+_SHA = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 def _mapping(path: Path) -> dict:
@@ -86,7 +91,8 @@ def load_registry(path: Path) -> dict:
     if registry.get("schema") != SCHEMA:
         raise EvaluationError("Unsupported evaluation registry")
     if (
-        registry.get("statuses") != STATUSES
+        registry.get("state_schema") != STATE_SCHEMA
+        or registry.get("statuses") != STATUSES
         or registry.get("gold_statuses") != GOLD_STATUSES
     ):
         raise EvaluationError(
@@ -102,17 +108,29 @@ def load_registry(path: Path) -> dict:
         if not isinstance(entry, dict):
             raise EvaluationError("Evaluation registry entry is not a mapping")
         evaluation_id = entry.get("id")
-        if not isinstance(evaluation_id, str) or evaluation_id in evaluation_ids:
+        if (
+            not isinstance(evaluation_id, str)
+            or not _ID.fullmatch(evaluation_id)
+            or evaluation_id in evaluation_ids
+        ):
             raise EvaluationError("Evaluation registry IDs are missing or duplicated")
         evaluation_ids.add(evaluation_id)
-        if entry.get("status") not in STATUSES:
-            raise EvaluationError(f"Evaluation {evaluation_id} has an invalid status")
-        gold = entry.get("gold")
-        limits = entry.get("limits")
-        if not isinstance(gold, dict) or gold.get("status") not in GOLD_STATUSES:
+        if any(name in entry for name in ("status", "gold", "decision")):
             raise EvaluationError(
-                f"Evaluation {evaluation_id} has invalid gold provenance"
+                f"Evaluation {evaluation_id} copies dynamic state into the registry"
             )
+        evidence = entry.get("evidence")
+        limits = entry.get("limits")
+        if (
+            not isinstance(evidence, dict)
+            or set(evidence)
+            != {
+                "provider_id",
+                "detail_capability",
+            }
+            or not all(isinstance(value, str) and value for value in evidence.values())
+        ):
+            raise EvaluationError(f"Evaluation {evaluation_id} has invalid evidence")
         if not isinstance(limits, dict) or not all(
             isinstance(limits.get(name), str) for name in ("rights", "routes")
         ):
@@ -148,7 +166,315 @@ def load_registry(path: Path) -> dict:
                     )
             else:
                 raise EvaluationError("Evaluation artifact visibility is invalid")
+        provider = next(
+            (
+                artifact
+                for artifact in entry.get("artifacts") or []
+                if artifact.get("id") == evidence["provider_id"]
+            ),
+            None,
+        )
+        if not provider or provider.get("role") != "state":
+            raise EvaluationError(
+                f"Evaluation {evaluation_id} has no registered state provider"
+            )
     return registry
+
+
+def validate_state(
+    entry: dict,
+    state: dict,
+    public_artifacts: dict[str, Path] | None = None,
+) -> dict:
+    """Validate one owner state and, for public providers, its exact evidence."""
+    evaluation_id = entry["id"]
+    if (
+        state.get("schema") != STATE_SCHEMA
+        or state.get("evaluation_id") != evaluation_id
+    ):
+        raise EvaluationError(f"State identity does not match {evaluation_id}")
+    evidence = state.get("evidence")
+    if not isinstance(evidence, list) or not evidence:
+        raise EvaluationError(f"State evidence is missing for {evaluation_id}")
+    seen: set[str] = set()
+    for item in evidence:
+        if not isinstance(item, dict) or set(item) != {"artifact_id", "sha256"}:
+            raise EvaluationError(f"State evidence is malformed for {evaluation_id}")
+        artifact_id = item.get("artifact_id")
+        sha = item.get("sha256")
+        if (
+            not isinstance(artifact_id, str)
+            or not artifact_id
+            or artifact_id in seen
+            or not isinstance(sha, str)
+            or not _SHA.fullmatch(sha)
+        ):
+            raise EvaluationError(f"State evidence is malformed for {evaluation_id}")
+        seen.add(artifact_id)
+        if public_artifacts is not None:
+            path = public_artifacts.get(artifact_id)
+            if path is None or not path.is_file():
+                raise EvaluationError(
+                    f"State evidence is unavailable for {evaluation_id}"
+                )
+            actual = f"sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}"
+            if actual != sha:
+                raise EvaluationError(f"State evidence is stale for {evaluation_id}")
+    canonical = json.dumps(
+        evidence, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+    ).encode()
+    expected_evidence_sha = f"sha256:{hashlib.sha256(canonical).hexdigest()}"
+    if state.get("evidence_sha256") != expected_evidence_sha:
+        raise EvaluationError(f"State evidence hash is invalid for {evaluation_id}")
+
+    status = state.get("status")
+    gold = state.get("gold")
+    if (
+        status not in STATUSES
+        or not isinstance(gold, dict)
+        or set(gold)
+        != {
+            "status",
+            "reviewed",
+            "total",
+            "unit",
+        }
+    ):
+        raise EvaluationError(f"State lifecycle is malformed for {evaluation_id}")
+    reviewed, total = gold.get("reviewed"), gold.get("total")
+    if (
+        gold.get("status") not in GOLD_STATUSES
+        or isinstance(reviewed, bool)
+        or not isinstance(reviewed, int)
+        or isinstance(total, bool)
+        or not isinstance(total, int)
+        or reviewed < 0
+        or total < reviewed
+        or not isinstance(gold.get("unit"), str)
+        or not gold["unit"]
+    ):
+        raise EvaluationError(f"State gold is malformed for {evaluation_id}")
+    blocker = state.get("blocked_reason")
+    if (status == "blocked") != (isinstance(blocker, str) and bool(blocker.strip())):
+        raise EvaluationError(f"State blocker is malformed for {evaluation_id}")
+    decision = state.get("decision")
+    if decision is not None and (
+        not isinstance(decision, dict)
+        or set(decision) != {"code", "summary"}
+        or not isinstance(decision.get("code"), str)
+        or not _ID.fullmatch(decision["code"])
+        or not isinstance(decision.get("summary"), str)
+        or not decision["summary"].strip()
+    ):
+        raise EvaluationError(f"State decision is malformed for {evaluation_id}")
+    items = state.get("items")
+    if items is not None:
+        if not isinstance(items, list):
+            raise EvaluationError(f"State items are malformed for {evaluation_id}")
+        item_ids: set[str] = set()
+        for item in items:
+            if not isinstance(item, dict):
+                raise EvaluationError(f"State items are malformed for {evaluation_id}")
+            item_id = item.get("id")
+            item_gold = item.get("gold")
+            if (
+                not isinstance(item_id, str)
+                or not item_id
+                or item_id in item_ids
+                or item.get("status") not in STATUSES
+                or not isinstance(item_gold, dict)
+            ):
+                raise EvaluationError(f"State items are malformed for {evaluation_id}")
+            item_ids.add(item_id)
+            item_reviewed = item_gold.get("reviewed")
+            item_total = item_gold.get("total")
+            if (
+                item_gold.get("status") not in GOLD_STATUSES
+                or isinstance(item_reviewed, bool)
+                or not isinstance(item_reviewed, int)
+                or isinstance(item_total, bool)
+                or not isinstance(item_total, int)
+                or item_reviewed < 0
+                or item_total < item_reviewed
+                or not isinstance(item_gold.get("unit"), str)
+                or not item_gold["unit"]
+            ):
+                raise EvaluationError(
+                    f"State item gold is malformed for {evaluation_id}"
+                )
+            item_blocker = item.get("blocked_reason")
+            if (item["status"] == "blocked") != (
+                isinstance(item_blocker, str) and bool(item_blocker.strip())
+            ):
+                raise EvaluationError(
+                    f"State item blocker is malformed for {evaluation_id}"
+                )
+            item_decision = item.get("decision")
+            if item_decision is not None and (
+                not isinstance(item_decision, dict)
+                or set(item_decision) != {"code", "summary"}
+                or not isinstance(item_decision.get("code"), str)
+                or not _ID.fullmatch(item_decision["code"])
+                or not isinstance(item_decision.get("summary"), str)
+                or not item_decision["summary"].strip()
+            ):
+                raise EvaluationError(
+                    f"State item decision is malformed for {evaluation_id}"
+                )
+    return state
+
+
+def public_state(entry: dict, repository_roots: dict[str, Path]) -> dict:
+    provider_id = entry["evidence"]["provider_id"]
+    provider = next(
+        artifact
+        for artifact in entry.get("artifacts") or []
+        if artifact.get("id") == provider_id
+    )
+    if provider.get("visibility") != "public":
+        raise EvaluationError(f"State provider is not public for {entry['id']}")
+    root = repository_roots.get(provider.get("repository"))
+    if root is None:
+        raise EvaluationError(f"State repository is unavailable for {entry['id']}")
+    state = _json_mapping(root / provider["path"])
+    public_artifacts = {
+        artifact["id"]: repository_roots[artifact["repository"]] / artifact["path"]
+        for artifact in entry.get("artifacts") or []
+        if artifact.get("visibility") == "public"
+        and artifact.get("repository") in repository_roots
+    }
+    return validate_state(entry, state, public_artifacts)
+
+
+def digest_corpus_detail(entry: dict, digester_root: Path) -> dict:
+    if entry.get("evidence") != {
+        "provider_id": "digest-evaluation-corpus-state",
+        "detail_capability": "digest-evaluation-corpus-detail",
+    }:
+        raise EvaluationError("Digest evaluation adapter is not allowlisted")
+    provider = next(
+        (
+            item
+            for item in entry.get("artifacts") or []
+            if item.get("id") == "digest-evaluation-corpus-state"
+        ),
+        None,
+    )
+    if provider != {
+        "id": "digest-evaluation-corpus-state",
+        "role": "state",
+        "visibility": "private",
+    }:
+        raise EvaluationError("Digest evaluation provider is not registered safely")
+    script = digester_root / "workspace" / "benchmarks" / "evaluation_corpus.py"
+    try:
+        process = subprocess.run(
+            ["python", "workspace/benchmarks/evaluation_corpus.py", "--state-only"],
+            cwd=digester_root,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=True,
+        )
+        state = json.loads(process.stdout)
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
+        raise EvaluationError("Digest evaluation state is unavailable") from exc
+    if not script.is_file() or not isinstance(state, dict):
+        raise EvaluationError("Digest evaluation state is unavailable")
+    return {"state": validate_state(entry, state), "items": state.get("items", [])}
+
+
+def account_state(entry: dict, manifest_path: Path, views: list[dict]) -> dict:
+    """Derive report-only account-review readiness from validated local inputs."""
+    if entry.get("evidence") != {
+        "provider_id": "account-chronology-state",
+        "detail_capability": "account-chronology-review",
+    }:
+        raise EvaluationError("Account chronology adapter is not allowlisted")
+    provider = next(
+        (
+            item
+            for item in entry.get("artifacts") or []
+            if item.get("id") == "account-chronology-state"
+        ),
+        None,
+    )
+    if provider != {
+        "id": "account-chronology-state",
+        "role": "state",
+        "visibility": "private",
+    }:
+        raise EvaluationError("Account chronology provider is not registered safely")
+    manifest = _mapping(manifest_path)
+    evidence = [
+        {
+            "artifact_id": "account-chronology-manifest",
+            "sha256": f"sha256:{hashlib.sha256(manifest_path.read_bytes()).hexdigest()}",
+        }
+    ]
+    total = sum(len(view.get("claims") or []) for view in views)
+    reviewed = 0
+    all_reviewed = bool(views)
+    records = manifest.get("records") or []
+    if len(records) != len(views):
+        raise EvaluationError("Account chronology manifest and review views disagree")
+    for configured, view in zip(records, views, strict=True):
+        digest_binding = configured.get("claim_digest") or {}
+        digest_path = (
+            manifest_path.parent / str(digest_binding.get("path", ""))
+        ).resolve()
+        if not digest_path.is_file():
+            raise EvaluationError("Account chronology digest evidence is unavailable")
+        record_id = str(configured.get("record_content_hash", "")).removeprefix(
+            "sha256:"
+        )
+        evidence.append(
+            {
+                "artifact_id": f"account-chronology:{record_id}:digest",
+                "sha256": f"sha256:{hashlib.sha256(digest_path.read_bytes()).hexdigest()}",
+            }
+        )
+        if view.get("gold") is None:
+            all_reviewed = False
+            continue
+        gold_path = (
+            manifest_path.parent
+            / str((configured.get("authenticated_gold") or {}).get("path", ""))
+        ).resolve()
+        if not gold_path.is_file():
+            raise EvaluationError("Account chronology gold evidence is unavailable")
+        evidence.append(
+            {
+                "artifact_id": f"account-chronology:{record_id}:gold",
+                "sha256": f"sha256:{hashlib.sha256(gold_path.read_bytes()).hexdigest()}",
+            }
+        )
+        reviewed += len(view.get("claims") or [])
+    canonical = json.dumps(
+        evidence, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+    ).encode()
+    state = {
+        "schema": STATE_SCHEMA,
+        "evaluation_id": ACCOUNT_ID,
+        "evidence": evidence,
+        "evidence_sha256": f"sha256:{hashlib.sha256(canonical).hexdigest()}",
+        "status": "reviewed" if all_reviewed else "ready-for-human-review",
+        "gold": {
+            "status": "human-reviewed" if all_reviewed else "ready-for-human-review",
+            "reviewed": reviewed,
+            "total": total,
+            "unit": "claims",
+        },
+        "decision": {
+            "code": "retain-report-only" if all_reviewed else "await-account-review",
+            "summary": (
+                "Retain the account chronology evaluation as report-only gold."
+                if all_reviewed
+                else "Await authenticated account-boundary and chronology review."
+            ),
+        },
+    }
+    return validate_state(entry, state)
 
 
 def registry_entry(registry: dict, evaluation_id: str) -> dict:
@@ -156,6 +482,22 @@ def registry_entry(registry: dict, evaluation_id: str) -> dict:
         if entry["id"] == evaluation_id:
             return entry
     raise EvaluationNotFound("No such evaluation")
+
+
+def index_entry(entry: dict, state: dict | None, sync_error: str | None = None) -> dict:
+    """Public-safe descriptor plus aggregate state; private item detail is omitted."""
+    row = {
+        key: entry[key] for key in ("id", "title", "purpose", "owner_repo", "limits")
+    }
+    row["detail_capability"] = entry["evidence"]["detail_capability"]
+    row["detail_available"] = sync_error is None
+    if state is not None:
+        row["state"] = {
+            key: value for key, value in state.items() if key not in {"items"}
+        }
+    else:
+        row["sync_error"] = sync_error or "Current evaluation state is unavailable"
+    return row
 
 
 def require_private_artifact(entry: dict, artifact_id: str) -> None:
@@ -172,7 +514,11 @@ def require_private_artifact(entry: dict, artifact_id: str) -> None:
 
 
 def _require_ingester_adapter(
-    entry: dict, provider_id: str, capability: str, result_id: str
+    entry: dict,
+    provider_id: str,
+    capability: str,
+    result_id: str,
+    reference_id: str,
 ) -> None:
     if entry.get("evidence") != {
         "provider_id": provider_id,
@@ -197,24 +543,41 @@ def _require_ingester_adapter(
     )
     if result != {"id": result_id, "role": "result", "visibility": "private"}:
         raise EvaluationError("Private evaluation result is not registered safely")
+    reference = next(
+        (
+            item
+            for item in entry.get("artifacts") or []
+            if item.get("id") == reference_id
+        ),
+        None,
+    )
+    if reference != {
+        "id": reference_id,
+        "role": "gold",
+        "visibility": "private",
+    }:
+        raise EvaluationError("Private evaluation reference is not registered safely")
 
 
 def _evidence_state(
     evaluation_id: str,
-    artifact_id: str,
-    path: Path,
+    evidence_paths: list[tuple[str, Path]],
     status: str,
     gold: dict,
     decision: dict,
 ) -> dict:
-    if not path.is_file():
-        raise EvaluationError(f"Current evidence is unavailable for {evaluation_id}")
-    evidence = [
-        {
-            "artifact_id": artifact_id,
-            "sha256": f"sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}",
-        }
-    ]
+    evidence = []
+    for artifact_id, path in evidence_paths:
+        if not path.is_file():
+            raise EvaluationError(
+                f"Current evidence is unavailable for {evaluation_id}"
+            )
+        evidence.append(
+            {
+                "artifact_id": artifact_id,
+                "sha256": f"sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}",
+            }
+        )
     canonical = json.dumps(
         evidence,
         ensure_ascii=False,
@@ -252,25 +615,66 @@ def _metric_set(value: object) -> dict:
     return {key: value[key] for key in required}
 
 
-def audio_exclusive_detail(entry: dict, report_path: Path, detail_path: Path) -> dict:
+def audio_exclusive_detail(
+    entry: dict,
+    reviewed_attribution_path: Path,
+    reviewed_record_paths: dict[str, Path],
+    report_path: Path,
+    detail_path: Path,
+) -> dict:
     """Sanitise private Community-1 evidence for the admin adapter."""
     _require_ingester_adapter(
         entry,
         "audio-community1-exclusive-state",
         "audio-community1-exclusive-detail",
         "audio-community1-exclusive-result",
+        "audio-community1-exclusive-reviewed-attribution",
     )
     report = _json_mapping(report_path)
+    attribution = _json_mapping(reviewed_attribution_path)
     descriptor = _json_mapping(detail_path)
     if (
         descriptor.get("schema") != "anomalica/audio-community1-exclusive-detail/1"
         or descriptor.get("evaluation_id") != AUDIO_EXCLUSIVE_ID
     ):
         raise EvaluationError("Unsupported audio evaluation detail")
+    if (
+        attribution.get("schema")
+        != "anomalica/audio-community1-exclusive-reviewed-attribution/1"
+        or attribution.get("evaluation_id") != AUDIO_EXCLUSIVE_ID
+        or not isinstance(attribution.get("records"), list)
+    ):
+        raise EvaluationError("Unsupported audio reviewed attribution")
     records = report.get("records")
     aggregate = report.get("aggregate")
     if not isinstance(records, dict) or not records or not isinstance(aggregate, dict):
         raise EvaluationError("Audio evaluation result is malformed")
+
+    expected_references = {}
+    for reference in attribution["records"]:
+        if (
+            not isinstance(reference, dict)
+            or not isinstance(reference.get("record_id"), str)
+            or not isinstance(reference.get("sha256"), str)
+        ):
+            raise EvaluationError("Audio reviewed attribution is malformed")
+        expected_references[reference["record_id"]] = reference["sha256"]
+    if (
+        len(expected_references) != len(attribution["records"])
+        or set(expected_references) != set(records)
+        or set(reviewed_record_paths) != set(records)
+    ):
+        raise EvaluationError("Audio reviewed attribution does not cover its records")
+    for record_id, expected_sha in expected_references.items():
+        reviewed_path = reviewed_record_paths[record_id]
+        if not reviewed_path.is_file():
+            raise EvaluationError("Current audio reviewed attribution is unavailable")
+        actual_sha = hashlib.sha256(reviewed_path.read_bytes()).hexdigest()
+        if (
+            actual_sha != expected_sha
+            or records[record_id].get("reviewed_ingest_sha256") != expected_sha
+        ):
+            raise EvaluationError("Audio reviewed attribution is out of sync")
 
     safe_records = []
     totals = {
@@ -336,8 +740,13 @@ def audio_exclusive_detail(entry: dict, report_path: Path, detail_path: Path) ->
 
     state = _evidence_state(
         AUDIO_EXCLUSIVE_ID,
-        "audio-community1-exclusive-result",
-        report_path,
+        [
+            (
+                "audio-community1-exclusive-reviewed-attribution",
+                reviewed_attribution_path,
+            ),
+            ("audio-community1-exclusive-result", report_path),
+        ],
         "adopted" if adopt else "rejected",
         {
             "status": "source-reviewed",
@@ -356,13 +765,16 @@ def audio_exclusive_detail(entry: dict, report_path: Path, detail_path: Path) ->
     }
 
 
-def pdf_native_detail(entry: dict, report_path: Path, detail_path: Path) -> dict:
+def pdf_native_detail(
+    entry: dict, reviewed_path: Path, report_path: Path, detail_path: Path
+) -> dict:
     """Sanitise private native-PDF evidence and public-domain examples."""
     _require_ingester_adapter(
         entry,
         "pdf-native-text-extraction-state",
         "pdf-native-text-extraction-detail",
         "pdf-native-text-extraction-result",
+        "pdf-native-text-extraction-reviewed-reference",
     )
     report = _json_mapping(report_path)
     descriptor = _json_mapping(detail_path)
@@ -403,6 +815,11 @@ def pdf_native_detail(entry: dict, report_path: Path, detail_path: Path) -> dict
         by_page[page["file_page"]] = {key: page[key] for key in metric_keys}
     if set(by_page) != set(range(1, page_count + 1)):
         raise EvaluationError("PDF page metrics do not cover the source")
+    if not reviewed_path.is_file():
+        raise EvaluationError("Current PDF reviewed reference is unavailable")
+    reviewed_sha = hashlib.sha256(reviewed_path.read_bytes()).hexdigest()
+    if (report.get("inputs") or {}).get("reviewed_ingest_sha256") != reviewed_sha:
+        raise EvaluationError("PDF reviewed reference is out of sync")
 
     aggregate_keys = {
         "candidate_words",
@@ -465,8 +882,10 @@ def pdf_native_detail(entry: dict, report_path: Path, detail_path: Path) -> dict
 
     state = _evidence_state(
         PDF_NATIVE_ID,
-        "pdf-native-text-extraction-result",
-        report_path,
+        [
+            ("pdf-native-text-extraction-reviewed-reference", reviewed_path),
+            ("pdf-native-text-extraction-result", report_path),
+        ],
         "reviewed",
         {
             "status": "source-reviewed",

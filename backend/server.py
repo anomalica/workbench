@@ -104,6 +104,9 @@ DEFAULT_SEARCH_EVALUATION_ROOT = (
 DEFAULT_EVALUATION_PRIVATE_PATH = (
     Path.home() / ".local" / "share" / "anomalica" / "evaluations"
 )
+DEFAULT_DIGESTER_PATH = Path(__file__).resolve().parents[2] / "digester"
+DEFAULT_ASSIMILATOR_PATH = Path(__file__).resolve().parents[2] / "assimilator"
+DEFAULT_INGESTER_PATH = Path(__file__).resolve().parents[2] / "ingester"
 # Materialised pre-digests (ADR 0042): the exact model input, content-addressed,
 # with a by-record pointer. Read-only from the digester repo (gitignored there -
 # pre-digests carry near-whole copyrighted bodies and the repo is public).
@@ -2059,6 +2062,11 @@ search_evaluation_root = Path(
 evaluation_private_path = Path(
     os.environ.get("EVALUATION_PRIVATE_PATH", str(DEFAULT_EVALUATION_PRIVATE_PATH))
 )
+digester_path = Path(os.environ.get("DIGESTER_PATH", str(DEFAULT_DIGESTER_PATH)))
+assimilator_path = Path(
+    os.environ.get("ASSIMILATOR_PATH", str(DEFAULT_ASSIMILATOR_PATH))
+)
+ingester_path = Path(os.environ.get("INGESTER_PATH", str(DEFAULT_INGESTER_PATH)))
 predigests_path = Path(os.environ.get("PREDIGESTS_PATH", str(DEFAULT_PREDIGESTS_PATH)))
 prompts_path = Path(os.environ.get("PROMPTS_PATH", str(DEFAULT_PROMPTS_PATH)))
 
@@ -2148,10 +2156,32 @@ def list_roles(request: Request) -> JSONResponse:
 
 @app.get("/api/evaluations")
 def list_evaluations(request: Request) -> JSONResponse:
-    """Central public-safe registry metadata, visible only to administrators."""
+    """Static descriptors joined to current validated owner evidence state."""
     _require_role(request, "admin")
     try:
-        return JSONResponse(evaluations.load_registry(evaluation_registry_path))
+        registry = evaluations.load_registry(evaluation_registry_path)
+        rows = []
+        for entry in registry["evaluations"]:
+            try:
+                state = _evaluation_state(entry)
+                rows.append(evaluations.index_entry(entry, state))
+            except (
+                evaluations.EvaluationError,
+                account_chronology.AccountChronologyError,
+                KeyError,
+                OSError,
+                TypeError,
+                ValueError,
+                yaml.YAMLError,
+            ) as exc:
+                rows.append(evaluations.index_entry(entry, None, str(exc)))
+        return JSONResponse(
+            {
+                "schema": registry["schema"],
+                "state_schema": registry["state_schema"],
+                "evaluations": rows,
+            }
+        )
     except evaluations.EvaluationError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
@@ -2167,28 +2197,114 @@ def _search_evaluation_paths() -> tuple[Path, Path, Path, Path, Path]:
     )
 
 
+def _account_evaluation_views() -> list[dict]:
+    manifest = yaml.safe_load(account_chronology_manifest.read_text())
+    return [
+        account_chronology.load_review(
+            account_chronology_manifest,
+            str(configured.get("record_content_hash", "")).removeprefix("sha256:"),
+        )
+        for configured in (manifest or {}).get("records") or []
+    ]
+
+
+def _evaluation_state(entry: dict) -> dict:
+    evaluation_id = entry["id"]
+    if evaluation_id == evaluations.SEARCH_ID:
+        return evaluations.public_state(
+            entry, {"anomalica/assimilator": assimilator_path}
+        )
+    if evaluation_id == evaluations.DIGEST_ID:
+        return evaluations.digest_corpus_detail(entry, digester_path)["state"]
+    if evaluation_id == evaluations.ACCOUNT_ID:
+        return evaluations.account_state(
+            entry, account_chronology_manifest, _account_evaluation_views()
+        )
+    if evaluation_id == evaluations.AUDIO_EXCLUSIVE_ID:
+        return _audio_evaluation_detail(entry)["state"]
+    if evaluation_id == evaluations.PDF_NATIVE_ID:
+        return _pdf_evaluation_detail(entry)["state"]
+    raise evaluations.EvaluationError("No allowlisted state provider")
+
+
+def _audio_evaluation_detail(entry: dict) -> dict:
+    evidence_root = ingester_path / ".ai" / "vad" / "exclusive"
+    attribution_path = evidence_root / "reviewed-attribution.json"
+    attribution = json.loads(attribution_path.read_text())
+    record_paths = {}
+    for record in attribution.get("records") or []:
+        record_id = record["record_id"]
+        v2_path = ingests_path / "store" / f"{record_id}.v2.md"
+        record_paths[record_id] = (
+            v2_path if v2_path.is_file() else ingests_path / "store" / f"{record_id}.md"
+        )
+    return evaluations.audio_exclusive_detail(
+        entry,
+        attribution_path,
+        record_paths,
+        evidence_root / "report.json",
+        evidence_root / "detail.json",
+    )
+
+
+def _pdf_evaluation_detail(entry: dict) -> dict:
+    record_id = "e27169e8198c2a69e4a11612efef16891f33b86209a5d1721246fed69a6d8ec1"
+    evidence_root = ingester_path / ".ai" / "pdf" / "native"
+    return evaluations.pdf_native_detail(
+        entry,
+        ingests_path / "store" / f"{record_id}.md",
+        evidence_root / f"{record_id}.json",
+        evidence_root / "detail.json",
+    )
+
+
 @app.get("/api/evaluations/{evaluation_id}")
 def get_evaluation(evaluation_id: str, request: Request) -> JSONResponse:
     """A sanitised, inspectable evaluation page from a recognised adapter."""
     _require_role(request, "admin")
     try:
-        if evaluation_id == evaluations.SEARCH_ID:
-            return JSONResponse(
-                evaluations.search_detail(
-                    evaluation_registry_path, *_search_evaluation_paths()
-                )
-            )
         registry = evaluations.load_registry(evaluation_registry_path)
         entry = evaluations.registry_entry(registry, evaluation_id)
+        if evaluation_id == evaluations.SEARCH_ID:
+            detail = evaluations.search_detail(
+                evaluation_registry_path, *_search_evaluation_paths()
+            )
+            detail["state"] = _evaluation_state(entry)
+            detail["evaluation"] = evaluations.index_entry(entry, detail["state"])
+            return JSONResponse(detail)
+        if evaluation_id == evaluations.DIGEST_ID:
+            detail = evaluations.digest_corpus_detail(entry, digester_path)
+            return JSONResponse(
+                {
+                    "evaluation": evaluations.index_entry(entry, detail["state"]),
+                    **detail,
+                }
+            )
+        if evaluation_id == evaluations.AUDIO_EXCLUSIVE_ID:
+            detail = _audio_evaluation_detail(entry)
+            return JSONResponse(
+                {
+                    "evaluation": evaluations.index_entry(entry, detail["state"]),
+                    **detail,
+                }
+            )
+        if evaluation_id == evaluations.PDF_NATIVE_ID:
+            detail = _pdf_evaluation_detail(entry)
+            return JSONResponse(
+                {
+                    "evaluation": evaluations.index_entry(entry, detail["state"]),
+                    **detail,
+                }
+            )
         if evaluation_id == evaluations.ACCOUNT_ID:
             manifest = yaml.safe_load(account_chronology_manifest.read_text())
+            views = _account_evaluation_views()
             records = []
-            for configured in (manifest or {}).get("records") or []:
+            for configured, view in zip(
+                (manifest or {}).get("records") or [], views, strict=True
+            ):
                 full_hash = str(configured.get("record_content_hash", "")).removeprefix(
                     "sha256:"
-                )
-                view = account_chronology.load_review(
-                    account_chronology_manifest, full_hash
                 )
                 records.append(
                     {
@@ -2202,7 +2318,14 @@ def get_evaluation(evaluation_id: str, request: Request) -> JSONResponse:
                         "has_gold": view["gold"] is not None,
                     }
                 )
-            return JSONResponse({"evaluation": entry, "records": records})
+            state = evaluations.account_state(entry, account_chronology_manifest, views)
+            return JSONResponse(
+                {
+                    "evaluation": evaluations.index_entry(entry, state),
+                    "state": state,
+                    "records": records,
+                }
+            )
         raise evaluations.EvaluationNotFound("No inspectable page for this evaluation")
     except evaluations.EvaluationNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -2230,11 +2353,12 @@ def put_search_evaluation_judgements(body: dict, request: Request) -> JSONRespon
             entry, evaluations.SEARCH_JUDGEMENT_ARTIFACT
         )
         evaluations.save_search_judgements(judgement_path, fixture_path, body, user)
-        return JSONResponse(
-            evaluations.search_detail(
-                evaluation_registry_path, *_search_evaluation_paths()
-            )
+        detail = evaluations.search_detail(
+            evaluation_registry_path, *_search_evaluation_paths()
         )
+        detail["state"] = _evaluation_state(entry)
+        detail["evaluation"] = evaluations.index_entry(entry, detail["state"])
+        return JSONResponse(detail)
     except (evaluations.EvaluationError, KeyError, TypeError) as exc:
         status = 409 if "changed; reload" in str(exc) else 400
         raise HTTPException(status_code=status, detail=str(exc)) from exc

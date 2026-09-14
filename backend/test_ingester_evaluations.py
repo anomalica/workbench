@@ -23,6 +23,15 @@ def _entry(evaluation_id: str, provider_id: str, capability: str) -> dict:
                 "role": "result",
                 "visibility": "private",
             },
+            {
+                "id": (
+                    "audio-community1-exclusive-reviewed-attribution"
+                    if evaluation_id == evaluations.AUDIO_EXCLUSIVE_ID
+                    else "pdf-native-text-extraction-reviewed-reference"
+                ),
+                "role": "gold",
+                "visibility": "private",
+            },
         ],
     }
 
@@ -40,6 +49,9 @@ def _metric(matched: int, wrong: int, turns: int, wrong_turns: int) -> dict:
 
 
 def test_audio_adapter_derives_state_and_returns_sanitised_detail(tmp_path: Path):
+    reviewed_path = tmp_path / "reviewed.md"
+    reviewed_path.write_text("Reviewed attribution")
+    reviewed_sha = hashlib.sha256(reviewed_path.read_bytes()).hexdigest()
     report_path = tmp_path / "report.json"
     regular = _metric(100, 10, 20, 2)
     exclusive = _metric(100, 8, 20, 3)
@@ -48,6 +60,7 @@ def test_audio_adapter_derives_state_and_returns_sanitised_detail(tmp_path: Path
             "a" * 64: {
                 "regular": {**regular, "private_path": "/private/audio"},
                 "exclusive": exclusive,
+                "reviewed_ingest_sha256": reviewed_sha,
             }
         },
         "aggregate": {
@@ -61,6 +74,16 @@ def test_audio_adapter_derives_state_and_returns_sanitised_detail(tmp_path: Path
         },
     }
     report_path.write_text(json.dumps(report))
+    attribution_path = tmp_path / "reviewed-attribution.json"
+    attribution_path.write_text(
+        json.dumps(
+            {
+                "schema": "anomalica/audio-community1-exclusive-reviewed-attribution/1",
+                "evaluation_id": evaluations.AUDIO_EXCLUSIVE_ID,
+                "records": [{"record_id": "a" * 64, "sha256": reviewed_sha}],
+            }
+        )
+    )
     detail_path = tmp_path / "detail.json"
     detail_path.write_text(
         json.dumps(
@@ -79,6 +102,8 @@ def test_audio_adapter_derives_state_and_returns_sanitised_detail(tmp_path: Path
             "audio-community1-exclusive-state",
             "audio-community1-exclusive-detail",
         ),
+        attribution_path,
+        {"a" * 64: reviewed_path},
         report_path,
         detail_path,
     )
@@ -96,13 +121,22 @@ def test_audio_adapter_derives_state_and_returns_sanitised_detail(tmp_path: Path
 
 
 def test_audio_adapter_rejects_a_decision_that_disagrees_with_metrics(tmp_path: Path):
+    reviewed_path = tmp_path / "reviewed.md"
+    reviewed_path.write_text("Reviewed attribution")
+    reviewed_sha = hashlib.sha256(reviewed_path.read_bytes()).hexdigest()
     report_path = tmp_path / "report.json"
     regular = _metric(100, 10, 20, 2)
     exclusive = _metric(100, 8, 20, 2)
     report_path.write_text(
         json.dumps(
             {
-                "records": {"a" * 64: {"regular": regular, "exclusive": exclusive}},
+                "records": {
+                    "a" * 64: {
+                        "regular": regular,
+                        "exclusive": exclusive,
+                        "reviewed_ingest_sha256": reviewed_sha,
+                    }
+                },
                 "aggregate": {
                     "regular": regular,
                     "exclusive": exclusive,
@@ -112,6 +146,16 @@ def test_audio_adapter_rejects_a_decision_that_disagrees_with_metrics(tmp_path: 
                         "summary": "Retain regular Community-1 tracks for speaker attribution.",
                     },
                 },
+            }
+        )
+    )
+    attribution_path = tmp_path / "reviewed-attribution.json"
+    attribution_path.write_text(
+        json.dumps(
+            {
+                "schema": "anomalica/audio-community1-exclusive-reviewed-attribution/1",
+                "evaluation_id": evaluations.AUDIO_EXCLUSIVE_ID,
+                "records": [{"record_id": "a" * 64, "sha256": reviewed_sha}],
             }
         )
     )
@@ -134,12 +178,17 @@ def test_audio_adapter_rejects_a_decision_that_disagrees_with_metrics(tmp_path: 
                 "audio-community1-exclusive-state",
                 "audio-community1-exclusive-detail",
             ),
+            attribution_path,
+            {"a" * 64: reviewed_path},
             report_path,
             detail_path,
         )
 
 
 def test_pdf_adapter_binds_examples_to_page_metrics_and_hashes_evidence(tmp_path: Path):
+    reviewed_path = tmp_path / "reviewed.md"
+    reviewed_path.write_text("Reviewed PDF reference")
+    reviewed_sha = hashlib.sha256(reviewed_path.read_bytes()).hexdigest()
     report_path = tmp_path / "result.json"
     page = {
         "file_page": 1,
@@ -165,6 +214,7 @@ def test_pdf_adapter_binds_examples_to_page_metrics_and_hashes_evidence(tmp_path
                     "word_recall_pct": 100.0,
                 },
                 "method": "pymupdf-native-text-geometric-sort",
+                "inputs": {"reviewed_ingest_sha256": reviewed_sha},
                 "production_decision": {
                     "code": "supplement-only",
                     "summary": "Use native text extraction as a supplement; do not replace AI transcription.",
@@ -201,6 +251,7 @@ def test_pdf_adapter_binds_examples_to_page_metrics_and_hashes_evidence(tmp_path
             "pdf-native-text-extraction-state",
             "pdf-native-text-extraction-detail",
         ),
+        reviewed_path,
         report_path,
         detail_path,
     )
@@ -211,9 +262,13 @@ def test_pdf_adapter_binds_examples_to_page_metrics_and_hashes_evidence(tmp_path
     assert state["decision"]["code"] == "supplement-only"
     assert state["evidence"] == [
         {
+            "artifact_id": "pdf-native-text-extraction-reviewed-reference",
+            "sha256": f"sha256:{reviewed_sha}",
+        },
+        {
             "artifact_id": "pdf-native-text-extraction-result",
             "sha256": f"sha256:{raw_sha}",
-        }
+        },
     ]
     canonical = json.dumps(
         state["evidence"], ensure_ascii=False, separators=(",", ":"), sort_keys=True
@@ -230,6 +285,8 @@ def test_ingester_adapter_requires_the_exact_private_provider(tmp_path: Path):
     with pytest.raises(evaluations.EvaluationError, match="allowlisted"):
         evaluations.audio_exclusive_detail(
             _entry(evaluations.AUDIO_EXCLUSIVE_ID, "wrong", "wrong"),
+            tmp_path / "missing-attribution.json",
+            {},
             tmp_path / "missing.json",
             tmp_path / "missing-detail.json",
         )

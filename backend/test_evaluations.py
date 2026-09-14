@@ -11,7 +11,7 @@ import yaml
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from backend import account_chronology, server
+from backend import account_chronology, evaluations, server
 
 
 @pytest.fixture
@@ -20,7 +20,8 @@ def evaluation_client(tmp_path: Path, monkeypatch):
     registry_path.write_text(
         yaml.safe_dump(
             {
-                "schema": "anomalica/evaluation-registry/1",
+                "schema": "anomalica/evaluation-registry/2",
+                "state_schema": "anomalica/evaluation-state/1",
                 "statuses": [
                     "proposed",
                     "ready-for-human-review",
@@ -43,10 +44,9 @@ def evaluation_client(tmp_path: Path, monkeypatch):
                         "title": "MiniLM versus Granite search reranking",
                         "purpose": "Compare identical candidate pools.",
                         "owner_repo": "anomalica/assimilator",
-                        "status": "adopted",
-                        "gold": {
-                            "status": "reviewed-derived",
-                            "provenance": "Project-authored claims with graph-derived labels.",
+                        "evidence": {
+                            "provider_id": "search-reranker-minilm-vs-granite-state",
+                            "detail_capability": "search-reranker-human-judgements",
                         },
                         "limits": {
                             "rights": "CC0 project-authored claims only.",
@@ -61,23 +61,34 @@ def evaluation_client(tmp_path: Path, monkeypatch):
                                 "path": "fixture.json",
                             },
                             {
+                                "id": "search-reranker-minilm-vs-granite-result",
+                                "role": "result",
+                                "visibility": "public",
+                                "repository": "anomalica/assimilator",
+                                "path": "controlled-run-2026-09-14/controlled-comparison-cuda.json",
+                            },
+                            {
+                                "id": "search-reranker-minilm-vs-granite-state",
+                                "role": "state",
+                                "visibility": "public",
+                                "repository": "anomalica/assimilator",
+                                "path": "evaluation-state.json",
+                            },
+                            {
                                 "id": "search-reranker-minilm-vs-granite-human-judgements",
                                 "role": "gold",
                                 "visibility": "private",
                             },
                         ],
-                        "decision": "Retain MiniLM; Granite failed the gates.",
                     },
                     {
                         "id": "account-chronology",
                         "title": "Account chronology extraction",
                         "purpose": "Review exact account boundaries.",
                         "owner_repo": "anomalica/digester",
-                        "status": "ready-for-human-review",
-                        "gold": {
-                            "status": "ready-for-human-review",
-                            "provenance": "Authenticated report-only gold.",
-                            "artifact_id": "account-chronology-gold",
+                        "evidence": {
+                            "provider_id": "account-chronology-state",
+                            "detail_capability": "account-chronology-review",
                         },
                         "limits": {
                             "rights": "Controlled source text stays private.",
@@ -88,9 +99,13 @@ def evaluation_client(tmp_path: Path, monkeypatch):
                                 "id": "account-chronology-gold",
                                 "role": "gold",
                                 "visibility": "private",
-                            }
+                            },
+                            {
+                                "id": "account-chronology-state",
+                                "role": "state",
+                                "visibility": "private",
+                            },
                         ],
-                        "decision": "Keep report-only.",
                     },
                 ],
             },
@@ -154,7 +169,8 @@ def evaluation_client(tmp_path: Path, monkeypatch):
         },
     }
     (controlled / "controlled-granite-cuda.json").write_text(json.dumps(granite))
-    (controlled / "controlled-comparison-cuda.json").write_text(
+    comparison_path = controlled / "controlled-comparison-cuda.json"
+    comparison_path.write_text(
         json.dumps(
             {
                 "schema": "anomalica/search-reranker-comparison/1",
@@ -163,6 +179,42 @@ def evaluation_client(tmp_path: Path, monkeypatch):
                 "resource_ratios_granite_over_minilm": {"median_latency": 4.0},
                 "criteria": {"median_latency_no_more_than_2x": False},
                 "replace_minilm": False,
+            }
+        )
+    )
+    state_evidence = [
+        {
+            "artifact_id": "search-reranker-minilm-vs-granite-fixture",
+            "sha256": f"sha256:{fixture_sha}",
+        },
+        {
+            "artifact_id": "search-reranker-minilm-vs-granite-result",
+            "sha256": f"sha256:{hashlib.sha256(comparison_path.read_bytes()).hexdigest()}",
+        },
+    ]
+    evidence_sha = hashlib.sha256(
+        json.dumps(
+            state_evidence, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+        ).encode()
+    ).hexdigest()
+    (root / "evaluation-state.json").write_text(
+        json.dumps(
+            {
+                "schema": "anomalica/evaluation-state/1",
+                "evaluation_id": "search-reranker-minilm-vs-granite",
+                "evidence": state_evidence,
+                "evidence_sha256": f"sha256:{evidence_sha}",
+                "status": "adopted",
+                "gold": {
+                    "status": "reviewed-derived",
+                    "reviewed": 1,
+                    "total": 1,
+                    "unit": "queries",
+                },
+                "decision": {
+                    "code": "retain-minilm",
+                    "summary": "Retain MiniLM.",
+                },
             }
         )
     )
@@ -183,6 +235,7 @@ def evaluation_client(tmp_path: Path, monkeypatch):
 
     monkeypatch.setattr(server, "evaluation_registry_path", registry_path)
     monkeypatch.setattr(server, "search_evaluation_root", root)
+    monkeypatch.setattr(server, "assimilator_path", root)
     monkeypatch.setattr(server, "evaluation_private_path", private_path)
     monkeypatch.setattr(server, "account_chronology_manifest", account_manifest)
     monkeypatch.setattr(
@@ -193,6 +246,32 @@ def evaluation_client(tmp_path: Path, monkeypatch):
             "record_status": "legacy-evidence-not-scoreable",
             "prediction": {"status": "blocked", "reason": "No prediction."},
             "gold": None,
+        },
+    )
+    monkeypatch.setattr(
+        server.evaluations,
+        "account_state",
+        lambda _entry, _path, _views: {
+            "schema": "anomalica/evaluation-state/1",
+            "evaluation_id": "account-chronology",
+            "evidence": [
+                {
+                    "artifact_id": "account-chronology-manifest",
+                    "sha256": f"sha256:{'b' * 64}",
+                }
+            ],
+            "evidence_sha256": f"sha256:{'c' * 64}",
+            "status": "ready-for-human-review",
+            "gold": {
+                "status": "ready-for-human-review",
+                "reviewed": 0,
+                "total": 1,
+                "unit": "claims",
+            },
+            "decision": {
+                "code": "await-account-review",
+                "summary": "Await account review.",
+            },
         },
     )
     monkeypatch.setattr(
@@ -208,18 +287,17 @@ def evaluation_client(tmp_path: Path, monkeypatch):
     return TestClient(server.app), private_path
 
 
-def test_registry_is_admin_only_and_keeps_private_artifacts_opaque(evaluation_client):
+def test_index_is_admin_only_and_omits_private_artifact_detail(evaluation_client):
     client, _private = evaluation_client
 
     response = client.get("/api/evaluations")
 
     assert response.status_code == 200
-    private = response.json()["evaluations"][0]["artifacts"][1]
-    assert private == {
-        "id": "search-reranker-minilm-vs-granite-human-judgements",
-        "role": "gold",
-        "visibility": "private",
-    }
+    row = response.json()["evaluations"][0]
+    assert row["state"]["status"] == "adopted"
+    assert row["state"]["gold"]["reviewed"] == 1
+    assert "artifacts" not in row
+    assert "items" not in row["state"]
 
 
 def test_registry_rejects_non_admin(evaluation_client, monkeypatch):
@@ -313,3 +391,33 @@ def test_detail_and_write_routes_reject_non_admin(evaluation_client, monkeypatch
         ).status_code
         == 403
     )
+
+
+def test_state_validation_rejects_stale_public_evidence(tmp_path: Path):
+    evidence_path = tmp_path / "result.json"
+    evidence_path.write_text("before")
+    evidence = [
+        {
+            "artifact_id": "result",
+            "sha256": f"sha256:{hashlib.sha256(evidence_path.read_bytes()).hexdigest()}",
+        }
+    ]
+    state = {
+        "schema": "anomalica/evaluation-state/1",
+        "evaluation_id": "test-evaluation",
+        "evidence": evidence,
+        "evidence_sha256": f"sha256:{hashlib.sha256(json.dumps(evidence, separators=(',', ':'), sort_keys=True).encode()).hexdigest()}",
+        "status": "reviewed",
+        "gold": {
+            "status": "source-reviewed",
+            "reviewed": 1,
+            "total": 1,
+            "unit": "records",
+        },
+    }
+    evidence_path.write_text("after")
+
+    with pytest.raises(evaluations.EvaluationError, match="stale"):
+        evaluations.validate_state(
+            {"id": "test-evaluation"}, state, {"result": evidence_path}
+        )

@@ -25,6 +25,7 @@ function reviewView(): api.AccountChronologyView {
         section: "domain_claims",
         location: "00:00:01.000-00:00:02.000",
         text: "First event",
+        quote: "First supplied quote",
       },
       {
         id: "c2",
@@ -42,7 +43,14 @@ function reviewView(): api.AccountChronologyView {
         text: "No usable location",
       },
     ],
-    suggestions: [{ title: "A reviewed account", summary: "Existing semantic gold." }],
+    suggestions: [
+      {
+        title: "A reviewed account",
+        subject: "A reviewed subject",
+        summary: "Existing semantic gold.",
+        approx_when: "During the test",
+      },
+    ],
     gold: null,
     gold_sha256: null,
   };
@@ -79,19 +87,54 @@ beforeEach(() => {
 });
 
 describe("report-only account chronology review", () => {
-  it("shows immutable bindings and explicit unlocatable claims", async () => {
+  it("guides review in order and hides the exhaustive assignment table", async () => {
     render(AccountChronologyView, { hash });
 
     await screen.findByText("Account chronology gold");
     expect(screen.getByText("Report only")).toBeTruthy();
     expect(screen.getByText("3 claims")).toBeTruthy();
-    expect(screen.getAllByText("unlocatable").length).toBeGreaterThan(0);
     expect(screen.getByText(/Prediction blocked/)).toBeTruthy();
+    expect(screen.getByText(/A reviewed subject/)).toBeTruthy();
+
+    const suggestions = screen.getByRole("heading", { name: "1. Reviewed suggestions" });
+    const evidence = screen.getByRole("heading", { name: "Backend-supplied claim evidence" });
+    const boundaries = screen.getByRole("heading", {
+      name: "2. Account boundaries and nesting",
+    });
+    const previews = screen.getByRole("heading", { name: "3. Account claim previews" });
+    const chronology = screen.getByRole("heading", { name: "4. Account-scoped chronology" });
+    const firstQuote = screen.getAllByText("First supplied quote")[0];
+    expect(suggestions.compareDocumentPosition(evidence) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(firstQuote.compareDocumentPosition(boundaries) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(suggestions.compareDocumentPosition(boundaries) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(boundaries.compareDocumentPosition(previews) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(previews.compareDocumentPosition(chronology) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    const assignmentDisclosure = screen.getByText("All 3 claim assignments").closest("details");
+    expect(assignmentDisclosure?.open).toBe(false);
+    expect(screen.queryByText("outside")).toBeNull();
+    expect(screen.queryByText("unlocatable")).toBeNull();
+
+    await fireEvent.click(screen.getByText("All 3 claim assignments"));
+    expect(screen.getAllByText("not inside an account you have marked").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("claim has no usable timestamp").length).toBeGreaterThan(0);
+  });
+
+  it("previews member claim text and backend-supplied quote", async () => {
+    render(AccountChronologyView, { hash });
+    await screen.findAllByText("A reviewed account");
+    await fireEvent.click(screen.getByRole("button", { name: "Add legacy account" }));
+    await fireEvent.input(screen.getAllByRole("spinbutton")[1], {
+      target: { value: "2500" },
+    });
+
+    expect(screen.getAllByText("First event").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("First supplied quote").length).toBeGreaterThan(1);
   });
 
   it("saves exact millisecond spans and account-scoped chronology", async () => {
     render(AccountChronologyView, { hash });
-    await screen.findByText("A reviewed account");
+    await screen.findAllByText("A reviewed account");
     await fireEvent.click(screen.getByRole("button", { name: "Add legacy account" }));
 
     const milliseconds = screen.getAllByRole("spinbutton");

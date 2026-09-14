@@ -648,18 +648,28 @@ export interface EvaluationEntry {
   title: string;
   purpose: string;
   owner_repo: string;
-  status: EvaluationStatus;
-  gold: { status: string; provenance: string; artifact_id?: string };
   limits: { rights: string; routes: string };
-  artifacts?: EvaluationArtifact[];
-  decision: string;
+  detail_capability: string;
+  detail_available: boolean;
+  state?: EvaluationState;
+  sync_error?: string;
 }
 
 export interface EvaluationRegistry {
-  schema: "anomalica/evaluation-registry/1";
-  statuses: EvaluationStatus[];
-  gold_statuses: string[];
+  schema: "anomalica/evaluation-registry/2";
+  state_schema: "anomalica/evaluation-state/1";
   evaluations: EvaluationEntry[];
+}
+
+export interface EvaluationState {
+  schema: "anomalica/evaluation-state/1";
+  evaluation_id: string;
+  evidence: { artifact_id: string; sha256: string }[];
+  evidence_sha256: string;
+  status: EvaluationStatus;
+  gold: { status: string; reviewed: number; total: number; unit: string };
+  blocked_reason?: string;
+  decision?: { code: string; summary: string };
 }
 
 export interface SearchEvaluationClaim {
@@ -671,6 +681,7 @@ export interface SearchEvaluationClaim {
 
 export interface SearchEvaluationDetail {
   evaluation: EvaluationEntry;
+  state: EvaluationState;
   fixture: {
     sha256: string;
     license: string;
@@ -707,6 +718,7 @@ export interface SearchEvaluationDetail {
 
 export interface AccountEvaluationDetail {
   evaluation: EvaluationEntry;
+  state: EvaluationState;
   records: {
     record_hash: string;
     name: string;
@@ -715,6 +727,52 @@ export interface AccountEvaluationDetail {
     gold_status: string;
     has_gold: boolean;
   }[];
+}
+
+export interface AudioEvaluationDetail {
+  evaluation: EvaluationEntry;
+  state: EvaluationState;
+  comparison_note: string;
+  production_note: string;
+  aggregate: Record<"regular" | "exclusive", Record<string, number>>;
+  records: {
+    record_id: string;
+    regular: Record<string, number>;
+    exclusive: Record<string, number>;
+  }[];
+}
+
+export interface PdfEvaluationDetail {
+  evaluation: EvaluationEntry;
+  state: EvaluationState;
+  method: string;
+  aggregate: Record<string, number>;
+  examples: {
+    kind: "normal-page" | "two-column-failure";
+    file_page: number;
+    native: string;
+    reviewed: string;
+    metrics: Record<string, number>;
+  }[];
+  production_note: string;
+}
+
+export interface DigestEvaluationItem {
+  id: string;
+  record_id: string;
+  review_id: string;
+  status: EvaluationStatus;
+  gold: EvaluationState["gold"];
+  blocked_reason?: string;
+  decision?: { code: string; summary: string };
+  source_review?: { status: string };
+  action?: { kind: string; route: string; starts_from_zero?: boolean };
+}
+
+export interface DigestEvaluationDetail {
+  evaluation: EvaluationEntry;
+  state: EvaluationState;
+  items: DigestEvaluationItem[];
 }
 
 async function evaluationResponse<T>(res: Response, action: string): Promise<T> {
