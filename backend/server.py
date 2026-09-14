@@ -38,6 +38,7 @@ from anomalica_common import pre_digest
 from anomalica_common.review_gate import digestibility
 
 from backend import (
+    account_chronology,
     audit_gold,
     curation,
     graph,
@@ -82,6 +83,13 @@ DEFAULT_CONTENT_PATH = Path(__file__).resolve().parents[2] / "content"
 # Grading results the digester emits for the relevance-tuning loop
 # (grading/{body_sha256}.grading.json in the digester repo). Read-only.
 DEFAULT_GRADING_PATH = Path(__file__).resolve().parents[2] / "digester" / "grading"
+DEFAULT_ACCOUNT_CHRONOLOGY_MANIFEST = (
+    Path(__file__).resolve().parents[2]
+    / "digester"
+    / "workspace"
+    / "benchmarks"
+    / "account-chronology-evaluation.yaml"
+)
 # Materialised pre-digests (ADR 0042): the exact model input, content-addressed,
 # with a by-record pointer. Read-only from the digester repo (gitignored there -
 # pre-digests carry near-whole copyrighted bodies and the repo is public).
@@ -2023,6 +2031,11 @@ ingests_path = Path(os.environ.get("INGESTS_PATH", str(DEFAULT_INGESTS_PATH)))
 digests_path = Path(os.environ.get("DIGESTS_PATH", str(DEFAULT_DIGESTS_PATH)))
 content_path = Path(os.environ.get("CONTENT_PATH", str(DEFAULT_CONTENT_PATH)))
 grading_path = Path(os.environ.get("GRADING_PATH", str(DEFAULT_GRADING_PATH)))
+account_chronology_manifest = Path(
+    os.environ.get(
+        "ACCOUNT_CHRONOLOGY_MANIFEST", str(DEFAULT_ACCOUNT_CHRONOLOGY_MANIFEST)
+    )
+)
 predigests_path = Path(os.environ.get("PREDIGESTS_PATH", str(DEFAULT_PREDIGESTS_PATH)))
 prompts_path = Path(os.environ.get("PROMPTS_PATH", str(DEFAULT_PROMPTS_PATH)))
 
@@ -3527,6 +3540,43 @@ def delete_audit_verdict(
         raise HTTPException(status_code=404, detail="No such adjudication")
     source.save_audit(full_hash, gold, user["name"], user["email"])
     return JSONResponse({"deleted": True})
+
+
+@app.get("/api/ingests/{full_hash}/account-chronology")
+def get_account_chronology(full_hash: str, request: Request) -> JSONResponse:
+    """Load the manifest-bound, report-only account chronology gold editor."""
+    _require_role(request, "reviewer")
+    if not FULL_HASH_PATTERN.match(full_hash):
+        raise HTTPException(status_code=404, detail="Not found")
+    try:
+        return JSONResponse(
+            account_chronology.load_review(account_chronology_manifest, full_hash)
+        )
+    except account_chronology.AccountChronologyNotConfigured as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except account_chronology.AccountChronologyError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.put("/api/ingests/{full_hash}/account-chronology")
+def put_account_chronology(
+    full_hash: str, body: dict, request: Request
+) -> JSONResponse:
+    """Atomically replace one authenticated, evaluator-valid gold document."""
+    user = _require_role(request, "reviewer")
+    if not FULL_HASH_PATTERN.match(full_hash):
+        raise HTTPException(status_code=404, detail="Not found")
+    try:
+        return JSONResponse(
+            account_chronology.save_review(
+                account_chronology_manifest, full_hash, body, user["email"]
+            )
+        )
+    except account_chronology.AccountChronologyNotConfigured as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except account_chronology.AccountChronologyError as exc:
+        status = 409 if "changed; reload" in str(exc) else 400
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
 
 
 # --- Knowledge-graph review (read-only over the assimilator DB) ----------

@@ -43,7 +43,12 @@ const EVICTABLE_PREFIXES = [
 // local state can occupy. Used by pruneOrphanedDrafts, which (unlike
 // EVICTABLE_PREFIXES above) also includes doc/notes: safe ONLY because the
 // record itself no longer exists anywhere in the corpus to have work protected.
-const HASH_KEYED_PREFIXES = [...EVICTABLE_PREFIXES, "workbench:doc:", "workbench:notes:"];
+const HASH_KEYED_PREFIXES = [
+  ...EVICTABLE_PREFIXES,
+  "workbench:doc:",
+  "workbench:notes:",
+  "workbench:account-chronology:",
+];
 
 function evictReconstructible(keep: string): boolean {
   const victims: string[] = [];

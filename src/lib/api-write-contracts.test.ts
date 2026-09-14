@@ -2,10 +2,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   decideHousekeeping,
   reviewBaseFor,
+  saveAccountChronology,
   submitReview,
   submitVerification,
   unlockedIngestFromVerification,
   type HousekeepingFullView,
+  type AccountChronologySave,
 } from "./api";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -136,5 +138,25 @@ describe("canonical write identities", () => {
       ]),
     ).rejects.toThrow(/non-empty and unique/);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("sends only report decisions and the private-gold compare-and-swap identity", async () => {
+    const calls = captureFetch();
+    const hash = "a".repeat(64);
+    const body: AccountChronologySave = {
+      base_gold_sha256: "b".repeat(64),
+      accounts: [{ id: "account-1", spans: [{ start: 1000, end: 2000 }] }],
+      before_pairs: [],
+      unknown_pairs: [],
+      simultaneous_pairs: [],
+    };
+
+    await saveAccountChronology(hash, body);
+
+    expect(calls[0]).toEqual({
+      url: `/api/ingests/${hash}/account-chronology`,
+      method: "PUT",
+      body,
+    });
   });
 });

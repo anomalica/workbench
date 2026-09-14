@@ -520,6 +520,113 @@ export async function putAuditClaim(
   return res.json();
 }
 
+export interface AccountChronologySpan {
+  start: number;
+  end: number;
+}
+
+export interface AccountChronologyAccount {
+  id: string;
+  title?: string;
+  parent_account_id?: string;
+  spans: AccountChronologySpan[];
+}
+
+export interface AccountChronologyClaim {
+  id: string;
+  record_content_hash: string;
+  position: number | null;
+  section: "domain_claims" | "infrastructure_claims";
+  location?: string;
+  text: string;
+  quote?: string;
+}
+
+export interface AccountChronologyBeforePair {
+  account_id: string;
+  before_claim_id: string;
+  after_claim_id: string;
+}
+
+export interface AccountChronologyUnorderedPair {
+  account_id: string;
+  claim_ids: [string, string];
+}
+
+export interface AccountChronologyGold {
+  accounts: AccountChronologyAccount[];
+  before_pairs: AccountChronologyBeforePair[];
+  unknown_pairs: AccountChronologyUnorderedPair[];
+  simultaneous_pairs: AccountChronologyUnorderedPair[];
+  reviewed_by: string;
+  reviewed_at: string;
+}
+
+export interface AccountChronologySuggestion {
+  title: string;
+  subject?: string;
+  summary?: string;
+  nested_within?: string;
+  approx_when?: string;
+  approx_where?: string;
+  approx_line_start?: number;
+  approx_line_end?: number;
+}
+
+export interface AccountChronologyView {
+  schema: "anomalica/account-chronology-review-view/1";
+  report_only: true;
+  canonical_activation: "forbidden";
+  record_name: string;
+  record_status: string;
+  record_content_hash: string;
+  pre_digest_sha256: string;
+  digest_sha256: string;
+  coordinate_system: "media_time_ms";
+  prediction: { status: string; reason?: string };
+  claims: AccountChronologyClaim[];
+  suggestions: AccountChronologySuggestion[];
+  gold: AccountChronologyGold | null;
+  gold_sha256: string | null;
+}
+
+export interface AccountChronologySave {
+  base_gold_sha256: string | null;
+  accounts: AccountChronologyAccount[];
+  before_pairs: AccountChronologyBeforePair[];
+  unknown_pairs: AccountChronologyUnorderedPair[];
+  simultaneous_pairs: AccountChronologyUnorderedPair[];
+}
+
+export async function fetchAccountChronology(
+  hash: string,
+): Promise<AccountChronologyView | null> {
+  const res = await fetch(`/api/ingests/${hash}/account-chronology`);
+  if (res.status === 404) return null;
+  if (res.status === 401 || res.status === 403) throw new AuditAccessError(res.status);
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail || `Failed to load account chronology (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function saveAccountChronology(
+  hash: string,
+  body: AccountChronologySave,
+): Promise<AccountChronologyView> {
+  const res = await fetch(`/api/ingests/${hash}/account-chronology`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail || `Failed to save account chronology (${res.status})`);
+  }
+  return res.json();
+}
+
 /** Check whether an ingest exists for a given full hash. */
 export async function ingestExists(fullHash: string): Promise<boolean> {
   const res = await fetch(readPath(`/api/ingests/${fullHash}`));

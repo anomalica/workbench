@@ -22,6 +22,7 @@
     fetchPredigest,
     fetchSupersession,
     fetchRelations,
+    fetchAccountChronology,
     type RecordRelation,
     type Predigest,
     fetchCoverage,
@@ -73,6 +74,7 @@
   import MilkdownEditor from "./MilkdownEditor.svelte";
   import FindReplaceView from "./FindReplaceView.svelte";
   import AuditView from "./AuditView.svelte";
+  import AccountChronologyView from "./AccountChronologyView.svelte";
   import EpubViewer from "./EpubViewer.svelte";
   import PdfViewer from "./PdfViewer.svelte";
   import ProseMarkup from "./ProseMarkup.svelte";
@@ -297,6 +299,20 @@
   // null otherwise. Memoised on the live body.
   let parsedWords = $derived(isWordRecord ? parseWords(currentBody()) : null);
 
+  let accountChronologyAvailable = $state(false);
+  $effect(() => {
+    const recordHash = ingest.content_hash;
+    accountChronologyAvailable = false;
+    if (STATIC_READS) return;
+    fetchAccountChronology(recordHash)
+      .then((result) => {
+        if (recordHash === ingest.content_hash) accountChronologyAvailable = result !== null;
+      })
+      .catch(() => {
+        if (recordHash === ingest.content_hash) accountChronologyAvailable = false;
+      });
+  });
+
   // The ingest-column sub-tabs. Word records get a Markup tab (cross-speaker
   // highlight/note authoring) and DROP the Edit tab: the rich markdown editor
   // mangles a `{{t:}}`-laden transcript, so Raw is the honest editable view.
@@ -317,6 +333,13 @@
       ["audit", "Audit", "Compare model extraction variants of this record"],
       ["predigest", "Pre-digest", "Exactly what the model receives - read-only (ADR 0042)"],
     );
+    if (accountChronologyAvailable) {
+      tabs.push([
+        "account-chronology",
+        "Accounts",
+        "Create private, report-only account chronology evaluation gold",
+      ]);
+    }
     // EXPERIMENTAL: only offered when the assimilator has judged this record
     // to share a subject with another. A tab that is usually empty is noise.
     if (relations.length) {
@@ -430,7 +453,16 @@
   // View mode for the ingest column's sub-tabs (rendered/edit/raw/diff/find).
   // Digest is no longer a sub-tab; it lives in its own column.
   let view = $state<
-    "ingest" | "edit" | "diff" | "raw" | "predigest" | "find" | "audit" | "related">("ingest");
+    | "ingest"
+    | "edit"
+    | "diff"
+    | "raw"
+    | "predigest"
+    | "find"
+    | "audit"
+    | "account-chronology"
+    | "related"
+  >("ingest");
   // Fall back to Ingest when the active tab isn't offered for this record (e.g.
   // Edit on a word record, or Markup after switching to a prose record).
   $effect(() => {
@@ -1956,11 +1988,13 @@
   });
 
   // Effective column visibility after applying singleColumn (no source pane
-  // possible for some record types) and digest availability.
+  // possible for some record types) and digest availability. The account-gold
+  // form needs the full workspace; preserve the user's column choices while it
+  // temporarily occupies the ingest column alone.
   let visibleCols = $derived({
-    source: cols.source && !singleColumn,
+    source: cols.source && !singleColumn && view !== "account-chronology",
     ingest: cols.ingest,
-    digest: cols.digest && !!digest,
+    digest: cols.digest && !!digest && view !== "account-chronology",
   });
   let visibleCount = $derived(
     (visibleCols.source ? 1 : 0)
@@ -5512,6 +5546,9 @@
 
       {:else if view === "audit"}
         <AuditView hash={ingest.content_hash} />
+
+      {:else if view === "account-chronology"}
+        <AccountChronologyView hash={ingest.content_hash} />
 
       {:else if isWordRecord}
         <!-- Per-word-timestamp record: isolated word-level editor. No
