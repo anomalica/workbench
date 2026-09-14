@@ -43,6 +43,9 @@ GOLD_STATUSES = [
 SEARCH_ID = "search-reranker-minilm-vs-granite"
 SEARCH_JUDGEMENT_ARTIFACT = "search-reranker-minilm-vs-granite-human-judgements"
 ACCOUNT_ID = "account-chronology"
+AUDIO_EXCLUSIVE_ID = "audio-community1-exclusive"
+PDF_NATIVE_ID = "pdf-native-text-extraction"
+STATE_SCHEMA = "anomalica/evaluation-state/1"
 JUDGEMENT_SCHEMA = "anomalica/search-reranker-human-judgements/1"
 JUDGEMENTS = {"minilm", "granite", "tie", "defer"}
 EXPECTED_MODELS = {
@@ -166,6 +169,320 @@ def require_private_artifact(entry: dict, artifact_id: str) -> None:
     )
     if artifact != {"id": artifact_id, "role": "gold", "visibility": "private"}:
         raise EvaluationError("Private evaluation artifact is not registered safely")
+
+
+def _require_ingester_adapter(
+    entry: dict, provider_id: str, capability: str, result_id: str
+) -> None:
+    if entry.get("evidence") != {
+        "provider_id": provider_id,
+        "detail_capability": capability,
+    }:
+        raise EvaluationError("Ingester evaluation adapter is not allowlisted")
+    artifact = next(
+        (
+            item
+            for item in entry.get("artifacts") or []
+            if item.get("id") == provider_id
+        ),
+        None,
+    )
+    if artifact != {"id": provider_id, "role": "state", "visibility": "private"}:
+        raise EvaluationError(
+            "Private evaluation state provider is not registered safely"
+        )
+    result = next(
+        (item for item in entry.get("artifacts") or [] if item.get("id") == result_id),
+        None,
+    )
+    if result != {"id": result_id, "role": "result", "visibility": "private"}:
+        raise EvaluationError("Private evaluation result is not registered safely")
+
+
+def _evidence_state(
+    evaluation_id: str,
+    artifact_id: str,
+    path: Path,
+    status: str,
+    gold: dict,
+    decision: dict,
+) -> dict:
+    if not path.is_file():
+        raise EvaluationError(f"Current evidence is unavailable for {evaluation_id}")
+    evidence = [
+        {
+            "artifact_id": artifact_id,
+            "sha256": f"sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}",
+        }
+    ]
+    canonical = json.dumps(
+        evidence,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
+    return {
+        "schema": STATE_SCHEMA,
+        "evaluation_id": evaluation_id,
+        "evidence": evidence,
+        "evidence_sha256": f"sha256:{hashlib.sha256(canonical).hexdigest()}",
+        "status": status,
+        "gold": gold,
+        "decision": decision,
+    }
+
+
+def _metric_set(value: object) -> dict:
+    if not isinstance(value, dict):
+        raise EvaluationError("Evaluation metrics are malformed")
+    required = {
+        "matched_words",
+        "wrong_words",
+        "word_error_pct",
+        "turns",
+        "wrong_turns",
+        "turn_error_pct",
+        "labels",
+    }
+    if not required.issubset(value) or any(
+        isinstance(value[key], bool) or not isinstance(value[key], (int, float))
+        for key in required
+    ):
+        raise EvaluationError("Evaluation metrics are malformed")
+    return {key: value[key] for key in required}
+
+
+def audio_exclusive_detail(entry: dict, report_path: Path, detail_path: Path) -> dict:
+    """Sanitise private Community-1 evidence for the admin adapter."""
+    _require_ingester_adapter(
+        entry,
+        "audio-community1-exclusive-state",
+        "audio-community1-exclusive-detail",
+        "audio-community1-exclusive-result",
+    )
+    report = _json_mapping(report_path)
+    descriptor = _json_mapping(detail_path)
+    if (
+        descriptor.get("schema") != "anomalica/audio-community1-exclusive-detail/1"
+        or descriptor.get("evaluation_id") != AUDIO_EXCLUSIVE_ID
+    ):
+        raise EvaluationError("Unsupported audio evaluation detail")
+    records = report.get("records")
+    aggregate = report.get("aggregate")
+    if not isinstance(records, dict) or not records or not isinstance(aggregate, dict):
+        raise EvaluationError("Audio evaluation result is malformed")
+
+    safe_records = []
+    totals = {
+        strategy: {
+            key: 0
+            for key in (
+                "matched_words",
+                "wrong_words",
+                "turns",
+                "wrong_turns",
+                "labels",
+            )
+        }
+        for strategy in ("regular", "exclusive")
+    }
+    for record_id, result in records.items():
+        if (
+            not isinstance(record_id, str)
+            or len(record_id) != 64
+            or not set(record_id) <= set("0123456789abcdef")
+            or not isinstance(result, dict)
+        ):
+            raise EvaluationError("Audio evaluation record is malformed")
+        safe = {strategy: _metric_set(result.get(strategy)) for strategy in totals}
+        for strategy in totals:
+            for key in totals[strategy]:
+                totals[strategy][key] += safe[strategy][key]
+        safe_records.append({"record_id": record_id, **safe})
+
+    safe_aggregate = {
+        strategy: _metric_set(aggregate.get(strategy)) for strategy in totals
+    }
+    for strategy in totals:
+        if any(
+            safe_aggregate[strategy][key] != value
+            for key, value in totals[strategy].items()
+        ):
+            raise EvaluationError("Audio aggregate does not match its records")
+    adopt = (
+        safe_aggregate["exclusive"]["wrong_words"]
+        < safe_aggregate["regular"]["wrong_words"]
+        and safe_aggregate["exclusive"]["wrong_turns"]
+        <= safe_aggregate["regular"]["wrong_turns"]
+    )
+    if aggregate.get("adopt_exclusive") is not adopt:
+        raise EvaluationError("Audio adoption result does not match its metrics")
+    expected_decision = (
+        {
+            "code": "adopt-exclusive",
+            "summary": "Adopt Community-1 exclusive tracks for speaker attribution.",
+        }
+        if adopt
+        else {
+            "code": "retain-regular",
+            "summary": "Retain regular Community-1 tracks for speaker attribution.",
+        }
+    )
+    if aggregate.get("production_decision") != expected_decision:
+        raise EvaluationError("Audio owner decision does not match its metrics")
+    notes = {key: descriptor.get(key) for key in ("comparison_note", "production_note")}
+    if any(not isinstance(value, str) or not value.strip() for value in notes.values()):
+        raise EvaluationError("Audio evaluation explanation is malformed")
+
+    state = _evidence_state(
+        AUDIO_EXCLUSIVE_ID,
+        "audio-community1-exclusive-result",
+        report_path,
+        "adopted" if adopt else "rejected",
+        {
+            "status": "source-reviewed",
+            "reviewed": len(safe_records),
+            "total": len(safe_records),
+            "unit": "records",
+        },
+        expected_decision,
+    )
+    return {
+        "state": state,
+        "comparison_note": notes["comparison_note"],
+        "production_note": notes["production_note"],
+        "aggregate": safe_aggregate,
+        "records": safe_records,
+    }
+
+
+def pdf_native_detail(entry: dict, report_path: Path, detail_path: Path) -> dict:
+    """Sanitise private native-PDF evidence and public-domain examples."""
+    _require_ingester_adapter(
+        entry,
+        "pdf-native-text-extraction-state",
+        "pdf-native-text-extraction-detail",
+        "pdf-native-text-extraction-result",
+    )
+    report = _json_mapping(report_path)
+    descriptor = _json_mapping(detail_path)
+    if (
+        descriptor.get("schema") != "anomalica/pdf-native-text-extraction-detail/1"
+        or descriptor.get("evaluation_id") != PDF_NATIVE_ID
+        or descriptor.get("rights") != "public-domain"
+    ):
+        raise EvaluationError("Unsupported PDF evaluation detail")
+    page_count = report.get("page_count")
+    pages = report.get("pages")
+    aggregate = report.get("aggregate")
+    if (
+        not isinstance(page_count, int)
+        or page_count < 1
+        or not isinstance(pages, list)
+        or len(pages) != page_count
+        or not isinstance(aggregate, dict)
+        or report.get("method") != "pymupdf-native-text-geometric-sort"
+    ):
+        raise EvaluationError("PDF evaluation result is malformed")
+    by_page = {}
+    metric_keys = {
+        "reference_words",
+        "candidate_words",
+        "word_errors",
+        "word_error_pct",
+        "word_precision_pct",
+        "word_recall_pct",
+    }
+    for page in pages:
+        if (
+            not isinstance(page, dict)
+            or not isinstance(page.get("file_page"), int)
+            or any(not isinstance(page.get(key), (int, float)) for key in metric_keys)
+        ):
+            raise EvaluationError("PDF page metrics are malformed")
+        by_page[page["file_page"]] = {key: page[key] for key in metric_keys}
+    if set(by_page) != set(range(1, page_count + 1)):
+        raise EvaluationError("PDF page metrics do not cover the source")
+
+    aggregate_keys = {
+        "candidate_words",
+        "pages_with_candidate_text",
+        "reference_words",
+        "word_error_pct",
+        "word_errors",
+        "word_precision_pct",
+        "word_recall_pct",
+    }
+    if not aggregate_keys.issubset(aggregate) or any(
+        isinstance(aggregate[key], bool) or not isinstance(aggregate[key], (int, float))
+        for key in aggregate_keys
+    ):
+        raise EvaluationError("PDF aggregate metrics are malformed")
+    safe_aggregate = {key: aggregate[key] for key in aggregate_keys}
+
+    owner_decision = report.get("production_decision")
+    if not isinstance(owner_decision, dict):
+        raise EvaluationError("PDF owner decision is unavailable")
+    if (
+        owner_decision.get("role") != "supplement"
+        or owner_decision.get("replace_ai_transcription") is not False
+        or owner_decision.get("code") != "supplement-only"
+        or not isinstance(owner_decision.get("summary"), str)
+        or not owner_decision["summary"].strip()
+    ):
+        raise EvaluationError("PDF owner decision is malformed")
+    decision = {
+        "code": owner_decision["code"],
+        "summary": owner_decision["summary"],
+    }
+
+    examples = descriptor.get("examples")
+    if not isinstance(examples, list) or not examples:
+        raise EvaluationError("PDF evaluation examples are unavailable")
+    safe_examples = []
+    for example in examples:
+        if (
+            not isinstance(example, dict)
+            or example.get("kind") not in {"normal-page", "two-column-failure"}
+            or not isinstance(example.get("file_page"), int)
+            or example["file_page"] not in by_page
+            or not isinstance(example.get("native"), str)
+            or not isinstance(example.get("reviewed"), str)
+        ):
+            raise EvaluationError("PDF evaluation example is malformed")
+        safe_examples.append(
+            {
+                "kind": example["kind"],
+                "file_page": example["file_page"],
+                "native": example["native"],
+                "reviewed": example["reviewed"],
+                "metrics": by_page[example["file_page"]],
+            }
+        )
+    production_note = descriptor.get("production_note")
+    if not isinstance(production_note, str) or not production_note.strip():
+        raise EvaluationError("PDF production note is malformed")
+
+    state = _evidence_state(
+        PDF_NATIVE_ID,
+        "pdf-native-text-extraction-result",
+        report_path,
+        "reviewed",
+        {
+            "status": "source-reviewed",
+            "reviewed": page_count,
+            "total": page_count,
+            "unit": "pages",
+        },
+        decision,
+    )
+    return {
+        "state": state,
+        "method": "pymupdf-native-text-geometric-sort",
+        "aggregate": safe_aggregate,
+        "examples": safe_examples,
+        "production_note": production_note,
+    }
 
 
 def _file_sha(path: Path) -> str | None:
