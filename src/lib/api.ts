@@ -627,6 +627,136 @@ export async function saveAccountChronology(
   return res.json();
 }
 
+export type EvaluationStatus =
+  | "proposed"
+  | "ready-for-human-review"
+  | "reviewed"
+  | "adopted"
+  | "rejected"
+  | "blocked";
+
+export interface EvaluationArtifact {
+  id: string;
+  role: string;
+  visibility: "public" | "private";
+  repository?: string;
+  path?: string;
+}
+
+export interface EvaluationEntry {
+  id: string;
+  title: string;
+  purpose: string;
+  owner_repo: string;
+  status: EvaluationStatus;
+  gold: { status: string; provenance: string; artifact_id?: string };
+  limits: { rights: string; routes: string };
+  artifacts?: EvaluationArtifact[];
+  decision: string;
+}
+
+export interface EvaluationRegistry {
+  schema: "anomalica/evaluation-registry/1";
+  statuses: EvaluationStatus[];
+  gold_statuses: string[];
+  evaluations: EvaluationEntry[];
+}
+
+export interface SearchEvaluationClaim {
+  rank: number;
+  claim_id: string;
+  text: string;
+  relevance: 0 | 1;
+}
+
+export interface SearchEvaluationDetail {
+  evaluation: EvaluationEntry;
+  fixture: {
+    sha256: string;
+    license: string;
+    source: Record<string, string>;
+  };
+  models: Record<
+    "minilm" | "granite",
+    {
+      name: string;
+      quality: Record<string, number>;
+      performance: Record<string, number>;
+    }
+  >;
+  comparison: {
+    quality_delta_granite_minus_minilm: Record<string, number>;
+    resource_ratios_granite_over_minilm: Record<string, number | string>;
+    criteria: Record<string, boolean>;
+    replace_minilm: boolean;
+  };
+  queries: {
+    id: string;
+    query: string;
+    target: { node_id?: string; name: string; node_type: string };
+    total_graph_relevant: number;
+    rankings: Record<"minilm" | "granite", SearchEvaluationClaim[]>;
+  }[];
+  judgements: Record<string, { decision: string; note: string }>;
+  judgement_provenance: {
+    reviewer: { issuer: string; subject: string; name: string };
+    updated_at: string;
+  } | null;
+  judgements_sha256: string | null;
+}
+
+export interface AccountEvaluationDetail {
+  evaluation: EvaluationEntry;
+  records: {
+    record_hash: string;
+    name: string;
+    status: string;
+    prediction: { status: string; reason?: string };
+    gold_status: string;
+    has_gold: boolean;
+  }[];
+}
+
+async function evaluationResponse<T>(res: Response, action: string): Promise<T> {
+  if (res.status === 401 || res.status === 403) throw new AuditAccessError(res.status);
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail || `Failed to ${action} (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function fetchEvaluations(): Promise<EvaluationRegistry> {
+  return evaluationResponse(await fetch("/api/evaluations"), "load evaluations");
+}
+
+export async function fetchEvaluation<T>(evaluationId: string): Promise<T> {
+  return evaluationResponse(
+    await fetch(`/api/evaluations/${encodeURIComponent(evaluationId)}`),
+    "load evaluation",
+  );
+}
+
+export async function saveSearchEvaluationJudgements(
+  body: {
+    base_sha256: string | null;
+    fixture_sha256: string;
+    judgements: Record<string, { decision: string; note: string }>;
+  },
+): Promise<SearchEvaluationDetail> {
+  return evaluationResponse(
+    await fetch(
+      "/api/evaluations/search-reranker-minilm-vs-granite/judgements",
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    ),
+    "save search judgements",
+  );
+}
+
 /** Check whether an ingest exists for a given full hash. */
 export async function ingestExists(fullHash: string): Promise<boolean> {
   const res = await fetch(readPath(`/api/ingests/${fullHash}`));

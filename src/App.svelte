@@ -40,6 +40,7 @@
   } from "$lib/browse-prefs";
   import { prepareFields, scorePrepared } from "$lib/fuzzy-search";
   import InfrastructureView from "$lib/components/InfrastructureView.svelte";
+  import EvaluationView from "$lib/components/EvaluationView.svelte";
   import HousekeepingView from "$lib/components/HousekeepingView.svelte";
   import PagesView from "$lib/components/PagesView.svelte";
   import ArticlesView from "$lib/components/ArticlesView.svelte";
@@ -66,6 +67,7 @@
     | "roles"
     | "digests"
     | "infrastructure"
+    | "evaluations"
     | "housekeeping"
     | "pages"
   >("records");
@@ -597,6 +599,11 @@
     history.pushState(null, "", "/infrastructure");
   }
 
+  function showEvaluations() {
+    appMode = "evaluations";
+    history.pushState(null, "", "/evaluations");
+  }
+
   function _removedShowArticles() {
     appMode = "records";
     history.pushState(null, "", "/articles");
@@ -676,6 +683,10 @@
     if (path === "infrastructure" && !STATIC_READS) {
       appMode = "infrastructure";
       return; // InfrastructureView fetches its own data
+    }
+    if (path === "evaluations" && !STATIC_READS) {
+      appMode = "evaluations";
+      return; // EvaluationView enforces its own admin-only API access
     }
     if (path === "roles" && !STATIC_READS) {
       appMode = "roles";
@@ -790,6 +801,14 @@
             {appMode === 'infrastructure' ? 'bg-bone/15 text-bone' : 'text-bone/50 hover:text-bone/80 hover:bg-bone/10'}"
           title="What our records say about their own sources - works, authors, citations"
         >Infrastructure</button>
+      {/if}
+      {#if canManageRoles}
+        <button
+          onclick={showEvaluations}
+          class="text-sm font-ui px-2.5 py-1 rounded cursor-pointer transition-colors
+            {appMode === 'evaluations' ? 'bg-bone/15 text-bone' : 'text-bone/50 hover:text-bone/80 hover:bg-bone/10'}"
+          title="Inspect evaluation datasets, evidence, provenance and decisions"
+        >Evaluations</button>
       {/if}
     </nav>
     <div class="hidden sm:block flex-1"></div>
@@ -918,6 +937,8 @@
   <main class="flex-1 flex flex-col min-h-0">
     {#if appMode === "digests"}
       <DigestsView />
+    {:else if appMode === "evaluations"}
+      <EvaluationView />
     {:else if appMode === "housekeeping"}
       <HousekeepingView
         canDecide={canHousekeep}

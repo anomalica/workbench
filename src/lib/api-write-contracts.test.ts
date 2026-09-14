@@ -3,6 +3,7 @@ import {
   decideHousekeeping,
   reviewBaseFor,
   saveAccountChronology,
+  saveSearchEvaluationJudgements,
   submitReview,
   submitVerification,
   unlockedIngestFromVerification,
@@ -155,6 +156,23 @@ describe("canonical write identities", () => {
 
     expect(calls[0]).toEqual({
       url: `/api/ingests/${hash}/account-chronology`,
+      method: "PUT",
+      body,
+    });
+  });
+
+  it("sends fixture-bound search judgements to the private evaluation route", async () => {
+    const calls = captureFetch();
+    const body = {
+      base_sha256: "b".repeat(64),
+      fixture_sha256: "c".repeat(64),
+      judgements: { q1: { decision: "minilm", note: "Better ordering." } },
+    };
+
+    await saveSearchEvaluationJudgements(body);
+
+    expect(calls[0]).toEqual({
+      url: "/api/evaluations/search-reranker-minilm-vs-granite/judgements",
       method: "PUT",
       body,
     });

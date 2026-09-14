@@ -41,6 +41,7 @@ from backend import (
     account_chronology,
     audit_gold,
     curation,
+    evaluations,
     graph,
     models,
     proposals,
@@ -89,6 +90,19 @@ DEFAULT_ACCOUNT_CHRONOLOGY_MANIFEST = (
     / "workspace"
     / "benchmarks"
     / "account-chronology-evaluation.yaml"
+)
+DEFAULT_EVALUATION_REGISTRY = (
+    Path(__file__).resolve().parents[2] / "anomalica" / "reference" / "evaluations.yaml"
+)
+DEFAULT_SEARCH_EVALUATION_ROOT = (
+    Path(__file__).resolve().parents[2]
+    / "assimilator"
+    / "workspace"
+    / "reports"
+    / "search-reranker-benchmark-2026-09-13"
+)
+DEFAULT_EVALUATION_PRIVATE_PATH = (
+    Path.home() / ".local" / "share" / "anomalica" / "evaluations"
 )
 # Materialised pre-digests (ADR 0042): the exact model input, content-addressed,
 # with a by-record pointer. Read-only from the digester repo (gitignored there -
@@ -2036,6 +2050,15 @@ account_chronology_manifest = Path(
         "ACCOUNT_CHRONOLOGY_MANIFEST", str(DEFAULT_ACCOUNT_CHRONOLOGY_MANIFEST)
     )
 )
+evaluation_registry_path = Path(
+    os.environ.get("EVALUATION_REGISTRY_PATH", str(DEFAULT_EVALUATION_REGISTRY))
+)
+search_evaluation_root = Path(
+    os.environ.get("SEARCH_EVALUATION_ROOT", str(DEFAULT_SEARCH_EVALUATION_ROOT))
+)
+evaluation_private_path = Path(
+    os.environ.get("EVALUATION_PRIVATE_PATH", str(DEFAULT_EVALUATION_PRIVATE_PATH))
+)
 predigests_path = Path(os.environ.get("PREDIGESTS_PATH", str(DEFAULT_PREDIGESTS_PATH)))
 prompts_path = Path(os.environ.get("PROMPTS_PATH", str(DEFAULT_PROMPTS_PATH)))
 
@@ -2121,6 +2144,100 @@ def list_roles(request: Request) -> JSONResponse:
             "self": (user.get("login") or "").lower(),
         }
     )
+
+
+@app.get("/api/evaluations")
+def list_evaluations(request: Request) -> JSONResponse:
+    """Central public-safe registry metadata, visible only to administrators."""
+    _require_role(request, "admin")
+    try:
+        return JSONResponse(evaluations.load_registry(evaluation_registry_path))
+    except evaluations.EvaluationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+def _search_evaluation_paths() -> tuple[Path, Path, Path, Path, Path]:
+    controlled = search_evaluation_root / "controlled-run-2026-09-14"
+    return (
+        search_evaluation_root / "fixture.json",
+        controlled / "controlled-minilm-cuda.json",
+        controlled / "controlled-granite-cuda.json",
+        controlled / "controlled-comparison-cuda.json",
+        evaluation_private_path / "search-reranker-minilm-vs-granite.json",
+    )
+
+
+@app.get("/api/evaluations/{evaluation_id}")
+def get_evaluation(evaluation_id: str, request: Request) -> JSONResponse:
+    """A sanitised, inspectable evaluation page from a recognised adapter."""
+    _require_role(request, "admin")
+    try:
+        if evaluation_id == evaluations.SEARCH_ID:
+            return JSONResponse(
+                evaluations.search_detail(
+                    evaluation_registry_path, *_search_evaluation_paths()
+                )
+            )
+        registry = evaluations.load_registry(evaluation_registry_path)
+        entry = evaluations.registry_entry(registry, evaluation_id)
+        if evaluation_id == evaluations.ACCOUNT_ID:
+            manifest = yaml.safe_load(account_chronology_manifest.read_text())
+            records = []
+            for configured in (manifest or {}).get("records") or []:
+                full_hash = str(configured.get("record_content_hash", "")).removeprefix(
+                    "sha256:"
+                )
+                view = account_chronology.load_review(
+                    account_chronology_manifest, full_hash
+                )
+                records.append(
+                    {
+                        "record_hash": full_hash,
+                        "name": view["record_name"],
+                        "status": view["record_status"],
+                        "prediction": view["prediction"],
+                        "gold_status": (configured.get("authenticated_gold") or {}).get(
+                            "status"
+                        ),
+                        "has_gold": view["gold"] is not None,
+                    }
+                )
+            return JSONResponse({"evaluation": entry, "records": records})
+        raise evaluations.EvaluationNotFound("No inspectable page for this evaluation")
+    except evaluations.EvaluationNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (
+        evaluations.EvaluationError,
+        account_chronology.AccountChronologyError,
+        KeyError,
+        OSError,
+        TypeError,
+        ValueError,
+        yaml.YAMLError,
+    ) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.put(f"/api/evaluations/{evaluations.SEARCH_ID}/judgements")
+def put_search_evaluation_judgements(body: dict, request: Request) -> JSONResponse:
+    """Atomically save an administrator's fixture-bound query judgements."""
+    user = _require_role(request, "admin")
+    fixture_path, *_results, judgement_path = _search_evaluation_paths()
+    try:
+        registry = evaluations.load_registry(evaluation_registry_path)
+        entry = evaluations.registry_entry(registry, evaluations.SEARCH_ID)
+        evaluations.require_private_artifact(
+            entry, evaluations.SEARCH_JUDGEMENT_ARTIFACT
+        )
+        evaluations.save_search_judgements(judgement_path, fixture_path, body, user)
+        return JSONResponse(
+            evaluations.search_detail(
+                evaluation_registry_path, *_search_evaluation_paths()
+            )
+        )
+    except (evaluations.EvaluationError, KeyError, TypeError) as exc:
+        status = 409 if "changed; reload" in str(exc) else 400
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
 
 
 @app.put("/api/roles/{login}")
