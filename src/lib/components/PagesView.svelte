@@ -622,7 +622,9 @@
                    name. A reviewer who asked for a change is owed the answer. -->
               <span
                 class="rounded-full bg-warning-container px-1.5 text-xs text-on-warning-container"
-                title={r.rename.note ?? ""}
+                title={[r.rename.note, r.rename.proposal_id && `proposal ${r.rename.proposal_id}`, r.rename.operation_id && `operation ${r.rename.operation_id}`]
+                  .filter(Boolean)
+                  .join(" | ")}
               >rename {r.rename.status}: {r.rename.proposed_name}</span>
             {/if}
 

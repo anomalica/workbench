@@ -4163,13 +4163,12 @@ def topic_rename(body: dict, request: Request) -> dict:
     archiving a record, not an assessment of it.
 
     The rename is applied through the assimilator and the recorded outcome comes
-    back with it, because a rename can end `lost` (the node no longer resolves)
-    without anything having gone wrong.
+    back with it. A clash remains pending until explicitly merged or rejected.
 
     Renaming a node to a name another node already holds is not an error either:
     it says the two are one thing, so it becomes a MERGE, into the node that
-    holds the name. Across two different node types that inference is weak, so
-    that case comes back as `clash` and is only merged with `confirm_merge`.
+    holds the name. It comes back as `clash` first and is only merged with an
+    explicit `confirm_merge`, regardless of whether the node types match.
     """
     user = _require_role(request, "editor")
     node_id = (body.get("node_id") or "").strip()
@@ -4184,6 +4183,7 @@ def topic_rename(body: dict, request: Request) -> dict:
             body.get("reason"),
             f"workbench/{login}",
             confirm_merge=bool(body.get("confirm_merge")),
+            proposal_id=body.get("proposal_id"),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

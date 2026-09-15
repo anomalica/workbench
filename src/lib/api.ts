@@ -2134,9 +2134,23 @@ export async function fetchNameSuggestions(q: string, exclude: string): Promise<
  *  another node's, which is a merge decision rather than a rename; `lost` means
  *  the node no longer resolves; `pending` means the assimilator has not run. */
 export interface RenameOutcome {
-  status: "pending" | "applied" | "rejected" | "lost" | "merged" | "clash";
+  status:
+    | "pending"
+    | "applied"
+    | "merged"
+    | "rejected"
+    | "compensated"
+    | "contraction_drop"
+    | "unresolved_drift"
+    | "invalid"
+    | "lost"
+    | "clash";
   proposed_name?: string;
   note?: string | null;
+  proposal_id?: string;
+  operation_id?: string;
+  resolution_phase?: "merge" | "rename";
+  compensation_operation_id?: string;
   /** `merged`: the node this one was folded into. */
   merged_into?: GraphNodeRef;
   /** `clash`: the node holding the name, and this one, so the confirmation can
@@ -2221,6 +2235,7 @@ export async function renameTopic(
   newName: string,
   reason?: string,
   confirmMerge = false,
+  proposalId?: string,
 ): Promise<RenameOutcome & { ok: boolean; name: string }> {
   const res = await fetch("/api/topics/rename", {
     method: "POST",
@@ -2231,6 +2246,7 @@ export async function renameTopic(
       new_name: newName,
       reason,
       confirm_merge: confirmMerge,
+      proposal_id: proposalId,
     }),
   });
   const payload = await res.json().catch(() => ({}));

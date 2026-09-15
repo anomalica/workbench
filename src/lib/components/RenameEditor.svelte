@@ -44,6 +44,7 @@
   let busy = $state(false);
   let message = $state<string | null>(null);
   let clash = $state<{ target: GraphNodeRef; source: GraphNodeRef } | null>(null);
+  let clashProposalId = $state<string | null>(null);
   /** The live node whose name the box now holds exactly - which means pressing
    *  the button MERGES rather than renames. The button says so instead of a
    *  confirmation step: picking a suggestion and pressing enter should not fold
@@ -93,7 +94,7 @@
   function onkey(e: KeyboardEvent) {
     if (suggest.key(e, pick)) return;
     if (e.key === "Escape") oncancel();
-    else if (e.key === "Enter") save();
+    else if (e.key === "Enter") save(Boolean(matched));
   }
 
   // The list arrives after the debounce, so the exact match is recomputed from
@@ -108,6 +109,10 @@
     rejected: "The rename did not go through.",
     lost: "That node no longer resolves - the graph was rebuilt. Reload and try again.",
     pending: "Queued. The assimilator has not applied it yet.",
+    compensated: "The applied rename was later reversed.",
+    contraction_drop: "The proposal's source no longer exists in this graph.",
+    unresolved_drift: "The proposal no longer resolves unambiguously.",
+    invalid: "The proposal or its resolution link is invalid.",
   };
 
   async function save(confirmMerge = false) {
@@ -116,13 +121,22 @@
     busy = true;
     message = null;
     try {
-      const outcome = await renameTopic(node.id, node.name, proposed, undefined, confirmMerge);
+      const outcome = await renameTopic(
+        node.id,
+        node.name,
+        proposed,
+        undefined,
+        confirmMerge,
+        confirmMerge ? (clashProposalId ?? undefined) : undefined,
+      );
       if (outcome.status === "clash" && outcome.target && outcome.source) {
         // Left open: the answer to this is a decision, not a retry.
         clash = { target: outcome.target, source: outcome.source };
+        clashProposalId = outcome.proposal_id ?? null;
         return;
       }
       clash = null;
+      clashProposalId = null;
       suggest.clear();
       if (outcome.status === "merged" && outcome.merged_into) {
         onchanged(
@@ -156,7 +170,7 @@
       class="min-w-64 flex-1 rounded border border-border bg-surface-alt px-2 py-1 text-sm text-on-surface"
     />
     <button
-      onclick={() => save()}
+      onclick={() => save(Boolean(matched))}
       disabled={busy || unchanged}
       class="rounded bg-primary px-2 py-1 text-on-primary disabled:opacity-50"
     >{matched ? "Merge into it" : "Rename"}</button>
@@ -232,9 +246,8 @@
   {#if clash}
     <div class="mt-2 rounded border border-warning/40 bg-warning-container/30 px-3 py-2">
       <p class="text-on-surface">
-        <strong>{clash.target.name}</strong> already has that name, but it is a
-        {clash.target.node_type} and this is a {clash.source.node_type}. Merging them
-        makes one {clash.target.node_type} holding
+        <strong>{clash.target.name}</strong> already has that name. Merging this
+        {clash.source.node_type} into it makes one {clash.target.node_type} holding
         {clash.target.claims + clash.source.claims} claims.
       </p>
       <div class="mt-2 flex items-center gap-2">
@@ -242,7 +255,7 @@
           onclick={() => save(true)}
           disabled={busy}
           class="rounded bg-warning px-2 py-1 text-on-warning disabled:opacity-50"
-        >Merge them anyway</button>
+        >Confirm merge</button>
         <button
           onclick={() => (clash = null)}
           class="rounded px-2 py-1 text-on-surface-muted hover:text-on-surface"

@@ -19,6 +19,7 @@ directory is a tmp_path and the assimilator call is stubbed.
 import json
 import sqlite3
 import subprocess
+import threading
 
 import pytest
 
@@ -28,7 +29,7 @@ NID = "11111111-1111-4111-8111-111111111111"
 
 
 @pytest.fixture
-def curation(tmp_path, monkeypatch):
+def curation(tmp_path, monkeypatch, graph_db):
     monkeypatch.setenv("ANOMALICA_CURATION_DIR", str(tmp_path / "curation"))
     return tmp_path / "curation" / "rename-proposals"
 
@@ -96,8 +97,23 @@ class TestTheProposalFile:
         files = list(curation.glob("*.json"))
         assert len(files) == 1
         doc = json.loads(files[0].read_text())
-        assert doc["node_id"] == NID
-        assert doc["node_name_at_proposal"] == "Old Name"
+        assert list(doc) == [
+            "schema",
+            "id",
+            "node",
+            "proposed_name",
+            "reason",
+            "proposed_by",
+            "proposed_at",
+            "source",
+        ]
+        assert doc["schema"] == "anomalica/rename-proposal/2"
+        assert doc["node"] == {
+            "name": "Old Name",
+            "node_type": "topic",
+            "prior_names": [],
+        }
+        assert doc["source"] == {"node_id": NID}
         assert doc["proposed_name"] == "New Name"
         assert doc["reason"] == "why"
         assert doc["proposed_by"] == "workbench/mark"
@@ -108,6 +124,55 @@ class TestTheProposalFile:
         pages.propose_rename(NID, "Old Name", "First", None, None)
         pages.propose_rename(NID, "Old Name", "Second", None, None)
         assert len(list(curation.glob("*.json"))) == 2
+
+    def test_a_complete_file_is_published_atomically(self, curation, monkeypatch):
+        _stub_assimilator(monkeypatch, status="applied")
+        real_link = pages.os.link
+        observed = []
+
+        def inspect_then_publish(source, destination):
+            assert not destination.exists()
+            observed.append(json.loads(source.read_text()))
+            real_link(source, destination)
+
+        monkeypatch.setattr(pages.os, "link", inspect_then_publish)
+
+        pages.propose_rename(NID, "Old Name", "New Name", "why", "workbench/mark")
+
+        assert observed[0]["proposed_name"] == "New Name"
+        assert json.loads(next(curation.glob("*.json")).read_text()) == observed[0]
+        assert not list(curation.glob(".rename-proposal-*"))
+
+    def test_concurrent_publication_never_clobbers(self, tmp_path, monkeypatch):
+        directory = tmp_path / "rename-proposals"
+        directory.mkdir()
+        destination = directory / "proposal.json"
+        barrier = threading.Barrier(2)
+        real_link = pages.os.link
+
+        def publish_together(source, target):
+            barrier.wait()
+            real_link(source, target)
+
+        monkeypatch.setattr(pages.os, "link", publish_together)
+        outcomes = []
+
+        def publish(value):
+            try:
+                pages._publish_proposal(destination, {"value": value})
+                outcomes.append("published")
+            except FileExistsError:
+                outcomes.append("collision")
+
+        threads = [threading.Thread(target=publish, args=(value,)) for value in (1, 2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        assert sorted(outcomes) == ["collision", "published"]
+        assert json.loads(destination.read_text())["value"] in {1, 2}
+        assert not list(directory.glob(".rename-proposal-*"))
 
     def test_the_assimilator_is_asked_to_apply_it(self, curation, monkeypatch):
         calls = _stub_assimilator(monkeypatch, status="applied")
@@ -177,6 +242,7 @@ class TestTheTopicRow:
             "status": "rejected",
             "proposed_name": "UFO",
             "note": "name taken",
+            "proposal_id": "rename-proposal:p1",
         }
 
     def test_an_applied_rename_is_not_shown(self, graph_db, curation):
@@ -207,6 +273,50 @@ class TestTheTopicRow:
         assert (
             pages.list_topics()["topics"][0]["rename"]["proposed_name"] == "Second try"
         )
+
+    def test_same_timestamp_uses_proposal_id_as_the_tiebreaker(
+        self, graph_db, curation
+    ):
+        con = sqlite3.connect(graph_db)
+        con.executemany(
+            "INSERT INTO rename_proposals (id, node_id, node_name_at_proposal,"
+            " proposed_name, proposed_at, status) VALUES (?,?,?,?,?,?)",
+            [
+                ("p-z", NID, "Old", "Last by id", "2026-09-01T00:00:00Z", "lost"),
+                ("p-a", NID, "Old", "First by id", "2026-09-01T00:00:00Z", "rejected"),
+            ],
+        )
+        con.commit()
+        con.close()
+
+        rename = pages.list_topics()["topics"][0]["rename"]
+        assert rename["proposal_id"] == "rename-proposal:p-z"
+        assert rename["proposed_name"] == "Last by id"
+
+    def test_canonical_resolution_links_are_exposed_for_audit(self, graph_db, curation):
+        con = sqlite3.connect(graph_db)
+        con.executescript(
+            "ALTER TABLE rename_proposals ADD COLUMN proposal_operation_id TEXT;"
+            "ALTER TABLE rename_proposals ADD COLUMN resolution_phase TEXT;"
+            "ALTER TABLE rename_proposals ADD COLUMN resolution_operation_id TEXT;"
+            "ALTER TABLE rename_proposals ADD COLUMN compensation_operation_id TEXT;"
+        )
+        con.execute(
+            "INSERT INTO rename_proposals (id, proposal_operation_id, node_id,"
+            " node_name_at_proposal, proposed_name, proposed_at, status,"
+            " resolution_phase, resolution_operation_id)"
+            " VALUES ('p1', 'rename-proposal:p1', ?, 'Old', 'New',"
+            " '2026-09-01T00:00:00Z', 'rejected', 'rename',"
+            " 'rename-ledger:sha256:abc')",
+            (NID,),
+        )
+        con.commit()
+        con.close()
+
+        rename = pages.list_topics()["topics"][0]["rename"]
+        assert rename["proposal_id"] == "rename-proposal:p1"
+        assert rename["resolution_phase"] == "rename"
+        assert rename["operation_id"] == "rename-ledger:sha256:abc"
 
     def test_a_graph_without_the_table_still_lists(
         self, tmp_path, monkeypatch, curation
@@ -362,7 +472,7 @@ class TestRenamingOntoATakenName:
         monkeypatch.setattr(curation, "apply_merge", fake_apply)
         return calls
 
-    def test_same_type_merges_into_the_node_holding_the_name(
+    def test_same_type_is_asked_about_before_merging(
         self, graph_db, curation, monkeypatch, merged
     ):
         _add_node(graph_db, OTHER, "The Greys", "topic", claims=9)
@@ -370,18 +480,33 @@ class TestRenamingOntoATakenName:
 
         out = pages.propose_rename(NID, "Grey aliens", "The Greys", None, None)
 
+        assert out["status"] == "clash"
+        assert out["ok"] is False
+        assert out["target"]["id"] == OTHER
+        assert out["proposal_id"].startswith("rename-proposal:")
+        assert merged == []
+
+    def test_confirmation_reuses_and_links_the_existing_proposal(
+        self, graph_db, curation, monkeypatch, merged
+    ):
+        _add_node(graph_db, OTHER, "The Greys", "topic", claims=9)
+        _stub_assimilator(monkeypatch, status="rejected")
+        first = pages.propose_rename(NID, "Grey aliens", "The Greys", None, None)
+        files_before = list(curation.glob("*.json"))
+
+        out = pages.propose_rename(
+            NID,
+            "Grey aliens",
+            "The Greys",
+            None,
+            None,
+            confirm_merge=True,
+            proposal_id=first["proposal_id"],
+        )
+
         assert out["status"] == "merged"
-        assert out["ok"] is True
-        assert out["merged_into"]["id"] == OTHER
-        # Survivor is the node that HOLDS the name, so its name needs no change.
-        assert merged == [
-            (
-                OTHER,
-                [NID],
-                "The Greys",
-                {"by": None, "confirmed_by": None, "confirmed_via": "workbench-rename"},
-            )
-        ]
+        assert list(curation.glob("*.json")) == files_before
+        assert merged[0][3]["proposal_ids"] == [first["proposal_id"]]
 
     def test_a_different_kind_of_thing_is_asked_about_first(
         self, graph_db, curation, monkeypatch, merged
@@ -411,14 +536,13 @@ class TestRenamingOntoATakenName:
         )
 
         assert out["status"] == "merged"
-        assert merged == [
-            (
-                OTHER,
-                [NID],
-                "The Greys",
-                {"by": None, "confirmed_by": None, "confirmed_via": "workbench-rename"},
-            )
-        ]
+        assert merged[0][:3] == (OTHER, [NID], "The Greys")
+        assert merged[0][3] == {
+            "by": None,
+            "confirmed_by": None,
+            "confirmed_via": "workbench-rename",
+            "proposal_ids": [out["proposal_id"]],
+        }
 
     def test_a_retired_node_does_not_hold_a_name(
         self, graph_db, curation, monkeypatch, merged
@@ -428,7 +552,9 @@ class TestRenamingOntoATakenName:
         _add_node(graph_db, OTHER, "The Greys", "topic", retired="2026-01-01")
         _stub_assimilator(monkeypatch, status="rejected")
 
-        out = pages.propose_rename(NID, "Grey aliens", "The Greys", None, None)
+        out = pages.propose_rename(
+            NID, "Grey aliens", "The Greys", None, None, confirm_merge=True
+        )
 
         assert out["status"] == "rejected"
         assert merged == []
@@ -444,8 +570,11 @@ class TestRenamingOntoATakenName:
             lambda *a, **k: {"ok": False, "error": "db locked"},
         )
 
-        out = pages.propose_rename(NID, "Grey aliens", "The Greys", None, None)
+        out = pages.propose_rename(
+            NID, "Grey aliens", "The Greys", None, None, confirm_merge=True
+        )
         assert out["ok"] is False
+        assert out["status"] == "pending"
         assert out["note"] == "db locked"
         assert out["name"] == "Grey aliens"
 
@@ -519,10 +648,18 @@ def test_a_merge_from_a_rename_carries_the_confirmation(
         lambda *a, **kw: (seen.update(kw), {"ok": True})[1],
     )
 
-    pages.propose_rename(NID, "Grey aliens", "The Greys", None, "workbench/mark")
+    pages.propose_rename(
+        NID,
+        "Grey aliens",
+        "The Greys",
+        None,
+        "workbench/mark",
+        confirm_merge=True,
+    )
 
     assert seen["confirmed_by"] == "workbench/mark"
     assert seen["confirmed_via"] == "workbench-rename"
+    assert seen["proposal_ids"][0].startswith("rename-proposal:")
 
 
 class TestWhatANameWillDo:

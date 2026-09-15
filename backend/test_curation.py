@@ -385,11 +385,16 @@ def test_a_merge_carries_the_confirmation_that_lets_it_apply(monkeypatch, tmp_pa
         by="workbench/x",
         confirmed_by="workbench/x",
         confirmed_via="workbench-rename",
+        proposal_ids=["rename-proposal:z", "rename-proposal:a"],
     )
     argv = seen[0]
     assert argv[argv.index("--confirmed-by") + 1] == "workbench/x"
     assert argv[argv.index("--confirmed-via") + 1] == "workbench-rename"
     assert argv[argv.index("--confirmed-at") + 1].endswith("Z")
+    proposal_flags = [
+        argv[index + 1] for index, value in enumerate(argv) if value == "--proposal-id"
+    ]
+    assert proposal_flags == ["rename-proposal:a", "rename-proposal:z"]
 
 
 def test_without_a_confirmer_no_confirmation_is_forged(monkeypatch, tmp_path):

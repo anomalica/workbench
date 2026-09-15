@@ -30,6 +30,7 @@ import sqlite3
 import re
 import subprocess
 import sys
+import tempfile
 import uuid
 from pathlib import Path
 
@@ -359,11 +360,43 @@ def list_topics(limit: int = 400) -> dict:
         # already shows the new name - but a rejected or lost one is an answer
         # somebody is owed, and it is invisible everywhere else. Ordered oldest
         # first so the latest attempt per node is the one that survives.
+        proposal_columns = {
+            row[1] for row in con.execute("PRAGMA table_info(rename_proposals)")
+        }
+        proposal_operation = (
+            "proposal_operation_id"
+            if "proposal_operation_id" in proposal_columns
+            else "'rename-proposal:' || id"
+        )
+        resolution_phase = (
+            "resolution_phase" if "resolution_phase" in proposal_columns else "NULL"
+        )
+        resolution_operation = (
+            "resolution_operation_id"
+            if "resolution_operation_id" in proposal_columns
+            else "NULL"
+        )
+        compensation_operation = (
+            "compensation_operation_id"
+            if "compensation_operation_id" in proposal_columns
+            else "NULL"
+        )
         renames = {
-            r[0]: {"status": r[1], "proposed_name": r[2], "note": r[3]}
+            r[0]: {
+                "status": r[1],
+                "proposed_name": r[2],
+                "note": r[3],
+                "proposal_id": r[4],
+                **({"resolution_phase": r[5]} if r[5] else {}),
+                **({"operation_id": r[6]} if r[6] else {}),
+                **({"compensation_operation_id": r[7]} if r[7] else {}),
+            }
             for r in con.execute(
-                "SELECT node_id, status, proposed_name, resolution_note"
-                " FROM rename_proposals WHERE status != 'applied' ORDER BY proposed_at"
+                "SELECT node_id, status, proposed_name, resolution_note,"
+                f" {proposal_operation}, {resolution_phase},"
+                f" {resolution_operation}, {compensation_operation}"
+                " FROM rename_proposals WHERE status != 'applied'"
+                " ORDER BY proposed_at, id"
             )
         }
     except sqlite3.OperationalError:
@@ -458,6 +491,23 @@ def rename_proposals_dir() -> Path:
     return base / "rename-proposals"
 
 
+def _publish_proposal(path: Path, proposal: dict) -> None:
+    """Publish one complete proposal without exposing partial bytes or clobbering."""
+    payload = (json.dumps(proposal, indent=2) + "\n").encode()
+    fd, temporary_name = tempfile.mkstemp(prefix=".rename-proposal-", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(payload)
+            f.flush()
+            os.fsync(f.fileno())
+        # A hard link publishes complete bytes atomically and fails rather than
+        # replacing an existing proposal if an identifier ever collides.
+        os.link(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def rename_outcome(proposal_id: str) -> dict | None:
     """What the assimilator recorded for one proposal, or None if it never
     reached the table (a graph built before renames existed has no such table)."""
@@ -465,15 +515,48 @@ def rename_outcome(proposal_id: str) -> dict | None:
     if con is None:
         return None
     try:
+        columns = {row[1] for row in con.execute("PRAGMA table_info(rename_proposals)")}
+        proposal_operation = (
+            "proposal_operation_id"
+            if "proposal_operation_id" in columns
+            else "'rename-proposal:' || id"
+        )
+        resolution_phase = (
+            "resolution_phase" if "resolution_phase" in columns else "NULL"
+        )
+        resolution_operation = (
+            "resolution_operation_id"
+            if "resolution_operation_id" in columns
+            else "NULL"
+        )
+        compensation_operation = (
+            "compensation_operation_id"
+            if "compensation_operation_id" in columns
+            else "NULL"
+        )
         row = con.execute(
-            "SELECT status, resolution_note FROM rename_proposals WHERE id = ?",
+            "SELECT status, resolution_note,"
+            f" {proposal_operation}, {resolution_phase},"
+            f" {resolution_operation}, {compensation_operation}"
+            " FROM rename_proposals WHERE id = ?",
             (proposal_id,),
         ).fetchone()
     except sqlite3.OperationalError:
         return None
     finally:
         con.close()
-    return {"status": row[0], "note": row[1]} if row else None
+    return (
+        {
+            "status": row[0],
+            "note": row[1],
+            "proposal_id": row[2],
+            "resolution_phase": row[3],
+            "operation_id": row[4],
+            "compensation_operation_id": row[5],
+        }
+        if row
+        else None
+    )
 
 
 def _live_node(node_id: str) -> dict | None:
@@ -497,6 +580,47 @@ def _live_node(node_id: str) -> dict | None:
         if row
         else None
     )
+
+
+def _proposal_node(node_id: str, expected_name: str) -> dict:
+    con = graph._open()
+    if con is None:
+        raise ValueError("The graph is unavailable; reload and try again")
+    try:
+        row = con.execute(
+            "SELECT name, node_type FROM nodes WHERE id = ? AND retired_at IS NULL",
+            (node_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("That node changed; reload and try again")
+        prior_names = sorted(
+            {
+                alias
+                for (alias,) in con.execute(
+                    "SELECT alias FROM aliases WHERE node_id = ? ORDER BY alias",
+                    (node_id,),
+                )
+                if alias and alias != expected_name
+            }
+        )
+    finally:
+        con.close()
+    return {"name": expected_name, "node_type": row[1], "prior_names": prior_names}
+
+
+def _existing_proposal(proposal_operation_id: str) -> dict:
+    prefix = "rename-proposal:"
+    if not proposal_operation_id.startswith(prefix):
+        raise ValueError("Invalid rename proposal reference")
+    proposal_id = proposal_operation_id.removeprefix(prefix)
+    for path in sorted(rename_proposals_dir().glob("*.json")):
+        try:
+            proposal = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(proposal, dict) and proposal.get("id") == proposal_id:
+            return proposal
+    raise ValueError("The rename proposal no longer exists; reload and try again")
 
 
 # A name that is only an acronym, with or without a plural "s": UAP, UAPs, CIA,
@@ -633,7 +757,12 @@ def _node_holding_name(name: str, other_than: str) -> dict | None:
 
 
 def _merge_into_the_name(
-    node_id: str, current_name: str, new_name: str, confirm: bool, by: str | None
+    node_id: str,
+    current_name: str,
+    new_name: str,
+    confirm: bool,
+    by: str | None,
+    proposal_id: str,
 ) -> dict:
     """Renaming a node to a name another node already has says the two are one
     thing, so do that: fold this node into the one already called that.
@@ -642,34 +771,32 @@ def _merge_into_the_name(
     changing, and the merge keeps the folded-in node's old name as an alias, so
     the wording the sources use still resolves.
 
-    Guarded on node type. An exact match on a full node name is strong evidence
-    of sameness between two topics; between a topic and a person it is far more
-    likely to be a name that reads the same than a thing that is the same, and
-    the assimilator's merge does not check types at all. Different types need
-    somebody to say so.
+    A merge always requires a separate explicit confirmation. The proposal link
+    records which request it resolves but never supplies that confirmation.
     """
     from backend import curation
 
     target = _node_holding_name(new_name, node_id)
     if target is None:
-        # The clash is gone - a concurrent change. Report the rejection plainly
-        # rather than merging into whatever holds the name now.
+        # The clash is gone - a concurrent change. The proposal remains pending;
+        # only an explicit reject_proposal event may call it rejected.
         return {
             "ok": False,
-            "status": "rejected",
-            "note": "name already taken",
+            "status": "pending",
+            "note": "the conflicting node changed; reload to review the proposal",
             "name": current_name,
+            "proposal_id": proposal_id,
         }
     source_node = _live_node(node_id)
-    same_type = bool(source_node) and source_node["node_type"] == target["node_type"]
-    if not (same_type or confirm):
+    if not confirm:
         return {
             "ok": False,
             "status": "clash",
-            "note": "that name belongs to a different kind of thing",
+            "note": "that name belongs to another node",
             "name": current_name,
             "target": target,
             "source": source_node,
+            "proposal_id": proposal_id,
         }
     # `by` is already workbench/<login>, taken from the session by the endpoint,
     # so it is also the confirmation: this merge happened because a person typed
@@ -681,13 +808,15 @@ def _merge_into_the_name(
         by=by,
         confirmed_by=by,
         confirmed_via="workbench-rename",
+        proposal_ids=[proposal_id],
     )
     if not result.get("ok"):
         return {
             "ok": False,
-            "status": "rejected",
+            "status": "pending",
             "note": result.get("error") or "merge failed",
             "name": current_name,
+            "proposal_id": proposal_id,
         }
     return {
         "ok": True,
@@ -695,6 +824,7 @@ def _merge_into_the_name(
         "name": new_name,
         "note": None,
         "merged_into": target,
+        "proposal_id": proposal_id,
     }
 
 
@@ -705,6 +835,7 @@ def propose_rename(
     reason: str | None,
     by: str | None,
     confirm_merge: bool = False,
+    proposal_id: str | None = None,
 ) -> dict:
     """Rename a graph node - the title its page will carry - via the assimilator.
 
@@ -714,11 +845,9 @@ def propose_rename(
     replayed. So the rename is dropped as a proposal file and applied by the
     assimilator's own command, which writes the ledger entry replay re-applies.
 
-    The outcome is read back and returned rather than assumed. A rename can end
-    `rejected` (the name is already another node's, which is a MERGE decision,
-    not this one) or `lost` (neither the id nor the name resolves any more), and
-    both of those exit zero - reporting success off the exit code would tell a
-    reviewer their change landed when it did not.
+    The outcome is read back and returned rather than assumed. A name clash
+    leaves the proposal pending until a person confirms a merge or explicitly
+    rejects the proposal; linking the proposal never supplies confirmation.
     """
     from datetime import datetime, timezone
 
@@ -731,18 +860,37 @@ def propose_rename(
     if new_name == current_name:
         raise ValueError("That is already the name")
 
+    if proposal_id is not None:
+        proposal = _existing_proposal(proposal_id)
+        proposal_node = proposal.get("node")
+        source = proposal.get("source")
+        if not (
+            confirm_merge
+            and proposal.get("schema") == "anomalica/rename-proposal/2"
+            and isinstance(proposal_node, dict)
+            and proposal_node.get("name") == current_name
+            and proposal.get("proposed_name") == new_name
+            and isinstance(source, dict)
+            and source.get("node_id") == node_id
+        ):
+            raise ValueError("The rename confirmation does not match its proposal")
+        return _merge_into_the_name(
+            node_id, current_name, new_name, True, by, proposal_id
+        )
+
     now = datetime.now(timezone.utc)
+    natural = _proposal_node(node_id, current_name)
     proposal = {
+        "schema": "anomalica/rename-proposal/2",
         "id": str(uuid.uuid4()),
-        "node_id": node_id,
-        # NOT redundant with node_id: a rebuild mints new node ids, so the name
-        # the reviewer saw is the fallback identity.
-        "node_name_at_proposal": current_name,
+        "node": natural,
         "proposed_name": new_name,
         "reason": (reason or "").strip() or None,
-        "proposed_by": by or "workbench",
+        "proposed_by": by,
         "proposed_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "source": {"node_id": node_id},
     }
+    proposal_operation_id = f"rename-proposal:{proposal['id']}"
     directory = rename_proposals_dir()
     directory.mkdir(parents=True, exist_ok=True)
     # Timestamp first so the directory sorts into application order; the id tail
@@ -751,7 +899,7 @@ def propose_rename(
     path = (
         directory / f"{stamp}-{_slugify(current_name)[:60]}-{proposal['id'][:8]}.json"
     )
-    path.write_text(json.dumps(proposal, indent=2) + "\n")
+    _publish_proposal(path, proposal)
 
     cmd = [
         sys.executable,
@@ -778,10 +926,17 @@ def propose_rename(
             r.stderr.strip()[-400:] or r.stdout.strip()[-400:] or "rename failed"
         )
     status = outcome["status"]
-    if status == "rejected":
-        # Rejected means the name is another live node's. That is not a dead end
-        # - it is the reviewer saying these two are one thing.
-        return _merge_into_the_name(node_id, current_name, new_name, confirm_merge, by)
+    if status in {"pending", "rejected"} and _node_holding_name(new_name, node_id):
+        # Legacy assimilators report a clash as rejected; version 2 leaves the
+        # proposal pending. Either way, merging is a separate confirmed action.
+        return _merge_into_the_name(
+            node_id,
+            current_name,
+            new_name,
+            confirm_merge,
+            by,
+            proposal_operation_id,
+        )
     # A non-zero exit here means some OTHER proposal file in the directory would
     # not parse. Ours has a recorded outcome, so report that outcome.
     return {
@@ -789,6 +944,9 @@ def propose_rename(
         "status": status,
         "note": outcome["note"],
         "name": new_name if status == "applied" else current_name,
-        "proposal_id": proposal["id"],
+        "proposal_id": outcome.get("proposal_id") or proposal_operation_id,
+        "resolution_phase": outcome.get("resolution_phase"),
+        "operation_id": outcome.get("operation_id"),
+        "compensation_operation_id": outcome.get("compensation_operation_id"),
         "detail": r.stdout.strip(),
     }

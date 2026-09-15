@@ -175,6 +175,7 @@ def apply_merge(
     by: str | None = None,
     confirmed_by: str | None = None,
     confirmed_via: str = "workbench-queue",
+    proposal_ids: list[str] | None = None,
 ) -> dict:
     """Merge victims into the survivor under canonical_name. Validated here;
     the assimilator does the re-pointing + records the reversible merge-log row.
@@ -218,6 +219,11 @@ def apply_merge(
             canonical_name,
             *(["--by", by] if by else []),
             *confirmation,
+            *[
+                argument
+                for proposal_id in sorted(set(proposal_ids or []))
+                for argument in ("--proposal-id", proposal_id)
+            ],
         ],
     )
 
