@@ -1790,8 +1790,9 @@ export interface HousekeepingRow {
   checked_at: string | null;
   checker_version?: number;
   algorithm_version?: string;
-  /** True only for a completed v2 pass over the exact current record bytes. */
+  /** True only for a ready v3 pass over the exact current record bytes. */
   current?: boolean;
+  state?: HousekeepingState;
   proposed: number;
   approved: number;
   rejected: number;
@@ -1799,6 +1800,8 @@ export interface HousekeepingRow {
 
 export interface HousekeepingFrontmatterItem {
   id: string;
+  pass: HousekeepingPassName;
+  category: HousekeepingCategory;
   check: string;
   field: string;
   to_field?: string;
@@ -1814,6 +1817,8 @@ export interface HousekeepingFrontmatterItem {
 
 export interface HousekeepingTokenItem {
   id: string;
+  pass: HousekeepingPassName;
+  category: HousekeepingCategory;
   check: string;
   operation: "replace-token";
   scope: "body";
@@ -1826,19 +1831,64 @@ export interface HousekeepingTokenItem {
   confidence: "high" | "medium" | "low";
   evidence: { reasoning: string; sources: string[]; record_spans: string[] };
   status: "proposed" | "approved" | "rejected";
+  depends_on?: string[];
 }
 
 export type HousekeepingItem = HousekeepingFrontmatterItem | HousekeepingTokenItem;
 
+export type HousekeepingPassName = "deterministic" | "metadata-research";
+export type HousekeepingCategory = "person-name" | "known-term" | "metadata";
+
+export interface HousekeepingWaiverAudit {
+  by: string;
+  at: string;
+  reason: string;
+}
+
+export interface HousekeepingResearchUsage {
+  transport: "subscription";
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+}
+
+export interface HousekeepingFailedPass {
+  status: "failed";
+  finished_at: string;
+  error: string;
+}
+
+export type HousekeepingDeterministicPass =
+  | { status: "completed"; finished_at: string }
+  | HousekeepingFailedPass;
+
+export type HousekeepingResearchPass =
+  | { status: "completed"; finished_at: string; usage: HousekeepingResearchUsage }
+  | HousekeepingFailedPass
+  | { status: "waived"; finished_at: string; waiver: HousekeepingWaiverAudit };
+
+export type HousekeepingPass = HousekeepingDeterministicPass | HousekeepingResearchPass;
+
+export interface HousekeepingDecisionAudit {
+  item_id: string;
+  status: "approved" | "rejected";
+  decided_at: string;
+  decided_by: string;
+}
+
 export interface HousekeepingSidecar {
-  schema: "anomalica/housekeeping/1" | "anomalica/housekeeping/2";
+  schema: "anomalica/housekeeping/3";
   content_hash: string;
-  input_sha256?: string;
+  input_sha256: string;
+  result_sha256: string;
   checked_at: string;
-  checker_version?: number;
-  algorithm_version?: string;
-  outcome?: "completed";
+  algorithm_version: string;
+  passes: {
+    deterministic?: HousekeepingDeterministicPass;
+    "metadata-research"?: HousekeepingResearchPass;
+  };
   items: HousekeepingItem[];
+  decisions: HousekeepingDecisionAudit[];
 }
 
 export type HousekeepingDueReason =
@@ -1850,8 +1900,8 @@ export type HousekeepingDueReason =
   | "algorithm-mismatch";
 
 interface HousekeepingViewBase {
-  schema: "anomalica/housekeeping-view/1";
-  state: "current" | "due";
+  schema: "anomalica/housekeeping-view/2";
+  state: HousekeepingState;
   due_reason: HousekeepingDueReason | null;
   outstanding_count: number;
   scopes: ("frontmatter" | "body")[];
@@ -1870,11 +1920,21 @@ export interface HousekeepingFullView extends HousekeepingViewBase {
   viewed_ref: string;
   viewed_content_hash: string;
   viewed_input_sha256: string;
+  viewed_result_sha256: string | null;
   viewed_algorithm_version: string;
   previews: Record<string, { removed: string[]; added: string[] }>;
 }
 
 export type HousekeepingView = HousekeepingSummaryView | HousekeepingFullView;
+export type HousekeepingState =
+  | "due"
+  | "pending-deterministic"
+  | "failed-deterministic"
+  | "pending-research"
+  | "failed-research"
+  | "needs-decisions"
+  | "ready"
+  | "excluded-review-state";
 
 export async function fetchHousekeepingQueue(): Promise<HousekeepingRow[]> {
   const res = await fetch(readPath("/api/housekeeping"));
@@ -1940,28 +2000,66 @@ export async function decideHousekeeping(
   decisions: { item_id: string; status: "approved" | "rejected" }[],
 ): Promise<{ applied: number; rejected: number }> {
   if (!view.viewed_sidecar_sha) throw new Error("Housekeeping view has no committed sidecar");
+  if (!view.viewed_result_sha256) throw new Error("Housekeeping view has no current result identity");
+  const proposedIds = (view.sidecar?.items ?? [])
+    .filter((item) => item.status === "proposed")
+    .map((item) => item.id);
+  const decisionIds = decisions.map((decision) => decision.item_id);
   if (
     decisions.length === 0 ||
-    new Set(decisions.map((decision) => decision.item_id)).size !== decisions.length
+    new Set(decisionIds).size !== decisions.length ||
+    decisionIds.length !== proposedIds.length ||
+    proposedIds.some((id) => !decisionIds.includes(id))
   ) {
-    throw new Error("Housekeeping decisions must be non-empty and unique");
+    throw new Error("Housekeeping decisions must cover every proposed item exactly once");
   }
   const h = contentHash.replace(/^sha256:/, "");
   const res = await fetch(`/api/ingests/${h}/housekeeping/decide`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      schema: "anomalica/housekeeping-decision/1",
+      schema: "anomalica/housekeeping-decision/2",
       viewed_sidecar_sha: view.viewed_sidecar_sha,
       viewed_ref: view.viewed_ref,
       viewed_content_hash: view.viewed_content_hash,
       viewed_input_sha256: view.viewed_input_sha256,
+      viewed_result_sha256: view.viewed_result_sha256,
       viewed_algorithm_version: view.viewed_algorithm_version,
       decisions,
     }),
   });
   if (!res.ok) throw new Error(`Failed to record decisions: ${res.status}`);
   return res.json();
+}
+
+/** Waive only the research pass. Identity and time are supplied by the server. */
+export async function waiveHousekeepingResearch(
+  contentHash: string,
+  view: HousekeepingFullView,
+  reason: string,
+): Promise<void> {
+  if (!view.viewed_sidecar_sha) throw new Error("Housekeeping view has no committed sidecar");
+  if (!view.viewed_result_sha256) throw new Error("Housekeeping view has no current result identity");
+  if (!reason.trim()) throw new Error("A research waiver reason is required");
+  const h = contentHash.replace(/^sha256:/, "");
+  const res = await fetch(`/api/ingests/${h}/housekeeping/waive-research`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      schema: "anomalica/housekeeping-research-waiver/1",
+      viewed_sidecar_sha: view.viewed_sidecar_sha,
+      viewed_ref: view.viewed_ref,
+      viewed_content_hash: view.viewed_content_hash,
+      viewed_input_sha256: view.viewed_input_sha256,
+      viewed_result_sha256: view.viewed_result_sha256,
+      viewed_algorithm_version: view.viewed_algorithm_version,
+      reason: reason.trim(),
+    }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail || `Failed to waive research (${res.status})`);
+  }
 }
 
 // --- Topics: what earns a page, and what goes into it ---

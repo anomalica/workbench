@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   decideHousekeeping,
+  waiveHousekeepingResearch,
   reviewBaseFor,
   saveAccountChronology,
   saveSearchEvaluationJudgements,
@@ -97,30 +98,58 @@ describe("canonical write identities", () => {
     const calls = captureFetch({ applied: 1, rejected: 0 });
     const hash = "a".repeat(64);
     const view: HousekeepingFullView = {
-      schema: "anomalica/housekeeping-view/1",
+      schema: "anomalica/housekeeping-view/2",
       access: "full",
       viewed_sidecar_sha: "b".repeat(40),
       viewed_ref: "c".repeat(40),
       viewed_content_hash: `sha256:${hash}`,
       viewed_input_sha256: `sha256:${"d".repeat(64)}`,
-      viewed_algorithm_version: "housekeeping-v2",
-      state: "current",
+      viewed_result_sha256: `sha256:${"e".repeat(64)}`,
+      viewed_algorithm_version: "2",
+      state: "needs-decisions",
       due_reason: null,
       outstanding_count: 1,
       scopes: ["body"],
       deep_link: `/housekeeping?record=${hash}`,
-      sidecar: null,
+      sidecar: {
+        schema: "anomalica/housekeeping/3",
+        content_hash: `sha256:${hash}`,
+        input_sha256: `sha256:${"d".repeat(64)}`,
+        result_sha256: `sha256:${"e".repeat(64)}`,
+        checked_at: "2026-09-17T00:00:00Z",
+        algorithm_version: "2",
+        passes: {},
+        decisions: [],
+        items: [{
+          id: "rename-1",
+          pass: "deterministic",
+          category: "known-term",
+          check: "canonical-name",
+          operation: "replace-token",
+          scope: "body",
+          old_token: "OLD",
+          new_token: "NEW",
+          case_sensitive: true,
+          token_boundary: "ascii-word",
+          occurrences: [{ start_byte: 10, end_byte: 13 }],
+          expected_count: 1,
+          confidence: "high",
+          evidence: { reasoning: "Canonical form.", sources: [], record_spans: ["body"] },
+          status: "proposed",
+        }],
+      },
       previews: {},
     };
     await decideHousekeeping(hash, view, [{ item_id: "rename-1", status: "approved" }]);
 
     expect(calls[0].body).toEqual({
-      schema: "anomalica/housekeeping-decision/1",
+      schema: "anomalica/housekeeping-decision/2",
       viewed_sidecar_sha: "b".repeat(40),
       viewed_ref: "c".repeat(40),
       viewed_content_hash: `sha256:${hash}`,
       viewed_input_sha256: `sha256:${"d".repeat(64)}`,
-      viewed_algorithm_version: "housekeeping-v2",
+      viewed_result_sha256: `sha256:${"e".repeat(64)}`,
+      viewed_algorithm_version: "2",
       decisions: [{ item_id: "rename-1", status: "approved" }],
     });
   });
@@ -131,14 +160,54 @@ describe("canonical write identities", () => {
     const view = {
       access: "full",
       viewed_sidecar_sha: "b".repeat(40),
+      viewed_result_sha256: `sha256:${"c".repeat(64)}`,
     } as HousekeepingFullView;
     await expect(
       decideHousekeeping("a".repeat(64), view, [
         { item_id: "same", status: "approved" },
         { item_id: "same", status: "rejected" },
       ]),
-    ).rejects.toThrow(/non-empty and unique/);
+    ).rejects.toThrow(/every proposed item exactly once/);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("sends only the waiver schema, viewed identities and trimmed reason", async () => {
+    const calls = captureFetch({});
+    const hash = "a".repeat(64);
+    const view = {
+      schema: "anomalica/housekeeping-view/2",
+      access: "full",
+      viewed_sidecar_sha: "b".repeat(40),
+      viewed_ref: "c".repeat(40),
+      viewed_content_hash: `sha256:${hash}`,
+      viewed_input_sha256: `sha256:${"d".repeat(64)}`,
+      viewed_result_sha256: `sha256:${"e".repeat(64)}`,
+      viewed_algorithm_version: "2",
+      state: "pending-research",
+      due_reason: null,
+      outstanding_count: 0,
+      scopes: [],
+      deep_link: `/housekeeping?record=${hash}`,
+      sidecar: null,
+      previews: {},
+    } satisfies HousekeepingFullView;
+
+    await waiveHousekeepingResearch(hash, view, "  Source lookup unavailable.  ");
+
+    expect(calls[0]).toEqual({
+      url: `/api/ingests/${hash}/housekeeping/waive-research`,
+      method: "POST",
+      body: {
+        schema: "anomalica/housekeeping-research-waiver/1",
+        viewed_sidecar_sha: "b".repeat(40),
+        viewed_ref: "c".repeat(40),
+        viewed_content_hash: `sha256:${hash}`,
+        viewed_input_sha256: `sha256:${"d".repeat(64)}`,
+        viewed_result_sha256: `sha256:${"e".repeat(64)}`,
+        viewed_algorithm_version: "2",
+        reason: "Source lookup unavailable.",
+      },
+    });
   });
 
   it("sends only report decisions and the private-gold compare-and-swap identity", async () => {

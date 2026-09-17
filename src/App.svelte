@@ -970,6 +970,12 @@
         initialView={housekeepingHash === selectedIngest?.content_hash
           ? selectedHousekeepingView
           : null}
+        onviewchange={(hash, view) => {
+          if (hash !== selectedIngest?.content_hash) return;
+          selectedHousekeepingView = view;
+          selectedHousekeepingOpen = view.outstanding_count;
+          selectedHousekeepingScopes = view.scopes;
+        }}
       />
     {:else if appMode === "pages"}
       <PagesView canDecide={liveBackend && canCurate} />
@@ -1032,6 +1038,7 @@
         canTag={liveBackend && canHousekeep}
         housekeepingOpen={selectedHousekeepingOpen}
         housekeepingScopes={selectedHousekeepingScopes}
+        housekeepingState={selectedHousekeepingView?.state ?? null}
         reviewed={reviewedHashes.has(selectedIngest.content_hash) &&
           !needsVerifyHashes.has(selectedIngest.content_hash)}
         needsVerify={needsVerifyHashes.has(selectedIngest.content_hash)}

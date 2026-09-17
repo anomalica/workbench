@@ -110,6 +110,7 @@
     canTag = false,
     housekeepingOpen = 0,
     housekeepingScopes = [],
+    housekeepingState = null,
     reviewed = false,
     needsVerify = false,
     hasNext = false,
@@ -134,6 +135,7 @@
     /** Undecided metadata proposals that should be reviewed before editing. */
     housekeepingOpen?: number;
     housekeepingScopes?: ("frontmatter" | "body")[];
+    housekeepingState?: import("$lib/api").HousekeepingState | null;
     reviewed?: boolean;
     /** Review carried from a re-ingest, not yet re-verified - show a banner. */
     needsVerify?: boolean;
@@ -157,6 +159,10 @@
   } = $props();
 
   const doc = new DocumentStore();
+  let contentReviewAllowed = $derived(
+    housekeepingState === "ready" || housekeepingState === "excluded-review-state",
+  );
+  let reviewBlocked = $derived(!contentReviewAllowed);
 
   // For a gated record, the public snapshot withholds body + raw_frontmatter;
   // they arrive only after a possession proof (unlockGatedBody) and then override
@@ -323,13 +329,17 @@
     // now (a sub-toolbar toggle), not a separate tab that remounts the
     // transcript. They also drop Edit: the rich markdown editor mangles a
     // `{{t:}}`-laden transcript, so Raw is the honest editable view.
-    if (!isWordRecord) {
+    if (!isWordRecord && contentReviewAllowed) {
       tabs.push(["edit", "Edit", "Rich markdown editor"]);
     }
+    if (contentReviewAllowed) {
+      tabs.push(
+        ["raw", "Raw", "Edit raw markdown with frontmatter"],
+        ["diff", "Diff", "View changes from original"],
+        ["find", "Find", "Find and replace in this record (Ctrl+F)"],
+      );
+    }
     tabs.push(
-      ["raw", "Raw", "Edit raw markdown with frontmatter"],
-      ["diff", "Diff", "View changes from original"],
-      ["find", "Find", "Find and replace in this record (Ctrl+F)"],
       ["audit", "Audit", "Compare model extraction variants of this record"],
       ["predigest", "Pre-digest", "Exactly what the model receives - read-only (ADR 0042)"],
     );
@@ -2926,9 +2936,9 @@
   // The toolbar button's disabled state. When logged out it must stay
   // CLICKABLE - its click navigates to the login page, so disabling it
   // there strands the reviewer ("Log in to submit" that can't be clicked).
-  let submitDisabled = $derived(submitting);
+  let submitDisabled = $derived(submitting || reviewBlocked);
   // Used by the `a` keyboard shortcut: only meaningful when logged in.
-  let approveShortcutEnabled = $derived(!!user && !submitting);
+  let approveShortcutEnabled = $derived(!!user && !submitting && contentReviewAllowed);
   let submitError = $state<string | null>(null);
   let showSubmitForm = $state(false);
   let reviewNotes = $state("");
@@ -2956,6 +2966,7 @@
   }
 
   function openSubmitForm() {
+    if (reviewBlocked) return;
     if (!reviewNotes.trim()) reviewNotes = defaultReviewNote;
     showSubmitForm = true;
     queueMicrotask(() => {
@@ -3167,7 +3178,7 @@
   });
 
   async function handleSubmit() {
-    if (!user) return;
+    if (!user || reviewBlocked) return;
     const submittedHash = ingest.content_hash;
     const submittedDocument = doc.current;
     // Refuse to submit while the recompute disagrees with the saved verdict: the
@@ -3648,6 +3659,7 @@
       // Find/replace in its own view, pre-loaded with the current selection.
       // Never the raw editor: nobody wants to be dropped into timestamps.
       e.preventDefault();
+      if (reviewBlocked) return;
       if (view === "find") {
         // Already here - reselect the query rather than re-seeding it from a
         // transcript selection the reviewer can no longer even see.
@@ -3660,11 +3672,13 @@
       requestAnimationFrame(() => findView?.focus());
     } else if ((e.ctrlKey || e.metaKey) && e.key === "s") {
       e.preventDefault();
-      if (doc.dirty && user) openSubmitForm();
+      if (doc.dirty && user && contentReviewAllowed) openSubmitForm();
     } else if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey) {
+      if (reviewBlocked) return;
       e.preventDefault();
       doc.undo();
     } else if ((e.ctrlKey || e.metaKey) && (e.key === "y" || (e.key === "z" && e.shiftKey))) {
+      if (reviewBlocked) return;
       e.preventDefault();
       doc.redo();
     } else if (e.key === "Escape") {
@@ -3708,7 +3722,7 @@
       const cur = ytPlayer.getCurrentTime();
       const delta = e.key === "ArrowRight" ? SEEK_STEP_SECONDS : -SEEK_STEP_SECONDS;
       ytPlayer.seekTo(Math.max(0, cur + delta), true);
-    } else if (e.key === "Delete" && selected.size > 0) {
+    } else if (e.key === "Delete" && selected.size > 0 && contentReviewAllowed) {
       toggleSelectedIrrelevance();
     } else if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key === "n" || (e.key === "ArrowRight" && !hasTranscript)) && hasNext) {
       // Next record. n is universal; ArrowRight only for non-transcript
@@ -3840,10 +3854,11 @@
   role="presentation"
   ondragover={(e) => e.preventDefault()}
   ondrop={(e) => e.preventDefault()}>
-  {#if housekeepingOpen > 0 && onhousekeeping}
+  {#if reviewBlocked && onhousekeeping}
     <HousekeepingWarning
       count={housekeepingOpen}
       scopes={housekeepingScopes}
+      state={housekeepingState}
       onopen={onhousekeeping}
     />
   {/if}
@@ -3926,7 +3941,7 @@
              The list is offered, not enforced. `document_type` is an open set
              in the format, which names values this list does not carry, so a
              record may legitimately hold one and must not have it replaced. -->
-        {#if !!user}
+        {#if !!user && contentReviewAllowed}
           <select
             value={liveDocumentType.missing ? "" : liveDocumentType.label}
             onchange={(e) => doc.updateFrontmatter({ document_type: e.currentTarget.value })}
@@ -4080,10 +4095,12 @@
         <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
       </svg>
       <span class="font-semibold">Your last edit could NOT be saved in this browser (storage full) - do not reload or close this tab.</span>
-      <button
-        onclick={() => { if (user) openSubmitForm(); }}
-        class="ml-1 underline font-semibold cursor-pointer hover:no-underline"
-      >Submit now</button>
+      {#if contentReviewAllowed}
+        <button
+          onclick={() => { if (user) openSubmitForm(); }}
+          class="ml-1 underline font-semibold cursor-pointer hover:no-underline"
+        >Submit now</button>
+      {/if}
     {:else if syncWarning}
       <svg class="w-3.5 h-3.5 flex-none" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
@@ -5161,9 +5178,9 @@
           <div class="w-px h-4 bg-border mx-1"></div>
           <button
             onclick={() => doc.undo()}
-            disabled={!doc.canUndo}
+            disabled={!doc.canUndo || reviewBlocked}
             class="p-1 rounded transition-colors cursor-pointer
-              {doc.canUndo ? 'text-on-surface-secondary hover:bg-surface hover:text-on-surface' : 'text-on-surface-muted cursor-default'}"
+              {doc.canUndo && !reviewBlocked ? 'text-on-surface-secondary hover:bg-surface hover:text-on-surface' : 'text-on-surface-muted cursor-default'}"
             title="Undo (Ctrl+Z)"
           >
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -5172,9 +5189,9 @@
           </button>
           <button
             onclick={() => doc.redo()}
-            disabled={!doc.canRedo}
+            disabled={!doc.canRedo || reviewBlocked}
             class="p-1 rounded transition-colors cursor-pointer
-              {doc.canRedo ? 'text-on-surface-secondary hover:bg-surface hover:text-on-surface' : 'text-on-surface-muted cursor-default'}"
+              {doc.canRedo && !reviewBlocked ? 'text-on-surface-secondary hover:bg-surface hover:text-on-surface' : 'text-on-surface-muted cursor-default'}"
             title="Redo (Ctrl+Shift+Z)"
           >
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -5192,6 +5209,8 @@
                   : 'bg-surface text-on-surface-secondary border border-border hover:bg-surface-alt cursor-pointer'}"
             title={!user
               ? "Log in to submit"
+              : reviewBlocked
+                ? "Complete housekeeping before starting content review"
               : alreadyApproved
                 ? "You've already approved this record as-is. Make changes to submit a new review."
                 : doc.dirty
@@ -5202,6 +5221,8 @@
               Submitting...
             {:else if !user}
               Log in to submit
+            {:else if reviewBlocked}
+              Housekeeping required
             {:else if alreadyApproved}
               Approved
             {:else if doc.dirty}
@@ -5236,7 +5257,7 @@
             dateAccessed={String(
               currentFrontmatterObj.date_accessed ?? ingest.frontmatter.date_accessed ?? "",
             )}
-            canEdit={!!user}
+            canEdit={!!user && contentReviewAllowed}
             onsave={({ title, publisher, creators, datePublished, sourceUrl, dateAccessed }) =>
               doc.updateFrontmatter({
                 title,
@@ -5251,7 +5272,7 @@
                label - see CopyrightControl. -->
           <CopyrightControl
             status={liveCopyright}
-            canEdit={isAdmin}
+            canEdit={isAdmin && contentReviewAllowed}
             onchange={(next) => doc.updateFrontmatter({ "copyright.status": next })}
           />
           <!-- What the record is ABOUT, asserted by a person. The pipeline can
@@ -5510,6 +5531,16 @@
               {@html predigestHtml}
             </div>
           {/if}
+        </div>
+
+      {:else if reviewBlocked && view === "ingest"}
+        <div class="flex-1 overflow-auto px-8 py-6">
+          <div class="mx-auto max-w-prose">
+            <p class="mb-4 rounded border border-warning/40 bg-warning-container px-3 py-2 text-sm text-on-warning-container">
+              This is a read-only preview. Complete housekeeping before starting content review.
+            </p>
+            <pre class="whitespace-pre-wrap font-sans text-sm leading-relaxed text-on-surface">{currentBody()}</pre>
+          </div>
         </div>
 
       {:else if view === "edit"}

@@ -15,29 +15,46 @@ function fullView(
   reasoning = "Source title differs.",
 ): HousekeepingFullView {
   return {
-    schema: "anomalica/housekeeping-view/1",
+    schema: "anomalica/housekeeping-view/2",
     access: "full",
     viewed_sidecar_sha: "c".repeat(40),
     viewed_ref: "d".repeat(40),
     viewed_content_hash: `sha256:${hash}`,
     viewed_input_sha256: `sha256:${"b".repeat(64)}`,
-    viewed_algorithm_version: "housekeeping-v2",
-    state: "current",
+    viewed_result_sha256: `sha256:${"b".repeat(64)}`,
+    viewed_algorithm_version: "2",
+    state: "needs-decisions",
     due_reason: null,
     outstanding_count: 1,
     scopes: ["body"],
     deep_link: `/housekeeping?record=${hash}`,
     previews: { [id]: { removed: ["OSSAP"], added: ["AAWSAP"] } },
     sidecar: {
-      schema: "anomalica/housekeeping/2",
+      schema: "anomalica/housekeeping/3",
       content_hash: `sha256:${hash}`,
       input_sha256: `sha256:${"b".repeat(64)}`,
+      result_sha256: `sha256:${"b".repeat(64)}`,
       checked_at: "2026-09-11T00:00:00Z",
-      algorithm_version: "housekeeping-v2",
-      outcome: "completed",
+      algorithm_version: "2",
+      passes: {
+        deterministic: { status: "completed", finished_at: "2026-09-11T00:00:00Z" },
+        "metadata-research": {
+          status: "completed",
+          finished_at: "2026-09-11T00:00:00Z",
+          usage: {
+            transport: "subscription",
+            model: "research-model",
+            input_tokens: 100,
+            output_tokens: 20,
+          },
+        },
+      },
+      decisions: [],
       items: [
         {
           id,
+          pass: "deterministic",
+          category: "known-term",
           check: "canonical-programme-name",
           operation: "replace-token",
           scope: "body",
@@ -60,7 +77,12 @@ describe("housekeeping record navigation", () => {
   it("warns before editing and offers the Housekeeping review path", async () => {
     const onopen = vi.fn();
     render(HousekeepingWarning, {
-      props: { count: 2, scopes: ["frontmatter", "body"], onopen },
+      props: {
+        count: 2,
+        scopes: ["frontmatter", "body"],
+        state: "needs-decisions",
+        onopen,
+      },
     });
 
     expect(screen.getByText("2 housekeeping proposals")).toBeTruthy();
@@ -70,8 +92,20 @@ describe("housekeeping record navigation", () => {
   });
 
   it("does not present pipeline freshness as an actionable proposal", () => {
-    render(HousekeepingWarning, { props: { count: 0, onopen: vi.fn() } });
-    expect(screen.queryByLabelText("Outstanding housekeeping proposals")).toBeNull();
+    render(HousekeepingWarning, {
+      props: { count: 0, state: "ready", onopen: vi.fn() },
+    });
+    expect(screen.queryByLabelText("Housekeeping blocks content review")).toBeNull();
+  });
+
+  it.each([
+    ["pending-deterministic", /checks are still pending/],
+    ["failed-deterministic", /checks failed.*retried successfully/],
+    ["pending-research", /research is still pending/],
+    ["failed-research", /research failed.*authenticated waiver/],
+  ] as const)("explains the %s review block", (state, message) => {
+    render(HousekeepingWarning, { props: { count: 0, state, onopen: vi.fn() } });
+    expect(screen.getByLabelText("Housekeeping blocks content review").textContent).toMatch(message);
   });
 
   it("opens the requested record and reads previews outside the raw sidecar", async () => {
@@ -92,9 +126,9 @@ describe("housekeeping record navigation", () => {
     const hash = "a".repeat(64);
     vi.spyOn(api, "fetchHousekeepingQueue").mockResolvedValue([]);
     vi.spyOn(api, "fetchHousekeeping").mockResolvedValue({
-      schema: "anomalica/housekeeping-view/1",
+      schema: "anomalica/housekeeping-view/2",
       access: "summary",
-      state: "current",
+      state: "needs-decisions",
       due_reason: null,
       outstanding_count: 1,
       scopes: ["body"],
@@ -104,7 +138,7 @@ describe("housekeeping record navigation", () => {
 
     render(HousekeepingView, { props: { initialHash: hash, canDecide: true } });
     expect(await screen.findByText(/prove possession/)).toBeTruthy();
-    expect(screen.queryByRole("checkbox")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
     expect(screen.queryByRole("button", { name: /Reject/ })).toBeNull();
   });
 
@@ -119,7 +153,7 @@ describe("housekeeping record navigation", () => {
 
     expect(await screen.findByText("Source title differs.")).toBeTruthy();
     expect(fetchRecord).not.toHaveBeenCalled();
-    expect(screen.getByRole("checkbox", { name: /Approve/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Reject" })).toBeTruthy();
   });
 
@@ -134,8 +168,8 @@ describe("housekeeping record navigation", () => {
     vi.spyOn(api, "fetchHousekeeping").mockResolvedValue(due);
 
     render(HousekeepingView, { props: { initialHash: hash, canDecide: true } });
-    expect(await screen.findByText(/older format/)).toBeTruthy();
-    expect(screen.queryByRole("checkbox")).toBeNull();
+    expect(await screen.findByText(/Older or stale proposals/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
     expect(screen.queryByRole("button", { name: /Reject/ })).toBeNull();
   });
 
@@ -181,5 +215,105 @@ describe("housekeeping record navigation", () => {
     await Promise.resolve();
     expect(screen.queryByText("Stale response.")).toBeNull();
     expect(screen.getByText("Latest response.")).toBeTruthy();
+  });
+
+  it("stages one proposal at a time and submits the complete set atomically", async () => {
+    const hash = "a".repeat(64);
+    const next = fullView(hash);
+    next.sidecar!.items.push({
+      id: "metadata-2",
+      pass: "metadata-research",
+      category: "metadata",
+      check: "publisher",
+      operation: "set",
+      field: "publisher",
+      current: null,
+      proposed: "Archive",
+      confidence: "medium",
+      evidence: { reasoning: "The source identifies the archive.", sources: [], record_spans: ["title"] },
+      status: "proposed",
+    });
+    next.outstanding_count = 2;
+    vi.spyOn(api, "fetchHousekeepingQueue").mockResolvedValue([]);
+    vi.spyOn(api, "fetchHousekeeping").mockResolvedValue({ ...next, state: "ready" });
+    const decide = vi.spyOn(api, "decideHousekeeping").mockResolvedValue({ applied: 1, rejected: 1 });
+
+    render(HousekeepingView, {
+      props: { initialHash: hash, initialView: next, canDecide: true },
+    });
+
+    const apply = screen.getByRole("button", { name: "Apply all decisions" });
+    expect(apply).toBeDisabled();
+    await fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    expect(await screen.findByText("The source identifies the archive.")).toBeTruthy();
+    expect(apply).toBeDisabled();
+    await fireEvent.click(screen.getByRole("button", { name: "Reject" }));
+    expect(apply).not.toBeDisabled();
+    await fireEvent.click(apply);
+
+    await waitFor(() =>
+      expect(decide).toHaveBeenCalledWith(hash, next, [
+        { item_id: "proposal-1", status: "approved" },
+        { item_id: "metadata-2", status: "rejected" },
+      ]),
+    );
+  });
+
+  it("shows failed research and sends an audited waiver reason", async () => {
+    const hash = "a".repeat(64);
+    const pending = fullView(hash);
+    pending.state = "failed-research";
+    pending.outstanding_count = 0;
+    pending.sidecar!.passes["metadata-research"] = {
+      status: "failed",
+      finished_at: "2026-09-17T00:00:00Z",
+      error: "Research provider unavailable.",
+    };
+    vi.spyOn(api, "fetchHousekeepingQueue").mockResolvedValue([]);
+    vi.spyOn(api, "fetchHousekeeping").mockResolvedValue(pending);
+    const waive = vi.spyOn(api, "waiveHousekeepingResearch").mockResolvedValue();
+
+    render(HousekeepingView, {
+      props: { initialHash: hash, initialView: pending, canDecide: true },
+    });
+
+    expect(screen.getByText("Research provider unavailable.")).toBeTruthy();
+    await fireEvent.input(screen.getByLabelText("Continue without metadata research"), {
+      target: { value: "Checked the source manually." },
+    });
+    await fireEvent.click(screen.getByRole("button", { name: "Waive research" }));
+    await waitFor(() =>
+      expect(waive).toHaveBeenCalledWith(hash, pending, "Checked the source manually."),
+    );
+  });
+
+  it("shows decision and waiver audit history", async () => {
+    const hash = "a".repeat(64);
+    const complete = fullView(hash);
+    complete.state = "ready";
+    complete.outstanding_count = 0;
+    complete.sidecar!.items[0].status = "approved";
+    complete.sidecar!.decisions = [{
+      item_id: "proposal-1",
+      status: "approved",
+      decided_at: "2026-09-17T02:00:00Z",
+      decided_by: "reviewer@example.test",
+    }];
+    complete.sidecar!.passes["metadata-research"] = {
+      status: "waived",
+      finished_at: "2026-09-17T01:00:00Z",
+      waiver: {
+        by: "reviewer@example.test",
+        at: "2026-09-17T01:00:00Z",
+        reason: "Primary source already checked.",
+      },
+    };
+    vi.spyOn(api, "fetchHousekeepingQueue").mockResolvedValue([]);
+
+    render(HousekeepingView, { props: { initialHash: hash, initialView: complete } });
+
+    expect(screen.getAllByText(/Primary source already checked/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/proposal-1/)).toBeTruthy();
+    expect(screen.getAllByText(/reviewer@example.test/).length).toBeGreaterThan(0);
   });
 });
