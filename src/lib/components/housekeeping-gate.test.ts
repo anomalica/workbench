@@ -37,8 +37,8 @@ beforeEach(() => {
 
 afterEach(() => vi.unstubAllGlobals());
 
-describe("housekeeping content-review gate", () => {
-  it("keeps due content read-only and removes editing entry points", () => {
+describe("housekeeping content review", () => {
+  it("permits review while housekeeping is due", () => {
     render(IngestViewer, {
       props: {
         ingest,
@@ -50,11 +50,10 @@ describe("housekeeping content-review gate", () => {
       },
     });
 
-    expect(screen.getByLabelText("Housekeeping blocks content review")).toBeTruthy();
-    expect(screen.getByText(/read-only preview/)).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Raw" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Housekeeping required" })).toBeDisabled();
+    expect(screen.queryByLabelText("Housekeeping proposals available")).toBeNull();
+    expect(screen.getByRole("button", { name: "Edit" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Raw" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Approve" })).not.toBeDisabled();
   });
 
   it("permits grandfathered content review", () => {
@@ -69,7 +68,7 @@ describe("housekeeping content-review gate", () => {
       },
     });
 
-    expect(screen.queryByLabelText("Housekeeping blocks content review")).toBeNull();
+    expect(screen.queryByLabelText("Housekeeping proposals available")).toBeNull();
     expect(screen.getByRole("button", { name: "Edit" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Raw" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Approve" })).not.toBeDisabled();

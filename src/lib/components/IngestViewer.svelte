@@ -159,10 +159,8 @@
   } = $props();
 
   const doc = new DocumentStore();
-  let contentReviewAllowed = $derived(
-    housekeepingState === "ready" || housekeepingState === "excluded-review-state",
-  );
-  let reviewBlocked = $derived(!contentReviewAllowed);
+  const contentReviewAllowed = true;
+  const reviewBlocked = false;
 
   // For a gated record, the public snapshot withholds body + raw_frontmatter;
   // they arrive only after a possession proof (unlockGatedBody) and then override
@@ -3854,7 +3852,7 @@
   role="presentation"
   ondragover={(e) => e.preventDefault()}
   ondrop={(e) => e.preventDefault()}>
-  {#if reviewBlocked && onhousekeeping}
+  {#if housekeepingState === "needs-decisions" && housekeepingOpen > 0 && onhousekeeping}
     <HousekeepingWarning
       count={housekeepingOpen}
       scopes={housekeepingScopes}

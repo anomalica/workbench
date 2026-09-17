@@ -74,7 +74,7 @@ function fullView(
 }
 
 describe("housekeeping record navigation", () => {
-  it("warns before editing and offers the Housekeeping review path", async () => {
+  it("offers a separate optional Housekeeping review path", async () => {
     const onopen = vi.fn();
     render(HousekeepingWarning, {
       props: {
@@ -86,7 +86,7 @@ describe("housekeeping record navigation", () => {
     });
 
     expect(screen.getByText("2 housekeeping proposals")).toBeTruthy();
-    expect(screen.getByText(/metadata and body/)).toBeTruthy();
+    expect(screen.getByText(/available for this record's metadata and body/)).toBeTruthy();
     await fireEvent.click(screen.getByRole("button", { name: "Review in Housekeeping" }));
     expect(onopen).toHaveBeenCalledOnce();
   });
@@ -95,17 +95,17 @@ describe("housekeeping record navigation", () => {
     render(HousekeepingWarning, {
       props: { count: 0, state: "ready", onopen: vi.fn() },
     });
-    expect(screen.queryByLabelText("Housekeeping blocks content review")).toBeNull();
+    expect(screen.queryByLabelText("Housekeeping proposals available")).toBeNull();
   });
 
   it.each([
-    ["pending-deterministic", /checks are still pending/],
-    ["failed-deterministic", /checks failed.*retried successfully/],
-    ["pending-research", /research is still pending/],
-    ["failed-research", /research failed.*authenticated waiver/],
-  ] as const)("explains the %s review block", (state, message) => {
+    "pending-deterministic",
+    "failed-deterministic",
+    "pending-research",
+    "failed-research",
+  ] as const)("does not interrupt review for %s", (state) => {
     render(HousekeepingWarning, { props: { count: 0, state, onopen: vi.fn() } });
-    expect(screen.getByLabelText("Housekeeping blocks content review").textContent).toMatch(message);
+    expect(screen.queryByLabelText("Housekeeping proposals available")).toBeNull();
   });
 
   it("opens the requested record and reads previews outside the raw sidecar", async () => {
