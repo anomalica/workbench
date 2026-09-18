@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -37,13 +38,26 @@ def _git(repo: Path, *args: str) -> str:
 
 
 def _sidecar(record: str = RECORD, *, content_hash: str = HASH) -> hk.Sidecar:
-    return hk.Sidecar(
+    sidecar = hk.new_sidecar(
         content_hash=f"sha256:{content_hash}",
-        input_sha256=hk.input_sha256(record.encode()),
+        raw_bytes=record.encode(),
         checked_at="2026-09-11T00:00:00Z",
-        algorithm_version=hk.ALGORITHM_VERSION,
-        outcome="completed",
-        items=[
+    )
+    hk.record_pass(
+        sidecar,
+        "deterministic",
+        hk.PassState(status="completed", finished_at="2026-09-11T00:01:00Z"),
+        observed_input_sha256=sidecar.input_sha256,
+    )
+    hk.record_pass(
+        sidecar,
+        "metadata-research",
+        hk.PassState(
+            status="completed",
+            finished_at="2026-09-11T00:02:00Z",
+            usage={"transport": "subscription"},
+        ),
+        [
             hk.Item(
                 id="publisher",
                 check="publisher",
@@ -53,9 +67,13 @@ def _sidecar(record: str = RECORD, *, content_hash: str = HASH) -> hk.Sidecar:
                 proposed="New publisher",
                 confidence="high",
                 evidence=hk.Evidence(reasoning="The source identifies it."),
+                category="metadata",
+                pass_name="metadata-research",
             )
         ],
+        observed_input_sha256=sidecar.input_sha256,
     )
+    return sidecar
 
 
 @pytest.fixture
@@ -102,11 +120,15 @@ def _decide(
     return client.post(
         f"/api/ingests/{HASH}/housekeeping/decide",
         json={
-            "schema": "anomalica/housekeeping-decision/1",
+            "schema": "anomalica/housekeeping-decision/2",
             **{key: value for key, value in view.items() if key.startswith("viewed_")},
             "decisions": [{"item_id": item_id, "status": status}],
         },
     )
+
+
+def _resolve_housekeeping(client: TestClient) -> None:
+    assert _decide(client, _housekeeping_view(client)).status_code == 200
 
 
 def test_reads_return_canonical_git_identities(local_api):
@@ -125,8 +147,9 @@ def test_reads_return_canonical_git_identities(local_api):
         "viewed_ref",
         "viewed_content_hash",
         "viewed_input_sha256",
+        "viewed_result_sha256",
         "viewed_algorithm_version",
-        "state",
+        "review_state",
         "due_reason",
         "outstanding_count",
         "scopes",
@@ -134,22 +157,25 @@ def test_reads_return_canonical_git_identities(local_api):
         "sidecar",
         "previews",
     }
-    assert view["schema"] == "anomalica/housekeeping-view/1"
+    assert view["schema"] == "anomalica/housekeeping-view/2"
     assert view["access"] == "full"
     assert view["viewed_sidecar_sha"] == _git(
         repo, "rev-parse", f"HEAD:{sidecar.relative_to(repo)}"
     )
-    assert view["state"] == "current"
+    assert view["review_state"] == "needs-decisions"
+    assert view["viewed_result_sha256"] == view["sidecar"]["result_sha256"]
     assert view["outstanding_count"] == 1
     assert view["scopes"] == ["frontmatter"]
 
 
 def test_replace_token_view_has_preview_and_body_scope(local_api):
-    client, repo, _record, sidecar = local_api
-    start = RECORD.encode().index(b"Body")
+    client, repo, record, sidecar = local_api
+    token_record = RECORD.replace("Body", "OSSAP")
+    record.write_text(token_record)
+    start = token_record.encode().index(b"OSSAP")
     replacement = hk.Item(
         id="body-token",
-        check="canonical-token",
+        check="correct-aawsap-acronym",
         field=None,
         operation="replace-token",
         current=None,
@@ -157,25 +183,33 @@ def test_replace_token_view_has_preview_and_body_scope(local_api):
         confidence="high",
         evidence=hk.Evidence(reasoning="Canonical spelling."),
         scope="body",
-        old_token="Body",
-        new_token="Text",
+        old_token="OSSAP",
+        new_token="AAWSAP",
         case_sensitive=True,
         token_boundary="ascii-word",
-        occurrences=[{"start_byte": start, "end_byte": start + 4}],
+        occurrences=[{"start_byte": start, "end_byte": start + 5}],
         expected_count=1,
+        category="known-term",
+        pass_name="deterministic",
     )
-    sc = _sidecar()
+    sc = _sidecar(token_record)
     sc.items = [replacement]
     hk.write_sidecar_file(sidecar, sc)
-    _git(repo, "add", "--", str(sidecar.relative_to(repo)))
+    _git(
+        repo,
+        "add",
+        "--",
+        str(record.relative_to(repo)),
+        str(sidecar.relative_to(repo)),
+    )
     _git(repo, "commit", "-q", "-m", "token proposal")
 
     view = _housekeeping_view(client)
     assert view["scopes"] == ["body"]
     assert "preview" not in view["sidecar"]["items"][0]
     assert view["previews"]["body-token"] == {
-        "removed": ["Body"],
-        "added": ["Text"],
+        "removed": ["OSSAP"],
+        "added": ["AAWSAP"],
     }
 
 
@@ -275,6 +309,54 @@ def test_ordinary_save_requires_a_viewed_base_identity(local_api):
     assert record.read_text() == RECORD
 
 
+@pytest.mark.parametrize(
+    "declared",
+    ["", " ", "null", "Footage", "screenplay"],
+)
+def test_ordinary_save_rejects_invalid_present_document_type(local_api, declared):
+    client, _repo, record, _sidecar = local_api
+    viewed = client.get(f"/api/ingests/{HASH}").json()
+    content = RECORD.replace(
+        "title: Test record", f"document_type: {declared}\ntitle: Test record"
+    )
+
+    response = client.put(
+        f"/api/ingests/{HASH}",
+        json={
+            "content": content,
+            "notes": "",
+            "base_record_sha": viewed["base_record_sha"],
+            "base_ref": viewed["base_ref"],
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Invalid document_type"
+    assert record.read_text() == RECORD
+
+
+def test_ordinary_save_accepts_footage_document_type(local_api):
+    client, _repo, record, _sidecar = local_api
+    _resolve_housekeeping(client)
+    viewed = client.get(f"/api/ingests/{HASH}").json()
+    content = RECORD.replace(
+        "title: Test record", "document_type: footage\ntitle: Test record"
+    )
+
+    response = client.put(
+        f"/api/ingests/{HASH}",
+        json={
+            "content": content,
+            "notes": "",
+            "base_record_sha": viewed["base_record_sha"],
+            "base_ref": viewed["base_ref"],
+        },
+    )
+
+    assert response.status_code == 200
+    assert "document_type: footage" in record.read_text()
+
+
 def test_ordinary_save_rejects_the_superseded_nested_alias(local_api):
     client, _repo, record, _sidecar = local_api
     response = client.put(
@@ -291,6 +373,7 @@ def test_ordinary_save_rejects_the_superseded_nested_alias(local_api):
 
 def test_ordinary_save_with_exact_blob_and_ref_commits(local_api):
     client, repo, record, _sidecar = local_api
+    _resolve_housekeeping(client)
     viewed = client.get(f"/api/ingests/{HASH}").json()
     response = client.put(
         f"/api/ingests/{HASH}",
@@ -313,8 +396,49 @@ def test_ordinary_save_with_exact_blob_and_ref_commits(local_api):
     assert _git(repo, "diff", "--cached", "--name-only", "HEAD") == ""
 
 
+def test_ordinary_save_atomically_binds_coverage_to_the_edited_body(local_api):
+    client, repo, record, _sidecar = local_api
+    _resolve_housekeeping(client)
+    viewed = client.get(f"/api/ingests/{HASH}").json()
+    edited = RECORD.replace("Body.", "Reviewed and edited body.")
+
+    response = client.put(
+        f"/api/ingests/{HASH}",
+        json={
+            "content": edited,
+            "notes": "Reviewed 100%",
+            "base_record_sha": viewed["base_record_sha"],
+            "base_ref": viewed["base_ref"],
+            "spans": [{"from": 0, "to": 3, "kind": "observed"}],
+            "verdict": {
+                "observed_coverage": 1.0,
+                "digestible": True,
+                "total_units": 4,
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    coverage_path = repo / "store" / f"{HASH}.review.json"
+    coverage = json.loads(coverage_path.read_text())
+    body = server.parse_frontmatter(edited)[1]
+    assert coverage["reviewed_body_sha256"] == (
+        "sha256:" + hashlib.sha256(body.encode("utf-8")).hexdigest()
+    )
+    assert coverage["reviews"][-1]["parent_commit"] == viewed["base_ref"]
+    assert set(_git(repo, "show", "--name-only", "--format=", "HEAD").splitlines()) == {
+        str(record.relative_to(repo)),
+        str(coverage_path.relative_to(repo)),
+    }
+    assert server.source.load_coverage(HASH) is not None
+    refreshed = client.get(f"/api/ingests/{HASH}").json()
+    assert refreshed["observed_coverage"] == 1.0
+    assert refreshed["digestible"] is True
+
+
 def test_successive_ordinary_saves_do_not_leave_reverse_staged_changes(local_api):
     client, repo, record, _sidecar = local_api
+    _resolve_housekeeping(client)
     viewed = client.get(f"/api/ingests/{HASH}").json()
 
     for body in ("First editor body.", "Second editor body."):
@@ -325,6 +449,7 @@ def test_successive_ordinary_saves_do_not_leave_reverse_staged_changes(local_api
                 "notes": "",
                 "base_record_sha": viewed["base_record_sha"],
                 "base_ref": viewed["base_ref"],
+                "spans": [{"from": 0, "to": 0, "kind": "observed"}],
             },
         )
 
@@ -337,6 +462,7 @@ def test_successive_ordinary_saves_do_not_leave_reverse_staged_changes(local_api
 
 def test_housekeeping_proposal_does_not_make_an_open_ordinary_editor_stale(local_api):
     client, repo, record, sidecar = local_api
+    _resolve_housekeeping(client)
     viewed = client.get(f"/api/ingests/{HASH}").json()
     proposal = sidecar.read_text().replace(
         "The source identifies it.", "A newer housekeeping proposal."
@@ -387,25 +513,17 @@ def test_successive_housekeeping_commits_do_not_leave_reverse_staged_changes(
     local_api,
 ):
     client, repo, _record, sidecar = local_api
+    assert _decide(client, _housekeeping_view(client)).status_code == 200
+    assert _git(repo, "diff", "--cached", "--name-only", "HEAD") == ""
+
     sc = _sidecar()
-    sc.items.append(
-        hk.Item(
-            id="publisher-two",
-            check="publisher",
-            field="publisher",
-            operation="set",
-            current="Old publisher",
-            proposed="Other publisher",
-            confidence="high",
-            evidence=hk.Evidence(reasoning="A second proposal for the test."),
-        )
-    )
+    sc.items[0].id = "publisher-two"
+    sc.items[0].proposed = "Other publisher"
+    sc.items[0].evidence = hk.Evidence(reasoning="A second proposal for the test.")
     hk.write_sidecar_file(sidecar, sc)
     _git(repo, "add", "--", str(sidecar.relative_to(repo)))
     _git(repo, "commit", "-q", "-m", "second proposal")
 
-    assert _decide(client, _housekeeping_view(client)).status_code == 200
-    assert _git(repo, "diff", "--cached", "--name-only", "HEAD") == ""
     assert (
         _decide(
             client,
@@ -502,6 +620,7 @@ def test_index_publish_failure_rolls_back_ref_and_releases_lock(local_api, monke
     [
         ("viewed_content_hash", f"sha256:{'b' * 64}"),
         ("viewed_input_sha256", f"sha256:{'b' * 64}"),
+        ("viewed_result_sha256", f"sha256:{'b' * 64}"),
         ("viewed_algorithm_version", "old-algorithm"),
         ("viewed_sidecar_sha", "f" * 40),
         ("viewed_ref", "f" * 40),
@@ -540,7 +659,7 @@ def test_decision_rejects_aliases_and_duplicate_item_ids(local_api):
     aliases = client.post(
         f"/api/ingests/{HASH}/housekeeping/decide",
         json={
-            "schema": "anomalica/housekeeping-decision/1",
+            "schema": "anomalica/housekeeping-decision/2",
             "base": view,
             "decisions": [],
         },
@@ -548,7 +667,7 @@ def test_decision_rejects_aliases_and_duplicate_item_ids(local_api):
     assert aliases.status_code == 400
 
     payload = {
-        "schema": "anomalica/housekeeping-decision/1",
+        "schema": "anomalica/housekeeping-decision/2",
         **{key: value for key, value in view.items() if key.startswith("viewed_")},
         "decisions": [
             {"item_id": "publisher", "status": "rejected"},
@@ -578,7 +697,7 @@ def test_v1_and_wrong_sidecar_content_hash_are_never_current_or_decidable(local_
     _git(repo, "add", "--", str(sidecar.relative_to(repo)))
     _git(repo, "commit", "-q", "-m", "wrong identity")
     viewed = _housekeeping_view(client)
-    assert viewed["state"] == "due"
+    assert viewed["review_state"] == "due"
     assert _decide(client, viewed).status_code == 409
 
     legacy = json.loads(sidecar.read_text())
@@ -593,9 +712,9 @@ def test_v1_and_wrong_sidecar_content_hash_are_never_current_or_decidable(local_
     _git(repo, "add", "--", str(sidecar.relative_to(repo)))
     _git(repo, "commit", "-q", "-m", "legacy")
     viewed = _housekeeping_view(client)
-    assert viewed["state"] == "due"
+    assert viewed["review_state"] == "due"
     assert viewed["due_reason"] == "unsupported-schema"
-    assert _decide(client, viewed).status_code == 409
+    assert _decide(client, viewed).status_code == 400
 
 
 def test_rejection_commit_contains_only_sidecar_and_preserves_other_changes(local_api):

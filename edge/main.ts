@@ -40,11 +40,12 @@ import {
   type HousekeepingSidecar,
   type HousekeepingV1Item,
   type HousekeepingV2Item,
+  type HousekeepingV3Item,
   InvalidReplacement,
   MultilineField,
   previewItem,
   unmetDependencies,
-  validateV2Sidecar,
+  validateV3Sidecar,
 } from "./lib/housekeeping.ts";
 import { sha256Hex } from "./lib/crypto.ts";
 import { needed, scoreSession, startSession } from "./lib/gate.ts";
@@ -85,7 +86,8 @@ const ARTICLE_SLUG = /^[a-z0-9][a-z0-9-]*$/;
 const MAX_DIRECTIVE_LEN = 500;
 const CHALLENGES_PER_SESSION = 10;
 const MIN_POOL_FOR_CLOZE_GATE = 5;
-const HOUSEKEEPING_DECISION_SCHEMA = "anomalica/housekeeping-decision/1";
+const HOUSEKEEPING_DECISION_SCHEMA = "anomalica/housekeeping-decision/2";
+const HOUSEKEEPING_WAIVER_SCHEMA = "anomalica/housekeeping-research-waiver/1";
 const HOUSEKEEPING_MANIFEST_SCHEMA = "anomalica/housekeeping-algorithm/1";
 const HOUSEKEEPING_MANIFEST_PATH = "housekeeping-algorithm.json";
 const ALGORITHM_VERSION_TOKEN = /^[A-Za-z0-9._-]+$/;
@@ -232,6 +234,30 @@ function copyrightStatus(
 
 class HousekeepingUnavailable extends Error {}
 
+async function reviewHasStartedAt(
+  hash: string,
+  ref: string,
+  env: Env,
+  deps: Deps,
+): Promise<boolean> {
+  const reviewFile = await deps.github.getFileAt(
+    env.ingestsRepo,
+    `store/${hash}.review.json`,
+    ref,
+  );
+  if (!reviewFile) return false;
+  try {
+    const review = JSON.parse(reviewFile.text);
+    return review != null && typeof review === "object" &&
+      !Array.isArray(review) &&
+      ["anomalica/review-coverage/0", "anomalica/review-coverage/1"].includes(
+        review.schema,
+      ) && Array.isArray(review.reviews) && review.reviews.length > 0;
+  } catch {
+    return false;
+  }
+}
+
 async function housekeepingViewAt(
   hash: string,
   ref: string,
@@ -250,14 +276,22 @@ async function housekeepingViewAt(
   const bodyPath = await resolveBodyPathAt(env, deps, hash, ref);
   const bodyFile = await deps.github.getFileAt(env.ingestsRepo, bodyPath, ref);
   if (!bodyFile) throw new GitHubError(404, "record not found");
-  const inputSha = `sha256:${await sha256Hex(bodyFile.text)}`;
+  const currentSha = `sha256:${await sha256Hex(bodyFile.text)}`;
   const sidecarFile = await deps.github.getFileAt(
     env.ingestsRepo,
     `store/${hash}.housekeeping.json`,
     ref,
   );
 
-  let sidecar: HousekeepingSidecar | null = null;
+  let sidecar:
+    | (HousekeepingSidecar & {
+      input_sha256: string;
+      result_sha256: string;
+      algorithm_version: string;
+      passes: Record<string, unknown>;
+      items: HousekeepingV3Item[];
+    })
+    | null = null;
   let rawSidecar: Record<string, unknown> | null = null;
   let dueReason: string | null = null;
   if (!sidecarFile) {
@@ -273,25 +307,64 @@ async function housekeepingViewAt(
       rawSidecar = null;
     }
     if (!rawSidecar) dueReason = "invalid-sidecar";
-    else if (rawSidecar.schema !== "anomalica/housekeeping/2") {
+    else if (rawSidecar.schema !== "anomalica/housekeeping/3") {
       dueReason = "unsupported-schema";
-    } else if (rawSidecar.outcome !== "completed") dueReason = "incomplete";
-    else {
-      sidecar = rawSidecar as unknown as HousekeepingSidecar;
+    } else {
+      sidecar = validateV3Sidecar(rawSidecar) ? rawSidecar : null;
       if (
-        !validateV2Sidecar(sidecar) || sidecar.content_hash !== `sha256:${hash}`
+        sidecar == null || sidecar.content_hash !== `sha256:${hash}`
       ) {
         sidecar = null;
         dueReason = "invalid-sidecar";
-      } else if (sidecar.input_sha256 !== inputSha) {
-        dueReason = "input-mismatch";
-      } else if (sidecar.algorithm_version !== algorithmVersion) {
+      } else if (sidecar.result_sha256 !== currentSha) {
+        dueReason = "result-mismatch";
+      } else if (
+        sidecar.algorithm_version !== algorithmVersion ||
+        sidecar.algorithm_version !== HOUSEKEEPING_ALGORITHM_VERSION
+      ) {
         dueReason = "algorithm-mismatch";
       }
     }
   }
 
-  const proposed = sidecar && dueReason == null
+  const reviewStarted = await reviewHasStartedAt(hash, ref, env, deps);
+
+  const deterministic = sidecar?.passes.deterministic as
+    | { status?: string }
+    | undefined;
+  const research = sidecar?.passes["metadata-research"] as
+    | { status?: string }
+    | undefined;
+  let reviewState = "due";
+  if (reviewStarted) {
+    reviewState = "excluded-review-state";
+    dueReason = null;
+  } else if (sidecar && dueReason == null) {
+    if (deterministic == null) {
+      reviewState = "pending-deterministic";
+    } else if (deterministic.status === "failed") {
+      reviewState = "failed-deterministic";
+    } else if (deterministic.status !== "completed") {
+      reviewState = "due";
+      dueReason = "incomplete";
+    } else if (research == null) {
+      reviewState = "pending-research";
+    } else if (research.status === "failed") {
+      reviewState = "failed-research";
+    } else if (
+      research.status !== "completed" && research.status !== "waived"
+    ) {
+      reviewState = "due";
+      dueReason = "incomplete";
+    } else if (sidecar.items.some((item) => item.status === "proposed")) {
+      reviewState = "needs-decisions";
+    } else {
+      reviewState = "ready";
+    }
+  }
+
+  const proposed = sidecar && dueReason == null &&
+      reviewState === "needs-decisions"
     ? sidecar.items.filter((item) => item.status === "proposed")
     : [];
   const scopes = [
@@ -301,26 +374,45 @@ async function housekeepingViewAt(
       ) => (item.operation === "replace-token" ? "body" : "frontmatter")),
     ),
   ].sort();
-  const previews = sidecar
-    ? Object.fromEntries(
-      sidecar.items.map((item) => [item.id, previewItem(bodyFile.text, item)]),
-    )
-    : {};
+  const previews =
+    sidecar && dueReason == null && reviewState !== "excluded-review-state"
+      ? Object.fromEntries(
+        sidecar.items.map((
+          item,
+        ) => [item.id, previewItem(bodyFile.text, item)]),
+      )
+      : {};
   return {
-    schema: "anomalica/housekeeping-view/1",
+    schema: "anomalica/housekeeping-view/2",
     access: "full",
     viewed_sidecar_sha: sidecarFile?.sha ?? null,
     viewed_ref: ref,
     viewed_content_hash: `sha256:${hash}`,
-    viewed_input_sha256: inputSha,
+    viewed_input_sha256: sidecar?.input_sha256 ?? null,
+    viewed_result_sha256: sidecar?.result_sha256 ?? null,
     viewed_algorithm_version: algorithmVersion,
-    state: dueReason == null ? "current" : "due",
+    review_state: reviewState,
     due_reason: dueReason,
     outstanding_count: proposed.length,
     scopes,
     deep_link: `/housekeeping?record=${hash}`,
     sidecar: rawSidecar,
     previews,
+  };
+}
+
+function summariseHousekeeping(
+  view: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    schema: view.schema,
+    access: "summary",
+    review_state: view.review_state,
+    due_reason: view.due_reason,
+    outstanding_count: view.outstanding_count,
+    scopes: view.scopes,
+    deep_link: view.deep_link,
+    sidecar: null,
   };
 }
 
@@ -771,6 +863,7 @@ async function handleHousekeepingDecide(
       "viewed_ref",
       "viewed_content_hash",
       "viewed_input_sha256",
+      "viewed_result_sha256",
       "viewed_algorithm_version",
       "decisions",
     ]) ||
@@ -783,6 +876,8 @@ async function handleHousekeepingDecide(
     !/^sha256:[a-f0-9]{64}$/.test(payload.viewed_content_hash) ||
     typeof payload.viewed_input_sha256 !== "string" ||
     !/^sha256:[a-f0-9]{64}$/.test(payload.viewed_input_sha256) ||
+    typeof payload.viewed_result_sha256 !== "string" ||
+    !/^sha256:[a-f0-9]{64}$/.test(payload.viewed_result_sha256) ||
     typeof payload.viewed_algorithm_version !== "string" ||
     !ALGORITHM_VERSION_TOKEN.test(payload.viewed_algorithm_version) ||
     !Array.isArray(payload.decisions) ||
@@ -809,19 +904,30 @@ async function handleHousekeepingDecide(
   if ((await deps.github.getRef(env.ingestsRepo)) !== payload.viewed_ref) {
     return err(409, "Stale housekeeping proposal");
   }
-  const manifestFile = await deps.github.getFileAt(
-    env.ingestsRepo,
-    HOUSEKEEPING_MANIFEST_PATH,
-    payload.viewed_ref,
-  );
-  const manifestVersion = manifestFile &&
-    algorithmManifestVersion(manifestFile.text);
-  if (
-    manifestVersion == null ||
-    manifestVersion !== HOUSEKEEPING_ALGORITHM_VERSION
-  ) {
-    return err(503, "Housekeeping algorithm manifest unavailable");
+  let view: Record<string, unknown>;
+  try {
+    view = await housekeepingViewAt(hash, payload.viewed_ref, env, deps);
+  } catch (error) {
+    if (error instanceof HousekeepingUnavailable) {
+      return err(503, "Housekeeping algorithm manifest unavailable");
+    }
+    throw error;
   }
+  const identityFields = [
+    "viewed_sidecar_sha",
+    "viewed_ref",
+    "viewed_content_hash",
+    "viewed_input_sha256",
+    "viewed_result_sha256",
+    "viewed_algorithm_version",
+  ];
+  if (
+    view.review_state !== "needs-decisions" ||
+    view.access !== "full" ||
+    identityFields.some((field) => view[field] !== payload[field]) ||
+    payload.viewed_algorithm_version !== HOUSEKEEPING_ALGORITHM_VERSION
+  ) return err(409, "Stale housekeeping proposal");
+
   const sidecarFile = await deps.github.getFileAt(
     env.ingestsRepo,
     sidecarPath,
@@ -831,31 +937,14 @@ async function handleHousekeepingDecide(
   if (sidecarFile.sha !== payload.viewed_sidecar_sha) {
     return err(409, "Stale housekeeping proposal");
   }
-  const raw = sidecarFile.text;
-
   let sidecar: HousekeepingSidecar;
   try {
-    sidecar = JSON.parse(raw);
+    sidecar = JSON.parse(sidecarFile.text);
   } catch {
-    return err(500, "Unreadable housekeeping sidecar");
-  }
-  if (sidecar.schema !== "anomalica/housekeeping/2") {
-    return err(409, "Housekeeping v1 proposal is due for a fresh pass");
-  }
-  if (sidecar.algorithm_version !== HOUSEKEEPING_ALGORITHM_VERSION) {
     return err(409, "Stale housekeeping proposal");
   }
-  if (!validateV2Sidecar(sidecar)) {
-    return err(422, "Invalid housekeeping/2 sidecar");
-  }
-  if (
-    sidecar.content_hash !== `sha256:${hash}` ||
-    sidecar.content_hash !== payload.viewed_content_hash ||
-    sidecar.input_sha256 !== payload.viewed_input_sha256 ||
-    sidecar.algorithm_version !== payload.viewed_algorithm_version ||
-    sidecar.algorithm_version !== manifestVersion
-  ) {
-    return err(409, "Stale housekeeping proposal");
+  if (!validateV3Sidecar(sidecar)) {
+    return err(422, "Invalid housekeeping/3 sidecar");
   }
 
   const bodyPath = await resolveBodyPathAt(env, deps, hash, payload.viewed_ref);
@@ -866,136 +955,210 @@ async function handleHousekeepingDecide(
   );
   if (bodyFile == null) return notFound();
   const current = bodyFile.text;
-  if (`sha256:${await sha256Hex(current)}` !== sidecar.input_sha256) {
+  if (`sha256:${await sha256Hex(current)}` !== sidecar.result_sha256) {
     return err(409, "Stale housekeeping proposal");
   }
 
-  const known = new Set(sidecar.items.map((i) => i.id));
-  if (known.size !== sidecar.items.length) {
-    return err(422, "Duplicate housekeeping item id");
-  }
-  for (const id of decisions.keys()) {
-    // A stale tab must not half-succeed.
-    if (!known.has(id)) return err(400, `Unknown item: ${id}`);
-  }
-  const selected = [];
-  for (const item of sidecar.items) {
-    const decision = decisions.get(item.id);
-    if (!decision) continue;
-    // Already decided means the record has moved underneath this tab.
-    if (item.status !== "proposed") {
-      return err(409, `${item.id} is already ${item.status}`);
-    }
-    selected.push({ item, decision });
-  }
+  const proposed = sidecar.items.filter((item) => item.status === "proposed");
+  if (
+    proposed.length !== sidecar.items.length ||
+    decisions.size !== proposed.length ||
+    proposed.some((item) => !decisions.has(item.id))
+  ) return err(400, "Decisions must resolve every proposed housekeeping item");
 
-  const approved = selected
-    .filter(({ decision }) => decision === "approved")
-    .map(({ item }) => item);
+  const approved = proposed.filter((item) =>
+    decisions.get(item.id) === "approved"
+  );
+  const approvedIds = new Set(approved.map((item) => item.id));
+  const unmet = unmetDependencies(
+    sidecar.items,
+    approvedIds,
+  );
+  if (unmet.length) return err(422, `Unmet dependencies: ${unmet.join(", ")}`);
+
   const author = authorOf(user);
+  const decidedAt = isoSeconds(new Date(deps.nowSec() * 1000));
+  const decidedBy = user.email || user.login || user.name;
   const note = `housekeeping: ${approved.length} applied, ${
     decisions.size - approved.length
   } rejected`;
 
-  if (approved.length) {
-    let updated: string;
-    try {
-      const replacements = approved.filter(
-        (item) => item.operation === "replace-token",
-      ) as HousekeepingV2Item[];
-      const frontmatter = approved.filter(
-        (item) => item.operation !== "replace-token",
-      ) as HousekeepingV1Item[];
-      updated = applyTokenReplacements(current, replacements);
-      if (frontmatter.length) {
-        const approvedIds = new Set(
-          sidecar.items
-            .filter((item) =>
-              item.status === "approved" ||
-              decisions.get(item.id) === "approved"
-            )
-            .map((item) => item.id),
-        );
-        const unmet = unmetDependencies(
-          sidecar.items.filter(
-            (item) => item.operation !== "replace-token",
-          ) as HousekeepingV1Item[],
-          approvedIds,
-        );
-        if (unmet.length) {
-          return err(422, `Unmet dependencies: ${unmet.join(", ")}`);
-        }
-        const approvedFrontmatter = frontmatter.map((item) => ({
-          ...item,
-          status: "approved" as const,
-        }));
-        const result = await applyPatch(updated, approvedFrontmatter);
-        if (
-          result.didNotApply.length ||
-          result.applied.length !== approvedFrontmatter.length
-        ) {
-          return err(409, "Stale housekeeping proposal");
-        }
-        updated = result.text;
-      }
-    } catch (e) {
-      if (e instanceof ApplyConflict) return err(409, e.message);
-      if (e instanceof BodyChanged) return err(500, e.message);
-      if (e instanceof MultilineField) return err(422, e.message);
-      if (e instanceof InvalidReplacement) return err(422, e.message);
-      throw e;
+  let updated = current;
+  try {
+    const replacements = approved.filter((item) =>
+      item.operation === "replace-token"
+    ) as HousekeepingV2Item[];
+    updated = applyTokenReplacements(current, replacements);
+    const frontmatter = approved.filter((item) =>
+      item.operation !== "replace-token"
+    ).map((item) => ({
+      ...item,
+      status: "approved" as const,
+    })) as HousekeepingV1Item[];
+    if (frontmatter.length) {
+      updated = (await applyPatch(updated, frontmatter, sidecar.items)).text;
     }
-    for (const { item, decision } of selected) item.status = decision;
-    const updatedSidecar = JSON.stringify(sidecar, null, 2) + "\n";
-    try {
-      await deps.github.commitFiles(
-        env.ingestsRepo,
-        [
-          { path: bodyPath, text: updated, expectedSha: bodyFile.sha },
-          {
-            path: sidecarPath,
-            text: updatedSidecar,
-            expectedSha: sidecarFile.sha,
-          },
-        ],
-        `${note} - ${hash.slice(0, 12)}`,
-        author,
-        { expectedRef: payload.viewed_ref },
-      );
-    } catch (e) {
-      if (e instanceof GitHubError && (e.status === 409 || e.status === 422)) {
-        return err(409, "Stale housekeeping proposal");
-      }
-      throw e;
+  } catch (e) {
+    if (e instanceof ApplyConflict) return err(409, e.message);
+    if (e instanceof BodyChanged) return err(500, e.message);
+    if (e instanceof MultilineField || e instanceof InvalidReplacement) {
+      return err(422, e.message);
     }
-  } else {
-    for (const { item, decision } of selected) item.status = decision;
-    try {
-      await deps.github.commitFiles(
-        env.ingestsRepo,
-        [
-          {
-            path: sidecarPath,
-            text: JSON.stringify(sidecar, null, 2) + "\n",
-            expectedSha: sidecarFile.sha,
-          },
-        ],
-        `${note} - ${hash.slice(0, 12)} (decisions)`,
-        author,
-        { expectedRef: payload.viewed_ref },
-      );
-    } catch (e) {
-      if (e instanceof GitHubError && (e.status === 409 || e.status === 422)) {
-        return err(409, "Stale housekeeping proposal");
-      }
-      throw e;
+    throw e;
+  }
+
+  for (const item of sidecar.items) item.status = decisions.get(item.id)!;
+  sidecar.decisions.push(...sidecar.items.map((item) => ({
+    item_id: item.id,
+    status: item.status as "approved" | "rejected",
+    decided_at: decidedAt,
+    decided_by: decidedBy,
+  })));
+  sidecar.result_sha256 = `sha256:${await sha256Hex(updated)}`;
+  if (!validateV3Sidecar(sidecar)) {
+    return err(422, "Housekeeping decision produced an invalid sidecar");
+  }
+  try {
+    await deps.github.commitFiles(
+      env.ingestsRepo,
+      [
+        { path: bodyPath, text: updated, expectedSha: bodyFile.sha },
+        {
+          path: sidecarPath,
+          text: JSON.stringify(sidecar, null, 2) + "\n",
+          expectedSha: sidecarFile.sha,
+        },
+      ],
+      `${note} - ${hash.slice(0, 12)}`,
+      author,
+      { expectedRef: payload.viewed_ref },
+    );
+  } catch (e) {
+    if (e instanceof GitHubError && (e.status === 409 || e.status === 422)) {
+      return err(409, "Stale housekeeping proposal");
     }
+    throw e;
   }
 
   return json({
     applied: approved.length,
     rejected: decisions.size - approved.length,
   });
+}
+
+async function handleHousekeepingWaiveResearch(
+  hash: string,
+  req: Request,
+  env: Env,
+  deps: Deps,
+  user: User,
+): Promise<Response> {
+  if (!FULL_HASH.test(hash)) return notFound();
+  const payload = await req.json().catch(() => null);
+  const fields = [
+    "schema",
+    "viewed_sidecar_sha",
+    "viewed_ref",
+    "viewed_content_hash",
+    "viewed_input_sha256",
+    "viewed_result_sha256",
+    "viewed_algorithm_version",
+    "reason",
+  ];
+  if (
+    !hasExactKeys(payload, fields) ||
+    payload.schema !== HOUSEKEEPING_WAIVER_SCHEMA ||
+    typeof payload.viewed_sidecar_sha !== "string" ||
+    !/^[a-f0-9]{40,64}$/.test(payload.viewed_sidecar_sha) ||
+    typeof payload.viewed_ref !== "string" ||
+    !/^[a-f0-9]{40,64}$/.test(payload.viewed_ref) ||
+    typeof payload.viewed_content_hash !== "string" ||
+    !/^sha256:[a-f0-9]{64}$/.test(payload.viewed_content_hash) ||
+    typeof payload.viewed_input_sha256 !== "string" ||
+    !/^sha256:[a-f0-9]{64}$/.test(payload.viewed_input_sha256) ||
+    typeof payload.viewed_result_sha256 !== "string" ||
+    !/^sha256:[a-f0-9]{64}$/.test(payload.viewed_result_sha256) ||
+    typeof payload.viewed_algorithm_version !== "string" ||
+    !ALGORITHM_VERSION_TOKEN.test(payload.viewed_algorithm_version) ||
+    typeof payload.reason !== "string" || !payload.reason.trim()
+  ) return err(400, "Invalid housekeeping research waiver request");
+  if ((await deps.github.getRef(env.ingestsRepo)) !== payload.viewed_ref) {
+    return err(409, "Stale housekeeping proposal");
+  }
+  let view: Record<string, unknown>;
+  try {
+    view = await housekeepingViewAt(hash, payload.viewed_ref, env, deps);
+  } catch (error) {
+    if (error instanceof HousekeepingUnavailable) {
+      return err(503, "Housekeeping algorithm manifest unavailable");
+    }
+    throw error;
+  }
+  const identityFields = fields.filter((field) => field.startsWith("viewed_"));
+  if (
+    !["pending-research", "failed-research"].includes(
+      String(view.review_state),
+    ) ||
+    view.access !== "full" ||
+    identityFields.some((field) => view[field] !== payload[field]) ||
+    payload.viewed_algorithm_version !== HOUSEKEEPING_ALGORITHM_VERSION
+  ) return err(409, "Stale housekeeping proposal");
+
+  const sidecarPath = `store/${hash}.housekeeping.json`;
+  const sidecarFile = await deps.github.getFileAt(
+    env.ingestsRepo,
+    sidecarPath,
+    payload.viewed_ref,
+  );
+  if (!sidecarFile || sidecarFile.sha !== payload.viewed_sidecar_sha) {
+    return err(409, "Stale housekeeping proposal");
+  }
+  let sidecar: HousekeepingSidecar;
+  try {
+    sidecar = JSON.parse(sidecarFile.text);
+  } catch {
+    return err(409, "Stale housekeeping proposal");
+  }
+  if (!validateV3Sidecar(sidecar)) {
+    return err(422, "Invalid housekeeping/3 sidecar");
+  }
+  if (
+    sidecar.passes.deterministic?.status !== "completed" ||
+    (sidecar.passes["metadata-research"] != null &&
+      sidecar.passes["metadata-research"].status !== "failed") ||
+    sidecar.result_sha256 !== payload.viewed_result_sha256 ||
+    sidecar.result_sha256 !== payload.viewed_input_sha256
+  ) return err(409, "Stale housekeeping proposal");
+  const at = isoSeconds(new Date(deps.nowSec() * 1000));
+  const by = user.email || user.login || user.name;
+  sidecar.passes["metadata-research"] = {
+    status: "waived",
+    finished_at: at,
+    waiver: { by, at, reason: payload.reason },
+  };
+  sidecar.checked_at = at;
+  if (!validateV3Sidecar(sidecar)) {
+    return err(422, "Housekeeping waiver produced an invalid sidecar");
+  }
+  try {
+    await deps.github.commitFiles(
+      env.ingestsRepo,
+      [{
+        path: sidecarPath,
+        text: JSON.stringify(sidecar, null, 2) + "\n",
+        expectedSha: sidecarFile.sha,
+      }],
+      `housekeeping: waive research - ${hash.slice(0, 12)}`,
+      authorOf(user),
+      { expectedRef: payload.viewed_ref },
+    );
+  } catch (e) {
+    if (e instanceof GitHubError && (e.status === 409 || e.status === 422)) {
+      return err(409, "Stale housekeeping proposal");
+    }
+    throw e;
+  }
+  return json({ waived: true });
 }
 
 async function handleCuration(
@@ -1202,6 +1365,31 @@ async function route(req: Request, env: Env, deps: Deps): Promise<Response> {
     return handleHistory(history[1], env, deps);
   }
 
+  const housekeepingRead = pathname.match(
+    /^\/api\/ingests\/([^/]+)\/housekeeping$/,
+  );
+  if (housekeepingRead) {
+    if (method !== "GET") return err(405, "Method not allowed");
+    const hash = housekeepingRead[1];
+    if (!FULL_HASH.test(hash)) return notFound();
+    const ref = await deps.github.getRef(env.ingestsRepo);
+    let view: Record<string, unknown>;
+    try {
+      view = await housekeepingViewAt(hash, ref, env, deps);
+    } catch (error) {
+      if (error instanceof HousekeepingUnavailable) {
+        return err(503, "Housekeeping algorithm manifest unavailable");
+      }
+      throw error;
+    }
+    const gated = await deps.github.getFileAt(
+      env.ingestsRepo,
+      `store/${hash}.verification.json`,
+      ref,
+    );
+    return json(gated ? summariseHousekeeping(view) : view);
+  }
+
   // Everything past here writes - require a logged-in user AND a role that may
   // write. Being logged in is NOT enough: unlisted logins default to contributor
   // and are refused, which is what stops any GitHub account committing to live
@@ -1237,14 +1425,16 @@ async function route(req: Request, env: Env, deps: Deps): Promise<Response> {
   }
 
   const housekeep = pathname.match(
-    /^\/api\/ingests\/([^/]+)\/housekeeping\/decide$/,
+    /^\/api\/ingests\/([^/]+)\/housekeeping\/(decide|waive-research)$/,
   );
   if (housekeep && method === "POST") {
     const denied = await denyUnless("reviewer");
     if (denied) return denied;
     const hash = await resolveWriteHash(env, deps, housekeep[1]);
     if (!hash) return notFound();
-    return handleHousekeepingDecide(hash, req, env, deps, user!);
+    return housekeep[2] === "decide"
+      ? handleHousekeepingDecide(hash, req, env, deps, user!)
+      : handleHousekeepingWaiveResearch(hash, req, env, deps, user!);
   }
 
   const curate = pathname.match(

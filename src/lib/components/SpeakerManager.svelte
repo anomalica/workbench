@@ -93,12 +93,16 @@
   // it as named is what invites the rest of the pipeline to treat
   // "interviewer 2" as a person and follow them between records.
   let anonymous = $derived((id: string) => isAnonymousSpeaker(id) && !isSpecialSpeaker(id));
-  let named = $derived(
-    speakerRows().filter(
-      (r) =>
-        (!isDefaultSpeakerName(r.id) && !isSpecialSpeaker(r.id) && !anonymous(r.id)) ||
-        (namedIdentities().has(speakerIdentity(r.id)) && !anonymous(r.id)),
-    ),
+  let named = $derived.by(() =>
+    speakerRows()
+      .map((row, index) => ({ row, index }))
+      .filter(
+        ({ row }) =>
+          (!isDefaultSpeakerName(row.id) && !isSpecialSpeaker(row.id) && !anonymous(row.id)) ||
+          (namedIdentities().has(speakerIdentity(row.id)) && !anonymous(row.id)),
+      )
+      .sort((a, b) => b.row.total - a.row.total || a.index - b.index)
+      .map(({ row }) => row),
   );
   let unnamed = $derived(
     speakerRows().filter((r) => anonymous(r.id) || (isDefaultSpeakerName(r.id) && !namedSpeakers.includes(r.id))),
@@ -113,6 +117,19 @@
       (n) => !speakerRows().some((r) => speakerIdentity(r.id) === speakerIdentity(n)),
     ),
   );
+  let namedChoices = $derived.by(() => {
+    const choices = [...namedSpeakers];
+    for (const row of named) {
+      if (!choices.some((name) => speakerIdentity(name) === speakerIdentity(row.id))) {
+        choices.push(row.id);
+      }
+    }
+    const totals = new Map(named.map((row) => [speakerIdentity(row.id), row.total]));
+    return choices
+      .map((name, index) => ({ name, index, total: totals.get(speakerIdentity(name)) ?? 0 }))
+      .sort((a, b) => b.total - a.total || a.index - b.index)
+      .map((choice) => choice.name);
+  });
 
   // New speaker input
   let newSpeakerName = $state("");
@@ -695,22 +712,13 @@
           </button>
           {#if assigningId === row.id}
             <div class="absolute right-0 top-full mt-1 z-20 bg-surface-raised border border-border rounded shadow-lg py-1 min-w-40 max-h-48 overflow-auto">
-              {#each namedSpeakers as name}
+              {#each namedChoices as name}
                 <button
                   onclick={(e) => { e.stopPropagation(); assignSpeaker(row.id, name); }}
                   class="block w-full text-left px-3 py-1.5 text-sm font-ui cursor-pointer hover:bg-primary-container/30 text-on-surface"
                 >
                   <SpeakerDot speaker={name} inline />
                   {name}
-                </button>
-              {/each}
-              {#each named.filter((n) => !namedSpeakers.includes(n.id)) as namedRow}
-                <button
-                  onclick={(e) => { e.stopPropagation(); assignSpeaker(row.id, namedRow.id); }}
-                  class="block w-full text-left px-3 py-1.5 text-sm font-ui cursor-pointer hover:bg-primary-container/30 text-on-surface"
-                >
-                  <SpeakerDot speaker={namedRow.id} inline />
-                  {namedRow.id}
                 </button>
               {/each}
               <div class="border-t border-border mt-1 pt-1">
@@ -810,4 +818,3 @@
     {/each}
   </div>
 {/if}
-

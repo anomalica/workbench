@@ -22,6 +22,7 @@
     type InfrastructureSummary,
     type InfrastructureEntity,
     type InfrastructureEntityDetail,
+    type IntakeQueueError,
     type InfrastructureClaim,
     type InfrastructureRecord,
     type PipelineStage,
@@ -40,6 +41,7 @@
 
   let summary = $state<InfrastructureSummary | null>(null);
   let sourceRecords = $state<InfrastructureRecord[]>([]);
+  let intakeErrors = $state<IntakeQueueError[]>([]);
   let unavailable = $state(false);
   let booted = $state(false);
   let tab = $state<Tab>("document");
@@ -65,7 +67,7 @@
    */
   const STAGE: Record<PipelineStage, { label: string; reach: number; note: string }> = {
     named: { label: "Not held", reach: 0, note: "Named by the material. We do not have it." },
-    queued: { label: "In the queue", reach: 0, note: "Ingested, waiting to be promoted to a record." },
+    queued: { label: "Pending intake", reach: 0, note: "Acquisition is pending. This is not yet a record." },
     ingested: { label: "Ingested", reach: 1, note: "We have it as a record. Not reviewed enough to digest." },
     reviewed: { label: "Reviewed", reach: 2, note: "Review complete. Waiting to be digested." },
     digested: { label: "Digested", reach: 3, note: "Claims extracted. It is in the knowledge graph." },
@@ -156,6 +158,7 @@
     const page = await fetchInfrastructure();
     summary = page.summary;
     sourceRecords = page.records;
+    intakeErrors = page.intake_errors ?? [];
     unavailable = page.summary === null;
     booted = true;
     if (!unavailable) await loadList();
@@ -200,19 +203,25 @@
 <!-- One track, used wherever a work appears. Three segments because "named"
      is the absence of progress rather than a step: an empty track says we have
      the title and nothing else. -->
-{#snippet track(stage: PipelineStage, stale: boolean)}
+{#snippet track(stage: PipelineStage, generationStatus: InfrastructureEntity["generation_status"])}
   {@const reach = STAGE[stage].reach}
   <span
     class="inline-flex items-center gap-px align-middle"
-    title="{STAGE[stage].note}{stale ? ' Ingested by a superseded version of the ingester.' : ''}"
+    title="{STAGE[stage].note}{reach > 0 && generationStatus === 'stale'
+      ? ' Ingested by a superseded generation of the ingester.'
+      : reach > 0 && generationStatus === 'unknown'
+        ? ' The ingest generation cannot be compared with the current manifest.'
+        : ''}"
   >
     {#each [1, 2, 3] as step}
       <span
         class="w-2.5 h-1.5 first:rounded-l-sm last:rounded-r-sm
           {step > reach
           ? 'bg-on-surface-muted/15'
-          : stale
+          : generationStatus === 'stale'
             ? 'bg-amber-500/80'
+            : generationStatus === 'unknown'
+              ? 'bg-on-surface-muted/45'
             : 'bg-success/80'}"
       ></span>
     {/each}
@@ -228,6 +237,19 @@
     </p>
   </div>
 {:else}
+  {#if intakeErrors.length}
+    <div class="mx-6 mt-4 rounded border border-error/40 bg-error/5 px-4 py-3" role="alert">
+      <p class="text-sm font-ui font-medium text-error">Intake queue blocked</p>
+      <p class="mt-0.5 text-xs text-on-surface-secondary">
+        These transient candidates need operator attention. Workbench has not changed them.
+      </p>
+      <ul class="mt-2 space-y-1 text-xs text-on-surface-secondary">
+        {#each intakeErrors as item (item.path)}
+          <li><code>{item.path}</code>: {item.reason}</li>
+        {/each}
+      </ul>
+    </div>
+  {/if}
   <!-- What this is. Nobody has seen this data before, so the view says what it
        holds before it shows any of it. -->
   {#if summary}
@@ -357,7 +379,7 @@
               <div class="flex items-baseline gap-2">
                 <span class="text-sm text-on-surface flex-1 min-w-0 truncate">{e.name}</span>
                 {#if tab === "document"}
-                  {@render track(e.stage, e.stale)}
+                  {@render track(e.stage, e.generation_status)}
                 {/if}
               </div>
               <div class="flex items-center gap-2 mt-0.5 text-[11px] font-ui text-on-surface-muted tabular-nums">
@@ -421,9 +443,13 @@
             </div>
             {#if selected.kind === "document"}
               <div class="flex items-center gap-2 mt-1.5">
-                {@render track(selected.stage, selected.stale)}
+                {@render track(selected.stage, selected.generation_status)}
                 <span class="text-xs font-ui text-on-surface-secondary">
-                  {STAGE[selected.stage].label}{selected.stale ? " - ingest out of date" : ""}
+                  {STAGE[selected.stage].label}{selected.generation_status === "stale"
+                    ? " - ingest out of date"
+                    : STAGE[selected.stage].reach > 0 && selected.generation_status === "unknown"
+                      ? " - ingest generation unknown"
+                      : ""}
                 </span>
                 {#if selected.record_hash}
                   <button
@@ -537,7 +563,7 @@
                       {@const n = summary.works_by_stage[stage] ?? 0}
                       {#if n}
                         <li class="flex items-center gap-2">
-                          {@render track(stage as PipelineStage, false)}
+                          {@render track(stage as PipelineStage, "current")}
                           <span class="text-[11px] font-ui text-on-surface-muted tabular-nums"
                             >{n}</span
                           >

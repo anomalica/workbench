@@ -35,7 +35,16 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 
 from anomalica_common import pre_digest
-from anomalica_common.review_gate import digestibility
+from anomalica_common.review_gate import (
+    CarryoverState,
+    ReviewBindingError,
+    ReviewBindingState,
+    ReviewBindingValidity,
+    digestibility,
+    parsed_record_body,
+    reviewed_body_sha256,
+    validate_review_binding,
+)
 
 from backend import (
     account_chronology,
@@ -180,19 +189,19 @@ def parse_frontmatter(text: str) -> tuple[dict, str, str]:
     copyright block). Nested keys are flattened with dots, e.g.
     copyright.status becomes a top-level key.
     """
-    match = re.match(r"^(---\n.*?\n---\n)(.*)", text, re.DOTALL)
+    match = re.match(
+        r"\A(---(?:\r\n|\r|\n).*?(?:\r\n|\r|\n)---(?:\r\n|\r|\n|\Z))(.*)\Z",
+        text,
+        re.DOTALL,
+    )
     if not match:
         return {}, text, ""
 
     raw_frontmatter = match.group(1)
     body = match.group(2)
-    fm_content = raw_frontmatter[
-        4 : raw_frontmatter.rindex("---")
-    ]  # strip --- delimiters
-
     frontmatter: dict = {}
     current_parent = ""
-    for line in fm_content.splitlines():
+    for line in raw_frontmatter.splitlines()[1:-1]:
         # Top-level key with inline value
         if ":" in line and not line.startswith(" "):
             key, _, value = line.partition(":")
@@ -223,32 +232,73 @@ def parse_frontmatter(text: str) -> tuple[dict, str, str]:
     return frontmatter, body, raw_frontmatter
 
 
+DOCUMENT_TYPES = frozenset(
+    {
+        "book",
+        "paper",
+        "report",
+        "article",
+        "letter",
+        "email",
+        "statement",
+        "form",
+        "transcript",
+        "slide",
+        "interview",
+        "documentary",
+        "footage",
+        "podcast",
+        "lecture",
+        "broadcast",
+        "recording",
+    }
+)
+
+
+def _validate_document_type(record_text: str) -> None:
+    frontmatter, _body, raw_frontmatter = parse_frontmatter(record_text)
+    has_field = any(
+        line.startswith("document_type:") for line in raw_frontmatter.splitlines()[1:-1]
+    )
+    if has_field and frontmatter.get("document_type") not in DOCUMENT_TYPES:
+        raise HTTPException(status_code=400, detail="Invalid document_type")
+
+
 # Digestibility (the digester gate's rule: 100% of content units observed) is
 # single-sourced in anomalica_common.review_gate.digestibility - imported above
-# so the workbench's browse-list flag and the digester's gate never drift. The
-# `_needs_body_for_digestibility` helper avoids reading a record body when the
-# sidecar already carries a verdict (the only case the pure rule needs the text).
-def _needs_body_for_digestibility(sidecar: dict | None) -> bool:
-    return (
-        sidecar is not None
-        and "observed_coverage" not in sidecar
-        and "digestible" not in sidecar
+# so the workbench's browse-list flag and the digester's gate never drift.
+def _validated_digestibility(record_text: str, sidecar: dict | None):
+    binding = (
+        ReviewBindingState(True, CarryoverState.RESOLVED)
+        if sidecar is not None
+        else None
     )
+    return digestibility(record_text, sidecar, binding=binding)
 
 
 # Pipeline versioning + supersession (anomalica decision 0040). A record's
 # `processing.pipeline_version` is the per-media-type extraction generation; a
-# record is STALE only when that value is PRESENT and below the current version
-# for its media type (absent = "generation not declared", no badge). Supersession
-# is the `superseded_by` frontmatter flag (a retired re-acquisition); the browse
-# list hides any record carrying it, with source_url newest-wins as belt-and-braces.
+# record generation is current only when that value equals an explicit manifest
+# entry for its source type. Missing, malformed and unexpectedly-ahead values are
+# unknown rather than generation zero. Supersession is the `superseded_by`
+# frontmatter flag (a retired re-acquisition); the browse list hides any record
+# carrying it, with source_url newest-wins as belt-and-braces.
 def _pipeline_version_of(frontmatter: dict) -> int | None:
-    """The record's extraction generation, or None if not declared."""
+    """The record's positive extraction generation, or None if invalid."""
     raw = frontmatter.get("processing.pipeline_version")
     if raw is None:
         return None
     text = str(raw).strip()
-    return int(text) if text.lstrip("-").isdigit() else None
+    return int(text) if text.isdigit() and int(text) > 0 else None
+
+
+def _pipeline_status(version: int | None, current: int | None) -> str:
+    """Compare record and manifest generations using ADR 0050's three states."""
+    if version is None or current is None or version > current:
+        return "unknown"
+    if version < current:
+        return "stale"
+    return "current"
 
 
 def _date_sort_key(value: str | None) -> float:
@@ -452,18 +502,18 @@ class IngestSource(ABC):
         prompt a reload rather than silently showing a stale record."""
 
     @abstractmethod
-    def load_highlights(self, full_hash: str) -> dict | None:
-        """Load the relevance-tuning highlights sidecar, or None if absent."""
+    def load_gold(self, full_hash: str) -> dict | None:
+        """Load the compact human-gold sidecar, or None if absent."""
 
     @abstractmethod
-    def save_highlights(
+    def save_gold(
         self,
         full_hash: str,
         sidecar: dict,
         author_name: str,
         author_email: str,
     ) -> bool:
-        """Write the highlights sidecar and commit it. Returns True on success."""
+        """Write the human-gold sidecar and commit it. Returns True on success."""
 
     @abstractmethod
     def reviewed_by_email(self, email: str) -> dict[str, str]:
@@ -545,23 +595,23 @@ class LocalIngestSource(IngestSource):
     def _pipeline_versions(self) -> dict[str, int]:
         """Current extraction generation per media type, from
         `store/_pipeline_versions.yaml` ({media_type: int}) - a flat map the
-        ingester upserts each run (decision 0040). Parsed without a YAML
-        dependency; a missing file yields an empty map (nothing badges)."""
+        ingester upserts each run (decisions 0040 and 0050). A missing or
+        malformed manifest yields an empty map, making currentness unknown."""
         path = self.store / "_pipeline_versions.yaml"
-        versions: dict[str, int] = {}
         try:
-            text = path.read_text()
-        except OSError:
-            return versions
-        for line in text.splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or ":" not in line:
-                continue
-            key, _, value = line.partition(":")
-            value = value.strip()
-            if value.lstrip("-").isdigit():
-                versions[key.strip()] = int(value)
-        return versions
+            loaded = yaml.safe_load(path.read_text())
+        except (OSError, yaml.YAMLError):
+            return {}
+        if not isinstance(loaded, dict):
+            return {}
+        return {
+            source_type: generation
+            for source_type, generation in loaded.items()
+            if isinstance(source_type, str)
+            and isinstance(generation, int)
+            and not isinstance(generation, bool)
+            and generation > 0
+        }
 
     def _dedup_by_source(self, ingests: list[dict]) -> list[dict]:
         """Belt-and-braces for supersession: at most one record per source_url,
@@ -601,11 +651,14 @@ class LocalIngestSource(IngestSource):
     def list_archived_ingests(self) -> list[dict]:
         """Summary metadata for every record in store/v1/."""
         ingests: list[dict] = []
+        manifest = self._pipeline_versions()
         for content_hash, (md_path, frontmatter) in self._scan_archived().items():
             creators = frontmatter.get("creators") or frontmatter.get("authors") or []
             if not isinstance(creators, list):
                 creators = []
             schema_version = _schema_version(frontmatter.get("schema", ""))
+            pipeline_version = _pipeline_version_of(frontmatter)
+            pipeline_current = manifest.get(frontmatter.get("source_type", ""))
             ingests.append(
                 {
                     "content_hash": content_hash,
@@ -626,8 +679,11 @@ class LocalIngestSource(IngestSource):
                     # What the thing IS (email, transcript...), distinct from how it
                     # was acquired. The list shows this in preference.
                     "document_type": frontmatter.get("document_type", ""),
-                    "pipeline_version": None,
-                    "pipeline_current": None,
+                    "pipeline_version": pipeline_version,
+                    "pipeline_current": pipeline_current,
+                    "pipeline_status": _pipeline_status(
+                        pipeline_version, pipeline_current
+                    ),
                     "source_url": frontmatter.get("source_url", ""),
                     "source_file": frontmatter.get("source_file", ""),
                     "source_hash": frontmatter.get("source_hash", ""),
@@ -1015,14 +1071,12 @@ class LocalIngestSource(IngestSource):
             creators = frontmatter.get("creators") or frontmatter.get("authors") or []
             if not isinstance(creators, list):
                 creators = []
-            # Digestibility: read the coverage sidecar; only read the record
-            # body when the legacy recompute path needs it (no stored verdict).
             sidecar = current_coverage.get(content_hash)
-            record_text = (
-                md_path.read_text() if _needs_body_for_digestibility(sidecar) else None
-            )
-            verdict = digestibility(record_text, sidecar)
+            record_text = md_path.read_bytes().decode("utf-8")
+            verdict = _validated_digestibility(record_text, sidecar)
             schema_version = _schema_version(frontmatter.get("schema", ""))
+            pipeline_version = _pipeline_version_of(frontmatter)
+            pipeline_current = manifest.get(frontmatter.get("source_type", ""))
             ingests.append(
                 {
                     "content_hash": content_hash,
@@ -1044,11 +1098,12 @@ class LocalIngestSource(IngestSource):
                     # was acquired. The list shows this in preference.
                     "document_type": frontmatter.get("document_type", ""),
                     # Extraction generation vs the current per-media-type version
-                    # (decision 0040). The frontend badges "outdated" only when
-                    # pipeline_version is present and below pipeline_current.
-                    "pipeline_version": _pipeline_version_of(frontmatter),
-                    "pipeline_current": manifest.get(
-                        frontmatter.get("source_type", "")
+                    # (decisions 0040 and 0050). Raw values remain available to
+                    # explain the comparison; status carries the three states.
+                    "pipeline_version": pipeline_version,
+                    "pipeline_current": pipeline_current,
+                    "pipeline_status": _pipeline_status(
+                        pipeline_version, pipeline_current
                     ),
                     # The pipeline tried to refresh this stale record and would
                     # not: the fresh extraction lost words a reviewer had kept.
@@ -1123,8 +1178,7 @@ class LocalIngestSource(IngestSource):
             return None
         md_path, _ = entry
 
-        with open(md_path) as f:
-            content = f.read()
+        content = md_path.read_bytes().decode("utf-8")
 
         return self._ingest_from_content(full_hash, content)
 
@@ -1144,9 +1198,7 @@ class LocalIngestSource(IngestSource):
         # edited (e.g. highlight markers), silently changing coverage under a
         # review that never moved.
         sidecar = self.load_coverage(full_hash)
-        verdict = digestibility(
-            content if _needs_body_for_digestibility(sidecar) else None, sidecar
-        )
+        verdict = _validated_digestibility(content, sidecar)
         return {
             "content_hash": full_hash,
             "public_hash": full_hash[:PUBLIC_HASH_LENGTH],
@@ -1233,7 +1285,11 @@ class LocalIngestSource(IngestSource):
             path = self.store.parent / relative
             if relative == "housekeeping-algorithm.json" or (
                 path.parent == self.store
-                and (path.suffix == ".md" or path.name.endswith(".housekeeping.json"))
+                and (
+                    path.suffix == ".md"
+                    or path.name.endswith(".housekeeping.json")
+                    or path.name.endswith(".review.json")
+                )
             ):
                 entries.append((path, raw_blob.decode("ascii")))
 
@@ -1778,34 +1834,60 @@ class LocalIngestSource(IngestSource):
             return json.load(f)
 
     @staticmethod
-    def _coverage_matches_record(
-        sidecar: dict, record_text: str, reviewed_record_text: str
-    ) -> bool:
+    def _coverage_carryover_state(sidecar: dict, record_text: str) -> CarryoverState:
         frontmatter, current_body, _ = parse_frontmatter(record_text)
         carryover_at = frontmatter.get("review_carryover.at")
-        if carryover_at:
+        if not carryover_at:
+            return CarryoverState.ABSENT
+        try:
+            marker = datetime.fromisoformat(str(carryover_at).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return CarryoverState.UNRESOLVED
+        if not _valid_intake_date(marker):
+            return CarryoverState.UNRESOLVED
+        for review in sidecar.get("reviews") or []:
             try:
-                marker = datetime.fromisoformat(
-                    str(carryover_at).replace("Z", "+00:00")
+                reviewed_at = datetime.fromisoformat(
+                    str(review.get("at", "")).replace("Z", "+00:00")
                 )
             except (TypeError, ValueError):
-                return False
-            if not _valid_intake_date(marker):
-                return False
-            resolved = False
-            for review in sidecar.get("reviews") or []:
-                try:
-                    reviewed_at = datetime.fromisoformat(
-                        str(review.get("at", "")).replace("Z", "+00:00")
-                    )
-                except (TypeError, ValueError):
-                    continue
-                if _valid_intake_date(reviewed_at) and reviewed_at >= marker:
-                    resolved = True
-                    break
-            if not resolved:
-                return False
-        return parse_frontmatter(reviewed_record_text)[1] == current_body
+                continue
+            if _valid_intake_date(reviewed_at) and reviewed_at >= marker:
+                return CarryoverState.RESOLVED
+        return CarryoverState.UNRESOLVED
+
+    @classmethod
+    def _coverage_direct_binding_matches(
+        cls, sidecar: dict, record_text: str
+    ) -> bool | None:
+        validation = validate_review_binding(
+            parsed_record_body(record_text).encode("utf-8"),
+            sidecar,
+            binding=ReviewBindingState(
+                False, cls._coverage_carryover_state(sidecar, record_text)
+            ),
+        )
+        if validation.validity is ReviewBindingValidity.VALID:
+            return True
+        if validation.error is ReviewBindingError.LEGACY_UNVALIDATED:
+            return None
+        return False
+
+    @classmethod
+    def _coverage_legacy_binding_matches(
+        cls, sidecar: dict, record_text: str, reviewed_record_text: str
+    ) -> bool:
+        bodies_match = parsed_record_body(reviewed_record_text).encode(
+            "utf-8"
+        ) == parsed_record_body(record_text).encode("utf-8")
+        validation = validate_review_binding(
+            parsed_record_body(record_text).encode("utf-8"),
+            sidecar,
+            binding=ReviewBindingState(
+                bodies_match, cls._coverage_carryover_state(sidecar, record_text)
+            ),
+        )
+        return validation.validity is ReviewBindingValidity.VALID
 
     @staticmethod
     def _git_blob_batch(repo_dir: Path, specs: list[str]) -> dict[str, str]:
@@ -1843,10 +1925,43 @@ class LocalIngestSource(IngestSource):
                 continue
         return out
 
+    @staticmethod
+    def _latest_coverage_revision(repo_dir: Path, coverage_rel: str) -> str:
+        revision = subprocess.run(
+            ["git", "log", "-1", "--format=%H", "--", coverage_rel],
+            cwd=repo_dir,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return revision.stdout.strip() if revision.returncode == 0 else ""
+
+    def _record_text_at_ref(
+        self, full_hash: str, ref: str, preferred_path: Path
+    ) -> str | None:
+        loaded = self.file_at_ref(preferred_path, ref)
+        if loaded is not None:
+            try:
+                text = loaded[1].decode("utf-8")
+            except UnicodeDecodeError:
+                text = ""
+            if (
+                normalise_hash(parse_frontmatter(text)[0].get("content_hash"))
+                == full_hash
+            ):
+                return text
+        located = self.record_at_ref(full_hash, ref)
+        if located is None:
+            return None
+        try:
+            return located[2].decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+
     def _current_coverages(
         self, index: dict[str, tuple[Path, dict]]
     ) -> dict[str, dict]:
-        """Validate all sidecars with three Git processes, independent of size."""
+        """Validate all sidecars with a bounded number of Git processes."""
         repo_dir = self.store.parent
         candidates: dict[str, tuple[dict, Path, str]] = {}
         for full_hash, (md_path, _) in index.items():
@@ -1854,7 +1969,11 @@ class LocalIngestSource(IngestSource):
             if sidecar is None:
                 continue
             coverage_rel = str(self._coverage_path(full_hash).relative_to(repo_dir))
-            candidates[coverage_rel] = (sidecar, md_path, md_path.read_text())
+            candidates[coverage_rel] = (
+                sidecar,
+                md_path,
+                md_path.read_bytes().decode("utf-8"),
+            )
         if not candidates:
             return {}
 
@@ -1873,57 +1992,81 @@ class LocalIngestSource(IngestSource):
             if len(item) > 3
         }
 
-        revisions: dict[str, str] = {}
+        current: dict[str, dict] = {}
         legacy_paths: list[str] = []
-        for coverage_rel, (sidecar, md_path, _) in candidates.items():
+        for coverage_rel, (sidecar, _md_path, record_text) in candidates.items():
+            direct_match = self._coverage_direct_binding_matches(sidecar, record_text)
+            if direct_match is not None:
+                if direct_match:
+                    full_hash = coverage_rel.removesuffix(".review.json").rsplit(
+                        "/", 1
+                    )[-1]
+                    current[full_hash] = sidecar
+                continue
+            if coverage_rel in dirty:
+                continue
             reviews = sidecar.get("reviews") or []
             parent_commit = reviews[-1].get("parent_commit") if reviews else None
             if isinstance(parent_commit, str) and re.fullmatch(
                 r"[0-9a-f]{40}|[0-9a-f]{64}", parent_commit
             ):
-                revisions[coverage_rel] = parent_commit
-            elif coverage_rel not in dirty:
                 legacy_paths.append(coverage_rel)
 
-        if legacy_paths:
-            history = subprocess.run(
-                [
-                    "git",
-                    "log",
-                    "--format=COMMIT %H",
-                    "--name-only",
-                    "--",
-                    *legacy_paths,
-                ],
-                cwd=repo_dir,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if history.returncode != 0:
-                return {}
-            commit = ""
-            for line in history.stdout.splitlines():
-                if line.startswith("COMMIT "):
-                    commit = line.removeprefix("COMMIT ")
-                elif line in candidates and line not in revisions:
-                    revisions[line] = commit
+        if not legacy_paths:
+            return current
+        revisions = {
+            coverage_rel: revision
+            for coverage_rel in legacy_paths
+            if (revision := self._latest_coverage_revision(repo_dir, coverage_rel))
+        }
+
+        parents = subprocess.run(
+            [
+                "git",
+                "rev-list",
+                "--parents",
+                "--no-walk=unsorted",
+                *set(revisions.values()),
+            ],
+            cwd=repo_dir,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if parents.returncode != 0:
+            return current
+        parents_by_commit = {
+            parts[0]: set(parts[1:])
+            for line in parents.stdout.splitlines()
+            if (parts := line.split())
+        }
 
         specs_by_path = {
             coverage_rel: f"{revision}:{candidates[coverage_rel][1].relative_to(repo_dir)}"
             for coverage_rel, revision in revisions.items()
             if revision
+            and candidates[coverage_rel][0]["reviews"][-1]["parent_commit"]
+            in parents_by_commit.get(revision, set())
         }
 
         blobs = self._git_blob_batch(repo_dir, list(specs_by_path.values()))
-        current: dict[str, dict] = {}
         for coverage_rel, spec in specs_by_path.items():
             reviewed_record = blobs.get(spec)
-            sidecar, _, record_text = candidates[coverage_rel]
-            if reviewed_record is not None and self._coverage_matches_record(
+            sidecar, md_path, record_text = candidates[coverage_rel]
+            full_hash = coverage_rel.removesuffix(".review.json").rsplit("/", 1)[-1]
+            if (
+                reviewed_record is None
+                or normalise_hash(
+                    parse_frontmatter(reviewed_record)[0].get("content_hash")
+                )
+                != full_hash
+            ):
+                reviewed_record = self._record_text_at_ref(
+                    full_hash, revisions[coverage_rel], md_path
+                )
+            if reviewed_record is not None and self._coverage_legacy_binding_matches(
                 sidecar, record_text, reviewed_record
             ):
-                full_hash = coverage_rel.removesuffix(".review.json").rsplit("/", 1)[-1]
                 current[full_hash] = sidecar
         return current
 
@@ -1932,12 +2075,9 @@ class LocalIngestSource(IngestSource):
     ) -> dict | None:
         """Return coverage only when it describes the current record body.
 
-        The stable content hash identifies the source asset, not extraction output.
-        A refresh can therefore rewrite the body without moving its sidecar. Compare
-        with the body committed at the sidecar's latest revision so that an old
-        verdict cannot silently survive that rewrite. A dirty sidecar is current
-        only when its latest review carries a parent commit whose body still
-        matches; arbitrary uncommitted edits therefore cannot revive stale review.
+        Prefer the exact body hash on current sidecars. For legacy sidecars, require
+        clean Git state, a genuine parent binding, and the body stored by the
+        sidecar commit so a refresh cannot silently retain an old verdict.
         """
         sidecar = self._load_coverage_file(full_hash)
         if sidecar is None:
@@ -1951,28 +2091,10 @@ class LocalIngestSource(IngestSource):
         repo_dir = self.store.parent
         coverage_path = self._coverage_path(full_hash)
         coverage_rel = str(coverage_path.relative_to(repo_dir))
-        record_rel = str(md_path.relative_to(repo_dir))
 
-        reviews = sidecar.get("reviews") or []
-        parent_commit = reviews[-1].get("parent_commit") if reviews else None
-        if isinstance(parent_commit, str) and re.fullmatch(
-            r"[0-9a-f]{40}|[0-9a-f]{64}", parent_commit
-        ):
-            reviewed_record = subprocess.run(
-                ["git", "show", f"{parent_commit}:{record_rel}"],
-                cwd=repo_dir,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            return (
-                sidecar
-                if reviewed_record.returncode == 0
-                and self._coverage_matches_record(
-                    sidecar, record_text, reviewed_record.stdout
-                )
-                else None
-            )
+        direct_match = self._coverage_direct_binding_matches(sidecar, record_text)
+        if direct_match is not None:
+            return sidecar if direct_match else None
 
         dirty = subprocess.run(
             ["git", "status", "--porcelain", "--", coverage_rel],
@@ -1984,29 +2106,31 @@ class LocalIngestSource(IngestSource):
         if dirty.returncode != 0 or dirty.stdout.strip():
             return None
 
-        revision = subprocess.run(
-            ["git", "log", "-1", "--format=%H", "--", coverage_rel],
-            cwd=repo_dir,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        commit = revision.stdout.strip() if revision.returncode == 0 else ""
+        commit = self._latest_coverage_revision(repo_dir, coverage_rel)
         if not commit:
             return None
-        reviewed_record = subprocess.run(
-            ["git", "show", f"{commit}:{record_rel}"],
+        reviews = sidecar.get("reviews") or []
+        parent_commit = reviews[-1].get("parent_commit") if reviews else None
+        if not isinstance(parent_commit, str) or not re.fullmatch(
+            r"[0-9a-f]{40}|[0-9a-f]{64}", parent_commit
+        ):
+            return None
+        ancestry = subprocess.run(
+            ["git", "rev-list", "--parents", "-n", "1", commit],
             cwd=repo_dir,
             capture_output=True,
             text=True,
             check=False,
         )
-        if reviewed_record.returncode != 0:
+        if ancestry.returncode != 0 or parent_commit not in ancestry.stdout.split()[1:]:
+            return None
+        reviewed_record_text = self._record_text_at_ref(full_hash, commit, md_path)
+        if reviewed_record_text is None:
             return None
         return (
             sidecar
-            if self._coverage_matches_record(
-                sidecar, record_text, reviewed_record.stdout
+            if self._coverage_legacy_binding_matches(
+                sidecar, record_text, reviewed_record_text
             )
             else None
         )
@@ -2024,17 +2148,17 @@ class LocalIngestSource(IngestSource):
             "superseded_by": normalise_hash(frontmatter.get("superseded_by")),
         }
 
-    def _highlights_path(self, full_hash: str) -> Path | None:
-        """The highlights sidecar sits next to the record file, so an
+    def _gold_path(self, full_hash: str) -> Path | None:
+        """The gold sidecar sits next to the record file, so an
         archived (store/v1/) record's sidecar lives in store/v1/ too."""
         entry = self._scan().get(full_hash) or self._scan_archived().get(full_hash)
         if entry is None:
             return None
         md_path, _ = entry
-        return md_path.parent / f"{full_hash}.highlights.json"
+        return md_path.parent / f"{full_hash}.gold.json"
 
-    def load_highlights(self, full_hash: str) -> dict | None:
-        path = self._highlights_path(full_hash)
+    def load_gold(self, full_hash: str) -> dict | None:
+        path = self._gold_path(full_hash)
         if path is None or not path.exists():
             return None
         with open(path) as f:
@@ -2092,7 +2216,7 @@ class LocalIngestSource(IngestSource):
         )
         return True
 
-    def save_highlights(
+    def save_gold(
         self,
         full_hash: str,
         sidecar: dict,
@@ -2103,14 +2227,14 @@ class LocalIngestSource(IngestSource):
         if entry is None:
             return False
         _, frontmatter = entry
-        path = self._highlights_path(full_hash)
+        path = self._gold_path(full_hash)
         with open(path, "w") as f:
             json.dump(sidecar, f, indent=2, ensure_ascii=False)
             f.write("\n")
         title = frontmatter.get("title", full_hash[:12])
         self._git_commit_paths(
             [path],
-            f"highlights: {title}",
+            f"gold review: {title}",
             author_name=author_name,
             author_email=author_email,
         )
@@ -2121,7 +2245,7 @@ class LocalIngestSource(IngestSource):
         entry = self._scan().get(full_hash) or self._scan_archived().get(full_hash)
         if entry is None:
             return None
-        return self._current_coverage(full_hash, entry[0].read_text())
+        return self._current_coverage(full_hash, entry[0].read_bytes().decode("utf-8"))
 
     def append_coverage(
         self,
@@ -2193,6 +2317,8 @@ class LocalIngestSource(IngestSource):
             sidecar["digestible"] = bool(digestible)
             if total_units is not None:
                 sidecar["total_units"] = total_units
+        record = self._scan()[full_hash][0].read_bytes().decode("utf-8")
+        sidecar["reviewed_body_sha256"] = reviewed_body_sha256(record)
 
         with open(self._coverage_path(full_hash), "w") as f:
             json.dump(sidecar, f, indent=2)
@@ -2247,10 +2373,10 @@ class GitHubIngestSource(IngestSource):
     def supersession(self, full_hash: str) -> dict:
         raise NotImplementedError("GitHubIngestSource is not yet implemented")
 
-    def load_highlights(self, full_hash: str) -> dict | None:
+    def load_gold(self, full_hash: str) -> dict | None:
         raise NotImplementedError("GitHubIngestSource is not yet implemented")
 
-    def save_highlights(self, **kwargs: object) -> bool:
+    def save_gold(self, **kwargs: object) -> bool:
         raise NotImplementedError("GitHubIngestSource is not yet implemented")
 
     def save_audit(self, **kwargs: object) -> bool:
@@ -2670,6 +2796,7 @@ def _records_held(intake: dict[str, list[dict]] | None = None) -> list[dict]:
             "digestible": r.get("digestible"),
             "pipeline_version": r.get("pipeline_version"),
             "pipeline_current": r.get("pipeline_current"),
+            "pipeline_status": r.get("pipeline_status"),
         }
         for r in source.list_ingests()
     ]
@@ -4730,11 +4857,8 @@ def get_coverage(full_hash: str) -> JSONResponse:
     return JSONResponse({"reviews": (sidecar or {}).get("reviews", [])})
 
 
-# Relevance-tuning highlights (anomalica/highlights/1). Span offsets are
-# Unicode code points into the raw stored body - the verbatim text after the
-# closing frontmatter fence, exactly as parse_frontmatter returns it. See
-# anomalica/decisions/drafts/relevance-tuning-mode.md. These endpoints follow
-# the same access posture as the record body itself (get_ingest).
+# Compact human-gold review. Inline highlight markers remain authoritative;
+# the sidecar stores only decisions, progress and bounded-range attestation.
 
 
 @app.get("/api/ingests/{full_hash}/body")
@@ -4751,70 +4875,152 @@ def get_raw_body(full_hash: str) -> JSONResponse:
     return JSONResponse({"body": body, "body_sha256": tuning.body_sha256(body)})
 
 
-@app.get("/api/ingests/{full_hash}/highlights")
-def get_highlights(full_hash: str) -> JSONResponse:
-    """The highlights sidecar (null if none yet) plus the current body's
-    hash so the client can detect a stale sidecar and re-anchor."""
-    if not FULL_HASH_PATTERN.match(full_hash):
-        raise HTTPException(status_code=404, detail="Not found")
-    ingest = source.get_ingest(full_hash)
-    if ingest is None:
-        raise HTTPException(status_code=404, detail="Not found")
-    return JSONResponse(
-        {
-            "highlights": source.load_highlights(full_hash),
-            "body_sha256": tuning.body_sha256(ingest["body"]),
-        }
-    )
+def _gold_digest_documents(full_hash: str) -> list[dict]:
+    return tuning.load_digest_documents(digests_path, _hash_to_digest_path(full_hash))
 
 
-@app.put("/api/ingests/{full_hash}/highlights")
-def put_highlights(full_hash: str, body: dict, request: Request) -> JSONResponse:
-    """Replace the highlights sidecar and commit it to the ingests repo.
-
-    Expects {"complete": bool, "spans": [{start,end,text,note?}],
-    "rejected": [{start,end,text}], "complete_ranges": [{start,end,note?}]}.
-    Offsets are validated against the current body (code points, text must match
-    exactly); highlight spans must be non-overlapping. `complete_ranges` records
-    which PARTS were swept, so precision is measurable on a record too long to
-    treat wall-to-wall - within a range an unhighlighted sentence means "judged
-    not claim-worthy", outside every range it means "not looked at". Requires
-    reviewer role.
-    """
+@app.get("/api/ingests/{full_hash}/gold")
+def get_gold_review(
+    full_hash: str,
+    request: Request,
+    range_id: str | None = None,
+    start: int | None = None,
+    end: int | None = None,
+) -> JSONResponse:
     user = _require_role(request, "reviewer")
     if not FULL_HASH_PATTERN.match(full_hash):
         raise HTTPException(status_code=404, detail="Not found")
     ingest = source.get_ingest(full_hash)
     if ingest is None:
         raise HTTPException(status_code=404, detail="Not found")
-
     record_body = ingest["body"]
     try:
-        spans = tuning.validate_spans(body.get("spans"), record_body)
-        rejected = tuning.validate_spans(
-            body.get("rejected"), record_body, field="rejected", allow_overlap=True
+        reviewer = tuning.reviewer_from_user(user)
+        sidecar, stale = tuning.validate_sidecar(
+            source.load_gold(full_hash), full_hash, record_body
         )
-        complete_ranges = tuning.validate_ranges(
-            record_body, body.get("complete_ranges")
+        selected = tuning.select_range(
+            sidecar,
+            reviewer,
+            len(record_body),
+            range_id=range_id,
+            start=start,
+            end=end,
         )
-    except (tuning.SpanError, ValueError) as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-
-    sidecar = tuning.build_sidecar(
-        record_hash=full_hash,
-        body=record_body,
-        complete=bool(body.get("complete", False)),
-        spans=spans,
-        rejected=rejected,
-        reviewed_by=user["email"],
-        reviewed_at=datetime.now(dt_timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        complete_ranges=complete_ranges,
+    except tuning.GoldError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return JSONResponse(
+        tuning.build_view(
+            sidecar,
+            selected,
+            record_body,
+            tuning.parse_units(record_body),
+            _gold_digest_documents(full_hash),
+            stale=stale,
+        )
     )
-    if not source.save_highlights(
-        full_hash, sidecar, author_name=user["name"], author_email=user["email"]
-    ):
+
+
+@app.post("/api/ingests/{full_hash}/gold/batches")
+def save_gold_batch(full_hash: str, payload: dict, request: Request) -> JSONResponse:
+    user = _require_role(request, "reviewer")
+    if not FULL_HASH_PATTERN.match(full_hash):
         raise HTTPException(status_code=404, detail="Not found")
-    return JSONResponse({"saved": True, "body_sha256": sidecar["body_sha256"]})
+    range_payload = payload.get("range")
+    if not isinstance(range_payload, dict):
+        raise HTTPException(status_code=400, detail="range is required")
+
+    lock = (
+        repository_write_lock(source.store.parent)
+        if isinstance(source, LocalIngestSource)
+        else GIT_LOCK
+    )
+    with lock:
+        ingest = source.get_ingest(full_hash)
+        if ingest is None:
+            raise HTTPException(status_code=404, detail="Not found")
+        record_body = ingest["body"]
+        current_hash = tuning.bound_body_sha256(record_body)
+        if payload.get("body_sha256") != current_hash:
+            raise HTTPException(status_code=409, detail="Viewed record body is stale")
+        try:
+            reviewer = tuning.reviewer_from_user(user)
+            sidecar, stale = tuning.validate_sidecar(
+                source.load_gold(full_hash), full_hash, record_body
+            )
+            if stale:
+                if payload.get("replace_stale") is not True:
+                    raise tuning.GoldError("Existing gold sidecar is stale")
+                sidecar = tuning.empty_sidecar(full_hash, record_body)
+
+            range_id = range_payload.get("id")
+            persisted = next(
+                (item for item in sidecar["ranges"] if item.get("id") == range_id),
+                None,
+            )
+            if persisted is not None:
+                selected = tuning.select_range(
+                    sidecar, reviewer, len(record_body), range_id=range_id
+                )
+                if selected["start"] != range_payload.get("start") or selected[
+                    "end"
+                ] != range_payload.get("end"):
+                    raise tuning.GoldError("Review range bounds cannot be changed")
+            else:
+                if not isinstance(range_id, str) or not re.fullmatch(
+                    r"[0-9a-f]{32}", range_id
+                ):
+                    raise tuning.GoldError("Invalid review range id")
+                selected = tuning.select_range(
+                    sidecar,
+                    reviewer,
+                    len(record_body),
+                    start=range_payload.get("start"),
+                    end=range_payload.get("end"),
+                )
+                selected["id"] = range_id
+
+            all_units = tuning.parse_units(record_body)
+            contained, _boundary = tuning.units_in_range(
+                all_units, selected["start"], selected["end"]
+            )
+            current_batch = tuning.next_batch(contained, selected)
+            proposals = tuning.proposals_for_units(
+                record_body, current_batch, _gold_digest_documents(full_hash)
+            )
+            current_batch = [
+                {**unit, "proposals": proposals[unit["highlight_id"]]}
+                for unit in current_batch
+            ]
+            decisions = tuning.validate_batch_decisions(
+                payload.get("decisions"), current_batch
+            )
+            sidecar = tuning.apply_batch(
+                sidecar,
+                selected,
+                decisions,
+                contained,
+                complete=payload.get("complete") is True,
+            )
+        except tuning.GoldError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        if not source.save_gold(
+            full_hash,
+            sidecar,
+            author_name=user["name"],
+            author_email=user["email"],
+        ):
+            raise HTTPException(status_code=404, detail="Not found")
+    return JSONResponse(
+        tuning.build_view(
+            sidecar,
+            selected,
+            record_body,
+            all_units,
+            _gold_digest_documents(full_hash),
+        )
+    )
 
 
 def _active_prompts() -> list[dict]:
@@ -5013,6 +5219,7 @@ def submit_review(full_hash: str, body: dict, request: Request) -> JSONResponse:
     content = body.get("content")
     if not content or not isinstance(content, str):
         raise HTTPException(status_code=400, detail="Missing content")
+    _validate_document_type(content)
 
     notes = body.get("notes", "").strip()
     spans = _validate_spans(body.get("spans"))
@@ -5056,7 +5263,6 @@ def submit_review(full_hash: str, body: dict, request: Request) -> JSONResponse:
                 or md_path.read_bytes() != current_raw
             ):
                 raise _stale()
-
         # Contributors cannot commit to live data, but their proposal must still
         # be tied to the record they actually viewed.
         if not roles.at_least(_role_of_user(user), "reviewer"):
@@ -5124,6 +5330,7 @@ def submit_review(full_hash: str, body: dict, request: Request) -> JSONResponse:
                     coverage["digestible"] = bool(digestible_flag)
                     if total_units is not None:
                         coverage["total_units"] = total_units
+                coverage["reviewed_body_sha256"] = reviewed_body_sha256(content)
                 changes[coverage_path] = (
                     json.dumps(coverage, indent=2, ensure_ascii=False) + "\n"
                 ).encode()
@@ -5505,17 +5712,42 @@ def _housekeeping_sidecar_path(full_hash: str) -> Path:
     return ingests_path / "store" / f"{full_hash}.housekeeping.json"
 
 
-HOUSEKEEPING_VIEW_SCHEMA = "anomalica/housekeeping-view/1"
-HOUSEKEEPING_DECISION_SCHEMA = "anomalica/housekeeping-decision/1"
+HOUSEKEEPING_VIEW_SCHEMA = "anomalica/housekeeping-view/2"
+HOUSEKEEPING_DECISION_SCHEMA = "anomalica/housekeeping-decision/2"
+HOUSEKEEPING_WAIVER_SCHEMA = "anomalica/housekeeping-research-waiver/1"
 HOUSEKEEPING_MANIFEST_SCHEMA = "anomalica/housekeeping-algorithm/1"
 HOUSEKEEPING_ALGORITHM_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 def _load_housekeeping_bytes(raw: bytes) -> hk.Sidecar | None:
-    with tempfile.TemporaryDirectory(prefix="workbench-housekeeping-") as td:
-        path = Path(td) / "sidecar.json"
-        path.write_bytes(raw)
-        return hk.load_sidecar_file(path)
+    return hk.load_sidecar_bytes(raw)
+
+
+def _review_has_started_at(
+    full_hash: str,
+    ref: str,
+    snapshot: tuple[
+        dict[str, tuple[Path, str, bytes]],
+        dict[Path, tuple[str, bytes]],
+    ]
+    | None = None,
+) -> bool:
+    if not isinstance(source, LocalIngestSource):
+        return False
+    path = source._coverage_path(full_hash)
+    loaded = snapshot[1].get(path) if snapshot else source.file_at_ref(path, ref)
+    if loaded is None:
+        return False
+    try:
+        review = json.loads(loaded[1])
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return False
+    return bool(
+        isinstance(review, dict)
+        and review.get("schema") in {COVERAGE_SCHEMA, COVERAGE_SCHEMA_V1}
+        and isinstance(review.get("reviews"), list)
+        and review["reviews"]
+    )
 
 
 def _replacement_preview(item: hk.Item) -> dict[str, list[str]]:
@@ -5544,7 +5776,7 @@ def _housekeeping_view_local(
     if record is None:
         raise HTTPException(status_code=404, detail="Record not found")
     _record_path, _record_blob, record_raw = record
-    input_sha256 = hk.input_sha256(record_raw)
+    record_sha256 = hk.input_sha256(record_raw)
 
     manifest_path = source.store.parent / "housekeeping-algorithm.json"
     manifest_file = (
@@ -5597,21 +5829,31 @@ def _housekeeping_view_local(
             due_reason = "invalid-sidecar"
         elif payload.get("schema") != hk.SCHEMA:
             due_reason = "unsupported-schema"
-        elif payload.get("outcome") != "completed":
-            due_reason = "incomplete"
         else:
             sc = _load_housekeeping_bytes(raw_sidecar)
             if sc is None or sc.content_hash != f"sha256:{full_hash}":
                 due_reason = "invalid-sidecar"
-            elif sc.input_sha256 != input_sha256:
-                due_reason = "input-mismatch"
-            elif sc.algorithm_version != algorithm_version:
+            elif sc.result_sha256 != record_sha256:
+                due_reason = "result-mismatch"
+            elif (
+                sc.algorithm_version != algorithm_version
+                or sc.algorithm_version != hk.ALGORITHM_VERSION
+            ):
                 due_reason = "algorithm-mismatch"
             else:
                 due_reason = None
 
+    review_started = _review_has_started_at(full_hash, ref, snapshot)
+    if review_started:
+        state = "excluded-review-state"
+        due_reason = None
+    elif sc is not None and due_reason is None:
+        state = hk.review_state(sc, record_raw)
+    else:
+        state = "due"
+
     previews: dict[str, dict[str, list[str]]] = {}
-    if payload is not None and sc is not None:
+    if sc is not None and due_reason is None and not review_started:
         text = record_raw.decode("utf-8")
         previews = {
             item.id: (
@@ -5622,14 +5864,11 @@ def _housekeeping_view_local(
             for item in sc.items
         }
 
-    if sc is not None and len({item.id for item in sc.items}) != len(sc.items):
-        sc = None
-        previews = {}
-        due_reason = "invalid-sidecar"
-
     proposed = [
         item
-        for item in (sc.items if sc and due_reason is None else [])
+        for item in (
+            sc.items if sc and due_reason is None and state == "needs-decisions" else []
+        )
         if item.status == "proposed"
     ]
     scopes = sorted(
@@ -5644,9 +5883,10 @@ def _housekeeping_view_local(
         "viewed_sidecar_sha": sidecar_sha,
         "viewed_ref": ref,
         "viewed_content_hash": f"sha256:{full_hash}",
-        "viewed_input_sha256": input_sha256,
+        "viewed_input_sha256": sc.input_sha256 if sc is not None else None,
+        "viewed_result_sha256": sc.result_sha256 if sc is not None else None,
         "viewed_algorithm_version": algorithm_version,
-        "state": "current" if due_reason is None else "due",
+        "review_state": state,
         "due_reason": due_reason,
         "outstanding_count": len(proposed),
         "scopes": scopes,
@@ -5684,8 +5924,8 @@ def housekeeping_queue() -> JSONResponse:
                 "copyright_status": s.get("copyright_status"),
                 "checked_at": sidecar.get("checked_at"),
                 "algorithm_version": view["viewed_algorithm_version"],
-                "current": view["state"] == "current",
-                "state": view["state"],
+                "current": view["review_state"] == "ready",
+                "review_state": view["review_state"],
                 "due_reason": view["due_reason"],
                 "proposed": view["outstanding_count"],
                 "approved": sum(1 for i in items if i.get("status") == "approved"),
@@ -5708,11 +5948,7 @@ def housekeeping_sidecar(full_hash: str) -> JSONResponse:
 
 @app.post("/api/ingests/{full_hash}/housekeeping/decide")
 async def housekeeping_decide(full_hash: str, request: Request) -> JSONResponse:
-    """Record per-item decisions and apply the approved ones.
-
-    One commit carrying the record and the sidecar together: the record edit and
-    the decision that authorised it are the same fact, and splitting them lets a
-    reader find an unexplained frontmatter change."""
+    """Apply one complete, viewed v3 decision set in an atomic local commit."""
     user = _require_role(request, "reviewer")
     payload = await request.json()
     if not isinstance(source, LocalIngestSource):
@@ -5724,11 +5960,13 @@ async def housekeeping_decide(full_hash: str, request: Request) -> JSONResponse:
         "viewed_ref",
         "viewed_content_hash",
         "viewed_input_sha256",
+        "viewed_result_sha256",
         "viewed_algorithm_version",
         "decisions",
     }
     if (
-        set(payload) != required
+        not isinstance(payload, dict)
+        or set(payload) != required
         or payload.get("schema") != HOUSEKEEPING_DECISION_SCHEMA
     ):
         raise HTTPException(status_code=400, detail="Invalid housekeeping decision")
@@ -5743,6 +5981,7 @@ async def housekeeping_decide(full_hash: str, request: Request) -> JSONResponse:
         or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", payload["viewed_ref"])
         or not re.fullmatch(r"sha256:[0-9a-f]{64}", payload["viewed_content_hash"])
         or not re.fullmatch(r"sha256:[0-9a-f]{64}", payload["viewed_input_sha256"])
+        or not re.fullmatch(r"sha256:[0-9a-f]{64}", payload["viewed_result_sha256"])
         or not HOUSEKEEPING_ALGORITHM_PATTERN.fullmatch(
             payload["viewed_algorithm_version"]
         )
@@ -5768,10 +6007,12 @@ async def housekeeping_decide(full_hash: str, request: Request) -> JSONResponse:
     with repository_write_lock(source.store.parent):
         if source.current_ref() != payload["viewed_ref"]:
             raise _stale()
-        view = _housekeeping_view_local(full_hash)
+        view = _housekeeping_view_local(full_hash, payload["viewed_ref"])
         if (
             any(view[field] != payload[field] for field in viewed_fields)
-            or view["state"] != "current"
+            or view["access"] != "full"
+            or view["review_state"] != "needs-decisions"
+            or payload["viewed_algorithm_version"] != hk.ALGORITHM_VERSION
         ):
             raise HTTPException(status_code=409, detail="Stale housekeeping proposal")
         record = source.record_at_ref(full_hash, view["viewed_ref"])
@@ -5789,56 +6030,39 @@ async def housekeeping_decide(full_hash: str, request: Request) -> JSONResponse:
         sc = _load_housekeeping_bytes(committed_sidecar)
         if sc is None:
             raise HTTPException(status_code=409, detail="Stale housekeeping proposal")
-
-        unknown = set(decisions) - {i.id for i in sc.items}
-        if unknown:
-            raise HTTPException(
-                status_code=400, detail=f"Unknown item(s): {sorted(unknown)}"
-            )
-        for item in sc.items:
-            if item.id not in decisions:
-                continue
-            if item.status != "proposed":
-                raise HTTPException(
-                    status_code=409, detail=f"{item.id} is already {item.status}"
+        decided_at = datetime.now(dt_timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        decided_by = (
+            user.get("email") or user.get("login") or user.get("name") or "Reviewer"
+        )
+        with tempfile.TemporaryDirectory(prefix="workbench-housekeeping-apply-") as td:
+            apply_path = Path(td) / md_path.name
+            apply_path.write_bytes(record_raw)
+            try:
+                result = hk.apply_decisions(
+                    apply_path,
+                    sc,
+                    decisions,
+                    decided_at=decided_at,
+                    decided_by=decided_by,
                 )
-            item.status = decisions[item.id]
+            except (hk.StaleInput, hk.ApplyConflict) as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            except hk.BodyChanged as exc:
+                raise HTTPException(status_code=500, detail=str(exc)) from exc
+            except (hk.MultilineField, ValueError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-        approved = [i for i in sc.items if i.id in decisions and i.status == "approved"]
-        unmet = hk.unmet_dependencies(sc.items, {i.id for i in approved})
-        if unmet:
-            raise HTTPException(
-                status_code=400,
-                detail=f"These need their prerequisite approved too: {unmet}",
-            )
-
-        if approved:
-            with tempfile.TemporaryDirectory(
-                prefix="workbench-housekeeping-apply-"
-            ) as td:
-                apply_path = Path(td) / md_path.name
-                apply_path.write_bytes(record_raw)
-                try:
-                    result = hk.apply_patch(
-                        apply_path, approved, expected_input_sha256=sc.input_sha256
-                    )
-                except (hk.StaleInput, hk.ApplyConflict) as exc:
-                    raise HTTPException(status_code=409, detail=str(exc)) from exc
-                except hk.BodyChanged as exc:
-                    raise HTTPException(status_code=500, detail=str(exc)) from exc
-                except (hk.MultilineField, ValueError) as exc:
-                    raise HTTPException(status_code=422, detail=str(exc)) from exc
-            if result.did_not_apply or len(result.applied) != len(approved):
-                raise HTTPException(
-                    status_code=409, detail="Stale housekeeping proposal"
-                )
-
-        changes = {sidecar_path: sc.to_json().encode()}
-        if approved:
-            changes[md_path] = result.text.encode()
+        approved_count = sum(status == "approved" for status in decisions.values())
+        changes = {
+            md_path: result.text.encode("utf-8"),
+            sidecar_path: sc.to_json().encode("utf-8"),
+        }
         frontmatter = parse_frontmatter(record_raw.decode("utf-8"))[0]
         title = frontmatter.get("title", full_hash[:12])
-        note = f"housekeeping: {len(approved)} applied, {len(decisions) - len(approved)} rejected"
+        note = (
+            f"housekeeping: {approved_count} applied, "
+            f"{len(decisions) - approved_count} rejected"
+        )
         message = f"review: {title}\n\n{note}\n\nReviewed-Record: content:{full_hash}"
         try:
             source._commit_bytes_locked(
@@ -5854,8 +6078,107 @@ async def housekeeping_decide(full_hash: str, request: Request) -> JSONResponse:
             ) from exc
     return JSONResponse(
         {
-            "applied": len(approved),
-            "rejected": len(decisions) - len(approved),
-            "did_not_apply": [],
+            "applied": approved_count,
+            "rejected": len(decisions) - approved_count,
         }
     )
+
+
+@app.post("/api/ingests/{full_hash}/housekeeping/waive-research")
+async def housekeeping_waive_research(full_hash: str, request: Request) -> JSONResponse:
+    """Waive missing or failed metadata research without editing the record."""
+    user = _require_role(request, "reviewer")
+    payload = await request.json()
+    if not isinstance(source, LocalIngestSource):
+        raise HTTPException(status_code=501, detail="Local housekeeping unavailable")
+
+    required = {
+        "schema",
+        "viewed_sidecar_sha",
+        "viewed_ref",
+        "viewed_content_hash",
+        "viewed_input_sha256",
+        "viewed_result_sha256",
+        "viewed_algorithm_version",
+        "reason",
+    }
+    viewed_fields = {field for field in required if field.startswith("viewed_")}
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != required
+        or payload.get("schema") != HOUSEKEEPING_WAIVER_SCHEMA
+        or not isinstance(payload.get("reason"), str)
+        or not payload["reason"].strip()
+        or any(
+            not isinstance(payload.get(field), str) or not payload[field]
+            for field in viewed_fields
+        )
+        or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", payload["viewed_sidecar_sha"])
+        or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", payload["viewed_ref"])
+        or not re.fullmatch(r"sha256:[0-9a-f]{64}", payload["viewed_content_hash"])
+        or not re.fullmatch(r"sha256:[0-9a-f]{64}", payload["viewed_input_sha256"])
+        or not re.fullmatch(r"sha256:[0-9a-f]{64}", payload["viewed_result_sha256"])
+        or not HOUSEKEEPING_ALGORITHM_PATTERN.fullmatch(
+            payload["viewed_algorithm_version"]
+        )
+    ):
+        raise HTTPException(
+            status_code=400, detail="Invalid housekeeping research waiver"
+        )
+
+    sidecar_path = _housekeeping_sidecar_path(full_hash)
+    with repository_write_lock(source.store.parent):
+        if source.current_ref() != payload["viewed_ref"]:
+            raise _stale()
+        view = _housekeeping_view_local(full_hash, payload["viewed_ref"])
+        if (
+            view["access"] != "full"
+            or view["review_state"] not in {"pending-research", "failed-research"}
+            or any(view[field] != payload[field] for field in viewed_fields)
+            or payload["viewed_algorithm_version"] != hk.ALGORITHM_VERSION
+        ):
+            raise HTTPException(status_code=409, detail="Stale housekeeping proposal")
+
+        record = source.record_at_ref(full_hash, payload["viewed_ref"])
+        sidecar_file = source.file_at_ref(sidecar_path, payload["viewed_ref"])
+        if record is None or sidecar_file is None:
+            raise HTTPException(status_code=409, detail="Stale housekeeping proposal")
+        md_path, _record_blob, record_raw = record
+        _sidecar_blob, sidecar_raw = sidecar_file
+        if (
+            md_path.read_bytes() != record_raw
+            or not sidecar_path.exists()
+            or sidecar_path.read_bytes() != sidecar_raw
+        ):
+            raise HTTPException(status_code=409, detail="Stale housekeeping proposal")
+        sc = _load_housekeeping_bytes(sidecar_raw)
+        if sc is None or sc.result_sha256 != sc.input_sha256:
+            raise HTTPException(status_code=409, detail="Stale housekeeping proposal")
+
+        at = datetime.now(dt_timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        by = user.get("email") or user.get("login") or user.get("name") or "Reviewer"
+        try:
+            hk.record_pass(
+                sc,
+                "metadata-research",
+                hk.PassState(
+                    status="waived",
+                    finished_at=at,
+                    waiver=hk.Waiver(by=by, at=at, reason=payload["reason"]),
+                ),
+                observed_input_sha256=sc.input_sha256,
+            )
+            source._commit_bytes_locked(
+                {sidecar_path: sc.to_json().encode("utf-8")},
+                f"housekeeping: waive research - {full_hash[:12]}",
+                user["name"],
+                user["email"],
+                payload["viewed_ref"],
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except (RuntimeError, subprocess.CalledProcessError) as exc:
+            raise HTTPException(
+                status_code=409, detail="Stale housekeeping proposal"
+            ) from exc
+    return JSONResponse({"waived": True})

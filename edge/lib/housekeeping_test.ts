@@ -25,6 +25,7 @@ import {
   InvalidReplacement,
   scalar,
   unmetDependencies,
+  validateV3Sidecar,
 } from "./housekeeping.ts";
 
 const RECORD = `---
@@ -269,6 +270,24 @@ Deno.test("CRLF fences and body bytes are preserved", async () => {
   );
 });
 
+Deno.test("mixed frontmatter line endings are preserved byte for byte", async () => {
+  const record =
+    "---\r\ntitle: Old\npublisher: Keep\r\ndate_published: '1967'\n---\r\nbody\n";
+  const title = item({
+    id: "title",
+    check: "title",
+    field: "title",
+    operation: "set",
+    to_field: undefined,
+    current: "Old",
+    proposed: "New",
+  });
+  assertEquals(
+    await applyItems(record, [title]),
+    record.replace("title: Old", 'title: "New"'),
+  );
+});
+
 Deno.test("a record with no frontmatter is refused", async () => {
   await assertRejects(
     () => applyItems("just a body\n", [MOVE_PUBLISHER]),
@@ -327,4 +346,210 @@ Deno.test("a dependent item cannot be approved without its prerequisite", () => 
   assertEquals(unmetDependencies([move, set], new Set(["s"])), ["s"]);
   assertEquals(unmetDependencies([move, set], new Set(["m", "s"])), []);
   assertEquals(unmetDependencies([move, set], new Set(["m"])), []);
+});
+
+Deno.test("apply refuses a fully approved dependency cycle", async () => {
+  const first = item({ id: "one", depends_on: ["two"] });
+  const second = item({
+    id: "two",
+    field: "date_published",
+    operation: "clear",
+    to_field: undefined,
+    current: "2026-08-11",
+    proposed: null,
+    depends_on: ["one"],
+  });
+  await assertRejects(
+    () => applyPatch(RECORD, [first, second]),
+    Error,
+    "dependency graph",
+  );
+});
+
+Deno.test("frontmatter apply validates dependencies against the full item graph", async () => {
+  const token: HousekeepingV2Item = {
+    id: "term",
+    check: "known-term-check",
+    operation: "replace-token",
+    scope: "body",
+    old_token: "OSAP",
+    new_token: "AAWSAP",
+    case_sensitive: true,
+    token_boundary: "ascii-word",
+    occurrences: [{ start_byte: 1, end_byte: 5 }],
+    expected_count: 1,
+    confidence: "high",
+    evidence: { reasoning: "Registered correction" },
+    status: "approved",
+  };
+  const title = item({
+    id: "title",
+    field: "title",
+    operation: "set",
+    to_field: undefined,
+    current: "Eyewitnesses Talk to Dr. James E. McDonald (1967)",
+    proposed: "Corrected title",
+    depends_on: ["term"],
+  });
+  const result = await applyPatch(RECORD, [title], [token, title]);
+  assert(result.text.includes('title: "Corrected title"'));
+});
+
+function validV3Sidecar() {
+  const digest = `sha256:${"a".repeat(64)}`;
+  return {
+    schema: "anomalica/housekeeping/3",
+    content_hash: digest,
+    input_sha256: digest,
+    result_sha256: digest,
+    checked_at: "2026-09-17T00:00:00Z",
+    algorithm_version: "3",
+    passes: {
+      deterministic: {
+        status: "completed",
+        finished_at: "2026-09-17T00:00:00Z",
+      },
+      "metadata-research": {
+        status: "completed",
+        finished_at: "2026-09-17T00:00:00Z",
+        usage: { transport: "subscription" },
+      },
+    },
+    items: [{
+      id: "publisher",
+      check: "publisher",
+      category: "metadata",
+      pass: "metadata-research",
+      field: "publisher",
+      operation: "set",
+      current: "Old",
+      proposed: "New",
+      confidence: "high",
+      evidence: { reasoning: "The source identifies the publisher." },
+      status: "proposed",
+    }],
+    decisions: [],
+  };
+}
+
+Deno.test("v3 sidecar validation accepts the strict canonical structure", () => {
+  assert(validateV3Sidecar(validV3Sidecar()));
+});
+
+Deno.test("v3 sidecar validation rejects extra fields and invalid pass usage", () => {
+  assert(!validateV3Sidecar({ ...validV3Sidecar(), outcome: "completed" }));
+  const wrongUsage = structuredClone(validV3Sidecar());
+  wrongUsage.passes["metadata-research"].usage.transport = "api";
+  assert(!validateV3Sidecar(wrongUsage));
+});
+
+Deno.test("v3 sidecar validation requires decision audit to match final items", () => {
+  const missingAudit = structuredClone(validV3Sidecar());
+  missingAudit.items[0].status = "approved";
+  assert(!validateV3Sidecar(missingAudit));
+  assert(validateV3Sidecar({
+    ...missingAudit,
+    decisions: [{
+      item_id: "publisher",
+      status: "approved",
+      decided_at: "2026-09-17T00:01:00Z",
+      decided_by: "reviewer@example.com",
+    }],
+  }));
+});
+
+Deno.test("v3 sidecar requires canonical timestamps, pass order, and latest checked_at", () => {
+  for (
+    const timestamp of [
+      "2026-09-17T00:00:00+00:00",
+      "2026-09-17 00:00:00Z",
+      "2026-02-30T00:00:00Z",
+    ]
+  ) {
+    const invalid = structuredClone(validV3Sidecar());
+    invalid.checked_at = timestamp;
+    assert(!validateV3Sidecar(invalid), timestamp);
+  }
+  const predates = structuredClone(validV3Sidecar());
+  predates.passes.deterministic.finished_at = "2026-09-17T00:00:01Z";
+  assert(!validateV3Sidecar(predates));
+  const staleCheckedAt = structuredClone(validV3Sidecar());
+  staleCheckedAt.passes["metadata-research"].finished_at =
+    "2026-09-17T00:00:01Z";
+  assert(!validateV3Sidecar(staleCheckedAt));
+});
+
+Deno.test("v3 sidecar rejects invalid dependency graphs", () => {
+  for (
+    const dependencies of [
+      ["missing"],
+      ["publisher"],
+      ["publisher", "publisher"],
+    ]
+  ) {
+    const invalid = structuredClone(validV3Sidecar());
+    (invalid.items[0] as { depends_on?: string[] }).depends_on = dependencies;
+    assert(!validateV3Sidecar(invalid));
+  }
+  const cyclic = structuredClone(validV3Sidecar()) as Record<string, unknown>;
+  const items = cyclic.items as Record<string, unknown>[];
+  items[0].depends_on = ["second"];
+  items.push({
+    ...items[0],
+    id: "second",
+    field: "creators",
+    depends_on: ["publisher"],
+  });
+  assert(!validateV3Sidecar(cyclic));
+});
+
+Deno.test("v3 replacements require deterministic known-term shape", () => {
+  const valid = structuredClone(validV3Sidecar()) as Record<string, unknown>;
+  valid.items = [{
+    id: "aawsap",
+    check: "known-term-check",
+    category: "known-term",
+    pass: "deterministic",
+    operation: "replace-token",
+    scope: "body",
+    old_token: "OSSAP",
+    new_token: "AAWSAP",
+    case_sensitive: true,
+    token_boundary: "ascii-word",
+    occurrences: [{ start_byte: 20, end_byte: 25 }],
+    expected_count: 1,
+    confidence: "high",
+    evidence: { reasoning: "The known-term correction applies." },
+    status: "proposed",
+  }];
+  assert(validateV3Sidecar(valid));
+  const research = structuredClone(valid) as Record<string, unknown>;
+  (research.items as Record<string, unknown>[])[0].pass = "metadata-research";
+  assert(!validateV3Sidecar(research));
+});
+
+Deno.test("v3 decisions must form one canonical audit batch", () => {
+  const invalid = structuredClone(validV3Sidecar()) as Record<string, unknown>;
+  const first = (invalid.items as Record<string, unknown>[])[0];
+  first.status = "rejected";
+  (invalid.items as Record<string, unknown>[]).push({
+    ...first,
+    id: "second",
+    field: "creators",
+  });
+  invalid.decisions = [
+    {
+      item_id: "publisher",
+      status: "rejected",
+      decided_at: "2026-09-17T00:01:00Z",
+      decided_by: "reviewer@example.com",
+    },
+    {
+      item_id: "second",
+      status: "rejected",
+      decided_at: "2026-09-17T00:01:01Z",
+      decided_by: "reviewer@example.com",
+    },
+  ];
+  assert(!validateV3Sidecar(invalid));
 });

@@ -6,12 +6,9 @@
  * EPUB and `pdf` when it came as PDF, and a briefing slide read as `image` -
  * true of the JPEG, useless about the document.
  *
- * The list below is what the UI OFFERS, not a closed vocabulary. The format
- * calls `document_type` an open set and names values this list does not carry
- * (`memo`, `statute`, `affidavit`), so refusing everything else would put the
- * workbench at odds with the spec and with records already written. Offering a
- * list gets the common case in one click without a typo; permitting a value
- * outside it keeps the field able to name a form nobody listed yet.
+ * The list below is the canonical closed vocabulary. A record can still carry
+ * an old or malformed value, which the UI surfaces rather than silently
+ * replacing, but `isDocumentType` accepts only values in this list.
  *
  * ABSENCE IS A REAL STATE AND THE COMMON ONE. The format emits the field only
  * where the artefact STATES its own form - RFC822 headers, a page headed
@@ -34,6 +31,7 @@ export const DOCUMENT_TYPES = [
   "slide",
   "interview",
   "documentary",
+  "footage",
   "podcast",
   "lecture",
   "broadcast",

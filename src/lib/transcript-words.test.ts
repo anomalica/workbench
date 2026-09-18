@@ -70,6 +70,18 @@ describe("replaceWordRange (multi-word selection editor splice)", () => {
     expect(next.runs).toEqual([{ speaker: "A", startWord: 0, endWord: 1 }]);
   });
 
+  it("preserves unaffected objects for a same-length text edit", () => {
+    const p = parseWords(body);
+    const next = replaceWordRange(p, 1, 1, [{ text: "two?", start: 2.0 }]);
+
+    expect(next.words[0]).toBe(p.words[0]);
+    expect(next.words[1]).not.toBe(p.words[1]);
+    expect(next.words[2]).toBe(p.words[2]);
+    expect(next.runs).toBe(p.runs);
+    expect(next.lineEndWords).toBe(p.lineEndWords);
+    expect(next.highlights).toBe(p.highlights);
+  });
+
   it("round-trips through serialise (edited text + new timestamp present)", () => {
     const p = parseWords(body);
     const next = replaceWordRange(p, 1, 1, [

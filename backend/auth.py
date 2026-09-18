@@ -111,6 +111,7 @@ async def auth_callback(request: Request) -> RedirectResponse:
 
     # Store user info in the session
     request.session["user"] = {
+        "id": str(profile.get("id")),
         "name": profile.get("name") or profile.get("login"),
         "email": email or "",
         "login": profile.get("login"),

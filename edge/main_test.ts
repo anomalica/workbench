@@ -28,13 +28,13 @@ const ENV: Env = {
   gateTtlSeconds: 300,
   serveGatedBody: false, // production-safe default; body-serving tests opt in
 };
-const NOW = 1000;
+const NOW = Math.floor(Date.parse("2026-09-17T00:16:40Z") / 1000);
 const HASH = "a".repeat(64);
 const PUBLIC_HASH = HASH.slice(0, 56);
 const REF = "b".repeat(40);
 const FILE_SHA = "c".repeat(40);
 const ALGORITHM_MANIFEST =
-  '{ "algorithm_version": "1", "schema": "anomalica/housekeeping-algorithm/1" }\n';
+  '{ "algorithm_version": "3", "schema": "anomalica/housekeeping-algorithm/1" }\n';
 const USER: User = {
   name: "Rev",
   email: "rev@x.com",
@@ -180,6 +180,17 @@ const sidecar = (n: number, extra = {}) => ({
 });
 async function cookie(): Promise<string> {
   return (await makeSessionCookie(ENV, USER, NOW)).split(";")[0];
+}
+function markReviewStarted(gh: FakeGitHub) {
+  gh.put(
+    "ingests",
+    `store/${HASH}.review.json`,
+    JSON.stringify({
+      schema: "anomalica/review-coverage/1",
+      reviews: [{ by: "earlier@example.com", spans: [] }],
+    }),
+  );
+  gh.seeded.add(`ingests/store/${HASH}.review.json`);
 }
 const req = (path: string, init?: RequestInit) =>
   new Request(`https://wb.example.is${path}`, init);
@@ -341,18 +352,21 @@ Deno.test("gate submit: SHA fastpath passes without a session", async () => {
     "due_reason",
     "outstanding_count",
     "previews",
+    "review_state",
     "schema",
     "scopes",
     "sidecar",
-    "state",
     "viewed_algorithm_version",
     "viewed_content_hash",
     "viewed_input_sha256",
     "viewed_ref",
+    "viewed_result_sha256",
     "viewed_sidecar_sha",
   ]);
   assertEquals(out.housekeeping.access, "full");
   assertEquals(out.housekeeping.sidecar, null);
+  assertEquals(out.housekeeping.viewed_input_sha256, null);
+  assertEquals(out.housekeeping.viewed_result_sha256, null);
 });
 
 Deno.test("gate success fails closed when the algorithm manifest is non-canonical", async () => {
@@ -625,6 +639,7 @@ Deno.test("curation reject appends to rejections.yaml", async () => {
 
 Deno.test("review PUT needs auth, then commits the corrected record", async () => {
   const gh = new FakeGitHub();
+  markReviewStarted(gh);
   gh.put(
     "ingests",
     `store/${HASH}.md`,
@@ -666,6 +681,7 @@ Deno.test("review PUT needs auth, then commits the corrected record", async () =
 
 Deno.test("review of a V2 record writes the canonical .v2.md, not a stray .md", async () => {
   const gh = new FakeGitHub();
+  markReviewStarted(gh);
   gh.files.delete(`ingests/store/${HASH}.md`);
   gh.shas.delete(`ingests/store/${HASH}.md`);
   gh.put(
@@ -747,6 +763,7 @@ Deno.test("review PUT validates route identity and reserves copyright changes fo
   const changedCopyright = current.replace("restricted", "licensed");
 
   const mismatch = new FakeGitHub();
+  markReviewStarted(mismatch);
   mismatch.put("ingests", `store/${HASH}.md`, current);
   const mismatchResponse = await handleRequest(
     req(`/api/ingests/${HASH}`, {
@@ -765,6 +782,7 @@ Deno.test("review PUT validates route identity and reserves copyright changes fo
   assertEquals(mismatch.atomicCommits.length, 0);
 
   const editor = new FakeGitHub();
+  markReviewStarted(editor);
   editor.put("ingests", `store/${HASH}.md`, current);
   const editorResponse = await handleRequest(
     req(`/api/ingests/${HASH}`, {
@@ -783,6 +801,7 @@ Deno.test("review PUT validates route identity and reserves copyright changes fo
   assertEquals(editor.atomicCommits.length, 0);
 
   const admin = new FakeGitHub();
+  markReviewStarted(admin);
   admin.put("ingests", "roles.yaml", "rev: admin\n");
   admin.put("ingests", `store/${HASH}.md`, current);
   const adminResponse = await handleRequest(
@@ -804,6 +823,7 @@ Deno.test("review PUT validates route identity and reserves copyright changes fo
 
 Deno.test("review PUT commits record and coverage sidecar atomically", async () => {
   const gh = new FakeGitHub();
+  markReviewStarted(gh);
   gh.put(
     "ingests",
     `store/${HASH}.md`,
@@ -951,66 +971,438 @@ Deno.test("a GitHub write failure surfaces a 502, not a bare 500", async () => {
   assertEquals((await res.json()).detail, "upstream write failed: GitHub 401");
 });
 
-async function v2Sidecar(record: string) {
-  const oldToken = "Speaker_1";
-  const encoded = new TextEncoder().encode(record);
-  const start = encoded.findIndex((_, i) =>
-    i >= encoded.length - new TextEncoder().encode(oldToken).length
-      ? false
-      : record.slice(0, i).includes("---\n") &&
-        new TextDecoder().decode(encoded.slice(i, i + oldToken.length)) ===
-          oldToken
-  );
+async function v3Sidecar(record: string) {
   return {
-    schema: "anomalica/housekeeping/2",
+    schema: "anomalica/housekeeping/3",
     content_hash: `sha256:${HASH}`,
     input_sha256: `sha256:${await sha256Hex(record)}`,
+    result_sha256: `sha256:${await sha256Hex(record)}`,
     checked_at: "2026-09-11T00:00:00Z",
-    algorithm_version: "1",
-    outcome: "completed",
+    algorithm_version: "3",
+    passes: {
+      deterministic: {
+        status: "completed",
+        finished_at: "2026-09-11T00:00:00Z",
+      },
+      "metadata-research": {
+        status: "completed",
+        finished_at: "2026-09-11T00:00:00Z",
+        usage: { transport: "subscription" },
+      },
+    },
     items: [
       {
-        id: "speaker-1",
-        check: "speaker-name",
-        operation: "replace-token",
-        scope: "body",
-        old_token: oldToken,
-        new_token: "Alice",
-        case_sensitive: true,
-        token_boundary: "ascii-word",
-        occurrences: [{ start_byte: start, end_byte: start + oldToken.length }],
-        expected_count: 1,
+        id: "title",
+        check: "title",
+        category: "metadata",
+        pass: "deterministic",
+        field: "title",
+        operation: "set",
+        current: "T",
+        proposed: "New",
         confidence: "high",
         evidence: {
-          reasoning: "Named in transcript",
+          reasoning: "Corrected source title",
           sources: [],
           record_spans: [],
         },
         status: "proposed",
       },
     ],
+    decisions: [],
   };
 }
 
 function housekeepingPayload(
-  proposal: Awaited<ReturnType<typeof v2Sidecar>>,
+  proposal: Awaited<ReturnType<typeof v3Sidecar>>,
   status: "approved" | "rejected",
 ) {
   return {
-    schema: "anomalica/housekeeping-decision/1",
+    schema: "anomalica/housekeeping-decision/2",
     decisions: [{ item_id: proposal.items[0].id, status }],
     viewed_sidecar_sha: FILE_SHA,
     viewed_ref: REF,
     viewed_content_hash: proposal.content_hash,
     viewed_input_sha256: proposal.input_sha256,
+    viewed_result_sha256: proposal.result_sha256,
     viewed_algorithm_version: proposal.algorithm_version,
   };
 }
 
-Deno.test("housekeeping v2 approval atomically commits record and approved sidecar", async () => {
+Deno.test("housekeeping GET returns v3 full view and exact gated summary", async () => {
+  const record = "---\ntitle: T\n---\nSpeaker_1 spoke.\n";
+  const proposal = await v3Sidecar(record);
+
+  const fullGh = new FakeGitHub();
+  fullGh.put("ingests", `store/${HASH}.v2.md`, record);
+  fullGh.put(
+    "ingests",
+    `store/${HASH}.housekeeping.json`,
+    JSON.stringify(proposal),
+  );
+  const full = await (await handleRequest(
+    req(`/api/ingests/${HASH}/housekeeping`),
+    ENV,
+    deps(fullGh),
+  )).json();
+  assertEquals(full.schema, "anomalica/housekeeping-view/2");
+  assertEquals(full.review_state, "needs-decisions");
+  assertEquals(full.viewed_input_sha256, proposal.input_sha256);
+  assertEquals(full.viewed_result_sha256, proposal.result_sha256);
+  assertEquals(full.outstanding_count, 1);
+
+  const staleGh = new FakeGitHub();
+  staleGh.put(
+    "ingests",
+    `store/${HASH}.v2.md`,
+    `${record}externally changed\n`,
+  );
+  staleGh.put(
+    "ingests",
+    `store/${HASH}.housekeeping.json`,
+    JSON.stringify(proposal),
+  );
+  const stale = await (await handleRequest(
+    req(`/api/ingests/${HASH}/housekeeping`),
+    ENV,
+    deps(staleGh),
+  )).json();
+  assertEquals(stale.review_state, "due");
+  assertEquals(stale.due_reason, "result-mismatch");
+  assertEquals(stale.viewed_input_sha256, proposal.input_sha256);
+  assertEquals(stale.viewed_result_sha256, proposal.result_sha256);
+
+  const invalidGh = new FakeGitHub();
+  invalidGh.put("ingests", `store/${HASH}.v2.md`, record);
+  invalidGh.put(
+    "ingests",
+    `store/${HASH}.housekeeping.json`,
+    JSON.stringify({ ...proposal, extra: true }),
+  );
+  const invalid = await (await handleRequest(
+    req(`/api/ingests/${HASH}/housekeeping`),
+    ENV,
+    deps(invalidGh),
+  )).json();
+  assertEquals(invalid.review_state, "due");
+  assertEquals(invalid.due_reason, "invalid-sidecar");
+  assertEquals(invalid.viewed_input_sha256, null);
+  assertEquals(invalid.viewed_result_sha256, null);
+
+  const gatedGh = new FakeGitHub();
+  gatedGh.put("ingests", `store/${HASH}.v2.md`, record);
+  gatedGh.put(
+    "ingests",
+    `store/${HASH}.housekeeping.json`,
+    JSON.stringify(proposal),
+  );
+  gatedGh.put("ingests", `store/${HASH}.verification.json`, "{}");
+  const summary = await (await handleRequest(
+    req(`/api/ingests/${HASH}/housekeeping`),
+    ENV,
+    deps(gatedGh),
+  )).json();
+  assertEquals(Object.keys(summary).sort(), [
+    "access",
+    "deep_link",
+    "due_reason",
+    "outstanding_count",
+    "review_state",
+    "schema",
+    "scopes",
+    "sidecar",
+  ]);
+  assertEquals(summary.access, "summary");
+  assertEquals(summary.sidecar, null);
+  assert(!JSON.stringify(summary).includes("Speaker_1"));
+  assert(!JSON.stringify(summary).includes("viewed_"));
+});
+
+Deno.test("housekeeping views mirror shared review_state values", async () => {
+  const record = "---\ntitle: T\n---\nSpeaker_1 spoke.\n";
+  const stateFor = async (
+    mutate: (proposal: Awaited<ReturnType<typeof v3Sidecar>>) => void,
+  ) => {
+    const gh = new FakeGitHub();
+    const proposal = await v3Sidecar(record);
+    mutate(proposal);
+    gh.put("ingests", `store/${HASH}.v2.md`, record);
+    gh.put(
+      "ingests",
+      `store/${HASH}.housekeeping.json`,
+      JSON.stringify(proposal),
+    );
+    return (await (await handleRequest(
+      req(`/api/ingests/${HASH}/housekeeping`),
+      ENV,
+      deps(gh),
+    )).json()).review_state;
+  };
+
+  assertEquals(
+    await stateFor((proposal) => {
+      proposal.items = [];
+      proposal.passes = {} as typeof proposal.passes;
+    }),
+    "pending-deterministic",
+  );
+  assertEquals(
+    await stateFor((proposal) => {
+      proposal.items = [];
+      (proposal as { passes: Record<string, unknown> }).passes = {
+        deterministic: {
+          status: "failed",
+          finished_at: "2026-09-17T00:00:00Z",
+          error: "checker failed",
+        },
+      };
+      proposal.checked_at = "2026-09-17T00:00:00Z";
+    }),
+    "failed-deterministic",
+  );
+  assertEquals(
+    await stateFor((proposal) => {
+      proposal.items = [];
+      delete (proposal.passes as Record<string, unknown>)[
+        "metadata-research"
+      ];
+    }),
+    "pending-research",
+  );
+  assertEquals(
+    await stateFor((proposal) => {
+      proposal.items = [];
+      (proposal.passes as Record<string, unknown>)["metadata-research"] = {
+        status: "failed",
+        finished_at: "2026-09-17T00:00:00Z",
+        error: "research failed",
+      };
+      proposal.checked_at = "2026-09-17T00:00:00Z";
+    }),
+    "failed-research",
+  );
+  assertEquals(await stateFor(() => {}), "needs-decisions");
+  assertEquals(
+    await stateFor((proposal) => {
+      proposal.items = [];
+    }),
+    "ready",
+  );
+});
+
+Deno.test("research waiver uses server audit and commits only the sidecar", async () => {
   const gh = new FakeGitHub();
   const record = "---\ntitle: T\n---\nSpeaker_1 spoke.\n";
-  const proposal = await v2Sidecar(record);
+  const proposal = await v3Sidecar(record);
+  delete (proposal.passes as Record<string, unknown>)["metadata-research"];
+  gh.put("ingests", `store/${HASH}.v2.md`, record);
+  gh.put(
+    "ingests",
+    `store/${HASH}.housekeeping.json`,
+    JSON.stringify(proposal),
+  );
+  const view = await (await handleRequest(
+    req(`/api/ingests/${HASH}/housekeeping`),
+    ENV,
+    deps(gh),
+  )).json();
+  assertEquals(view.review_state, "pending-research");
+  const res = await handleRequest(
+    req(`/api/ingests/${HASH}/housekeeping/waive-research`, {
+      method: "POST",
+      headers: { cookie: await cookie() },
+      body: JSON.stringify({
+        schema: "anomalica/housekeeping-research-waiver/1",
+        viewed_sidecar_sha: view.viewed_sidecar_sha,
+        viewed_ref: view.viewed_ref,
+        viewed_content_hash: view.viewed_content_hash,
+        viewed_input_sha256: view.viewed_input_sha256,
+        viewed_result_sha256: view.viewed_result_sha256,
+        viewed_algorithm_version: view.viewed_algorithm_version,
+        reason: "Source research is unavailable",
+      }),
+    }),
+    ENV,
+    deps(gh),
+  );
+  assertEquals(res.status, 200);
+  assertEquals(gh.atomicCommits[0].changes.map((change) => change.path), [
+    `store/${HASH}.housekeeping.json`,
+  ]);
+  const saved = JSON.parse(
+    gh.files.get(`ingests/store/${HASH}.housekeeping.json`)! as string,
+  );
+  assertEquals(saved.passes["metadata-research"], {
+    status: "waived",
+    finished_at: "2026-09-17T00:16:40Z",
+    waiver: {
+      by: "rev@x.com",
+      at: "2026-09-17T00:16:40Z",
+      reason: "Source research is unavailable",
+    },
+  });
+  const repeated = await handleRequest(
+    req(`/api/ingests/${HASH}/housekeeping/waive-research`, {
+      method: "POST",
+      headers: { cookie: await cookie() },
+      body: JSON.stringify({
+        schema: "anomalica/housekeeping-research-waiver/1",
+        viewed_sidecar_sha: view.viewed_sidecar_sha,
+        viewed_ref: view.viewed_ref,
+        viewed_content_hash: view.viewed_content_hash,
+        viewed_input_sha256: view.viewed_input_sha256,
+        viewed_result_sha256: view.viewed_result_sha256,
+        viewed_algorithm_version: view.viewed_algorithm_version,
+        reason: "repeat",
+      }),
+    }),
+    ENV,
+    deps(gh),
+  );
+  assertEquals(repeated.status, 409);
+  assertEquals(gh.atomicCommits.length, 1);
+});
+
+Deno.test("research waiver may replace a failed research pass", async () => {
+  const gh = new FakeGitHub();
+  const record = "---\ntitle: T\n---\nBody.\n";
+  const proposal = await v3Sidecar(record);
+  proposal.items = [];
+  (proposal.passes as Record<string, unknown>)["metadata-research"] = {
+    status: "failed",
+    finished_at: "2026-09-11T00:01:00Z",
+    error: "research unavailable",
+  };
+  proposal.checked_at = "2026-09-11T00:01:00Z";
+  gh.put("ingests", `store/${HASH}.v2.md`, record);
+  gh.put(
+    "ingests",
+    `store/${HASH}.housekeeping.json`,
+    JSON.stringify(proposal),
+  );
+  const view = await (await handleRequest(
+    req(`/api/ingests/${HASH}/housekeeping`),
+    ENV,
+    deps(gh),
+  )).json();
+  assertEquals(view.review_state, "failed-research");
+  const res = await handleRequest(
+    req(`/api/ingests/${HASH}/housekeeping/waive-research`, {
+      method: "POST",
+      headers: { cookie: await cookie() },
+      body: JSON.stringify({
+        schema: "anomalica/housekeeping-research-waiver/1",
+        viewed_sidecar_sha: view.viewed_sidecar_sha,
+        viewed_ref: view.viewed_ref,
+        viewed_content_hash: view.viewed_content_hash,
+        viewed_input_sha256: view.viewed_input_sha256,
+        viewed_result_sha256: view.viewed_result_sha256,
+        viewed_algorithm_version: view.viewed_algorithm_version,
+        reason: "Proceed without research",
+      }),
+    }),
+    ENV,
+    deps(gh),
+  );
+  assertEquals(res.status, 200);
+  const saved = JSON.parse(
+    gh.files.get(`ingests/store/${HASH}.housekeeping.json`)! as string,
+  );
+  assertEquals(saved.passes["metadata-research"].status, "waived");
+  assertEquals(saved.checked_at, "2026-09-17T00:16:40Z");
+});
+
+Deno.test("ordinary review continues independently of housekeeping", async () => {
+  const blocked = new FakeGitHub();
+  const content = `---\ncontent_hash: sha256:${HASH}\n---\nchanged\n`;
+  const blockedResponse = await handleRequest(
+    req(`/api/ingests/${HASH}`, {
+      method: "PUT",
+      headers: { cookie: await cookie() },
+      body: JSON.stringify({
+        content,
+        base_record_sha: FILE_SHA,
+        base_ref: REF,
+      }),
+    }),
+    ENV,
+    deps(blocked),
+  );
+  assertEquals(blockedResponse.status, 200);
+  assertEquals(blocked.atomicCommits.length, 1);
+
+  const ready = new FakeGitHub();
+  const current = ready.files.get(`ingests/store/${HASH}.md`)!;
+  const digest = `sha256:${await sha256Hex(current)}`;
+  ready.put(
+    "ingests",
+    `store/${HASH}.housekeeping.json`,
+    JSON.stringify({
+      schema: "anomalica/housekeeping/3",
+      content_hash: `sha256:${HASH}`,
+      input_sha256: digest,
+      result_sha256: digest,
+      checked_at: "2026-09-17T00:00:00Z",
+      algorithm_version: "3",
+      passes: {
+        deterministic: {
+          status: "completed",
+          finished_at: "2026-09-17T00:00:00Z",
+        },
+        "metadata-research": {
+          status: "completed",
+          finished_at: "2026-09-17T00:00:00Z",
+          usage: { transport: "subscription" },
+        },
+      },
+      items: [],
+      decisions: [],
+    }),
+  );
+  const firstReview = await handleRequest(
+    req(`/api/ingests/${HASH}`, {
+      method: "PUT",
+      headers: { cookie: await cookie() },
+      body: JSON.stringify({
+        content,
+        base_record_sha: FILE_SHA,
+        base_ref: REF,
+      }),
+    }),
+    ENV,
+    deps(ready),
+  );
+  assertEquals(firstReview.status, 200);
+
+  const started = new FakeGitHub();
+  markReviewStarted(started);
+  const excluded = await (await handleRequest(
+    req(`/api/ingests/${HASH}/housekeeping`),
+    ENV,
+    deps(started),
+  )).json();
+  assertEquals(excluded.review_state, "excluded-review-state");
+  assertEquals(excluded.outstanding_count, 0);
+  const continued = await handleRequest(
+    req(`/api/ingests/${HASH}`, {
+      method: "PUT",
+      headers: { cookie: await cookie() },
+      body: JSON.stringify({
+        content,
+        base_record_sha: FILE_SHA,
+        base_ref: REF,
+      }),
+    }),
+    ENV,
+    deps(started),
+  );
+  assertEquals(continued.status, 200);
+});
+
+Deno.test("housekeeping v3 approval atomically commits record and approved sidecar", async () => {
+  const gh = new FakeGitHub();
+  const record = "---\ntitle: T\n---\nSpeaker_1 spoke.\n";
+  const proposal = await v3Sidecar(record);
   gh.put("ingests", `store/${HASH}.v2.md`, record);
   gh.put(
     "ingests",
@@ -1038,22 +1430,49 @@ Deno.test("housekeeping v2 approval atomically commits record and approved sidec
           path.endsWith(".v2.md"),
       )
       .map(({ ref }) => ref),
-    [REF, REF, REF, REF],
+    [REF, REF, REF, REF, REF, REF, REF],
   );
   assertEquals(
     gh.files.get(`ingests/store/${HASH}.v2.md`),
-    "---\ntitle: T\n---\nAlice spoke.\n",
+    '---\ntitle: "New"\n---\nSpeaker_1 spoke.\n',
   );
   const saved = JSON.parse(
     gh.files.get(`ingests/store/${HASH}.housekeeping.json`)!,
   );
   assertEquals(saved.items[0].status, "approved");
+  assertEquals(
+    saved.result_sha256,
+    `sha256:${await sha256Hex('---\ntitle: "New"\n---\nSpeaker_1 spoke.\n')}`,
+  );
+  assertEquals(saved.decisions, [{
+    item_id: "title",
+    status: "approved",
+    decided_at: "2026-09-17T00:16:40Z",
+    decided_by: "rev@x.com",
+  }]);
+  const ready = await (await handleRequest(
+    req(`/api/ingests/${HASH}/housekeeping`),
+    ENV,
+    deps(gh),
+  )).json();
+  assertEquals(ready.review_state, "ready");
+  const repeated = await handleRequest(
+    req(`/api/ingests/${HASH}/housekeeping/decide`, {
+      method: "POST",
+      headers: { cookie: await cookie() },
+      body: JSON.stringify(housekeepingPayload(proposal, "approved")),
+    }),
+    ENV,
+    deps(gh),
+  );
+  assertEquals(repeated.status, 409);
+  assertEquals(gh.atomicCommits.length, 1);
 });
 
-Deno.test("housekeeping stale v2 approval writes neither file and stays proposed", async () => {
+Deno.test("housekeeping stale v3 approval writes neither file and stays proposed", async () => {
   const gh = new FakeGitHub();
   const original = "---\ntitle: T\n---\nSpeaker_1 spoke.\n";
-  const proposal = await v2Sidecar(original);
+  const proposal = await v3Sidecar(original);
   const changed = original + "later edit\n";
   gh.put("ingests", `store/${HASH}.v2.md`, changed);
   gh.put(
@@ -1079,10 +1498,10 @@ Deno.test("housekeeping stale v2 approval writes neither file and stays proposed
   assertEquals(saved.items[0].status, "proposed");
 });
 
-Deno.test("housekeeping stale v2 rejection also writes neither file", async () => {
+Deno.test("housekeeping stale v3 rejection also writes neither file", async () => {
   const gh = new FakeGitHub();
   const original = "---\ntitle: T\n---\nSpeaker_1 spoke.\n";
-  const proposal = await v2Sidecar(original);
+  const proposal = await v3Sidecar(original);
   const changed = original + "later edit\n";
   gh.put("ingests", `store/${HASH}.v2.md`, changed);
   gh.put(
@@ -1111,10 +1530,17 @@ Deno.test("housekeeping stale v2 rejection also writes neither file", async () =
 Deno.test("housekeeping decisions bind every viewed identity", async () => {
   const record = "---\ntitle: T\n---\nSpeaker_1 spoke.\n";
   for (
-    const changed of ["content", "input", "version", "sidecar", "ref"] as const
+    const changed of [
+      "content",
+      "input",
+      "result",
+      "version",
+      "sidecar",
+      "ref",
+    ] as const
   ) {
     const gh = new FakeGitHub();
-    const proposal = await v2Sidecar(record);
+    const proposal = await v3Sidecar(record);
     gh.put("ingests", `store/${HASH}.v2.md`, record);
     gh.put(
       "ingests",
@@ -1127,6 +1553,9 @@ Deno.test("housekeeping decisions bind every viewed identity", async () => {
     }
     if (changed === "input") {
       payload.viewed_input_sha256 = `sha256:${"f".repeat(64)}`;
+    }
+    if (changed === "result") {
+      payload.viewed_result_sha256 = `sha256:${"f".repeat(64)}`;
     }
     if (changed === "version") payload.viewed_algorithm_version = "0";
     if (changed === "sidecar") {
@@ -1150,7 +1579,7 @@ Deno.test("housekeeping decisions bind every viewed identity", async () => {
 Deno.test("housekeeping rejects client-supplied operations as an extra field", async () => {
   const gh = new FakeGitHub();
   const record = "---\ntitle: T\n---\nSpeaker_1 spoke.\n";
-  const proposal = await v2Sidecar(record);
+  const proposal = await v3Sidecar(record);
   gh.put("ingests", `store/${HASH}.v2.md`, record);
   gh.put(
     "ingests",
@@ -1179,7 +1608,7 @@ Deno.test("housekeeping requires the canonical decision schema", async () => {
   const record = "---\ntitle: T\n---\nSpeaker_1 spoke.\n";
   for (const schema of [undefined, "anomalica/housekeeping-decision/0"]) {
     const gh = new FakeGitHub();
-    const proposal = await v2Sidecar(record);
+    const proposal = await v3Sidecar(record);
     gh.put("ingests", `store/${HASH}.v2.md`, record);
     gh.put(
       "ingests",
@@ -1210,7 +1639,7 @@ Deno.test("housekeeping decision schema rejects duplicate ids and nested extra f
   const record = "---\ntitle: T\n---\nSpeaker_1 spoke.\n";
   for (const variant of ["duplicate", "extra"] as const) {
     const gh = new FakeGitHub();
-    const proposal = await v2Sidecar(record);
+    const proposal = await v3Sidecar(record);
     gh.put("ingests", `store/${HASH}.v2.md`, record);
     gh.put(
       "ingests",
@@ -1248,11 +1677,11 @@ Deno.test("housekeeping decisions fail closed on a missing or non-canonical mani
       null,
       '{"algorithm_version":"1","schema":"anomalica/housekeeping-algorithm/1"}\n',
       ALGORITHM_MANIFEST + "\n",
-      ALGORITHM_MANIFEST.replace('"1"', '"2"'),
+      ALGORITHM_MANIFEST.replace('"3"', '"4"'),
     ]
   ) {
     const gh = new FakeGitHub();
-    const proposal = await v2Sidecar(record);
+    const proposal = await v3Sidecar(record);
     gh.put("ingests", `store/${HASH}.v2.md`, record);
     gh.put(
       "ingests",
@@ -1274,16 +1703,20 @@ Deno.test("housekeeping decisions fail closed on a missing or non-canonical mani
       ENV,
       deps(gh),
     );
-    assertEquals(res.status, 503, String(manifest));
+    assertEquals(
+      res.status,
+      manifest?.includes('"algorithm_version": "4"') ? 409 : 503,
+      String(manifest),
+    );
     assertEquals(gh.atomicCommits.length, 0);
   }
 });
 
-Deno.test("housekeeping invalid v2 approval writes neither file and stays proposed", async () => {
+Deno.test("housekeeping invalid v3 approval writes neither file and stays proposed", async () => {
   const gh = new FakeGitHub();
   const record = "---\ntitle: T\n---\nSpeaker_1 spoke.\n";
-  const proposal = await v2Sidecar(record);
-  proposal.items[0].expected_count = 2;
+  const proposal = await v3Sidecar(record);
+  (proposal.items[0] as Record<string, unknown>).extra = true;
   gh.put("ingests", `store/${HASH}.v2.md`, record);
   gh.put(
     "ingests",
@@ -1299,7 +1732,7 @@ Deno.test("housekeeping invalid v2 approval writes neither file and stays propos
     ENV,
     deps(gh),
   );
-  assertEquals(res.status, 422);
+  assertEquals(res.status, 409);
   assertEquals(gh.atomicCommits.length, 0);
   assertEquals(gh.files.get(`ingests/store/${HASH}.v2.md`), record);
   const saved = JSON.parse(
@@ -1308,11 +1741,11 @@ Deno.test("housekeeping invalid v2 approval writes neither file and stays propos
   assertEquals(saved.items[0].status, "proposed");
 });
 
-Deno.test("housekeeping rejection commits only the sidecar", async () => {
+Deno.test("housekeeping rejection atomically commits record identity and sidecar", async () => {
   const gh = new FakeGitHub();
   const record = "---\ntitle: T\n---\nSpeaker_1 spoke.\n";
   gh.put("ingests", `store/${HASH}.v2.md`, record);
-  const proposal = await v2Sidecar(record);
+  const proposal = await v3Sidecar(record);
   gh.put(
     "ingests",
     `store/${HASH}.housekeeping.json`,
@@ -1331,7 +1764,7 @@ Deno.test("housekeeping rejection commits only the sidecar", async () => {
   assertEquals(gh.atomicCommits.length, 1);
   assertEquals(
     gh.atomicCommits[0].changes.map((change) => change.path),
-    [`store/${HASH}.housekeeping.json`],
+    [`store/${HASH}.v2.md`, `store/${HASH}.housekeeping.json`],
   );
   assertEquals(gh.files.get(`ingests/store/${HASH}.v2.md`), record);
   const saved = JSON.parse(
@@ -1377,12 +1810,13 @@ Deno.test("housekeeping v1 approval is due and never applies without an input ha
       method: "POST",
       headers: { cookie: await cookie() },
       body: JSON.stringify({
-        schema: "anomalica/housekeeping-decision/1",
+        schema: "anomalica/housekeeping-decision/2",
         decisions: [{ item_id: "publisher", status: "approved" }],
         viewed_sidecar_sha: FILE_SHA,
         viewed_ref: REF,
         viewed_content_hash: proposal.content_hash,
         viewed_input_sha256: "sha256:" + "0".repeat(64),
+        viewed_result_sha256: "sha256:" + "0".repeat(64),
         viewed_algorithm_version: "1",
       }),
     }),
@@ -1431,12 +1865,13 @@ Deno.test("housekeeping v1 rejection is also refused", async () => {
       method: "POST",
       headers: { cookie: await cookie() },
       body: JSON.stringify({
-        schema: "anomalica/housekeeping-decision/1",
+        schema: "anomalica/housekeeping-decision/2",
         decisions: [{ item_id: "title", status: "rejected" }],
         viewed_sidecar_sha: FILE_SHA,
         viewed_ref: REF,
         viewed_content_hash: proposal.content_hash,
         viewed_input_sha256: `sha256:${await sha256Hex(record)}`,
+        viewed_result_sha256: `sha256:${await sha256Hex(record)}`,
         viewed_algorithm_version: "1",
       }),
     }),
@@ -1447,7 +1882,7 @@ Deno.test("housekeeping v1 rejection is also refused", async () => {
   assertEquals(gh.atomicCommits.length, 0);
 });
 
-Deno.test("housekeeping v2 retains hash-bound frontmatter operations", async () => {
+Deno.test("housekeeping v2 is read-only and cannot apply frontmatter operations", async () => {
   const gh = new FakeGitHub();
   const record = "---\npublisher: 'Old'\n---\nBody unchanged.\n";
   const proposal = {
@@ -1486,24 +1921,22 @@ Deno.test("housekeeping v2 retains hash-bound frontmatter operations", async () 
       method: "POST",
       headers: { cookie: await cookie() },
       body: JSON.stringify({
-        schema: "anomalica/housekeeping-decision/1",
+        schema: "anomalica/housekeeping-decision/2",
         decisions: [{ item_id: "publisher", status: "approved" }],
         viewed_sidecar_sha: FILE_SHA,
         viewed_ref: REF,
         viewed_content_hash: proposal.content_hash,
         viewed_input_sha256: proposal.input_sha256,
+        viewed_result_sha256: proposal.input_sha256,
         viewed_algorithm_version: proposal.algorithm_version,
       }),
     }),
     ENV,
     deps(gh),
   );
-  assertEquals(res.status, 200);
-  assertEquals(gh.atomicCommits.length, 1);
-  assertEquals(
-    gh.files.get(`ingests/store/${HASH}.md`),
-    '---\npublisher: "New"\n---\nBody unchanged.\n',
-  );
+  assertEquals(res.status, 409);
+  assertEquals(gh.atomicCommits.length, 0);
+  assertEquals(gh.files.get(`ingests/store/${HASH}.md`), record);
 });
 
 // --- role gate (the production write gate) ---------------------------------
@@ -1514,6 +1947,7 @@ const asUser = async (login: string) =>
   (await makeSessionCookie(ENV, { ...USER, login }, NOW)).split(";")[0];
 
 const putReview = (gh: FakeGitHub, ck: string) => {
+  markReviewStarted(gh);
   gh.put(
     "ingests",
     `store/${HASH}.md`,

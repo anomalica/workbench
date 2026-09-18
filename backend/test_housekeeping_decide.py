@@ -23,13 +23,16 @@ It's called Cydonia, a complex region.
 
 def _sidecar() -> hk.Sidecar:
     ev = hk.Evidence(reasoning="channel republishes work it did not produce")
-    return hk.Sidecar(
+    sidecar = hk.new_sidecar(
         content_hash=f"sha256:{'a' * 64}",
-        input_sha256=hk.input_sha256(RECORD.encode()),
         checked_at="2026-08-19T20:00:00Z",
-        algorithm_version=hk.ALGORITHM_VERSION,
-        outcome="completed",
-        items=[
+        raw_bytes=RECORD.encode(),
+    )
+    hk.record_pass(
+        sidecar,
+        "deterministic",
+        hk.PassState(status="completed", finished_at="2026-08-19T20:01:00Z"),
+        [
             hk.Item(
                 "i-move",
                 "redistributor",
@@ -39,6 +42,8 @@ def _sidecar() -> hk.Sidecar:
                 "Eyes On Cinema",
                 "high",
                 ev,
+                category="metadata",
+                pass_name="deterministic",
                 to_field="posted_by",
             ),
             hk.Item(
@@ -50,9 +55,23 @@ def _sidecar() -> hk.Sidecar:
                 "1967",
                 "medium",
                 ev,
+                category="metadata",
+                pass_name="deterministic",
             ),
         ],
+        observed_input_sha256=sidecar.input_sha256,
     )
+    hk.record_pass(
+        sidecar,
+        "metadata-research",
+        hk.PassState(
+            status="completed",
+            finished_at="2026-08-19T20:02:00Z",
+            usage={"transport": "subscription"},
+        ),
+        observed_input_sha256=sidecar.input_sha256,
+    )
+    return sidecar
 
 
 @pytest.fixture
@@ -95,9 +114,14 @@ def test_untouched_frontmatter_keeps_its_bytes(record):
 
 def test_a_rejected_item_changes_nothing_but_is_recorded(record, tmp_path):
     sc = _sidecar()
-    sc.items[0].status = "rejected"
-    out = hk.apply_items(record, [i for i in sc.items if i.status == "approved"])
-    assert out == RECORD
+    result = hk.apply_decisions(
+        record,
+        sc,
+        {item.id: "rejected" for item in sc.items},
+        decided_at="2026-08-19T20:03:00Z",
+        decided_by="reviewer@example.test",
+    )
+    assert result.text == RECORD
 
     p = tmp_path / "abc123.housekeeping.json"
     hk.write_sidecar_file(p, sc)
@@ -112,7 +136,7 @@ def test_the_sidecar_round_trips_through_the_wire_shape(tmp_path):
     p = tmp_path / "s.housekeeping.json"
     hk.write_sidecar_file(p, _sidecar())
     d = json.loads(p.read_text())
-    assert d["schema"] == "anomalica/housekeeping/2"
+    assert d["schema"] == "anomalica/housekeeping/3"
     assert d["input_sha256"] == hk.input_sha256(RECORD.encode())
     assert {i["id"] for i in d["items"]} == {"i-move", "i-year"}
     assert d["items"][0]["to_field"] == "posted_by"

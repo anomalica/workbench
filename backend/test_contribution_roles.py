@@ -121,11 +121,11 @@ def test_editor_can_archive(env):
     assert stub.archived is True
 
 
-def test_contributor_cannot_write_highlights(env):
+def test_contributor_cannot_write_gold(env):
     client_as, _, _ = env
-    res = client_as("newbie").put(
-        f"/api/ingests/{HASH}/highlights",
-        json={"complete": True, "spans": [], "rejected": []},
+    res = client_as("newbie").post(
+        f"/api/ingests/{HASH}/gold/batches",
+        json={},
     )
     assert res.status_code == 403
 

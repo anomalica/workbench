@@ -191,6 +191,37 @@ describe("markup: click plays, drag pauses", () => {
   });
 });
 
+describe("selection case control", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    Element.prototype.scrollTo = vi.fn();
+    Element.prototype.scrollIntoView = vi.fn();
+  });
+
+  it("updates the word locally while the parent suppresses a full transcript refresh", async () => {
+    const onreplaceselection = vi.fn();
+    render(WordTranscript, {
+      props: props({ mode: "edit", onreplaceselection }),
+    });
+    await settle();
+    await click(0);
+
+    const caseButton = screen.getByTitle("Cycle case: lowercase -> Capitalised -> UPPERCASE");
+    expect(caseButton.textContent?.trim()).toBe("abc");
+
+    await fireEvent.click(caseButton);
+    await settle();
+    expect(word(0).textContent).toBe("Alpha");
+    expect(caseButton.textContent?.trim()).toBe("Abc");
+
+    await fireEvent.click(caseButton);
+    await settle();
+    expect(word(0).textContent).toBe("ALPHA");
+    expect(caseButton.textContent?.trim()).toBe("ABC");
+    expect(onreplaceselection).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("the context-pick click is consumed, not played", () => {
   beforeEach(() => {
     localStorage.clear();

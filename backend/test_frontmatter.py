@@ -20,3 +20,21 @@ def test_plain_value_unchanged():
         "---\ntitle: Plain Title\nsource_type: pdf\n---\nx\n"
     )
     assert fm["title"] == "Plain Title"
+
+
+def test_crlf_frontmatter_preserves_exact_body():
+    text = "---\r\ntitle: CRLF\r\nsource_type: video\r\n---\r\nBody.\r\n"
+    fm, body, raw = server.parse_frontmatter(text)
+
+    assert fm["title"] == "CRLF"
+    assert raw == "---\r\ntitle: CRLF\r\nsource_type: video\r\n---\r\n"
+    assert body == "Body.\r\n"
+
+
+def test_bare_cr_frontmatter_preserves_exact_body():
+    text = "---\rtitle: CR\rsource_type: video\r---\rBody.\r"
+    fm, body, raw = server.parse_frontmatter(text)
+
+    assert fm["title"] == "CR"
+    assert raw == "---\rtitle: CR\rsource_type: video\r---\r"
+    assert body == "Body.\r"

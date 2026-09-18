@@ -23,11 +23,14 @@ export interface IngestSummary {
   document_type?: string;
   source_url: string;
   /** Extraction generation that produced this record (anomalica decision 0040),
-   *  or null when not declared. Below `pipeline_current` = stale (badged). */
+   *  or null when absent or malformed. */
   pipeline_version?: number | null;
   /** Current extraction generation for this record's media type, from the
    *  ingester's manifest, or null when the media type isn't in the manifest. */
   pipeline_current?: number | null;
+  /** ADR 0050 comparison. Unknown covers absent/malformed values, a missing
+   * manifest entry, and a record generation ahead of the manifest. */
+  pipeline_status: "current" | "stale" | "unknown";
   /** The pipeline tried to refresh this stale record and refused: the fresh
    *  extraction lost words a reviewer had kept. `reason` names them. Absent
    *  when never tried, or when a later refresh succeeded. */
@@ -827,10 +830,11 @@ export async function ingestExists(fullHash: string): Promise<boolean> {
 // A submit request must never hang indefinitely with no feedback - a stuck
 // backend/network once left the submit dialog silently open for an hour with
 // no error, so the reviewer had no signal to retry before the browser crashed
-// and the (unsaved) review was lost. 45s is generous for a large record's PUT
-// on a slow connection but still bounds the wait to something a reviewer would
-// notice and can act on.
-const SUBMIT_TIMEOUT_MS = 45_000;
+// and the (unsaved) review was lost. A large review can legitimately wait on the
+// repository write lock, then hash and commit a substantial record. Aborting at
+// 45s twice reported failure after the commit had actually succeeded and invited
+// duplicate reviews, so keep the bound but leave enough room for that path.
+const SUBMIT_TIMEOUT_MS = 120_000;
 
 export async function submitReview(
   fullHash: string,
@@ -873,7 +877,7 @@ export async function submitReview(
     return {
       ok: false,
       error: timedOut
-        ? "Submit timed out - your edits are still safe in this browser. Check your connection and try again."
+        ? "Submit could not be confirmed within two minutes. Your edits are still safe in this browser; check the review history before retrying, because the commit may still complete."
         : "Network error while submitting - your edits are still safe in this browser. Try again.",
     };
   } finally {
@@ -1003,69 +1007,100 @@ export async function fetchHistory(hash: string): Promise<ReviewHistoryEntry[]> 
   return Array.isArray(data?.history) ? data.history : [];
 }
 
-// Relevance-tuning highlights (anomalica/highlights/1). Span offsets are
-// Unicode code points into the raw stored body - src/lib/highlights.ts
-// converts to/from the UI's UTF-16 offsets.
-
-export interface HighlightSpan {
+// Compact human-gold review. Source spans and context remain canonical inline
+// markers; this API returns only the current batch and its overlapping claims.
+export interface GoldPart {
   start: number;
   end: number;
   text: string;
+}
+
+export interface HighlightSpan extends GoldPart {
   note?: string;
 }
 
-export interface HighlightsSidecar {
-  complete_ranges?: { start: number; end: number; note?: string }[];
-  schema: string;
+export interface GoldContext {
+  highlight_id: string;
+  parts: GoldPart[];
+}
+
+export interface GoldProposal {
+  text: string;
+  quote: string;
+}
+
+export interface GoldUnit {
+  highlight_id: string;
+  parts: GoldPart[];
+  context: GoldContext[];
+  context_issue: string | null;
+  proposals: GoldProposal[];
+}
+
+export interface GoldRange {
+  id: string;
+  start: number;
+  end: number;
+  complete: boolean;
+  reviewer: { issuer: string; subject: string; name: string };
+  updated_at: string | null;
+  attested_at?: string;
+  units: GoldDecision[];
+}
+
+export interface GoldDecision {
+  highlight_id: string;
+  decision: "accept" | "adjust" | "split" | "reject" | "defer";
+  facts?: string[];
+}
+
+export interface GoldReviewView {
+  schema: "anomalica/highlight-gold-view/1";
   record_hash: string;
   body_sha256: string;
-  complete: boolean;
-  /** Pseudonymous author; "fable-draft" for an unconfirmed AI draft. */
-  reviewed_by: string;
-  /** Null on an AI draft that no reviewer has saved yet. */
-  reviewed_at: string | null;
-  spans: HighlightSpan[];
-  rejected: HighlightSpan[];
+  body_length: number;
+  stale: boolean;
+  range: GoldRange;
+  progress: { total: number; resolved: number; deferred: number; boundary_count: number };
+  boundary_cases: { highlight_id: string; parts: GoldPart[] }[];
+  batch: GoldUnit[];
 }
 
-/** The raw stored body (the reference text highlight offsets index) and its
- *  hash. This is the same text the digester pins body_sha256 from.
- *  DYNAMIC (the live FastAPI only) - tuning mode is not part of the static
- *  snapshot, and its entry point is hidden on static builds. */
-export async function fetchRawBody(hash: string): Promise<{ body: string; body_sha256: string }> {
-  const res = await fetch(`/api/ingests/${hash}/body`);
-  if (!res.ok) throw new Error(`Failed to fetch body: ${res.status}`);
-  return res.json();
-}
-
-export async function fetchHighlights(
+export async function fetchGoldReview(
   hash: string,
-): Promise<{ highlights: HighlightsSidecar | null; body_sha256: string }> {
-  const res = await fetch(`/api/ingests/${hash}/highlights`);
-  if (!res.ok) throw new Error(`Failed to fetch highlights: ${res.status}`);
+  range?: { id?: string; start?: number; end?: number },
+): Promise<GoldReviewView> {
+  const params = new URLSearchParams();
+  if (range?.id) params.set("range_id", range.id);
+  if (range?.start !== undefined) params.set("start", String(range.start));
+  if (range?.end !== undefined) params.set("end", String(range.end));
+  const query = params.size ? `?${params}` : "";
+  const res = await fetch(`/api/ingests/${hash}/gold${query}`);
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail || `Failed to fetch gold review (${res.status})`);
+  }
   return res.json();
 }
 
-export async function saveHighlights(
+export async function saveGoldBatch(
   hash: string,
   payload: {
-    complete: boolean;
-    spans: HighlightSpan[];
-    rejected: HighlightSpan[];
-    /** Which regions the reviewer actually swept. Inside one, an unhighlighted
-     *  sentence means "judged not claim-worthy"; outside every range it means
-     *  "not looked at", and eval scores nothing there. */
-    complete_ranges?: { start: number; end: number; note?: string }[];
+    body_sha256: string;
+    range: Pick<GoldRange, "id" | "start" | "end">;
+    decisions: GoldDecision[];
+    complete?: boolean;
+    replace_stale?: boolean;
   },
-): Promise<{ saved: boolean; body_sha256: string }> {
-  const res = await fetch(`/api/ingests/${hash}/highlights`, {
-    method: "PUT",
+): Promise<GoldReviewView> {
+  const res = await fetch(`/api/ingests/${hash}/gold/batches`, {
+    method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
-    throw new Error(data.detail || `Save failed (${res.status})`);
+    throw new Error(data.detail || `Batch save failed (${res.status})`);
   }
   return res.json();
 }
@@ -1694,8 +1729,9 @@ export interface InfrastructureEntity {
   records: number;
   /** Works only: how far along the pipeline this one has got. */
   stage: PipelineStage;
-  /** Ingested by a superseded version of the ingester. */
-  stale: boolean;
+  /** Compatibility projection of generation_status; null means unknown. */
+  stale: boolean | null;
+  generation_status: "current" | "stale" | "unknown";
 }
 
 /** Where a named work has got to. A work starts as a title in someone else's
@@ -1707,7 +1743,8 @@ export interface InfrastructureEntityDetail {
   name: string;
   kind: string;
   stage: PipelineStage;
-  stale: boolean;
+  stale: boolean | null;
+  generation_status: "current" | "stale" | "unknown";
   /** The record we hold for this work, when we hold one. */
   record_hash: string | null;
   /** Other names this same work is listed under, unmerged. */
@@ -1792,7 +1829,7 @@ export interface HousekeepingRow {
   algorithm_version?: string;
   /** True only for a ready v3 pass over the exact current record bytes. */
   current?: boolean;
-  state?: HousekeepingState;
+  review_state?: HousekeepingState;
   proposed: number;
   approved: number;
   rejected: number;
@@ -1895,13 +1932,12 @@ export type HousekeepingDueReason =
   | "missing-sidecar"
   | "invalid-sidecar"
   | "unsupported-schema"
-  | "incomplete"
-  | "input-mismatch"
+  | "result-mismatch"
   | "algorithm-mismatch";
 
 interface HousekeepingViewBase {
   schema: "anomalica/housekeeping-view/2";
-  state: HousekeepingState;
+  review_state: HousekeepingState;
   due_reason: HousekeepingDueReason | null;
   outstanding_count: number;
   scopes: ("frontmatter" | "body")[];

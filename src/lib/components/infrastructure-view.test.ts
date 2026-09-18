@@ -27,9 +27,9 @@ const summary: api.InfrastructureSummary = {
 };
 
 const works: api.InfrastructureEntity[] = [
-  { id: "w1", name: "American Cosmic", mentions: 30, records: 2, stage: "digested", stale: false },
-  { id: "w2", name: "Haunted Media", mentions: 3, records: 1, stage: "named", stale: false },
-  { id: "w3", name: "Passport to Magonia", mentions: 2, records: 1, stage: "named", stale: false },
+  { id: "w1", name: "American Cosmic", mentions: 30, records: 2, stage: "digested", stale: false, generation_status: "current" },
+  { id: "w2", name: "Haunted Media", mentions: 3, records: 1, stage: "named", stale: null, generation_status: "unknown" },
+  { id: "w3", name: "Passport to Magonia", mentions: 2, records: 1, stage: "named", stale: null, generation_status: "unknown" },
 ];
 
 const claim = (over: Partial<api.InfrastructureClaim>): api.InfrastructureClaim => ({
@@ -46,7 +46,11 @@ const claim = (over: Partial<api.InfrastructureClaim>): api.InfrastructureClaim 
 
 beforeEach(() => {
   vi.restoreAllMocks();
-  vi.spyOn(api, "fetchInfrastructure").mockResolvedValue({ summary, records: [] });
+  vi.spyOn(api, "fetchInfrastructure").mockResolvedValue({
+    summary,
+    records: [],
+    intake_errors: [],
+  });
   vi.spyOn(api, "fetchInfrastructureEntities").mockResolvedValue(works);
   vi.spyOn(api, "fetchInfrastructureClaims").mockResolvedValue([]);
 });
@@ -76,6 +80,14 @@ describe("the shelf-check", () => {
     );
     expect(rows).toHaveLength(3);
     expect(container.querySelectorAll("button span[title^='Claims extracted']")).toHaveLength(1);
+  });
+
+  it("presents unknown ingest generation separately from stale", async () => {
+    vi.spyOn(api, "fetchInfrastructureEntities").mockResolvedValue([
+      { ...works[0], stale: null, generation_status: "unknown" },
+    ]);
+    render(InfrastructureView, {});
+    expect(await screen.findByTitle(/generation cannot be compared/)).toBeTruthy();
   });
 });
 
@@ -111,7 +123,28 @@ describe("the claims view", () => {
 it("says the database is missing rather than showing an empty bibliography", async () => {
   // None means the assimilator has not built it; an empty list would read as
   // "there is nothing in here", which is a different statement.
-  vi.spyOn(api, "fetchInfrastructure").mockResolvedValue({ summary: null, records: [] });
+  vi.spyOn(api, "fetchInfrastructure").mockResolvedValue({
+    summary: null,
+    records: [],
+    intake_errors: [],
+  });
   render(InfrastructureView, {});
   await screen.findByText(/hasn't been built yet/);
+});
+
+it("shows blocked intake data without treating it as a record", async () => {
+  vi.spyOn(api, "fetchInfrastructure").mockResolvedValue({
+    summary,
+    records: [],
+    intake_errors: [
+      {
+        path: "queue/duplicate.md",
+        title: "Duplicate source",
+        reason: "Duplicate transient intake candidates share this source identity.",
+      },
+    ],
+  });
+  render(InfrastructureView, {});
+  await screen.findByText("Intake queue blocked");
+  expect(screen.getByText(/queue\/duplicate\.md/)).toBeTruthy();
 });

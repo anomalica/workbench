@@ -1038,7 +1038,7 @@
         canTag={liveBackend && canHousekeep}
         housekeepingOpen={selectedHousekeepingOpen}
         housekeepingScopes={selectedHousekeepingScopes}
-        housekeepingState={selectedHousekeepingView?.state ?? null}
+        housekeepingState={selectedHousekeepingView?.review_state ?? null}
         reviewed={reviewedHashes.has(selectedIngest.content_hash) &&
           !needsVerifyHashes.has(selectedIngest.content_hash)}
         needsVerify={needsVerifyHashes.has(selectedIngest.content_hash)}

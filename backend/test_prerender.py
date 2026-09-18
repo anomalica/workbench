@@ -355,9 +355,9 @@ def test_local_prerender_detail_uses_committed_bytes_and_identity(
     monkeypatch.setattr(server, "ingests_path", repo)
     monkeypatch.setattr(server, "digests_path", tmp_path / "digests")
     full_housekeeping = {
-        "schema": "anomalica/housekeeping-view/1",
+        "schema": "anomalica/housekeeping-view/2",
         "access": "full",
-        "state": "current",
+        "review_state": "ready",
         "due_reason": None,
         "outstanding_count": 1,
         "scopes": ["body"],
@@ -367,6 +367,7 @@ def test_local_prerender_detail_uses_committed_bytes_and_identity(
         "viewed_ref": ref,
         "viewed_content_hash": f"sha256:{H_PUB}",
         "viewed_input_sha256": f"sha256:{'b' * 64}",
+        "viewed_result_sha256": f"sha256:{'b' * 64}",
         "viewed_algorithm_version": "1",
         "previews": {},
     }

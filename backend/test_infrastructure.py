@@ -103,7 +103,7 @@ def test_a_queued_record_sits_between_not_held_and_ingested(db):
     assert stage["Haunted Media"] == "queued"
 
 
-def test_an_undeclared_generation_is_not_stale(db):
+def test_generation_currentness_has_three_states(db):
     # A record extracted before the ingester declared generations says nothing
     # about its own age. Absent is not behind.
     old = [
@@ -116,7 +116,23 @@ def test_an_undeclared_generation_is_not_stale(db):
     ]
     silent = [{"title": "American Cosmic", "digested": True, "pipeline_current": 3}]
     assert entity("w1", db, records_held=old)["stale"] is True
-    assert entity("w1", db, records_held=silent)["stale"] is False
+    assert entity("w1", db, records_held=old)["generation_status"] == "stale"
+    assert entity("w1", db, records_held=silent)["stale"] is None
+    assert entity("w1", db, records_held=silent)["generation_status"] == "unknown"
+
+
+def test_a_record_ahead_of_the_manifest_is_unknown(db):
+    ahead = [
+        {
+            "title": "American Cosmic",
+            "digested": True,
+            "pipeline_version": 4,
+            "pipeline_current": 3,
+        }
+    ]
+    got = entity("w1", db, records_held=ahead)
+    assert got["stale"] is None
+    assert got["generation_status"] == "unknown"
 
 
 def test_a_title_matches_through_the_acronym_convention(db):

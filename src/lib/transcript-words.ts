@@ -881,6 +881,27 @@ export function replaceWordRange(
   // dropping them - editing (or splitting on space in) the word a note is
   // anchored to must never lose or tokenise the note.
   const rangeNotes = words.slice(from, to + 1).flatMap((w) => w.notes ?? []);
+
+  // The common correction changes text or timing without changing how many
+  // words exist. Preserve every unaffected object and all index-based
+  // structures so the keyed transcript can update only the edited words.
+  if (delta === 0) {
+    const out = [...words];
+    clean.forEach((w, ci) => {
+      const carryNotes = ci === clean.length - 1 && rangeNotes.length > 0;
+      out[from + ci] = {
+        text: w.text,
+        start: w.start,
+        gIndex: from + ci,
+        ...(carryNotes ? { notes: rangeNotes } : {}),
+      };
+    });
+    return {
+      ...parsed,
+      words: out,
+    };
+  }
+
   const out: Word[] = [];
   for (let i = 0; i < from; i++) out.push({ ...words[i], gIndex: out.length });
   clean.forEach((w, ci) => {

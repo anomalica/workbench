@@ -145,25 +145,36 @@ def _matcher(records):
     return match
 
 
-def _stage_of(record: dict | None) -> tuple[str, bool]:
-    """Which stage a matched record sits at, and whether it needs redoing.
+def _stage_of(record: dict | None) -> tuple[str, str]:
+    """Which stage a matched record sits at, and its ingest-generation status.
 
     Stale is the ingest's own generation, not the digest's: a record extracted
     by an older version of the ingester says so in its frontmatter, and
-    everything downstream of it inherits the problem. A record that never
-    declared a generation is not stale, it is undeclared - no badge either way.
+    everything downstream of it inherits the problem. Missing, malformed and
+    unexpectedly-ahead generations are unknown rather than neutral.
     """
     if record is None:
-        return "named", False
+        return "named", "unknown"
     if record.get("queued"):
-        return "queued", False
+        return "queued", "unknown"
     version, current = record.get("pipeline_version"), record.get("pipeline_current")
-    stale = version is not None and current is not None and version < current
+    generation_status = record.get("pipeline_status")
+    if generation_status not in {"current", "stale", "unknown"}:
+        if (
+            not isinstance(version, int)
+            or not isinstance(current, int)
+            or version > current
+        ):
+            generation_status = "unknown"
+        elif version < current:
+            generation_status = "stale"
+        else:
+            generation_status = "current"
     if record.get("digested"):
-        return "digested", stale
+        return "digested", generation_status
     if record.get("digestible"):
-        return "reviewed", stale
-    return "ingested", stale
+        return "reviewed", generation_status
+    return "ingested", generation_status
 
 
 # --- Reads ---
@@ -355,8 +366,8 @@ def entities(
         match = _matcher(_with_own_records(con, records_held))
         out = []
         for r in rows:
-            stage, stale = (
-                _stage_of(match(r["name"])) if records_held else ("named", False)
+            stage, generation_status = (
+                _stage_of(match(r["name"])) if records_held else ("named", "unknown")
             )
             out.append(
                 {
@@ -365,7 +376,12 @@ def entities(
                     "mentions": r["c"],
                     "records": r["records"],
                     "stage": stage,
-                    "stale": stale,
+                    "stale": True
+                    if generation_status == "stale"
+                    else False
+                    if generation_status == "current"
+                    else None,
+                    "generation_status": generation_status,
                 }
             )
         return out
@@ -427,13 +443,18 @@ def entity(
             if records_held and node["node_type"] == "document"
             else None
         )
-        stage, stale = _stage_of(found)
+        stage, generation_status = _stage_of(found)
         return {
             "id": node["id"],
             "name": node["name"],
             "kind": node["node_type"],
             "stage": stage,
-            "stale": stale,
+            "stale": True
+            if generation_status == "stale"
+            else False
+            if generation_status == "current"
+            else None,
+            "generation_status": generation_status,
             "record_hash": (found or {}).get("content_hash"),
             "also_listed_as": (
                 _same_work_names(con).get(node["name"], [])

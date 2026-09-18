@@ -26,7 +26,7 @@ describe("what a record is, versus what file arrived", () => {
     expect(recordType({}).missing).toBe(true);
   });
 
-  it("surfaces a value outside the closed list rather than hiding it", () => {
+  it("surfaces an invalid legacy value rather than hiding it", () => {
     const t = recordType({ document_type: "screenplay" });
     expect(t.label).toBe("screenplay");
     expect(t.known).toBe(false);
@@ -37,17 +37,21 @@ describe("what a record is, versus what file arrived", () => {
     expect(recordType({ document_type: "   " }).missing).toBe(true);
   });
 
-  it("has the sixteen agreed types and no duplicates", () => {
-    expect(DOCUMENT_TYPES).toHaveLength(16);
-    expect(new Set(DOCUMENT_TYPES).size).toBe(16);
-    for (const t of ["book", "slide", "interview", "recording"]) {
+  it("has the seventeen agreed types and no duplicates", () => {
+    expect(DOCUMENT_TYPES).toHaveLength(17);
+    expect(new Set(DOCUMENT_TYPES).size).toBe(17);
+    for (const t of ["book", "slide", "interview", "footage", "recording"]) {
       expect(isDocumentType(t)).toBe(true);
     }
     expect(isDocumentType("ebook")).toBe(false); // a source_type, not a document_type
-    // The format calls this an open set, so a value outside the list is legal
-    // and must be reported rather than replaced.
+    // Preserve an invalid stored value for correction rather than replacing it.
     expect(recordType({ document_type: "memo" }).label).toBe("memo");
     expect(recordType({ document_type: "memo" }).known).toBe(false);
     expect(isDocumentType(undefined)).toBe(false);
+    expect(isDocumentType(null)).toBe(false);
+    expect(isDocumentType("")).toBe(false);
+    expect(isDocumentType(" ")).toBe(false);
+    expect(isDocumentType("Footage")).toBe(false);
+    expect(isDocumentType("memo")).toBe(false);
   });
 });

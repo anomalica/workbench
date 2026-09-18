@@ -23,7 +23,7 @@ function fullView(
     viewed_input_sha256: `sha256:${"b".repeat(64)}`,
     viewed_result_sha256: `sha256:${"b".repeat(64)}`,
     viewed_algorithm_version: "2",
-    state: "needs-decisions",
+    review_state: "needs-decisions",
     due_reason: null,
     outstanding_count: 1,
     scopes: ["body"],
@@ -128,7 +128,7 @@ describe("housekeeping record navigation", () => {
     vi.spyOn(api, "fetchHousekeeping").mockResolvedValue({
       schema: "anomalica/housekeeping-view/2",
       access: "summary",
-      state: "needs-decisions",
+      review_state: "needs-decisions",
       due_reason: null,
       outstanding_count: 1,
       scopes: ["body"],
@@ -160,7 +160,7 @@ describe("housekeeping record navigation", () => {
   it("shows due proposals for context but offers no decision controls", async () => {
     const hash = "a".repeat(64);
     const due = fullView(hash);
-    due.state = "due";
+    due.review_state = "due";
     due.due_reason = "unsupported-schema";
     due.outstanding_count = 0;
     due.scopes = [];
@@ -235,7 +235,10 @@ describe("housekeeping record navigation", () => {
     });
     next.outstanding_count = 2;
     vi.spyOn(api, "fetchHousekeepingQueue").mockResolvedValue([]);
-    vi.spyOn(api, "fetchHousekeeping").mockResolvedValue({ ...next, state: "ready" });
+    vi.spyOn(api, "fetchHousekeeping").mockResolvedValue({
+      ...next,
+      review_state: "ready",
+    });
     const decide = vi.spyOn(api, "decideHousekeeping").mockResolvedValue({ applied: 1, rejected: 1 });
 
     render(HousekeepingView, {
@@ -262,7 +265,7 @@ describe("housekeeping record navigation", () => {
   it("shows failed research and sends an audited waiver reason", async () => {
     const hash = "a".repeat(64);
     const pending = fullView(hash);
-    pending.state = "failed-research";
+    pending.review_state = "failed-research";
     pending.outstanding_count = 0;
     pending.sidecar!.passes["metadata-research"] = {
       status: "failed",
@@ -290,7 +293,7 @@ describe("housekeeping record navigation", () => {
   it("shows decision and waiver audit history", async () => {
     const hash = "a".repeat(64);
     const complete = fullView(hash);
-    complete.state = "ready";
+    complete.review_state = "ready";
     complete.outstanding_count = 0;
     complete.sidecar!.items[0].status = "approved";
     complete.sidecar!.decisions = [{

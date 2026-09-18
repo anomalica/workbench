@@ -2,8 +2,7 @@
 """list_ingests applies pipeline versioning + supersession (decision 0040).
 
 Covers the workbench integration: hiding superseded records, the source_url
-newest-wins dedup safety net, exposing processing.pipeline_version against the
-store/_pipeline_versions.yaml manifest, and the absent-is-not-stale rule.
+newest-wins dedup safety net, and ADR 0050's three-state generation comparison.
 """
 
 import pytest
@@ -16,6 +15,8 @@ C = "c" * 64
 D = "d" * 64
 E = "e" * 64
 F = "0" * 64
+G = "1" * 64
+H = "2" * 64
 SUPERSEDER = "f" * 64
 
 
@@ -95,16 +96,19 @@ def repo(tmp_path):
             F,
             source_url="u://4",
             source_type="web",
-            pipeline_version=0,
+            pipeline_version=1,
             refresh_refused=(
                 "refused: 2 word(s) of the stored body are absent from the fresh "
                 "extraction (a reviewed record keeps every word): june 5"
             ),
         )
     )
+    # G: unexpectedly ahead of the manifest. H declares malformed generation 0.
+    (store / "g.md").write_text(_rec(G, source_type="audio", pipeline_version=3))
+    (store / "h.md").write_text(_rec(H, source_type="audio", pipeline_version=0))
 
     (store / "_pipeline_versions.yaml").write_text(
-        "# current generation per media type\nvideo: 2\naudio: 1\nweb: 1\n"
+        "# current generation per media type\nvideo: 2\naudio: 1\nweb: 2\n"
     )
     return tmp_path / "ingests"
 
@@ -127,11 +131,35 @@ def test_pipeline_version_and_current_exposed(repo):
     # A: video pipeline_version 1, manifest video=2 -> stale (frontend badges).
     assert by_hash[A]["pipeline_version"] == 1
     assert by_hash[A]["pipeline_current"] == 2
+    assert by_hash[A]["pipeline_status"] == "stale"
     # D: pdf not in the manifest -> current is None (no badge possible).
     assert by_hash[D]["pipeline_version"] == 1
     assert by_hash[D]["pipeline_current"] is None
-    # E: no pipeline_version declared -> None, never badged ("not stale").
+    assert by_hash[D]["pipeline_status"] == "unknown"
+    # E: no pipeline_version declared -> unknown, not generation zero.
     assert by_hash[E]["pipeline_version"] is None
+    assert by_hash[E]["pipeline_status"] == "unknown"
+    assert by_hash[G]["pipeline_status"] == "unknown"
+    assert by_hash[H]["pipeline_version"] is None
+    assert by_hash[H]["pipeline_status"] == "unknown"
+
+
+@pytest.mark.parametrize(
+    "manifest",
+    [None, "[not, a, map]\n", "audio: nope\n", "audio: true\n"],
+)
+def test_missing_or_malformed_manifest_generation_is_unknown(tmp_path, manifest):
+    repo = tmp_path / "ingests"
+    store = repo / "store"
+    store.mkdir(parents=True)
+    (store / "a.md").write_text(_rec(A, source_type="audio", pipeline_version=1))
+    if manifest is not None:
+        (store / "_pipeline_versions.yaml").write_text(manifest)
+
+    [record] = LocalIngestSource(repo).list_ingests()
+
+    assert record["pipeline_current"] is None
+    assert record["pipeline_status"] == "unknown"
 
 
 def test_records_without_source_url_pass_through(repo):

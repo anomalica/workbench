@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-"""Tests for the relevance-tuning highlights sidecar and its endpoints."""
+"""Human-gold unit parsing, batching, persistence and API tests."""
 
-import hashlib
 import json
 import subprocess
 
@@ -9,28 +8,49 @@ import pytest
 from fastapi.testclient import TestClient
 
 import backend.server as server
-from backend.server import LocalIngestSource, parse_frontmatter
+from backend.server import LocalIngestSource
 from backend.tuning import (
-    HIGHLIGHTS_SCHEMA,
-    SpanError,
+    GOLD_SCHEMA,
     body_sha256,
-    validate_spans,
+    parse_units,
+    proposals_for_units,
+    units_in_range,
 )
 
 CONTENT_HASH = "b" * 64
+BODY = """
+{{highlight-start: h1}}The object{{highlight-end: h1}} was
+{{highlight-start: h1}}intact{{highlight-end: h1}}.
 
+{{highlight-start: h2}}It moved north{{highlight-end: h2}}.
+{{highlight-start: h3}}A sensor detected it{{highlight-end: h3}}.
+{{highlight-start: h4}}The weather was clear{{highlight-end: h4}}.
+{{highlight-start: h5}}The operator took notes{{highlight-end: h5}}.
+{{highlight-start: h6}}The event ended{{highlight-end: h6}}.
+{{highlight-context: [h2, h1]}}
+"""
 RECORD = f"""---
 schema: anomalica/record/1
 content_hash: {CONTENT_HASH}
-title: Tuning Record
+title: Gold Record
 ---
+{BODY}"""
 
-<!-- speaker: Speaker 1 -->
-00:00:01.0 The tic-tac moved erratically.
-00:00:05.0 Weather was clear that day.
-"""
 
-BODY = parse_frontmatter(RECORD)[1]
+def digest_claim(text: str, quote: str) -> dict:
+    return {"id": text, "type": "observation", "text": text, "quote": quote}
+
+
+DIGESTS = [
+    {
+        "domain_claims": [
+            digest_claim("The object was intact.", "The object was intact"),
+            digest_claim("The object was intact.", "intact"),
+            digest_claim("It moved north.", "It moved north"),
+            digest_claim("A hidden whole-record claim.", "The event ended"),
+        ]
+    }
+]
 
 
 @pytest.fixture
@@ -50,16 +70,16 @@ def ingests_repo(tmp_path):
 
 
 @pytest.fixture
-def client(ingests_repo, tmp_path, monkeypatch):
+def client(ingests_repo, monkeypatch):
     monkeypatch.setattr(server, "source", LocalIngestSource(ingests_repo))
-    monkeypatch.setattr(server, "grading_path", tmp_path / "grading")
-    # Highlights is a reviewer action; grant the test user that role.
-    (ingests_repo / "roles.yaml").write_text("rev: reviewer\n")
     monkeypatch.setattr(server, "ingests_path", ingests_repo)
+    monkeypatch.setattr(server, "_gold_digest_documents", lambda _hash: DIGESTS)
+    (ingests_repo / "roles.yaml").write_text("rev: reviewer\n")
     monkeypatch.setattr(
         server,
         "_require_user",
         lambda request: {
+            "id": "1234567",
             "login": "rev",
             "email": "reviewer@example.invalid",
             "name": "Reviewer",
@@ -68,111 +88,121 @@ def client(ingests_repo, tmp_path, monkeypatch):
     return TestClient(server.app)
 
 
-def span_for(text: str, note: str | None = None) -> dict:
-    start = BODY.index(text)
-    span = {"start": start, "end": start + len(text), "text": text}
-    if note:
-        span["note"] = note
-    return span
-
-
-# --- validate_spans ---
-
-
-def test_validate_spans_accepts_matching_span():
-    spans = validate_spans([span_for("tic-tac moved erratically")], BODY)
-    assert spans[0]["text"] == "tic-tac moved erratically"
-
-
-def test_validate_spans_sorts_by_start():
-    a = span_for("Weather was clear")
-    b = span_for("tic-tac")
-    assert [s["text"] for s in validate_spans([a, b], BODY)] == [
-        "tic-tac",
-        "Weather was clear",
+def decisions_for(batch: list[dict], *, deferred: str | None = None) -> list[dict]:
+    return [
+        {
+            "highlight_id": unit["highlight_id"],
+            "decision": "defer" if unit["highlight_id"] == deferred else "reject",
+        }
+        for unit in batch
     ]
 
 
-def test_validate_spans_rejects_text_mismatch():
-    span = span_for("tic-tac")
-    span["text"] = "tick-tock"
-    with pytest.raises(SpanError, match="does not match"):
-        validate_spans([span], BODY)
-
-
-def test_validate_spans_rejects_out_of_range():
-    with pytest.raises(SpanError, match="out of range"):
-        validate_spans([{"start": 0, "end": len(BODY) + 5, "text": "x"}], BODY)
-
-
-def test_validate_spans_rejects_overlap():
-    a = span_for("tic-tac moved")
-    b = span_for("moved erratically")
-    with pytest.raises(SpanError, match="non-overlapping"):
-        validate_spans([a, b], BODY)
-
-
-def test_validate_spans_allows_overlap_for_rejected():
-    a = span_for("tic-tac moved")
-    b = span_for("moved erratically")
-    assert len(validate_spans([a, b], BODY, allow_overlap=True)) == 2
-
-
-def test_validate_spans_offsets_are_code_points():
-    body = "café \U0001f6f8 sighting"
-    text = "\U0001f6f8 sighting"
-    start = body.index(text)  # Python str.index counts code points
-    spans = validate_spans(
-        [{"start": start, "end": start + len(text), "text": text}], body
-    )
-    assert spans[0]["start"] == 5
-
-
-def test_body_sha256_is_utf8_hash():
-    assert body_sha256("abc") == hashlib.sha256(b"abc").hexdigest()
-
-
-# --- endpoints ---
-
-
-def test_get_raw_body_serves_verbatim_post_frontmatter_text(client):
-    res = client.get(f"/api/ingests/{CONTENT_HASH}/body")
-    assert res.status_code == 200
-    data = res.json()
-    assert data["body"] == BODY
-    assert data["body_sha256"] == body_sha256(BODY)
-
-
-def test_get_highlights_when_none_exist(client):
-    res = client.get(f"/api/ingests/{CONTENT_HASH}/highlights")
-    assert res.status_code == 200
-    data = res.json()
-    assert data["highlights"] is None
-    assert data["body_sha256"] == body_sha256(BODY)
-
-
-def test_put_highlights_writes_sidecar_and_commits(client, ingests_repo):
-    res = client.put(
-        f"/api/ingests/{CONTENT_HASH}/highlights",
+def save(client: TestClient, view: dict, decisions: list[dict], complete=False):
+    return client.post(
+        f"/api/ingests/{CONTENT_HASH}/gold/batches",
         json={
-            "complete": True,
-            "spans": [span_for("tic-tac moved erratically", note="core claim")],
-            "rejected": [span_for("Weather was clear")],
+            "body_sha256": view["body_sha256"],
+            "range": {
+                "id": view["range"]["id"],
+                "start": view["range"]["start"],
+                "end": view["range"]["end"],
+            },
+            "decisions": decisions,
+            "complete": complete,
         },
     )
-    assert res.status_code == 200
-    assert res.json() == {"saved": True, "body_sha256": body_sha256(BODY)}
 
-    sidecar_path = ingests_repo / "store" / f"{CONTENT_HASH}.highlights.json"
-    sidecar = json.loads(sidecar_path.read_text())
-    assert sidecar["schema"] == HIGHLIGHTS_SCHEMA
-    assert sidecar["record_hash"] == CONTENT_HASH
-    assert sidecar["body_sha256"] == body_sha256(BODY)
-    assert sidecar["complete"] is True
-    assert sidecar["reviewed_by"] == "reviewer@example.invalid"
-    assert sidecar["reviewed_at"].endswith("Z")
-    assert sidecar["spans"][0]["note"] == "core claim"
-    assert sidecar["rejected"][0]["text"] == "Weather was clear"
+
+def test_parser_keeps_multipart_parts_and_transitive_ancestor_context():
+    body = (
+        "{{highlight-start: a}}one{{highlight-end: a}} "
+        "{{highlight-start: a}}two{{highlight-end: a}} "
+        "{{highlight-start: b}}it{{highlight-end: b}} "
+        "{{highlight-start: c}}then{{highlight-end: c}}\n"
+        "{{highlight-context: [b, a]}}\n{{highlight-context: [c, b]}}\n"
+    )
+    units = parse_units(body)
+    assert [part["text"] for part in units[0]["parts"]] == ["one", "two"]
+    assert [item["highlight_id"] for item in units[2]["context"]] == ["a", "b"]
+
+
+def test_parser_applies_canonical_orphan_semantics():
+    units = parse_units("before {{highlight-start: open}}to the end")
+    assert units[0]["parts"][0]["text"] == "to the end"
+    assert parse_units("before {{highlight-end: orphan}}after") == []
+
+
+@pytest.mark.parametrize(
+    ("edge", "message"),
+    [("[a, missing]", "dangling"), ("[a, b]", "forward")],
+)
+def test_parser_reports_context_that_must_be_deferred(edge, message):
+    body = (
+        "{{highlight-start: a}}one{{highlight-end: a}} "
+        "{{highlight-start: b}}two{{highlight-end: b}}\n"
+        f"{{{{highlight-context: {edge}}}}}\n"
+    )
+    assert message in parse_units(body)[0]["context_issue"]
+
+
+def test_bounded_range_excludes_a_multipart_boundary_case():
+    units = parse_units(BODY)
+    h1 = units[0]
+    contained, boundary = units_in_range(
+        units, h1["parts"][0]["start"], h1["parts"][0]["end"]
+    )
+    assert contained == []
+    assert [unit["highlight_id"] for unit in boundary] == ["h1"]
+
+
+def test_proposals_are_overlap_filtered_and_deduplicated():
+    proposals = proposals_for_units(BODY, parse_units(BODY)[:2], DIGESTS)
+    assert [item["text"] for item in proposals["h1"]] == ["The object was intact."]
+    assert [item["text"] for item in proposals["h2"]] == ["It moved north."]
+    assert "A hidden whole-record claim." not in json.dumps(proposals)
+
+
+def test_view_returns_five_existing_units_with_parts_context_and_only_their_proposals(
+    client,
+):
+    response = client.get(f"/api/ingests/{CONTENT_HASH}/gold")
+    assert response.status_code == 200
+    view = response.json()
+    assert len(view["batch"]) == 5
+    assert [part["text"] for part in view["batch"][0]["parts"]] == [
+        "The object",
+        "intact",
+    ]
+    assert view["batch"][1]["context"][0]["highlight_id"] == "h1"
+    assert view["batch"][0]["proposals"] == [
+        {"text": "The object was intact.", "quote": "The object was intact"}
+    ]
+    assert "A hidden whole-record claim." not in response.text
+
+
+def test_batch_save_is_authenticated_atomic_and_resumes_never_reviewed_before_deferred(
+    client, ingests_repo
+):
+    view = client.get(f"/api/ingests/{CONTENT_HASH}/gold").json()
+    response = save(client, view, decisions_for(view["batch"], deferred="h2"))
+    assert response.status_code == 200
+    resumed = response.json()
+    assert [unit["highlight_id"] for unit in resumed["batch"]] == ["h6", "h2"]
+
+    sidecar = json.loads(
+        (ingests_repo / "store" / f"{CONTENT_HASH}.gold.json").read_text()
+    )
+    assert sidecar["schema"] == GOLD_SCHEMA
+    assert sidecar["record_hash"] == f"sha256:{CONTENT_HASH}"
+    assert sidecar["body_sha256"] == f"sha256:{body_sha256(BODY)}"
+    assert sidecar["ranges"][0]["reviewer"] == {
+        "issuer": "github",
+        "subject": "1234567",
+        "name": "Reviewer",
+    }
+    assert "parts" not in json.dumps(sidecar)
+    assert "proposals" not in json.dumps(sidecar)
 
     log = subprocess.run(
         ["git", "log", "-1", "--format=%s|%an"],
@@ -181,123 +211,96 @@ def test_put_highlights_writes_sidecar_and_commits(client, ingests_repo):
         text=True,
         check=True,
     ).stdout.strip()
-    assert log == "highlights: Tuning Record|Reviewer"
+    assert log == "gold review: Gold Record|Reviewer"
 
 
-def test_put_highlights_rejects_bad_span(client):
-    res = client.put(
-        f"/api/ingests/{CONTENT_HASH}/highlights",
-        json={"spans": [{"start": 0, "end": 4, "text": "nope"}]},
-    )
-    assert res.status_code == 400
-    assert "does not match" in res.json()["detail"]
-
-
-def test_get_highlights_roundtrip(client):
-    span = span_for("tic-tac")
-    client.put(
-        f"/api/ingests/{CONTENT_HASH}/highlights",
-        json={"complete": False, "spans": [span]},
-    )
-    data = client.get(f"/api/ingests/{CONTENT_HASH}/highlights").json()
-    assert data["highlights"]["spans"] == [span]
-    assert data["highlights"]["complete"] is False
-    assert data["highlights"]["rejected"] == []
-
-
-def test_get_grading_unavailable(client):
-    res = client.get(f"/api/ingests/{CONTENT_HASH}/grading")
-    assert res.status_code == 200
-    assert res.json() == {"available": False, "body_sha256": body_sha256(BODY)}
-
-
-def test_get_grading_serves_results_keyed_by_body_hash(client, tmp_path):
-    grading_dir = tmp_path / "grading"
-    grading_dir.mkdir()
-    results = {
-        "schema": "anomalica/grading/1",
-        "record_hash": CONTENT_HASH,
-        "body_sha256": body_sha256(BODY),
-        "models": [{"model": "test", "recall": 0.5, "precision": 1.0, "f1": 0.67}],
+def test_accept_must_be_one_displayed_proposal_and_invalid_batch_writes_nothing(
+    client, ingests_repo
+):
+    view = client.get(f"/api/ingests/{CONTENT_HASH}/gold").json()
+    decisions = decisions_for(view["batch"])
+    decisions[0] = {
+        "highlight_id": "h1",
+        "decision": "accept",
+        "facts": ["Invented fact"],
     }
-    (grading_dir / f"{body_sha256(BODY)}.grading.json").write_text(json.dumps(results))
-
-    res = client.get(f"/api/ingests/{CONTENT_HASH}/grading")
-    assert res.status_code == 200
-    data = res.json()
-    assert data["available"] is True
-    assert data["grading"]["models"][0]["model"] == "test"
+    response = save(client, view, decisions)
+    assert response.status_code == 400
+    assert "unchanged proposed fact" in response.json()["detail"]
+    assert not (ingests_repo / "store" / f"{CONTENT_HASH}.gold.json").exists()
 
 
-def test_endpoints_reject_malformed_hash(client):
-    for path in ("body", "highlights", "grading"):
-        assert client.get(f"/api/ingests/nothex/{path}").status_code == 404
+def test_adjust_split_reject_and_complete_attestation(client, ingests_repo):
+    view = client.get(f"/api/ingests/{CONTENT_HASH}/gold").json()
+    decisions = decisions_for(view["batch"])
+    decisions[0] = {
+        "highlight_id": "h1",
+        "decision": "adjust",
+        "facts": ["The object was reported intact."],
+    }
+    decisions[1] = {
+        "highlight_id": "h2",
+        "decision": "split",
+        "facts": ["The object moved.", "The movement was north."],
+    }
+    second = save(client, view, decisions).json()
+    third = save(client, second, decisions_for(second["batch"])).json()
+    assert third["batch"] == []
 
-
-# --- archived (store/v1/) records stay annotatable ---
-
-ARCHIVED_HASH = "d" * 64
-
-ARCHIVED_RECORD = f"""---
-schema: anomalica/record/1
-content_hash: {ARCHIVED_HASH}
-title: Retired Record
----
-
-Retired but still ground truth.
-"""
-
-
-@pytest.fixture
-def archived_client(ingests_repo, monkeypatch):
-    v1 = ingests_repo / "store" / "v1"
-    v1.mkdir()
-    (v1 / f"{ARCHIVED_HASH}.md").write_text(ARCHIVED_RECORD)
-    subprocess.run(["git", "add", "-A"], cwd=ingests_repo, check=True)
-    subprocess.run(
-        ["git", "commit", "-q", "-m", "archive record"], cwd=ingests_repo, check=True
+    attested = save(client, third, [], complete=True)
+    assert attested.status_code == 200
+    assert attested.json()["range"]["complete"] is True
+    sidecar = json.loads(
+        (ingests_repo / "store" / f"{CONTENT_HASH}.gold.json").read_text()
     )
-    monkeypatch.setattr(server, "source", LocalIngestSource(ingests_repo))
-    (ingests_repo / "roles.yaml").write_text("rev: reviewer\n")
-    monkeypatch.setattr(server, "ingests_path", ingests_repo)
+    assert sidecar["ranges"][0]["attested_at"].endswith("Z")
+
+
+def test_deferred_unit_prevents_completeness(client):
+    view = client.get(f"/api/ingests/{CONTENT_HASH}/gold").json()
+    current = save(client, view, decisions_for(view["batch"], deferred="h2")).json()
+    current = save(
+        client, current, decisions_for(current["batch"], deferred="h2")
+    ).json()
+    response = save(
+        client, current, decisions_for(current["batch"], deferred="h2"), complete=True
+    )
+    assert response.status_code == 400
+    assert "cannot be completed" in response.json()["detail"]
+
+
+def test_get_resumes_latest_incomplete_range(client):
+    first = client.get(f"/api/ingests/{CONTENT_HASH}/gold?start=0&end=100").json()
+    save(client, first, decisions_for(first["batch"]))
+    resumed = client.get(f"/api/ingests/{CONTENT_HASH}/gold").json()
+    assert resumed["range"]["id"] == first["range"]["id"]
+
+
+def test_stale_body_binding_is_reported_not_reanchored(client, ingests_repo):
+    view = client.get(f"/api/ingests/{CONTENT_HASH}/gold").json()
+    assert save(client, view, decisions_for(view["batch"])).status_code == 200
+    path = ingests_repo / "store" / f"{CONTENT_HASH}.md"
+    path.write_text(RECORD + "changed\n")
+    stale = client.get(f"/api/ingests/{CONTENT_HASH}/gold").json()
+    assert stale["stale"] is True
+    assert stale["batch"] == []
+
+
+def test_missing_durable_github_subject_is_refused(client, monkeypatch):
     monkeypatch.setattr(
         server,
         "_require_user",
-        lambda request: {
-            "login": "rev",
-            "email": "reviewer@example.invalid",
-            "name": "Reviewer",
-        },
+        lambda request: {"login": "rev", "email": "x@example.invalid", "name": "R"},
     )
-    return TestClient(server.app)
+    response = client.get(f"/api/ingests/{CONTENT_HASH}/gold")
+    assert response.status_code == 400
+    assert "log out and log in again" in response.json()["detail"]
 
 
-def test_archived_record_body_is_served(archived_client):
-    res = archived_client.get(f"/api/ingests/{ARCHIVED_HASH}/body")
-    assert res.status_code == 200
-    assert "Retired but still ground truth." in res.json()["body"]
-
-    detail = archived_client.get(f"/api/ingests/{ARCHIVED_HASH}")
-    assert detail.status_code == 200
-    assert detail.json()["frontmatter"]["title"] == "Retired Record"
+def test_invalid_range_is_refused(client):
+    response = client.get(f"/api/ingests/{CONTENT_HASH}/gold?start=20&end=10")
+    assert response.status_code == 400
 
 
-def test_archived_record_highlights_sidecar_lives_in_v1(archived_client, ingests_repo):
-    body = parse_frontmatter(ARCHIVED_RECORD)[1]
-    text = "still ground truth"
-    start = body.index(text)
-    res = archived_client.put(
-        f"/api/ingests/{ARCHIVED_HASH}/highlights",
-        json={
-            "complete": False,
-            "spans": [{"start": start, "end": start + len(text), "text": text}],
-        },
-    )
-    assert res.status_code == 200
-
-    sidecar_path = ingests_repo / "store" / "v1" / f"{ARCHIVED_HASH}.highlights.json"
-    assert sidecar_path.exists()
-    assert not (ingests_repo / "store" / f"{ARCHIVED_HASH}.highlights.json").exists()
-
-    data = archived_client.get(f"/api/ingests/{ARCHIVED_HASH}/highlights").json()
-    assert data["highlights"]["spans"][0]["text"] == text
+def test_malformed_hash_is_not_found(client):
+    assert client.get("/api/ingests/nothex/gold").status_code == 404

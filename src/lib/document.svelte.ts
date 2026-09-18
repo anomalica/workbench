@@ -30,6 +30,8 @@ export class DocumentStore {
   past = $state<string[]>([]);
   future = $state<string[]>([]);
   storageKey = $state("");
+  private patchOriginal = "";
+  private patchCache = new Map<string, DraftPatch>();
   /** True when the last local save attempt failed (e.g. localStorage quota
    *  exceeded) - the in-memory edit is NOT durably saved. Must never fail
    *  silently: the viewer shows a persistent warning banner while this is
@@ -156,7 +158,20 @@ export class DocumentStore {
       return;
     }
 
-    const patch = encodePatch(this.original, this.current);
+    const patchFor = (version: string) => {
+      if (this.patchOriginal !== this.original) {
+        this.patchOriginal = this.original;
+        this.patchCache.clear();
+      }
+      let patch = this.patchCache.get(version);
+      if (!patch) {
+        patch = encodePatch(this.original, version);
+        this.patchCache.set(version, patch);
+      }
+      return patch;
+    };
+
+    const patch = patchFor(this.current);
     // History is a convenience; the current text is the work. So history is
     // kept only while it is affordable, newest first, and dropped entirely
     // before the edit itself is ever at risk.
@@ -165,7 +180,7 @@ export class DocumentStore {
     const affordable = (versions: string[]) => {
       const out: DraftPatch[] = [];
       for (const v of versions) {
-        const p = encodePatch(this.original, v);
+        const p = patchFor(v);
         const size = patchSize(p);
         if (spent + size > budget) break;
         spent += size;
@@ -404,10 +419,15 @@ export class DocumentStore {
    *  edited set of words (text + start) - the multi-word selection editor's save.
    *  Handles delete/insert/retext/retime in one undo step, then reconciles the
    *  frontmatter speakers (a delete could remove a speaker's last words). */
-  replaceSelection(from: number, to: number, newWords: { text: string; start: number }[]) {
+  replaceSelection(
+    from: number,
+    to: number,
+    newWords: { text: string; start: number }[],
+    parsedInput?: ReturnType<typeof parseWords>,
+  ): ReturnType<typeof parseWords> | null {
     const [fm, body] = splitFrontmatter(this.current);
-    const parsed = parseWords(body);
-    if (from < 0 || to >= parsed.words.length || from > to) return;
+    const parsed = parsedInput ?? parseWords(body);
+    if (from < 0 || to >= parsed.words.length || from > to) return null;
     const next = replaceWordRange(parsed, from, to, newWords);
     const newBody = serializeWords(
       next.words,
@@ -437,6 +457,7 @@ export class DocumentStore {
       merged.length === currentNamed.length && merged.every((n, i) => n === currentNamed[i]);
     const result = (same ? fm : rewriteFrontmatterSpeakers(fm, merged)) + newBody;
     if (result !== this.current) this.pushEdit(result);
+    return next;
   }
 
   /** Attach a inline event note (`{{laughs}}`) as a first-class annotation

@@ -18,7 +18,7 @@ SIDECAR = {
         {"id": "d", "field": "word_timestamps", "proposed": True},
     ],
 }
-VIEW = {"schema": "anomalica/housekeeping-view/1", "sidecar": SIDECAR}
+VIEW = {"schema": "anomalica/housekeeping-view/2", "sidecar": SIDECAR}
 
 
 def test_gated_housekeeping_is_the_exact_summary_variant():
@@ -26,7 +26,7 @@ def test_gated_housekeeping_is_the_exact_summary_variant():
         **VIEW,
         "access": "full",
         "viewed_ref": "secret-ref",
-        "state": "current",
+        "review_state": "needs-decisions",
         "due_reason": None,
         "outstanding_count": 4,
         "scopes": ["body", "frontmatter"],
@@ -35,9 +35,9 @@ def test_gated_housekeeping_is_the_exact_summary_variant():
     }
     summary = _gate_housekeeping(full, "abc")
     assert summary == {
-        "schema": "anomalica/housekeeping-view/1",
+        "schema": "anomalica/housekeeping-view/2",
         "access": "summary",
-        "state": "current",
+        "review_state": "needs-decisions",
         "due_reason": None,
         "outstanding_count": 4,
         "scopes": ["body", "frontmatter"],
@@ -57,7 +57,7 @@ def test_the_allow_list_is_unchanged_by_housekeeping():
     assert "content_hash" not in GATED_FRONTMATTER_ALLOW
 
 
-def test_prerender_marks_only_the_exact_current_v2_tuple_current(tmp_path, monkeypatch):
+def test_prerender_marks_only_the_exact_current_v3_tuple_ready(tmp_path, monkeypatch):
     from backend import prerender, server
 
     content_hash = "a" * 64
@@ -68,21 +68,31 @@ def test_prerender_marks_only_the_exact_current_v2_tuple_current(tmp_path, monke
     original = f"---\ncontent_hash: sha256:{content_hash}\ntitle: T\n---\nOSSAP\n"
     record.write_text(original)
     sidecar = store / f"{content_hash}.housekeeping.json"
-    sidecar.write_text(
-        json.dumps(
-            {
-                "schema": hk.SCHEMA,
-                "content_hash": f"sha256:{content_hash}",
-                "input_sha256": hk.input_sha256(record.read_bytes()),
-                "checked_at": "2026-09-11T00:00:00Z",
-                "algorithm_version": hk.ALGORITHM_VERSION,
-                "outcome": "completed",
-                "items": [],
-            }
-        )
+    housekeeping = hk.new_sidecar(
+        content_hash=f"sha256:{content_hash}",
+        raw_bytes=record.read_bytes(),
+        checked_at="2026-09-11T00:00:00Z",
     )
+    hk.record_pass(
+        housekeeping,
+        "deterministic",
+        hk.PassState(status="completed", finished_at="2026-09-11T00:01:00Z"),
+        observed_input_sha256=housekeeping.input_sha256,
+    )
+    hk.record_pass(
+        housekeeping,
+        "metadata-research",
+        hk.PassState(
+            status="completed",
+            finished_at="2026-09-11T00:02:00Z",
+            usage={"transport": "subscription"},
+        ),
+        observed_input_sha256=housekeeping.input_sha256,
+    )
+    hk.write_sidecar_file(sidecar, housekeeping)
     (repo / "housekeeping-algorithm.json").write_text(
-        '{ "algorithm_version": "1", "schema": "anomalica/housekeeping-algorithm/1" }\n'
+        f'{{ "algorithm_version": "{hk.ALGORITHM_VERSION}", '
+        '"schema": "anomalica/housekeeping-algorithm/1" }\n'
     )
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
     subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
@@ -97,7 +107,7 @@ def test_prerender_marks_only_the_exact_current_v2_tuple_current(tmp_path, monke
 
     monkeypatch.setattr(server, "ingests_path", repo)
     monkeypatch.setattr(server, "source", server.LocalIngestSource(repo))
-    assert prerender._housekeeping_for(content_hash)["state"] == "current"
+    assert prerender._housekeeping_for(content_hash)["review_state"] == "ready"
 
     record.write_text(original.replace("OSSAP", "AAWSAP"))
     subprocess.run(
@@ -107,7 +117,7 @@ def test_prerender_marks_only_the_exact_current_v2_tuple_current(tmp_path, monke
         ["git", "commit", "-q", "-m", "record changed"], cwd=repo, check=True
     )
     view = prerender._housekeeping_for(content_hash)
-    assert view["state"] == "due" and view["due_reason"] == "input-mismatch"
+    assert view["review_state"] == "due" and view["due_reason"] == "result-mismatch"
 
     record.write_text(original)
     payload = json.loads(sidecar.read_text())
@@ -118,4 +128,4 @@ def test_prerender_marks_only_the_exact_current_v2_tuple_current(tmp_path, monke
         ["git", "commit", "-q", "-m", "wrong identity"], cwd=repo, check=True
     )
     view = prerender._housekeeping_for(content_hash)
-    assert view["state"] == "due" and view["due_reason"] == "invalid-sidecar"
+    assert view["review_state"] == "due" and view["due_reason"] == "invalid-sidecar"

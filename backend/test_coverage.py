@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Tests for review-coverage sidecar handling and the coverage endpoint."""
 
+import hashlib
 import json
 import subprocess
 
@@ -33,6 +34,9 @@ def ingests_repo(tmp_path):
     subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
     subprocess.run(
         ["git", "config", "user.email", "test@example.invalid"], cwd=repo, check=True
+    )
+    subprocess.run(
+        ["git", "config", "core.hooksPath", "/dev/null"], cwd=repo, check=True
     )
     subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
     subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=repo, check=True)
@@ -79,14 +83,45 @@ def test_append_coverage_stores_verdict_at_v1(ingests_repo):
     assert sidecar["observed_coverage"] == 1.0
     assert sidecar["digestible"] is True
     assert sidecar["total_units"] == 10
+    body = server.parse_frontmatter(RECORD)[1]
+    assert sidecar["reviewed_body_sha256"] == (
+        "sha256:" + hashlib.sha256(body.encode("utf-8")).hexdigest()
+    )
 
 
 def test_append_coverage_without_verdict_stays_v0(ingests_repo):
     src = LocalIngestSource(ingests_repo)
     src.append_coverage(CONTENT_HASH, "a@example.invalid", [{"from": 0, "to": 1}], "")
-    sidecar = src.load_coverage(CONTENT_HASH)
+    sidecar = src._load_coverage_file(CONTENT_HASH)
     assert sidecar["schema"] == COVERAGE_SCHEMA
     assert "observed_coverage" not in sidecar
+    body = server.parse_frontmatter(RECORD)[1]
+    assert sidecar["reviewed_body_sha256"] == (
+        "sha256:" + hashlib.sha256(body.encode("utf-8")).hexdigest()
+    )
+
+
+@pytest.mark.parametrize("newline", ["\r\n", "\r"])
+def test_append_coverage_hashes_exact_non_lf_body_bytes(ingests_repo, newline):
+    record = ingests_repo / "store" / "test-record.md"
+    exact_record = RECORD.replace("\n", newline)
+    record.write_bytes(exact_record.encode("utf-8"))
+    subprocess.run(["git", "add", str(record)], cwd=ingests_repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "change line endings"],
+        cwd=ingests_repo,
+        check=True,
+    )
+    src = LocalIngestSource(ingests_repo)
+
+    src.append_coverage(CONTENT_HASH, "a@example.invalid", [{"from": 0, "to": 1}], "")
+
+    sidecar = src._load_coverage_file(CONTENT_HASH)
+    exact_body = server.parse_frontmatter(exact_record)[1]
+    assert sidecar["reviewed_body_sha256"] == (
+        "sha256:" + hashlib.sha256(exact_body.encode("utf-8")).hexdigest()
+    )
+    assert src.load_coverage(CONTENT_HASH) is not None
 
 
 def test_append_coverage_is_append_only(ingests_repo):
@@ -94,7 +129,7 @@ def test_append_coverage_is_append_only(ingests_repo):
     src.append_coverage(CONTENT_HASH, "a@example.invalid", [{"from": 0, "to": 1}], "")
     src.append_coverage(CONTENT_HASH, "b@example.invalid", [{"from": 3, "to": 5}], "")
 
-    sidecar = src.load_coverage(CONTENT_HASH)
+    sidecar = src._load_coverage_file(CONTENT_HASH)
     assert [r["by"] for r in sidecar["reviews"]] == [
         "a@example.invalid",
         "b@example.invalid",
@@ -145,6 +180,12 @@ def test_coverage_endpoint_returns_all_reviewers(client, ingests_repo):
     src = LocalIngestSource(ingests_repo)
     src.append_coverage(CONTENT_HASH, "a@example.invalid", [{"from": 0, "to": 1}], "")
     src.append_coverage(CONTENT_HASH, "b@example.invalid", [{"from": 2, "to": 4}], "n")
+    src.commit_review(
+        full_hash=CONTENT_HASH,
+        author_name="Reviewer",
+        author_email="reviewer@example.invalid",
+        notes="",
+    )
 
     res = client.get(f"/api/ingests/{CONTENT_HASH}/coverage")
     assert res.status_code == 200
@@ -204,7 +245,7 @@ def test_append_coverage_stores_kind(ingests_repo):
         ],
         notes="",
     )
-    spans = src.load_coverage(CONTENT_HASH)["reviews"][0]["spans"]
+    spans = src._load_coverage_file(CONTENT_HASH)["reviews"][0]["spans"]
     assert spans == [
         {"from": 0, "to": 1, "kind": "played"},
         {"from": 3, "to": 5, "kind": "observed"},

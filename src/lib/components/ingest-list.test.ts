@@ -19,6 +19,7 @@ function ingest(over: Partial<IngestSummary>): IngestSummary {
     date: "",
     date_ingested: "",
     source_type: "web",
+    pipeline_status: "unknown",
     source_url: "",
     source_file: "",
     source_hash: "",

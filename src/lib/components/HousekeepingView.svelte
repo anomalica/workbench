@@ -45,13 +45,13 @@
     queue.filter(
       (row) =>
         row.proposed > 0 ||
-        (row.state !== undefined &&
-          row.state !== "ready" &&
-          row.state !== "excluded-review-state"),
+        (row.review_state !== undefined &&
+          row.review_state !== "ready" &&
+          row.review_state !== "excluded-review-state"),
     ),
   );
   const proposals = $derived.by(() => {
-    if (view?.access !== "full" || view.state !== "needs-decisions") return [];
+    if (view?.access !== "full" || view.review_state !== "needs-decisions") return [];
     const items = (view.sidecar?.items ?? []).filter((item) => item.status === "proposed");
     return items
       .map((item, index) => ({ item, index }))
@@ -68,14 +68,15 @@
   const canSubmit = $derived(
     canDecide &&
       view?.access === "full" &&
-      view.state === "needs-decisions" &&
+      view.review_state === "needs-decisions" &&
       view.viewed_sidecar_sha !== null &&
       allDecided,
   );
   const canWaive = $derived(
     canDecide &&
       view?.access === "full" &&
-      (view.state === "pending-research" || view.state === "failed-research") &&
+      (view.review_state === "pending-research" ||
+        view.review_state === "failed-research") &&
       view.viewed_sidecar_sha !== null,
   );
 
@@ -129,7 +130,7 @@
   }
 
   function stage(status: "approved" | "rejected") {
-    if (!currentProposal || !canDecide || view?.state !== "needs-decisions") return;
+    if (!currentProposal || !canDecide || view?.review_state !== "needs-decisions") return;
     staged = { ...staged, [currentProposal.id]: status };
     if (cursor < proposals.length - 1) cursor += 1;
   }
@@ -231,7 +232,8 @@
               >
                 <span class="truncate">{row.title ?? row.content_hash.slice(0, 12)}</span>
                 <span class="flex-none rounded-full bg-warning-container px-1.5 text-xs tabular-nums text-on-warning-container">
-                  {row.proposed || (row.state ? stateLabel(row.state) : "Due")}
+                  {row.proposed ||
+                    (row.review_state ? stateLabel(row.review_state) : "Due")}
                 </span>
               </button>
             </li>
@@ -251,35 +253,35 @@
         {:else}
           <div class="mb-5 flex flex-wrap items-center gap-2 text-xs font-ui">
             <span class="rounded bg-surface-alt px-2 py-1 text-on-surface-secondary">
-              {stateLabel(view.state)}
+              {stateLabel(view.review_state)}
             </span>
             {#if view.outstanding_count > 0}
               <span class="text-on-surface-muted">{view.outstanding_count} outstanding</span>
             {/if}
           </div>
 
-          {#if view.state === "due"}
+          {#if view.review_state === "due"}
             <p class="mb-4 rounded border border-border bg-warning-container px-3 py-2 text-sm text-on-warning-container">
               A current version 3 pass is required ({view.due_reason ?? "not yet available"}).
               Older or stale proposals cannot be decided.
             </p>
-          {:else if view.state === "excluded-review-state"}
+          {:else if view.review_state === "excluded-review-state"}
             <p class="mb-4 rounded border border-border bg-surface-alt px-3 py-2 text-sm text-on-surface-secondary">
               Content review already started for this record. That review is grandfathered and automatic housekeeping is excluded.
             </p>
-          {:else if view.state === "pending-deterministic"}
+          {:else if view.review_state === "pending-deterministic"}
             <p class="mb-4 rounded border border-border bg-surface-alt px-3 py-2 text-sm text-on-surface-secondary">
               Deterministic checks have not completed yet. Content review will remain read-only while they run.
             </p>
-          {:else if view.state === "failed-deterministic"}
+          {:else if view.review_state === "failed-deterministic"}
             <p class="mb-4 rounded border border-error/40 bg-error/10 px-3 py-2 text-sm text-error">
               Deterministic checks failed. The pass must be retried successfully before research or review can continue.
             </p>
-          {:else if view.state === "pending-research"}
+          {:else if view.review_state === "pending-research"}
             <p class="mb-4 rounded border border-border bg-surface-alt px-3 py-2 text-sm text-on-surface-secondary">
               Deterministic checks are complete. Metadata research is still pending.
             </p>
-          {:else if view.state === "failed-research"}
+          {:else if view.review_state === "failed-research"}
             <p class="mb-4 rounded border border-error/40 bg-error/10 px-3 py-2 text-sm text-error">
               Metadata research failed. Retry the research pass or record an authenticated waiver with a reason.
             </p>
@@ -390,7 +392,7 @@
                     </p>
                   {/if}
 
-                  {#if view.state === "needs-decisions" && canDecide}
+                  {#if view.review_state === "needs-decisions" && canDecide}
                     <div class="mt-4 flex items-center gap-2">
                       <button onclick={() => stage("approved")} class="rounded bg-primary px-4 py-1.5 text-sm font-medium text-on-primary">Approve</button>
                       <button onclick={() => stage("rejected")} class="rounded border border-error/50 px-4 py-1.5 text-sm font-medium text-error">Reject</button>
@@ -408,7 +410,7 @@
                 {/if}
               {/if}
 
-              {#if view.state === "needs-decisions" && canDecide}
+              {#if view.review_state === "needs-decisions" && canDecide}
                 <div class="sticky bottom-0 mt-4 flex items-center gap-3 border-t border-border bg-surface py-3">
                   <span class="text-sm text-on-surface-muted">{decidedCount}/{proposals.length} decisions staged</span>
                   <button
@@ -418,9 +420,9 @@
                   >{saving ? "Saving..." : "Apply all decisions"}</button>
                 </div>
               {/if}
-            {:else if view.state === "ready"}
+            {:else if view.review_state === "ready"}
               <p class="text-sm text-on-surface-muted">All passes and decisions are complete. Content review is ready.</p>
-            {:else if view.state !== "due" && view.state !== "excluded-review-state"}
+            {:else if view.review_state !== "due" && view.review_state !== "excluded-review-state"}
               <p class="text-sm text-on-surface-muted">No proposals are ready for a decision yet.</p>
             {/if}
 

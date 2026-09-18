@@ -301,7 +301,35 @@
   );
   // Parsed word runs for word records (drives the per-word playback skip below);
   // null otherwise. Memoised on the live body.
-  let parsedWords = $derived(isWordRecord ? parseWords(currentBody()) : null);
+  let parsedWordsOverride = $state<{
+    body: string;
+    parsed: ReturnType<typeof parseWords>;
+  } | null>(null);
+  let parsedWords = $derived.by(() => {
+    if (!isWordRecord) return null;
+    const body = currentBody();
+    return parsedWordsOverride?.body === body ? parsedWordsOverride.parsed : parseWords(body);
+  });
+  let wordTranscriptSnapshot = $state<{
+    body: string;
+    parsed: ReturnType<typeof parseWords>;
+  } | null>(null);
+  let locallyRenderedWordBody = "";
+  $effect(() => {
+    const body = currentBody();
+    const parsed = parsedWords;
+    if (!parsed) {
+      wordTranscriptSnapshot = null;
+      return;
+    }
+    // WordTranscript has already patched its local model and DOM for this edit.
+    // Sending the complete body back would make Svelte revisit every word.
+    if (body === locallyRenderedWordBody) {
+      locallyRenderedWordBody = "";
+      return;
+    }
+    wordTranscriptSnapshot = { body, parsed };
+  });
 
   let accountChronologyAvailable = $state(false);
   $effect(() => {
@@ -3063,6 +3091,9 @@
   // Pre-seed: segments edited this session automatically become pending
   // runs. Reads pendingRuns untracked so its own write doesn't loop.
   $effect(() => {
+    // PWTS coverage is recorded by word index in WordTranscript. Running the
+    // legacy line diff here is both irrelevant and quadratic in body lines.
+    if (isWordRecord) return;
     const edited = segmentRunsFromLineSpans(
       currentBody(),
       editedLineSpans(bodyOf(doc.original), currentBody()),
@@ -3936,9 +3967,8 @@
              invitation, never an error: the record is fine, nobody has said
              what it is yet.
 
-             The list is offered, not enforced. `document_type` is an open set
-             in the format, which names values this list does not carry, so a
-             record may legitimately hold one and must not have it replaced. -->
+             `document_type` has a closed vocabulary. An old or malformed value
+             is still shown for correction rather than silently replaced. -->
         {#if !!user && contentReviewAllowed}
           <select
             value={liveDocumentType.missing ? "" : liveDocumentType.label}
@@ -4054,8 +4084,8 @@
         onclick={ontuning}
         class="px-2 py-1 rounded text-xs font-ui font-medium flex-none border border-border
           text-on-surface-secondary hover:bg-surface transition-colors cursor-pointer"
-        title="Relevance tuning: highlight the spans a good extraction should cover"
-      >Tuning</button>
+        title="Review the source spans a good digest should retain"
+      >Claim gold</button>
     {/if}
 
     {#if reviewed}
@@ -4687,6 +4717,7 @@
       <div class="px-3 py-2">
         <MarkupList
           body={currentBody()}
+          {parsedWords}
           focusedId={focusedMarkId}
           onfocus={focusMark}
           onremovehighlight={(id) => doc.removeWordHighlight(id)}
@@ -5604,7 +5635,8 @@
             onobservedonlychange={(v) => (observedOnly = v)}
             recordHash={ingest.content_hash}
             storedCoverage={storedVerdict?.observed_coverage ?? null}
-            body={currentBody()}
+            body={wordTranscriptSnapshot?.body ?? currentBody()}
+            parsedWords={wordTranscriptSnapshot?.parsed ?? parsedWords}
             namedSpeakers={namedSpeakersOrdered}
             {currentTime}
             {filteredSpeakers}
@@ -5618,7 +5650,15 @@
             focusWords={markupFocus}
             onclearfocus={clearMarkFocus}
             onreassign={(from, to, speaker) => doc.reassignWords(from, to, speaker)}
-            onreplaceselection={(from, to, w) => doc.replaceSelection(from, to, w)}
+            onreplaceselection={(from, to, w) => {
+              const next = doc.replaceSelection(from, to, w, parsedWords ?? undefined);
+              if (next) {
+                const body = currentBody();
+                parsedWordsOverride = { body, parsed: next };
+                locallyRenderedWordBody = body;
+              }
+              return next;
+            }}
             oneventnote={(at, text) => doc.insertEventNote(at, text)}
             oneventnoteedit={(g, ordinal, text) => doc.editWordNote(g, ordinal, text)}
             oneventnoteremove={(g, ordinal) => doc.removeWordNote(g, ordinal)}

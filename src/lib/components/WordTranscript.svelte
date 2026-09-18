@@ -8,16 +8,16 @@
     resolveAnchorTarget,
     shouldPersistScroll,
   } from "$lib/scroll-anchor";
-  import { foldTurns, parseWords, wordsInTimeRange, wordActiveAt } from "$lib/transcript-words";
-  import type { SpeakerRun, WordExternal } from "$lib/transcript-words";
+  import { foldTurns, parseWords, replaceWordRange, speakerWordCounts, wordsInTimeRange, wordActiveAt } from "$lib/transcript-words";
+  import type { ParsedWords, SpeakerRun, WordExternal } from "$lib/transcript-words";
   import { buildContextIndex } from "$lib/highlight-context";
   import { pointerMoved } from "$lib/drag-intent";
   import { EVENT_NOTE_PRESETS } from "$lib/transcript";
   import {
     assignableSpecialSpeakers,
-    orderedNamedSpeakers,
     isSpecialSpeaker,
     nextSpeakerName,
+    speakerIdentity,
     SPEAKER_IRRELEVANT,
     SPEAKER_NARRATOR,
     SPEAKER_EXTERNAL_FOOTAGE,
@@ -64,6 +64,7 @@
 
   let {
     body,
+    parsedWords = null,
     mode = "edit",
     onmodechange,
     showObservedOnly = false,
@@ -115,6 +116,9 @@
     /** Transcript body (everything after the frontmatter) using `{{t:N.N}}`
      *  per-word markers. */
     body: string;
+    /** Reuse the owner's parse when available; parsing a long transcript is
+     *  whole-document work and the owner already needs the same result. */
+    parsedWords?: ParsedWords | null;
     /** "edit" (default): word editing + speaker reassign, selection clamped to
      *  one speaker turn. "markup": read-only annotation - editing affordances
      *  hidden, selection spans speakers freely, and the floating bar offers
@@ -185,7 +189,7 @@
       from: number,
       to: number,
       newWords: { text: string; start: number }[],
-    ) => void;
+    ) => ParsedWords | null | void;
     /** Insert a inline event note (`{{laughs}}`) into the body at time
      *  `at` - the word-record twin of the segment editor's quick-insert. */
     oneventnote?: (at: number, text: string) => void;
@@ -265,7 +269,21 @@
     }) => void;
   } = $props();
 
-  let parsed = $derived(parseWords(body));
+  // Keep the rendered model stable across an edit initiated in this component.
+  // A punctuation save updates its few word nodes directly below; replacing this
+  // object afterwards would make Svelte revisit all tens of thousands of words.
+  // svelte-ignore state_referenced_locally -- intentional initial snapshot;
+  // later prop changes are reconciled by the effect below.
+  let parsed = $state.raw(parsedWords ?? parseWords(body));
+  // svelte-ignore state_referenced_locally -- paired with the snapshot above.
+  let renderedBody = body;
+  $effect(() => {
+    const nextBody = body;
+    const supplied = parsedWords;
+    if (nextBody === renderedBody) return;
+    renderedBody = nextBody;
+    parsed = supplied ?? parseWords(nextBody);
+  });
   let words = $derived(parsed.words);
 
   // Restore the scroll anchor once the words are on screen. rAF-retries because
@@ -738,7 +756,7 @@
     return out;
   });
 
-  // Pseudo-segments so orderedNamedSpeakers can sort by first appearance.
+  // Pseudo-segments retain first appearance for minting the next unnamed id.
   let pseudoSegments = $derived(
     runs.map((r) => ({
       speaker: r.speaker,
@@ -748,7 +766,17 @@
       index: r.startWord,
     })),
   );
-  let namedSpeakersOrdered = $derived(orderedNamedSpeakers(pseudoSegments, namedSpeakers));
+  let namedSpeakersOrdered = $derived.by(() => {
+    const totals = new Map<string, number>();
+    for (const row of speakerWordCounts(runs, parsed.externals)) {
+      const id = speakerIdentity(row.id);
+      totals.set(id, (totals.get(id) ?? 0) + row.total);
+    }
+    return namedSpeakers
+      .map((name, index) => ({ name, index, total: totals.get(speakerIdentity(name)) ?? 0 }))
+      .sort((a, b) => b.total - a.total || a.index - b.index)
+      .map((row) => row.name);
+  });
 
   // Selection state: an inclusive {from, to} range of word gIndices, always
   // within one speaker run. `anchor` is where a click/drag started.
@@ -1070,7 +1098,7 @@
         const bottomZone = view.height * 0.1;
         if (word.top < view.top + topMargin || word.bottom > view.bottom - bottomZone) {
           const target = scrollEl.scrollTop + (word.top - view.top) - view.height * 0.5;
-          scrollEl.scrollTo({ top: Math.max(0, target), behavior: "smooth" });
+          scrollEl.scrollTo({ top: Math.max(0, target), behavior: "auto" });
         }
       });
     });
@@ -1156,13 +1184,43 @@
     const order: CaseMode[] = ["lower", "title", "upper"];
     return c === "mixed" ? "title" : order[(order.indexOf(c) + 1) % order.length];
   }
+  let wordEditEpoch = $state(0);
+  function commitWordReplacement(
+    from: number,
+    to: number,
+    newWords: { text: string; start: number }[],
+  ) {
+    const next = replaceWordRange(parsed, from, to, newWords);
+    if (next.words.length === parsed.words.length) {
+      const notesUnchanged = next.words
+        .slice(from, to + 1)
+        .every(
+          (word, i) =>
+            JSON.stringify(word.notes ?? []) ===
+            JSON.stringify(parsed.words[from + i].notes ?? []),
+        );
+      if (notesUnchanged) {
+        for (let g = from; g <= to; g++) {
+          parsed.words[g] = next.words[g];
+          const el = wordEls.get(g);
+          if (el) el.textContent = next.words[g].text;
+        }
+        wordEditEpoch++;
+      } else {
+        parsed = next;
+      }
+    } else {
+      parsed = next;
+    }
+    onreplaceselection?.(from, to, newWords);
+  }
   // Advance the selection to the next case, writing the cased text back but
   // keeping the selection so repeated clicks keep cycling.
   function cycleCase() {
     if (!range) return;
     const sel = words.slice(range.from, range.to + 1);
     const mode = nextCase(detectCase(sel.map((w) => w.text)));
-    onreplaceselection?.(
+    commitWordReplacement(
       range.from,
       range.to,
       sel.map((w) => ({ text: applyCase(w.text, mode), start: w.start })),
@@ -1170,6 +1228,7 @@
   }
   // Label showing the selection's current case for the bar button.
   let caseLabel = $derived.by(() => {
+    void wordEditEpoch;
     if (!range) return "Aa";
     const c = detectCase(words.slice(range.from, range.to + 1).map((w) => w.text));
     return { lower: "abc", title: "Abc", upper: "ABC", mixed: "Aa" }[c];
@@ -1743,24 +1802,36 @@
   let appliedClaim = new Set<number>();
   let appliedChain = new Set<number>();
 
+  // Parsing creates fresh arrays and maps even when an edit changes only word
+  // text. Track the semantics that can alter rendered membership or styling,
+  // rather than those container identities, so punctuation does not trigger an
+  // imperative pass over every word element.
+  let fullRestyleKey = $derived.by(() =>
+    JSON.stringify({
+      words: words.length,
+      runs: runs.map((r) => [r.speaker, r.startWord, r.endWord]),
+      filtered: [...filteredSpeakers],
+      hideIrrelevant,
+      externalOnly,
+      observed: showObservedOnly ? [...observedVisible] : null,
+      highlights: parsed.highlights,
+      spanNotes: parsed.spanNotes,
+      citedWorks: parsed.citedWorks,
+      links: parsed.links.map((l) => [l, linkTitles?.get(l.target.replace(/^sha256:/, ""))]),
+      externals: parsed.externals,
+      focusWords,
+    }),
+  );
+
   // Full restyle when the rendered word set changes (load/filter/edit) or after
   // an observed change with no DOM delta (epoch bump). Deliberately tracks only
   // those signals - NOT range/active/etc - so a selection never triggers it.
   $effect(() => {
-    void renderRuns;
-    void observedVisible; // the observed-only filter hides words; restyle when that set moves
+    void fullRestyleKey;
     void styleEpoch;
-    void highlightColorsByWord; // re-apply bands when a highlight is added/cleared
     void highlightDisplay.mode; // ...and when the reviewer changes how loud they are
     void pickingFrom; // dim the rest while picking, restore when the mode ends
     void hoverHighlightId; // and light whichever highlight is under the cursor
-    void spanNoteWordSet; // re-apply tint when a span note is added/cleared/re-ranged
-    void spanNoteTextByWord; // and the hover text when its words change
-    void citedWorkWords; // and the cited-title underline
-    void focusWordSet; // re-apply markup focus flash
-    void linkWordSet; // re-apply the link underline when a link is added/removed
-    void linkLabelByWord; // and its tooltip when the titles arrive
-    void externalWordSet; // and the tint when a passage is marked as quoted
     const el = scrollEl;
     untrack(() => {
       if (!el) return;
@@ -2652,7 +2723,7 @@
      the reviewer steers by it, submitting at around 75-80%. Selection state
      therefore sits on the LEFT and coverage stays anchored right, so the figure
      never moves or disappears as a selection comes and goes. -->
-<div class="flex-none flex items-center gap-2 px-4 py-1.5 border-b border-border bg-surface-alt">
+<div class="flex-none flex flex-wrap items-center gap-2 px-4 py-1.5 border-b border-border bg-surface-alt">
 
   <span class="text-xs font-ui text-on-surface-muted tabular-nums">Playing {secondsToClock(currentTime)}</span>
   {#if range}
@@ -3053,7 +3124,11 @@
       onseek={(t) => onseek?.(t)}
       oncancel={() => { editingSelection = false; }}
       onsave={(newWords) => {
-        if (range) onreplaceselection?.(range.from, range.to, newWords);
+        if (range) {
+          const from = range.from;
+          const to = range.to;
+          commitWordReplacement(from, to, newWords);
+        }
         editingSelection = false;
         range = null;
       }}
@@ -3062,13 +3137,13 @@
 </div>
 
 {#snippet wordSpans(gs: number[])}
-          {#each gs as g (g)}{#each linksStartingAt.get(g) ?? [] as l (l.id)}{@render linkIcon(l.target, linkLabelByWord.get(l.fromWord) ?? "Linked record")}{/each}{#each citedWorksAt.get(g) ?? [] as c (c.id)}{@render citedWorkOpen(c.id, c.creator ? `${c.title} - ${c.creator}` : c.title)}{/each}{#each citedStartingAt.get(g) ?? [] as sn (sn.id)}{@render spanNoteIcon(sn.id, sn.text)}{/each}<span
+          {#each gs.map((g) => words[g]) as word (word.gIndex)}{@const g = word.gIndex}{#each linksStartingAt.get(g) ?? [] as l (l.id)}{@render linkIcon(l.target, linkLabelByWord.get(l.fromWord) ?? "Linked record")}{/each}{#each citedWorksAt.get(g) ?? [] as c (c.id)}{@render citedWorkOpen(c.id, c.creator ? `${c.title} - ${c.creator}` : c.title)}{/each}{#each citedStartingAt.get(g) ?? [] as sn (sn.id)}{@render spanNoteIcon(sn.id, sn.text)}{/each}<span
               data-word-index={g}
-              class="wt-word">{words[g].text}</span>{" "}
+              class="wt-word">{word.text}</span>{" "}
             <!-- Committed event notes on this word: first-class annotation
                  chips, NOT spoken words - no timestamp, never in the word
                  editor. display:flex breaks each onto its own line. -->
-            {#each words[g].notes ?? [] as noteText, ordinal (ordinal)}
+            {#each word.notes ?? [] as noteText, ordinal (ordinal)}
               <span
                 data-event-note={g}
                 data-note-ordinal={ordinal}

@@ -188,7 +188,7 @@ def _gate_housekeeping(view: dict, public_hash: str | None = None) -> dict:
     return {
         "schema": view["schema"],
         "access": "summary",
-        "state": view["state"],
+        "review_state": view["review_state"],
         "due_reason": view["due_reason"],
         "outstanding_count": view["outstanding_count"],
         "scopes": view["scopes"],
@@ -552,7 +552,7 @@ def _housekeeping_queue(summaries: list[dict], viewed_ref: str | None = None) ->
             continue
         sidecar = hk.get("sidecar") or {}
         items = sidecar.get("items") or []
-        current = hk.get("state") == "current"
+        current = hk.get("review_state") == "ready"
         public = serves_verbatim(s.get("copyright_status"))
         rows.append(
             {
@@ -564,7 +564,7 @@ def _housekeeping_queue(summaries: list[dict], viewed_ref: str | None = None) ->
                 "checked_at": sidecar.get("checked_at"),
                 "algorithm_version": hk.get("viewed_algorithm_version"),
                 "current": current,
-                "state": hk.get("state"),
+                "review_state": hk.get("review_state"),
                 "due_reason": hk.get("due_reason"),
                 "proposed": hk.get("outstanding_count", 0),
                 "approved": sum(1 for i in items if i.get("status") == "approved"),

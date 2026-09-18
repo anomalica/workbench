@@ -128,6 +128,25 @@ describe("SpeakerManager - section counts", () => {
   });
 });
 
+describe("SpeakerManager - named ordering", () => {
+  it("puts the named speakers with the most words first", () => {
+    const { container } = render(SpeakerManager, {
+      ...makeProps(),
+      rows: [
+        { id: "Brief Speaker", total: 2 },
+        { id: "Main Speaker", total: 120 },
+        { id: "Second Speaker", total: 40 },
+      ],
+      namedSpeakers: ["Brief Speaker", "Main Speaker", "Second Speaker", "Unassigned Person"],
+    });
+    const text = container.textContent ?? "";
+
+    expect(text.indexOf("Main Speaker")).toBeLessThan(text.indexOf("Second Speaker"));
+    expect(text.indexOf("Second Speaker")).toBeLessThan(text.indexOf("Brief Speaker"));
+    expect(text.indexOf("Brief Speaker")).toBeLessThan(text.indexOf("Unassigned Person"));
+  });
+});
+
 describe("SpeakerManager - section filter eye", () => {
   it("clicking the Named eye icon sets filter to all named speaker ids", async () => {
     const onsetfilter = vi.fn();

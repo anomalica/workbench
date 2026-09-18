@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { parseWords } from "$lib/transcript-words";
+  import { parseWords, type ParsedWords } from "$lib/transcript-words";
   import { buildContextIndex } from "$lib/highlight-context";
 
   // The list of every mark on a word record - highlights, span notes and point
@@ -14,6 +14,7 @@
   // when it actually destroys the mark.
   let {
     body,
+    parsedWords = null,
     onfocus,
     onremovehighlight,
     onremovenote,
@@ -24,6 +25,7 @@
     focusedId = null,
   }: {
     body: string;
+    parsedWords?: ParsedWords | null;
     onfocus: (from: number, to: number, id: string) => void;
     onremovehighlight: (id: string) => void;
     onremovenote: (id: string) => void;
@@ -52,7 +54,7 @@
     quote?: string;
   }
 
-  let parsed = $derived(parseWords(body));
+  let parsed = $derived(parsedWords ?? parseWords(body));
 
   function excerptOf(from: number, to: number): string {
     const s = parsed.words
