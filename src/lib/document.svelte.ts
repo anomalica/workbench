@@ -6,9 +6,13 @@
  */
 
 import yaml from "js-yaml";
-import { type DraftPatch, decodePatch, encodePatch, patchSize } from "./draft-patch";
+import { type DraftPatch, decodePatch, encodePatch } from "./draft-patch";
 
-const MAX_HISTORY = 200;
+// Undo history is in-memory only - save() never ships it to localStorage (see
+// there), so a reload loses the ability to undo but never an edit. Depth 10 is
+// a deliberate cap: deeper history held hundreds of live copies of the whole
+// document and drove the GC churn that made a long review grind to a halt.
+const MAX_HISTORY = 10;
 
 /** The `speakers:` list is a list of PEOPLE, so a trailing qualifier comes off:
  *  the body line says `Scott Gordon [KXAS]`, where the station reads with the
@@ -38,6 +42,10 @@ export class DocumentStore {
    *  true, because a page reload from here loses the edit entirely. Cleared
    *  on the next successful save. */
   saveFailed = $state(false);
+  /** When the draft was last written durably (a save that succeeded). Null
+   *  until the first actual write - lets the status bar say "when did my edit
+   *  actually get to disk" at a glance. */
+  lastSavedAt = $state<number | null>(null);
 
   get dirty() {
     return this.current !== this.original;
@@ -104,23 +112,31 @@ export class DocumentStore {
       const apply = (patch: unknown) => (patch ? decodePatch(markdown, patch as DraftPatch) : null);
       const current = apply(state.patch);
       if (current === null) return null;
+      // Current drafts carry no history (save() writes none), but older drafts
+      // stored it - accept it when present, bounded to MAX_HISTORY so a legacy
+      // 200-deep draft cannot flood memory on load. In-flight undo from a draft
+      // written before this change is still someone's work.
       const seq = (list: unknown) =>
         ((list as DraftPatch[] | undefined) ?? [])
           .map(apply)
           .filter((t): t is string => t !== null);
-      return { current, past: seq(state.past), future: seq(state.future) };
+      return {
+        current,
+        past: seq(state.past).slice(-MAX_HISTORY),
+        future: seq(state.future).slice(0, MAX_HISTORY),
+      };
     }
     if (typeof state.current !== "string") return null;
     return {
       current: state.current,
-      past: (state.past as string[]) ?? [],
-      future: (state.future as string[]) ?? [],
+      past: ((state.past as string[] | undefined) ?? []).slice(-MAX_HISTORY),
+      future: ((state.future as string[] | undefined) ?? []).slice(0, MAX_HISTORY),
     };
   }
 
   private pushEdit(newContent: string) {
     if (newContent === this.current) return;
-    this.past = [...this.past.slice(-MAX_HISTORY), this.current];
+    this.past = [...this.past, this.current].slice(-MAX_HISTORY);
     this.current = newContent;
     this.future = [];
     this.save();
@@ -172,47 +188,27 @@ export class DocumentStore {
     };
 
     const patch = patchFor(this.current);
-    // History is a convenience; the current text is the work. So history is
-    // kept only while it is affordable, newest first, and dropped entirely
-    // before the edit itself is ever at risk.
-    const budget = 512 * 1024;
-    let spent = patchSize(patch);
-    const affordable = (versions: string[]) => {
-      const out: DraftPatch[] = [];
-      for (const v of versions) {
-        const p = patchFor(v);
-        const size = patchSize(p);
-        if (spent + size > budget) break;
-        spent += size;
-        out.push(p);
-      }
-      return out;
-    };
-    // Reversed so the entries nearest the present survive the budget, then
-    // restored to chronological order for readDraft.
-    const past = affordable([...this.past].reverse()).reverse();
-    const future = affordable(this.future);
+    // Only the CURRENT state is stored. History is a convenience where the
+    // current text is the work, so it stays in memory (depth MAX_HISTORY) and
+    // is never serialised here: a draft is a few KB and stays that size no
+    // matter how long the review runs. Gone with the old approach are the
+    // per-save re-measure against a 512KB budget and the payload that grew
+    // toward it - the "slower as the session grinds on" curve.
+    const payload = JSON.stringify({ v: 2, patch });
 
-    for (const payload of [
-      JSON.stringify({ v: 2, patch, past, future }),
-      JSON.stringify({ v: 2, patch, past: [], future: [] }),
-    ]) {
-      try {
-        localStorage.setItem(this.storageKey, payload);
-        this.saveFailed = false;
-        return;
-      } catch {
-        // Quota exceeded - retry with no history at all.
-      }
+    try {
+      localStorage.setItem(this.storageKey, payload);
+      this.saveFailed = false;
+      this.lastSavedAt = Date.now();
+    } catch {
+      // Quota exceeded: the edit exists only in this tab's memory. This must
+      // NEVER fail silently - a reload from here loses it for good (this
+      // is exactly what happened to a 3-hour review once). saveFailed drives a
+      // blocking banner in the viewer; nothing else can substitute for it,
+      // since there is no other durable place this edit exists yet.
+      console.error("[doc.save] localStorage save failed entirely - edit is NOT saved");
+      this.saveFailed = true;
     }
-
-    // Both attempts failed: the edit exists only in this tab's memory. This
-    // must NEVER fail silently - a reload from here loses it for good (this
-    // is exactly what happened to a 3-hour review once). saveFailed drives a
-    // blocking banner in the viewer; nothing else can substitute for it,
-    // since there is no other durable place this edit exists yet.
-    console.error("[doc.save] localStorage save failed entirely - edit is NOT saved");
-    this.saveFailed = true;
   }
 
   discard() {

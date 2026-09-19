@@ -4148,6 +4148,12 @@
         class="underline decoration-dotted underline-offset-2 hover:decoration-solid cursor-pointer"
         title="View what changed (diff)"
       >You have unsubmitted changes (saved locally) - view diff</button>
+      {#if doc.lastSavedAt}
+        <span
+          class="ml-auto flex-none opacity-70 tabular-nums"
+          title="When the draft was last written to this browser (every edit saves immediately - this time just confirms the last one landed)"
+        >saved {new Date(doc.lastSavedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>
+      {/if}
     {:else if user}
       <svg class="w-3.5 h-3.5 flex-none" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />

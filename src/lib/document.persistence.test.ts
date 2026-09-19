@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { DocumentStore } from "./document.svelte";
 
 const SAMPLE_MARKDOWN = `---
@@ -41,6 +41,9 @@ describe("DocumentStore - persistence across simulated refresh", () => {
     expect(afterEdit).toContain("Ross Coulthart");
     // Speaker 6 remains untouched
     expect(afterEdit).toContain("Speaker 6");
+    // And it is durably written, which the status bar reports as "saved <time>".
+    expect(doc1.lastSavedAt).not.toBeNull();
+    expect(doc1.lastSavedAt!).toBeLessThanOrEqual(Date.now());
 
     // Simulated refresh: a fresh DocumentStore loads the same pristine markdown
     const doc2 = new DocumentStore();
@@ -52,17 +55,24 @@ describe("DocumentStore - persistence across simulated refresh", () => {
     expect(doc2.current).toContain("Ross Coulthart");
   });
 
-  it("restores undo history after refresh so changes can be undone", () => {
+  it("undoes within the session but never after refresh (history is memory-only)", () => {
     const doc1 = new DocumentStore();
     doc1.load(SAMPLE_MARKDOWN, HASH);
     doc1.mergeSpeakers(["Speaker 5"], "Ross Coulthart");
 
-    // After refresh, user should still be able to undo
+    // Undo is in-memory: the live session can walk back an edit.
+    expect(doc1.canUndo).toBe(true);
+    doc1.undo();
+    expect(doc1.current).toContain("Speaker 5");
+
+    // ...but the current text is saved every edit, so a reload restores it
+    // with the history cleared. The reviewer loses the walk-back, never the work.
+    doc1.mergeSpeakers(["Speaker 5"], "Ross Coulthart");
     const doc2 = new DocumentStore();
     doc2.load(SAMPLE_MARKDOWN, HASH);
-    expect(doc2.canUndo).toBe(true);
-    doc2.undo();
-    expect(doc2.current).toContain("Speaker 5");
+    expect(doc2.current).toContain("Ross Coulthart");
+    expect(doc2.current).not.toContain("Speaker 5");
+    expect(doc2.canUndo).toBe(false);
   });
 
   it("does not reset state when load is called a second time with the same hash", () => {
@@ -138,6 +148,59 @@ describe("DocumentStore - persistence across simulated refresh", () => {
     expect(doc2.current).not.toContain('"B"');
   });
 
+  it("caps in-memory undo history at ten edits, dropping the oldest", () => {
+    const doc = new DocumentStore();
+    doc.load(SAMPLE_MARKDOWN, HASH);
+    for (let i = 0; i < 25; i++) {
+      doc.renameSpeaker(i === 0 ? "Speaker 6" : `Name ${i - 1}`, `Name ${i}`);
+    }
+    // Never more than MAX_HISTORY (10) layers of history are kept alive.
+    expect(doc.past.length).toBeLessThanOrEqual(10);
+    // The newest ten edits are still undoable this session - the oldest fell off.
+    doc.undo();
+    expect(doc.current).toContain("Name 23");
+  });
+
+  it("flags the save as failed when localStorage is full, so the banner shows", () => {
+    // The blocking saveFailed banner is the only thing standing between the
+    // reviewer and a reload losing an edit entirely - it must never regress.
+    const quota = {
+      map: new Map<string, string>(),
+      get length() {
+        return this.map.size;
+      },
+      key() {
+        return null;
+      },
+      clear() {
+        this.map.clear();
+      },
+      removeItem(k: string) {
+        this.map.delete(k);
+      },
+      getItem(k: string) {
+        return this.map.get(k) ?? null;
+      },
+      setItem(k: string, v: string) {
+        const e = new Error("quota") as Error & { name: string };
+        e.name = "QuotaExceededError";
+        throw e;
+      },
+    } as Storage;
+    const original = globalThis.localStorage;
+    Object.defineProperty(globalThis, "localStorage", { value: quota, configurable: true });
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const doc = new DocumentStore();
+      doc.load(SAMPLE_MARKDOWN, HASH);
+      doc.renameSpeaker("Speaker 6", "David Marler");
+      expect(doc.saveFailed).toBe(true);
+    } finally {
+      err.mockRestore();
+      Object.defineProperty(globalThis, "localStorage", { value: original, configurable: true });
+    }
+  });
+
   it("uses a per-ingest storage key so different ingests don't cross-contaminate", () => {
     const docA = new DocumentStore();
     docA.load(SAMPLE_MARKDOWN, HASH);
@@ -175,6 +238,21 @@ describe("what a draft costs in the browser", () => {
     expect(BOOK.length).toBeGreaterThan(700_000);
     expect(stored(BOOK_HASH)).toBeGreaterThan(0);
     expect(stored(BOOK_HASH)).toBeLessThan(2_000);
+  });
+
+  it("never stores undo history - the draft is current-state only", () => {
+    const doc = new DocumentStore();
+    doc.load(SAMPLE_MARKDOWN, HASH);
+    for (let i = 0; i < 6; i++) doc.renameSpeaker("Speaker 6", `Name ${i}`);
+
+    const state = JSON.parse(localStorage.getItem(`workbench:doc:${HASH}`)!) as Record<
+      string,
+      unknown
+    >;
+    expect(state.v).toBe(2);
+    expect(state.patch).toBeDefined();
+    expect(state.past).toBeUndefined();
+    expect(state.future).toBeUndefined();
   });
 
   it("restores that edit exactly on the next load", () => {
