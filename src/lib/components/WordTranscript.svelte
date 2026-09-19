@@ -181,8 +181,15 @@
      *  first of them. `seq` is bumped per navigation so re-linking the same
      *  claim re-triggers the scroll. */
     claimHighlight?: { start: number; end: number; seq: number } | null;
-    /** Reassign the inclusive word range [from, to] to `speaker`. */
-    onreassign: (from: number, to: number, speaker: string) => void;
+    /** Reassign the inclusive word range [from, to] to `speaker`. Returns the
+     *  next parse when the owner can hand one back (it edited its own model in
+     *  place); null/void when nothing changed. The caller adopts that return so
+     *  its model and the store's never drift. */
+    onreassign: (
+      from: number,
+      to: number,
+      speaker: string,
+    ) => ParsedWords | null | void;
     /** Replace the selected word range [from, to] with edited words (text +
      *  start) - the multi-word selection editor's save. */
     onreplaceselection?: (
@@ -2055,7 +2062,14 @@
   }
 
   function chooseSpeaker(name: string) {
-    if (range) onreassign(range.from, range.to, name);
+    if (range) {
+      const next = onreassign(range.from, range.to, name);
+      // Adopt the owner's next parse - it already holds the reassigned runs,
+      // and its words array is the SAME reference, so swapping the model in
+      // here never makes Svelte revisit the other words. Do NOT recompute the
+      // runs locally: the store's return is the single source of truth.
+      if (next) parsed = next;
+    }
     clearSelection();
   }
 
@@ -2183,7 +2197,8 @@
   }
 
   function chooseClipSpeaker(run: SpeakerRun, name: string) {
-    onreassign(run.startWord, run.endWord, name);
+    const next = onreassign(run.startWord, run.endWord, name);
+    if (next) parsed = next;
     clipPicker = null;
   }
 
@@ -2199,7 +2214,8 @@
   }
 
   function chooseRunSpeaker(run: SpeakerRun, name: string) {
-    onreassign(run.startWord, run.endWord, name);
+    const next = onreassign(run.startWord, run.endWord, name);
+    if (next) parsed = next;
     headerPicker = null;
   }
 </script>

@@ -334,25 +334,46 @@ export class DocumentStore {
    *  The whole point of PWTS is to keep every word's `{{t:N.N}}` marker, so
    *  serializeWords retains them; the original line-break structure is
    *  reproduced from `lineEndWords`. The caller guarantees the range lies
-   *  within a single speaker run. */
-  reassignWords(fromGIndex: number, toGIndex: number, newSpeaker: string) {
+   *  within a single speaker run.
+   *
+   *  `parsedInput`, when supplied, is the caller's up-to-date parse and skips
+   *  the whole-document `parseWords`; the return value is the NEXT parse with
+   *  only `runs` changed (the `words` array is structurally shared), so a
+   *  caller that already renders these words can swap the model in place
+   *  without Svelte revisiting every word. Null when nothing changed. */
+  reassignWords(
+    fromGIndex: number,
+    toGIndex: number,
+    newSpeaker: string,
+    parsedInput?: ReturnType<typeof parseWords>,
+  ): ReturnType<typeof parseWords> | null {
     const [fm, body] = splitFrontmatter(this.current);
-    const parsed = parseWords(body);
+    const parsed = parsedInput ?? parseWords(body);
     const newRuns = reassignSpeaker(parsed.runs, fromGIndex, toGIndex, newSpeaker);
     const result = this.serialiseWithReconcile(fm, parsed, newRuns);
-    if (result !== this.current) this.pushEdit(result);
+    if (result === this.current) return null;
+    this.pushEdit(result);
+    return { ...parsed, runs: newRuns };
   }
 
   /** Rename a speaker everywhere in a PWTS body to `newName` (all their turns),
    *  merging with any existing speaker of that name, then reconcile the
-   *  frontmatter - all in one undo step. No-op when empty or unchanged. */
-  renameWordSpeaker(oldName: string, newName: string) {
-    if (!newName || oldName === newName) return;
+   *  frontmatter - all in one undo step. No-op when empty or unchanged.
+   *  `parsedInput` / return contract mirrors reassignWords: reuse the caller's
+   *  parse, hand back the next parse so the caller's model updates in place. */
+  renameWordSpeaker(
+    oldName: string,
+    newName: string,
+    parsedInput?: ReturnType<typeof parseWords>,
+  ): ReturnType<typeof parseWords> | null {
+    if (!newName || oldName === newName) return null;
     const [fm, body] = splitFrontmatter(this.current);
-    const parsed = parseWords(body);
+    const parsed = parsedInput ?? parseWords(body);
     const newRuns = renameSpeakerInRuns(parsed.runs, oldName, newName);
     const result = this.serialiseWithReconcile(fm, parsed, newRuns);
-    if (result !== this.current) this.pushEdit(result);
+    if (result === this.current) return null;
+    this.pushEdit(result);
+    return { ...parsed, runs: newRuns };
   }
 
   /** Edit a single word's text in a PWTS body. A SPACE splits it into several

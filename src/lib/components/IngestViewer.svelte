@@ -3595,8 +3595,12 @@
   function renameSpeaker(oldId: string, newName: string) {
     // Word records must keep their per-word timestamps, so rename through the
     // word-aware path (the segment serialiser would strip the {{t:}} markers).
-    if (isWordRecord) doc.renameWordSpeaker(oldId, newName);
-    else doc.renameSpeaker(oldId, newName);
+    // The caller's parse is handed on and the next parse returned, so the
+    // transcript model is swapped in place instead of re-parsing 48k words.
+    if (isWordRecord) {
+      const next = doc.renameWordSpeaker(oldId, newName, parsedWords ?? undefined);
+      if (next) parsedWordsOverride = { body: currentBody(), parsed: next };
+    } else doc.renameSpeaker(oldId, newName);
     // If the renamed speaker was selected, follow it to the new name
     if (selectedSpeakers.has(oldId)) {
       const next = new Set(selectedSpeakers);
@@ -3608,8 +3612,15 @@
 
   function mergeSpeakers(sourceIds: string[], targetName: string) {
     // Word records: merge via the word-aware rename so {{t:}} markers survive.
-    if (isWordRecord) for (const id of sourceIds) doc.renameWordSpeaker(id, targetName);
-    else doc.mergeSpeakers(sourceIds, targetName);
+    // Chain each rename's next parse as the next merge's input - no re-parse
+    // between merges - and keep one undo step per source id.
+    if (isWordRecord) {
+      let parsed = parsedWords ?? undefined;
+      for (const id of sourceIds) {
+        parsed = doc.renameWordSpeaker(id, targetName, parsed ?? undefined) ?? parsed;
+      }
+      if (parsed) parsedWordsOverride = { body: currentBody(), parsed };
+    } else doc.mergeSpeakers(sourceIds, targetName);
     // Replace the merged speakers with just the target in the selection
     const next = new Set<string>();
     next.add(targetName);
@@ -5655,7 +5666,15 @@
             {claimHighlight}
             focusWords={markupFocus}
             onclearfocus={clearMarkFocus}
-            onreassign={(from, to, speaker) => doc.reassignWords(from, to, speaker)}
+            onreassign={(from, to, speaker) => {
+              const next = doc.reassignWords(from, to, speaker, parsedWords ?? undefined);
+              if (next) {
+                const body = currentBody();
+                parsedWordsOverride = { body, parsed: next };
+                locallyRenderedWordBody = body;
+              }
+              return next;
+            }}
             onreplaceselection={(from, to, w) => {
               const next = doc.replaceSelection(from, to, w, parsedWords ?? undefined);
               if (next) {
