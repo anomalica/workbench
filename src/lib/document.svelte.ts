@@ -1329,7 +1329,48 @@ function splitFrontmatter(doc: string): [string, string] {
  *  block via js-yaml, leaving every other key untouched. An empty list drops
  *  the key entirely. */
 function rewriteFrontmatterSpeakers(rawFm: string, speakers: string[]): string {
-  return rewriteFrontmatterFields(rawFm, { speakers });
+  const lines = rawFm.split("\n");
+  const keyIdx = lines.findIndex((l) => /^speakers:(\s|$)/.test(l));
+  // No speakable key: fall back to the general writer rather than inventing a
+  // line layout. (Rare - every record reviewed here carries a speakers list.)
+  if (keyIdx === -1) return rewriteFrontmatterFields(rawFm, { speakers });
+
+  const inline = /^speakers:\s*\[/.test(lines[keyIdx]);
+  if (inline) {
+    // `speakers: [a, b]` on one line - replace just that line. Blocking out the
+    // list keeps the rest of the frontmatter byte-for-byte.
+    const head = lines.slice(0, keyIdx);
+    const tail = lines.slice(keyIdx + 1);
+    return [...head, "speakers:", ...speakers.map((s) => `- ${quoteYamlItem(s)}`), ...tail].join("\n");
+  }
+
+  // Block sequence (`speakers:` then `- item` lines): replace exactly the item
+  // lines, preserving the rest of the frontmatter byte-for-byte. The general
+  // rewriteFrontmatterFields re-dumps the WHOLE frontmatter through js-yaml
+  // (folded scalars flatten, quoting style changes, numbers re-emit) - every
+  // line then diverges and the flat draft patch degrades to a full-copy
+  // literal, which is the quota failure this store exists to prevent.
+  let end = keyIdx + 1;
+  while (end < lines.length && /^\s*-\s/.test(lines[end]) && lines[end].trim() !== "---") end++;
+  const head = lines.slice(0, keyIdx + 1);
+  const tail = lines.slice(end);
+  const itemIndent = end > keyIdx + 1 ? (lines[keyIdx + 1].match(/^[ \t]*/) ?? [""])[0] : "";
+  const items = speakers.map((s) => `${itemIndent}- ${quoteYamlItem(s)}`);
+  return [...head, ...items, ...tail].join("\n");
+}
+
+/** Render one `speakers:` list item safely. A name that re-parses as something
+ *  other than itself (a number, `no`/`true`, a comment, `a: b`) must be quoted
+ *  or the list round-trip changes meaning; plain names stay plain. */
+function quoteYamlItem(s: string): string {
+  const value = String(s);
+  if (value === "") return '""';
+  try {
+    if (yaml.load(value) === value) return value;
+  } catch {
+    /* fall through to quoting */
+  }
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
 /** Set top-level frontmatter keys via js-yaml, leaving every other key (and

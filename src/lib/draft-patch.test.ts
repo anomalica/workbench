@@ -47,6 +47,21 @@ describe("size - the reason this exists", () => {
     expect(decodePatch(original, patch)).toBe(current);
     expect(patchSize(patch)).toBeLessThan(6_000);
   });
+
+  it("does not leap to a later copy of a repeated marker when one line changes", () => {
+    // Transcripts repeat `<!-- speaker: [irrelevant] -->` at every quietly
+    // edited segment. Editing an EARLY segment to add that marker used to
+    // resync the walk onto the far-away copy, then store the whole document
+    // between as one literal - a 900KB draft for a one-line change.
+    const original =
+      `<!-- speaker: Lex Fridman -->\nLine one.\n`.repeat(3) +
+      `<!-- speaker: [irrelevant] -->\nLine four.\n`.repeat(2_000);
+    const current = original.replace("<!-- speaker: Lex Fridman -->\n", "<!-- speaker: [irrelevant] -->\n");
+    const patch = encodePatch(original, current);
+    expect(decodePatch(original, patch)).toBe(current);
+    expect(patchSize(patch)).toBeLessThan(2_000);
+    expect(original.length).toBeGreaterThan(60_000);
+  });
 });
 
 describe("refusing to apply a patch to the wrong text", () => {

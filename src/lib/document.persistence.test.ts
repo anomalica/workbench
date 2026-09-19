@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import yaml from "js-yaml";
 import { DocumentStore } from "./document.svelte";
+import { parseWords } from "./transcript-words";
+import { decodePatch, patchSize } from "./draft-patch";
 
 const SAMPLE_MARKDOWN = `---
 title: Test Ingest
@@ -356,5 +359,87 @@ speakers:
     doc.load(QUALIFIED, HASH);
     doc.updateFrontmatterSpeakers(["[audience member]"]);
     expect(doc.current).toContain('- "[audience member]"');
+  });
+});
+
+describe("the speakers-list rewrite touches only the speakers block", () => {
+  // The Fravor-style fixture: a folded multi-line title and a numeric field
+  // that js-yaml would re-emit differently. Rewriting `speakers:` must leave
+  // every other frontmatter byte alone, or the whole body re-encodes as one
+  // giant literal (a 901KB draft for a one-line change - the quota bug).
+  const FOLDED = `---
+schema: anomalica/record/2
+title: >-
+  David Fravor: UFOs, Aliens, Fighter Jets, and Aerospace Engineering | Lex
+  Fridman Podcast #122
+published: 2023-01-19
+funded: 1947
+speakers:
+  - Lex Fridman
+  - David Fravor
+---
+
+<!-- speaker: Lex Fridman -->
+{{t:0.05}}The {{t:0.19}}following {{t:0.69}}is {{t:0.79}}a {{t:0.87}}conversation.
+
+<!-- speaker: David Fravor -->
+{{t:13.02}}So {{t:13.12}}I {{t:13.28}}was {{t:13.42}}flying.
+
+<!-- speaker: David Fravor -->
+{{t:21.02}}We {{t:21.20}}proceeded.
+`;
+
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  function frontmatterOf(doc: DocumentStore): string {
+    const match = doc.current.match(/^(---\n[\s\S]*?\n---\n)/);
+    if (!match) throw new Error("no frontmatter");
+    return match[1];
+  }
+
+  function loadFm(rawFm: string): { [k: string]: unknown } {
+    return (yaml.load(rawFm.replace(/^---\n/, "").replace(/---\n$/, "")) as {
+      [k: string]: unknown;
+    }) ?? {};
+  }
+
+  it("reorders the list without retouching folded titles or numbers", () => {
+    const doc = new DocumentStore();
+    doc.load(FOLDED, HASH);
+    doc.updateFrontmatterSpeakers(["David Fravor", "Lex Fridman", "Marjorie"]);
+    const fm = frontmatterOf(doc);
+    // Every non-speakers line survives byte-for-byte (folded title and all).
+    expect(fm).toBe(`---\nschema: anomalica/record/2\ntitle: >-\n  David Fravor: UFOs, Aliens, Fighter Jets, and Aerospace Engineering | Lex\n  Fridman Podcast #122\npublished: 2023-01-19\nfunded: 1947\nspeakers:\n  - David Fravor\n  - Lex Fridman\n  - Marjorie\n---\n`);
+    const loaded = loadFm(fm);
+    expect(loaded.title).toBe("David Fravor: UFOs, Aliens, Fighter Jets, and Aerospace Engineering | Lex Fridman Podcast #122");
+    expect(loaded.funded).toBe(1947);
+    expect(loaded.speakers).toEqual(["David Fravor", "Lex Fridman", "Marjorie"]);
+  });
+
+  it("a reassign that reconciles the list still stores a tiny patch", () => {
+    const doc = new DocumentStore();
+    doc.load(FOLDED, HASH);
+    const before = doc.current;
+    // Reassign the first run to a real, new name: the frontmatter list must
+    // grow, which is exactly the path that used to re-dump the whole
+    // frontmatter through js-yaml (every line reshaped -> whole-body literal).
+    const [, body] = (() => {
+      const m = before.match(/^(---\n[\s\S]*?\n---\n)([\s\S]*)$/);
+      return [m![1], m![2]];
+    })();
+    const parsed = parseWords(body);
+    const next = doc.reassignWords(0, 4, "Marjorie", parsed);
+    expect(next).not.toBeNull();
+    expect(doc.current).toContain("<!-- speaker: Marjorie -->");
+    expect(loadFm(frontmatterOf(doc)).speakers).toEqual(["Lex Fridman", "David Fravor", "Marjorie"]);
+
+    const stored = localStorage.getItem(`workbench:doc:${HASH}`);
+    expect(stored).not.toBeNull();
+    expect(stored!.length).toBeLessThan(1_000);
+    const patch = JSON.parse(stored!).patch;
+    expect(patchSize(patch)).toBeLessThan(1_000);
+    expect(decodePatch(before, patch)).toBe(doc.current);
   });
 });

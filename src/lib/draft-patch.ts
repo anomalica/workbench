@@ -15,10 +15,14 @@
  *
  * Deliberately not a general diff. There is no LCS search here - it walks the
  * current text once, matching each line against the original from a moving
- * cursor and re-syncing through an index when an edit breaks the run. That is
- * linear, has no dependency, and stays exact: `decode(original, encode(a, b))`
- * returns b for ANY pair of strings, because anything it fails to match is
- * simply stored as a literal.
+ * cursor and re-syncing through an index when an edit breaks the run. A resync
+ * only counts when the very next line also lines up at the new position:
+ * transcripts carry repeated markers (`<!-- speaker: [irrelevant] -->` appears
+ * at every quietly-edited segment), so a bare match would otherwise leap the
+ * cursor to a far-away copy of the marker and store the whole document between
+ * as literals. That is linear, has no dependency, and stays exact:
+ * `decode(original, encode(a, b))` returns b for ANY pair of strings, because
+ * anything it fails to match is simply stored as a literal.
  */
 
 /** A run of unchanged lines, by position in the original. */
@@ -81,7 +85,7 @@ export function encodePatch(original: string, current: string): DraftPatch {
       const all = positions.get(line);
       if (all) {
         for (const p of all) {
-          if (p >= cursor) {
+          if (p >= cursor && from[p + 1] === to[i + 1]) {
             at = p;
             break;
           }
