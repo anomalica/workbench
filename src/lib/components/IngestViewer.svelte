@@ -216,7 +216,13 @@
     const match = doc.current.match(/^---\n([\s\S]*?)\n---\n/);
     if (!match) return {};
     try {
-      return (yaml.load(match[1]) as Record<string, unknown>) ?? {};
+      // YAML 1.1 resolves an unquoted date/timestamp to a JavaScript Date. That
+      // discards the original offset and String(Date) turns it into a localised
+      // value such as "Mon Sep 21 ...". Metadata editing must remain lexical and
+      // lossless, so use the same timestamp-free schema as the document writer.
+      return (
+        (yaml.load(match[1], { schema: yaml.CORE_SCHEMA }) as Record<string, unknown>) ?? {}
+      );
     } catch {
       return {};
     }
@@ -5298,7 +5304,9 @@
             title={liveTitle}
             publisher={livePublisher}
             creators={liveCreators}
-            datePublished={ingest.frontmatter.date_published ?? ""}
+            datePublished={String(
+              currentFrontmatterObj.date_published ?? ingest.frontmatter.date_published ?? "",
+            )}
             sourceUrl={String(currentFrontmatterObj.source_url ?? ingest.frontmatter.source_url ?? "")}
             dateAccessed={String(
               currentFrontmatterObj.date_accessed ?? ingest.frontmatter.date_accessed ?? "",

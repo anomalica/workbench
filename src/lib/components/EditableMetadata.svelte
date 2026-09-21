@@ -47,15 +47,21 @@
   // because sources state what they state. A picker would force a full date and
   // turn "1947" into "1947-01-01", which invents a day the source never gave.
   const DATE_SHAPE = /^\d{4}(-\d{2}(-\d{2})?)?$/;
+  // Access metadata may carry only the known date or the exact retrieval
+  // instant. Keep the offset: converting to a local date changes the evidence.
+  // A space separator remains readable for records written by older emitters;
+  // current producers use RFC 3339's `T` separator.
+  const DATE_OR_OFFSET_TIMESTAMP_SHAPE =
+    /^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))?$/;
   let dateProblem = $derived(
     draftDate.trim() === "" || DATE_SHAPE.test(draftDate.trim())
       ? ""
       : "Use YYYY, YYYY-MM or YYYY-MM-DD",
   );
   let accessedProblem = $derived(
-    draftAccessed.trim() === "" || DATE_SHAPE.test(draftAccessed.trim())
+    draftAccessed.trim() === "" || DATE_OR_OFFSET_TIMESTAMP_SHAPE.test(draftAccessed.trim())
       ? ""
-      : "Use YYYY, YYYY-MM or YYYY-MM-DD",
+      : "Use YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS+09:00",
   );
   // An address that is not one is worse than none: it reads as a way back to
   // the original and is not.
@@ -76,11 +82,9 @@
     draftTitle = title;
     draftPublisher = publisher;
     draftCreators = creators.length > 0 ? [...creators] : [""];
-    // A timestamp form is offered as its date; the reviewer can keep or narrow
-    // it, but nothing is rewritten unless they choose to.
-    draftDate = (datePublished || "").trim().slice(0, 10);
+    draftDate = (datePublished || "").trim();
     draftUrl = sourceUrl;
-    draftAccessed = (dateAccessed || "").trim().slice(0, 10);
+    draftAccessed = (dateAccessed || "").trim();
     editing = true;
   }
 
@@ -217,7 +221,7 @@
         <input
           type="text"
           bind:value={draftAccessed}
-          placeholder="2026-08-20"
+          placeholder="2026-08-20 or 2026-08-20T12:30:00+09:00"
           class="bg-surface border rounded px-2 py-1 text-on-surface outline-none
             placeholder:text-on-surface-muted/50
             {accessedProblem
@@ -225,7 +229,8 @@
               : 'border-border focus:border-primary'}"
         />
         <span class="text-[11px] {accessedProblem ? 'text-error' : 'text-on-surface-muted'}">
-          {accessedProblem || "Which version of the page above this record reflects."}
+          {accessedProblem ||
+            "Date, or exact time with Z / an offset. This identifies which version was retrieved."}
         </span>
       </label>
       <label class="flex flex-col gap-1">
