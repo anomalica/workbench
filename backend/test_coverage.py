@@ -250,3 +250,46 @@ def test_append_coverage_stores_kind(ingests_repo):
         {"from": 0, "to": 1, "kind": "played"},
         {"from": 3, "to": 5, "kind": "observed"},
     ]
+
+
+def test_coverage_revisions_by_path_matches_per_path_lookup(ingests_repo):
+    """The batched revision walk returns each path's newest-touching commit,
+    agreeing with the per-path git log it replaces in list_ingests."""
+    p1 = "store/first.review.json"
+    p2 = "store/second.review.json"
+    for p in (p1, p2):
+        f = ingests_repo / p
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("{}")
+    subprocess.run(["git", "add", "-A"], cwd=ingests_repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "both"], cwd=ingests_repo, check=True)
+    c1 = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=ingests_repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    (ingests_repo / p2).write_text("{} touched")
+    subprocess.run(["git", "add", "-A"], cwd=ingests_repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "p2 only"], cwd=ingests_repo, check=True
+    )
+    c2 = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=ingests_repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+    src = LocalIngestSource(ingests_repo)
+    batch = src._coverage_revisions_by_path(ingests_repo, [p1, p2])
+    assert batch[p1] == c1
+    assert batch[p2] == c2
+    assert batch[p1] == src._latest_coverage_revision(ingests_repo, p1)
+    assert batch[p2] == src._latest_coverage_revision(ingests_repo, p2)
+    assert src._coverage_revisions_by_path(ingests_repo, []) == {}
+    assert "store/absent.review.json" not in src._coverage_revisions_by_path(
+        ingests_repo, ["store/absent.review.json"]
+    )

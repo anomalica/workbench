@@ -133,6 +133,27 @@ export async function fetchIngests(): Promise<IngestSummary[]> {
   return rows.map((row) => ({ ...row, content_hash: row.content_hash ?? row.public_hash }));
 }
 
+/** Just the corpus identity for the record pickers (external content, links).
+ *  The full /api/ingests list computes per-record digestibility and coverage
+ *  verdicts, which a search-over-names-and-store-the-hash picker never reads;
+ *  this endpoint skips all of it. */
+export interface RecordName {
+  content_hash: string;
+  public_hash: string;
+  title: string;
+  /** One-line picker subtitle; present on every record. */
+  source_type?: string;
+  date?: string;
+  creators: string[];
+}
+
+export async function fetchRecordNames(): Promise<RecordName[]> {
+  const res = await fetch(readPath("/api/ingests/names"));
+  if (!res.ok) throw new Error(`Failed to fetch record names: ${res.status}`);
+  const rows = (await res.json()) as RecordName[];
+  return rows.map((row) => ({ ...row, content_hash: row.content_hash ?? row.public_hash }));
+}
+
 /** Speaker names already used anywhere in the corpus, commonest first. Fetched
  *  once and offered while a new name is typed, so the same person does not end
  *  up spelled two ways. */

@@ -246,6 +246,15 @@ def test_records_prerender_gates_body_keeps_short_quotes(records_repo, tmp_path)
     assert (base / "ingests" / H_PUB / "media" / "0123456789ab.jpg").is_file()
     assert not (base / "ingests" / H_GATED / "media").exists()
 
+    # The picker names slice mirrors the same gating: hash stays for public
+    # records, gated rows carry only identity metadata.
+    names = json.loads((base / "ingests" / "names.json").read_text())
+    pub_name = next(r for r in names if r["title"] == "rec-pub")
+    assert pub_name["content_hash"] == H_PUB
+    gated_name = next(r for r in names if r["title"] == "rec-gated")
+    assert gated_name["public_hash"] == H_GATED_PUBLIC
+    assert "content_hash" not in gated_name
+
     # The list ships both records as metadata.
     listed = json.loads((base / "ingests.json").read_text())
     public_row = next(r for r in listed if r["title"] == "rec-pub")

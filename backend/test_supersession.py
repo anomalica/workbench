@@ -42,6 +42,40 @@ def test_not_superseded_when_current(client):
     assert data == {"exists": True, "superseded_by": None, "public_supersedes": None}
 
 
+def test_names_lists_live_records_and_skips_superseded(client, ingests_repo):
+    # A retired re-acquisition is hidden from the names list too, exactly as the
+    # browse list hides it.
+    store = ingests_repo / "store"
+    v1 = store / "v1"
+    v1.mkdir()
+    (v1 / f"{OLD}.md").write_text(
+        OLD_RECORD.replace("---\nBody.", f"superseded_by: {NEW}\n---\nBody.")
+    )
+    (store / f"{OLD}.md").unlink()
+    (store / f"{NEW}.md").write_text(OLD_RECORD.replace(OLD, NEW))
+
+    names = client.get("/api/ingests/names").json()
+    assert [n["content_hash"] for n in names] == [NEW]
+    row = names[0]
+    assert row["public_hash"] == NEW[:56]
+    assert row["title"] == "The Article"
+    assert row["creators"] == []
+
+
+def test_names_endpoint_reader_shape(client):
+    names = client.get("/api/ingests/names").json()
+    assert names == [
+        {
+            "content_hash": OLD,
+            "public_hash": OLD[:56],
+            "title": "The Article",
+            "source_type": "",
+            "date": "",
+            "creators": [],
+        }
+    ]
+
+
 def test_reports_supersession_after_reingest(client, ingests_repo):
     # Simulate the ingester's supersession: move the old record to store/v1/
     # with a superseded_by pointer, add the new record.

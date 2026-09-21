@@ -446,6 +446,25 @@ class IngestSource(ABC):
     def list_ingests(self) -> list[dict]:
         """Return a summary index of every available ingest."""
 
+    def list_names(self) -> list[dict]:
+        """Minimal identity list (hash + title + creators) for record pickers.
+
+        Default: derive from the browse list. Local sources override this with
+        a frontmatter-only walk, because the browse list computes per-record
+        digestibility and coverage verdicts that the pickers never read.
+        """
+        return [
+            {
+                "content_hash": x.get("content_hash"),
+                "public_hash": x.get("public_hash"),
+                "title": x.get("title", "Untitled"),
+                "source_type": x.get("source_type", ""),
+                "date": x.get("date", ""),
+                "creators": x.get("creators") or [],
+            }
+            for x in self.list_ingests()
+        ]
+
     def intake_queue(self) -> dict[str, list[dict]]:
         """Pending transient intake and blocked data errors, when locally visible."""
         return {"pending": [], "errors": []}
@@ -1149,6 +1168,43 @@ class LocalIngestSource(IngestSource):
         ingests = self._dedup_by_source(ingests)
         ingests.sort(key=lambda x: (x.get("date", ""), x.get("title", "")))
         return ingests
+
+    def list_names(self) -> list[dict]:
+        """Minimal identity list for the record pickers (external content, links).
+
+        A picker matches a reviewer's words against names and stores the hash
+        it returns; it never needs digestibility, coverage or any other per-
+        record verdict - which is most of the browse list's cost. Frontmatter
+        only: no bodies, no sidecars, no git, no digestibility gate.
+        """
+        names: list[dict] = []
+        for content_hash, (_md_path, frontmatter) in self._scan().items():
+            if frontmatter.get("superseded_by"):
+                continue
+            creators = frontmatter.get("creators") or frontmatter.get("authors") or []
+            if not isinstance(creators, list):
+                creators = []
+            names.append(
+                {
+                    "content_hash": content_hash,
+                    "public_hash": content_hash[:PUBLIC_HASH_LENGTH],
+                    "title": frontmatter.get("title", "Untitled"),
+                    # The picker's one-line subtitle; both are present on every
+                    # record and come from the same frontmatter read.
+                    "source_type": frontmatter.get("source_type", ""),
+                    "date": frontmatter.get(
+                        "date_published", frontmatter.get("date", "")
+                    ),
+                    "creators": creators,
+                }
+            )
+        names.sort(
+            key=lambda x: (
+                str(x.get("title", "")).casefold(),
+                x.get("content_hash", ""),
+            )
+        )
+        return names
 
     def bodies(self, hashes: set[str]) -> dict[str, str]:
         """Just the bodies, for callers that want prose and nothing else.
@@ -1936,6 +1992,58 @@ class LocalIngestSource(IngestSource):
         )
         return revision.stdout.strip() if revision.returncode == 0 else ""
 
+    @staticmethod
+    def _coverage_revisions_by_path(
+        repo_dir: Path, coverage_rel_paths: list[str]
+    ) -> dict[str, str]:
+        """Last commit touching each coverage path, from ONE git log walk.
+
+        `_latest_coverage_revision` pays a git process per path (around 0.2s
+        each on this repository), so validating the 120-odd sidecars of a
+        browse list launched ~26s of subprocess startup - the whole measured
+        cost of the /api/ingests list. One batched walk returns the same
+        newest-touching-commit map at a single git process's cost. A path that
+        no reachable commit ever touched is simply absent, matching the
+        per-path git log -1 result.
+
+        `--cc` is load-bearing: without it git log drops the file list of a
+        MERGE commit, so a review committed on a merge parent's line has its
+        file attributed to an older commit and the binding fails. `--cc`
+        (dense combined) lists the file only for merges that actually changed
+        it - the same TREESAME rule `git log -1 -- <path>` applies - so a
+        merge that brings the sidecar in unchanged still points at the
+        original review commit.
+        """
+        if not coverage_rel_paths:
+            return {}
+        proc = subprocess.run(
+            [
+                "git",
+                "log",
+                "--format=%H",
+                "--cc",
+                "--name-only",
+                "--",
+                *coverage_rel_paths,
+            ],
+            cwd=repo_dir,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            return {}
+        revisions: dict[str, str] = {}
+        current: str | None = None
+        for line in proc.stdout.splitlines():
+            if re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", line):
+                current = line
+                continue
+            if not line or not current or line in revisions:
+                continue
+            revisions[line] = current
+        return revisions
+
     def _record_text_at_ref(
         self, full_hash: str, ref: str, preferred_path: Path
     ) -> str | None:
@@ -2014,11 +2122,7 @@ class LocalIngestSource(IngestSource):
 
         if not legacy_paths:
             return current
-        revisions = {
-            coverage_rel: revision
-            for coverage_rel in legacy_paths
-            if (revision := self._latest_coverage_revision(repo_dir, coverage_rel))
-        }
+        revisions = self._coverage_revisions_by_path(repo_dir, legacy_paths)
 
         parents = subprocess.run(
             [
@@ -2350,6 +2454,9 @@ class GitHubIngestSource(IngestSource):
         self.token = token
 
     def list_ingests(self) -> list[dict]:
+        raise NotImplementedError("GitHubIngestSource is not yet implemented")
+
+    def list_names(self) -> list[dict]:
         raise NotImplementedError("GitHubIngestSource is not yet implemented")
 
     def get_ingest(self, full_hash: str) -> dict | None:
@@ -2881,6 +2988,19 @@ def list_ingests() -> list[dict]:
     should return only public hashes to non-authenticated callers.
     """
     return source.list_ingests()
+
+
+@app.get("/api/ingests/names")
+def list_ingest_names() -> list[dict]:
+    """Minimal identity list for the record pickers: name + public hash + creators.
+
+    A picker (external content, links) matches against names and stores the
+    hash, so it never needs the browse list's per-record digestibility and
+    coverage verdicts, which across a large corpus cost tens of seconds. This
+    view reads frontmatter only and returns fast even when the browse list is
+    still building.
+    """
+    return source.list_names()
 
 
 _review_queue_cache: dict[str, object] = {}

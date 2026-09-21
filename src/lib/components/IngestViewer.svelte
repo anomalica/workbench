@@ -12,11 +12,11 @@
     CopyrightStatus,
     DigestDocument,
     IngestDetail,
-    IngestSummary,
+    RecordName,
     User,
   } from "$lib/api";
   import {
-    fetchIngests,
+    fetchRecordNames,
     submitReview,
     pushOrigin,
     fetchPredigest,
@@ -1858,13 +1858,15 @@
     wantedUrl = "";
     wantedKind = "book";
   }
-  let allRecords = $state<IngestSummary[] | null>(null);
-  /** The corpus listing, fetched at most once. Needed both to CHOOSE a link
-   *  target and to NAME one this record already has. */
+  let allRecords = $state<RecordName[] | null>(null);
+  /** The corpus identity list, fetched at most once. Needed both to CHOOSE a
+   *  link target and to NAME one this record already has. Served by the cheap
+   *  names endpoint: a picker matches names and stores the hash - digestibility
+   *  and coverage verdicts (most of the browse list) are never read. */
   async function loadAllRecords() {
     if (allRecords !== null) return;
     try {
-      allRecords = await fetchIngests();
+      allRecords = await fetchRecordNames();
     } catch {
       allRecords = [];
     }

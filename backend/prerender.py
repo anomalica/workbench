@@ -455,6 +455,24 @@ def _prerender_records(base: Path, only: set[str] | None = None) -> dict:
         ],
     )  # the list = metadata only, no bodies, no gate answers
 
+    # The record pickers run on names alone and never read the browse list's
+    # verdicts; give them their own snapshot slice so /api/ingests/names can
+    # serve the static build too.
+    _write(
+        base / "ingests" / "names.json",
+        [
+            {
+                "content_hash": s.get("content_hash"),
+                "public_hash": s.get("public_hash"),
+                "title": s.get("title", "Untitled"),
+                "source_type": s.get("source_type", ""),
+                "date": s.get("date", ""),
+                "creators": s.get("creators") or [],
+            }
+            for s in summaries
+        ],
+    )
+
     _write(base / "housekeeping.json", _housekeeping_queue(summaries, snapshot_ref))
 
     digest_map = _build_digest_map(server)
