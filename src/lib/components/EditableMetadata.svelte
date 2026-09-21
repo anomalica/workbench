@@ -12,7 +12,7 @@
     title: string;
     publisher: string;
     creators: string[];
-    /** `date_published` verbatim - a year, a year-month or a full date. */
+    /** `date_published` verbatim at the precision the source evidences. */
     datePublished?: string;
     /** Where this copy came from. Often the only way back to the original for
      *  a record acquired by hand, and the ingester cannot know it for a file
@@ -46,7 +46,8 @@
   // A YEAR, a year-month, or a full date - all three occur in the corpus,
   // because sources state what they state. A picker would force a full date and
   // turn "1947" into "1947-01-01", which invents a day the source never gave.
-  const DATE_SHAPE = /^\d{4}(-\d{2}(-\d{2})?)?$/;
+  const EVIDENCED_DATE_OR_OFFSET_TIMESTAMP_SHAPE =
+    /^\d{4}(?:-\d{2}(?:-\d{2}(?:[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))?)?)?$/;
   // Access metadata may carry only the known date or the exact retrieval
   // instant. Keep the offset: converting to a local date changes the evidence.
   // A space separator remains readable for records written by older emitters;
@@ -54,9 +55,9 @@
   const DATE_OR_OFFSET_TIMESTAMP_SHAPE =
     /^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))?$/;
   let dateProblem = $derived(
-    draftDate.trim() === "" || DATE_SHAPE.test(draftDate.trim())
+    draftDate.trim() === "" || EVIDENCED_DATE_OR_OFFSET_TIMESTAMP_SHAPE.test(draftDate.trim())
       ? ""
-      : "Use YYYY, YYYY-MM or YYYY-MM-DD",
+      : "Use YYYY, YYYY-MM, YYYY-MM-DD or a full time with Z / an offset",
   );
   let accessedProblem = $derived(
     draftAccessed.trim() === "" || DATE_OR_OFFSET_TIMESTAMP_SHAPE.test(draftAccessed.trim())
@@ -191,14 +192,13 @@
         <input
           type="text"
           bind:value={draftDate}
-          placeholder="1947, 1947-06 or 1947-06-24"
+          placeholder="1947, 1947-06, 1947-06-24 or an offset time"
           class="bg-surface border rounded px-2 py-1 text-on-surface outline-none
             placeholder:text-on-surface-muted/50
             {dateProblem ? 'border-error focus:border-error' : 'border-border focus:border-primary'}"
         />
         <span class="text-[11px] {dateProblem ? 'text-error' : 'text-on-surface-muted'}">
-          {dateProblem ||
-            "As precise as the source states - a year alone is a real answer, not a missing one."}
+          {dateProblem || "Keep exactly the date or offset time evidenced by the source."}
         </span>
       </label>
       <label class="flex flex-col gap-1">

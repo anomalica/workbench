@@ -1451,12 +1451,23 @@ export function rewriteFrontmatterFields(
     }
     setPath(doc, key, resolved);
   }
-  const newFmContent = yaml.dump(doc, {
+  let newFmContent = yaml.dump(doc, {
     lineWidth: -1,
     quotingType: '"',
     forceQuotes: false,
     sortKeys: false,
   });
+  // The temporal contract requires strings on disk. CORE_SCHEMA prevents date
+  // coercion while reading, but js-yaml still emits date-looking strings plain;
+  // quote fields this editor writes so every producer has the same YAML type.
+  for (const key of ["date_published", "date_accessed"]) {
+    const value = fields[key];
+    if (typeof value !== "string" || value.trim() === "") continue;
+    newFmContent = newFmContent.replace(
+      new RegExp(`^${key}:.*$`, "m"),
+      `${key}: ${JSON.stringify(value.trim())}`,
+    );
+  }
   return `---\n${newFmContent}---\n`;
 }
 

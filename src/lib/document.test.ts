@@ -868,10 +868,21 @@ describe("frontmatter edits leave dates alone", () => {
   });
 
   it("writes a new publication date, including a partial one", () => {
-    expect(rewriteFrontmatterFields(FM, { date_published: "1947" })).toMatch(
-      /date_published: ["']?1947["']?/,
+    expect(rewriteFrontmatterFields(FM, { date_published: "1947" })).toContain(
+      'date_published: "1947"',
     );
-    expect(rewriteFrontmatterFields(FM, { date_published: "1947-06" })).toContain("1947-06");
+    expect(rewriteFrontmatterFields(FM, { date_published: "1947-06" })).toContain(
+      'date_published: "1947-06"',
+    );
+  });
+
+  it("writes offset timestamps as quoted strings", () => {
+    const out = rewriteFrontmatterFields(FM, {
+      date_published: "2026-09-21T10:15:30+09:00",
+      date_accessed: "2026-09-21T12:15:30+09:00",
+    });
+    expect(out).toContain('date_published: "2026-09-21T10:15:30+09:00"');
+    expect(out).toContain('date_accessed: "2026-09-21T12:15:30+09:00"');
   });
 
   it("clearing the date removes the key rather than writing an empty one", () => {
