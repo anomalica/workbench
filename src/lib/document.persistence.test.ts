@@ -164,6 +164,38 @@ describe("DocumentStore - persistence across simulated refresh", () => {
     expect(doc.current).toContain("Name 23");
   });
 
+  it("keeps draft patches only for document versions the bounded history can reach", () => {
+    const doc = new DocumentStore();
+    doc.load(SAMPLE_MARKDOWN, HASH);
+    for (let i = 0; i < 40; i++) {
+      doc.renameSpeaker(i === 0 ? "Speaker 6" : `Name ${i - 1}`, `Name ${i}`);
+    }
+
+    const cache = (doc as unknown as { patchCache: Map<string, unknown> }).patchCache;
+    expect(cache.size).toBeLessThanOrEqual(11);
+    expect([...cache.keys()].every((version) => version === doc.current || doc.past.includes(version))).toBe(
+      true,
+    );
+  });
+
+  it("rebases draft encoding after a successful submission", () => {
+    const doc = new DocumentStore();
+    doc.load(SAMPLE_MARKDOWN, HASH);
+    doc.renameSpeaker("Speaker 6", "Submitted Name");
+    const submitted = doc.current;
+
+    doc.acceptSubmitted(submitted);
+    expect(doc.dirty).toBe(false);
+    expect(doc.canUndo).toBe(false);
+    expect(localStorage.getItem(doc.storageKey)).toBeNull();
+
+    doc.renameSpeaker("Submitted Name", "Later Name");
+    const reloaded = new DocumentStore();
+    reloaded.load(submitted, HASH);
+    expect(reloaded.current).toBe(doc.current);
+    expect(reloaded.current).toContain("Later Name");
+  });
+
   it("flags the save as failed when localStorage is full, so the banner shows", () => {
     // The blocking saveFailed banner is the only thing standing between the
     // reviewer and a reload losing an edit entirely - it must never regress.

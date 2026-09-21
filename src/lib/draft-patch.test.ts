@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decodePatch, encodePatch, fingerprint, patchSize } from "./draft-patch";
+import { createPatchEncoder, decodePatch, encodePatch, fingerprint, patchSize } from "./draft-patch";
 
 const book = (lines: number) =>
   Array.from({ length: lines }, (_, i) => `Line ${i}: some ordinary sentence of prose.`).join("\n");
@@ -22,6 +22,24 @@ describe("encode/decode round-trip", () => {
       expect(decodePatch(from, encodePatch(from, to))).toBe(to);
     });
   }
+
+  it("reuses a prepared original across sequential current versions", () => {
+    const original = Array.from({ length: 2_000 }, (_, i) =>
+      i % 3 === 0 ? "<!-- speaker: Speaker 1 -->" : `line ${i}`,
+    ).join("\n");
+    const versions = [
+      original.replace("line 100", "changed 100"),
+      original.replace("line 100", "changed 100").replace("line 1700", "changed 1700"),
+      `${original}\nnew final line`,
+    ];
+    const encode = createPatchEncoder(original);
+
+    for (const current of versions) {
+      const patch = encode(current);
+      expect(decodePatch(original, patch)).toBe(current);
+      expect(patch).toEqual(encodePatch(original, current));
+    }
+  });
 });
 
 describe("size - the reason this exists", () => {

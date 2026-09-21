@@ -206,7 +206,7 @@
     });
   });
 
-  let currentBody = $derived(() => {
+  let currentBody = $derived.by(() => {
     const match = doc.current.match(/^---\n[\s\S]*?\n---\n([\s\S]*)$/);
     return match ? match[1] : doc.current;
   });
@@ -289,8 +289,6 @@
     const m = doc.current.match(/^---\n([\s\S]*?)\n---\n/);
     return m ? m[1].trim() : "";
   });
-  let segments = $derived(parseTranscript(currentBody()));
-
   // Per-word-timestamp (PWTS) records carry `{{t:N.N}}` markers and a
   // `word_timestamps: true` frontmatter flag. They get the isolated word-level
   // editor instead of the segment editor; v1 records are untouched. Detect from
@@ -298,7 +296,11 @@
   // HH:MM:SS.D line prefix, which record/2 no longer carries, so it finds no
   // segments for a PWTS body - detect the word record directly from the {{t:}}
   // markers, NOT via hasTranscript.
-  let isWordRecord = $derived(hasWordTimestamps(currentBody()));
+  let isWordRecord = $derived(hasWordTimestamps(currentBody));
+  // The legacy segment parser cannot produce useful segments for a word record
+  // and scanning the complete timestamped body after every word edit is pure
+  // waste. Detect the cheap `{{t:}}` marker first and skip that parse entirely.
+  let segments = $derived(isWordRecord ? [] : parseTranscript(currentBody));
   // A PWTS body IS a transcript even though parseTranscript found no prefixed
   // segments in it, so fold isWordRecord into hasTranscript (drives the speaker
   // panel, keyboard nav, layout).
@@ -313,7 +315,7 @@
   } | null>(null);
   let parsedWords = $derived.by(() => {
     if (!isWordRecord) return null;
-    const body = currentBody();
+    const body = currentBody;
     return parsedWordsOverride?.body === body ? parsedWordsOverride.parsed : parseWords(body);
   });
   let wordTranscriptSnapshot = $state<{
@@ -322,7 +324,7 @@
   } | null>(null);
   let locallyRenderedWordBody = "";
   $effect(() => {
-    const body = currentBody();
+    const body = currentBody;
     const parsed = parsedWords;
     if (!parsed) {
       wordTranscriptSnapshot = null;
@@ -607,7 +609,7 @@
   $effect(() => {
     if (view !== "predigest") return;
     const hash = ingest.content_hash;
-    const working = currentBody();
+    const working = currentBody;
     clearTimeout(predigestTimer);
     predigestTimer = setTimeout(() => {
       fetchPredigest(hash, working).then((p) => {
@@ -1013,9 +1015,10 @@
     }
   }
 
-  if (typeof window !== "undefined") {
+  $effect(() => {
     document.addEventListener("mousedown", _handleClaimClickOutside);
-  }
+    return () => document.removeEventListener("mousedown", _handleClaimClickOutside);
+  });
 
   // Quote-to-ingest highlighting. When a claim card is clicked, we look
   // up the claim's verbatim `quote` text in the rendered ingest body,
@@ -1141,9 +1144,13 @@
     untrack(() => _scrollToClaimFromHash());
   });
 
-  if (typeof window !== "undefined") {
+  $effect(() => {
     window.addEventListener("hashchange", _scrollToClaimFromHash);
-  }
+    return () => {
+      window.removeEventListener("hashchange", _scrollToClaimFromHash);
+      _clearQuoteHighlight();
+    };
+  });
 
   // Metadata parsed from frontmatter (read-only display)
   let showMetadata = $state(false);
@@ -1204,11 +1211,11 @@
     const n = Number(ingest.frontmatter.pages);
     return Number.isFinite(n) && n > 0 ? n : null;
   });
-  let pageMarkers = $derived(readPageMarkers(claimedPages(currentBody()), declaredPages));
+  let pageMarkers = $derived(readPageMarkers(claimedPages(currentBody), declaredPages));
   /** How many page markers precede each body line. The prose renders block by
    *  block, so a block cannot count its own place in the record. */
-  let markersBeforeLine = $derived(pageMarkerLines(currentBody()));
-  let printedPageAnchorLines = $derived(printedPageAnchors(currentBody()));
+  let markersBeforeLine = $derived(pageMarkerLines(currentBody));
+  let printedPageAnchorLines = $derived(printedPageAnchors(currentBody));
   let isWeb = $derived(ingest.frontmatter.source_type === "web");
   let isAudio = $derived(ingest.frontmatter.source_type === "audio");
   let isVideo = $derived(ingest.frontmatter.source_type === "video");
@@ -1712,7 +1719,7 @@
   let highlightOrder = $derived.by(() => {
     const order = new Map<string, number>();
     const re = /\{\{highlight-start:\s*([A-Za-z0-9]+)\s*\}\}/g;
-    const body = currentBody();
+    const body = currentBody;
     for (let m = re.exec(body); m; m = re.exec(body)) {
       if (!order.has(m[1])) order.set(m[1], order.size);
     }
@@ -1720,7 +1727,7 @@
   });
   const highlightIndex = (id: string) => highlightOrder.get(id) ?? 0;
 
-  let hasHighlights = $derived(/\{\{highlight-start:/.test(currentBody()));
+  let hasHighlights = $derived(/\{\{highlight-start:/.test(currentBody));
 
   // Column visibility: user toggles which of source/ingest/digest are shown.
   // Persists to localStorage. The Source column is auto-suppressed for
@@ -2475,7 +2482,7 @@
       ...anchor,
       kind: "printed" as const,
     }));
-    const lines = currentBody().split("\n");
+    const lines = currentBody.split("\n");
     for (let i = 0; i < lines.length; i++) {
       const t = lines[i].trim();
       const m = t.match(/^<!--\s*file_page:\s*(\d+)\s*-->$/);
@@ -3022,8 +3029,8 @@
   let playedRuns = $state<CoverageSpan[]>([]);
   let myObservedSpans = $state<CoverageSpan[]>([]);
   let myPlayedSpans = $state<CoverageSpan[]>([]);
-  let bodyLineCount = $derived(currentBody().split("\n").length);
-  let coveredSegments = $derived(coveredSegmentIndices(currentBody(), myObservedSpans));
+  let bodyLineCount = $derived(currentBody.split("\n").length);
+  let coveredSegments = $derived(coveredSegmentIndices(currentBody, myObservedSpans));
   // For word/video records the submitted spans are word indices (not line
   // spans), so expand this reviewer's server coverage into a word-index list
   // and feed it to the word editor - otherwise a reopened record (or a fresh
@@ -3034,7 +3041,7 @@
     for (const s of myObservedSpans) for (let i = s.from; i <= s.to; i++) out.push(i);
     return out;
   });
-  let playedCoveredSegments = $derived(coveredSegmentIndices(currentBody(), myPlayedSpans));
+  let playedCoveredSegments = $derived(coveredSegmentIndices(currentBody, myPlayedSpans));
   function runsToSet(runs: CoverageSpan[]): Set<number> {
     const out = new Set<number>();
     for (const r of runs) for (let i = r.from; i <= r.to; i++) out.add(i);
@@ -3046,14 +3053,14 @@
   // (edits always count as observed coverage even if unmarked).
   let pendingLineSpans = $derived(
     mergeSpans([
-      ...runsToLineSpans(currentBody(), pendingRuns),
-      ...editedLineSpans(bodyOf(doc.original), currentBody()),
+      ...runsToLineSpans(currentBody, pendingRuns),
+      ...editedLineSpans(bodyOf(doc.original), currentBody),
     ]),
   );
   // The submit payload: both tiers as kinded line spans, observed winning
   // over played on overlap.
   let pendingKindedSpans = $derived<KindedSpan[]>(
-    mergeTiers(pendingLineSpans, runsToLineSpans(currentBody(), playedRuns)),
+    mergeTiers(pendingLineSpans, runsToLineSpans(currentBody, playedRuns)),
   );
   let pendingSpanLineCount = $derived(spanLineCount(pendingKindedSpans));
 
@@ -3103,8 +3110,8 @@
     // legacy line diff here is both irrelevant and quadratic in body lines.
     if (isWordRecord) return;
     const edited = segmentRunsFromLineSpans(
-      currentBody(),
-      editedLineSpans(bodyOf(doc.original), currentBody()),
+      currentBody,
+      editedLineSpans(bodyOf(doc.original), currentBody),
     );
     if (edited.length === 0) return;
     untrack(() => {
@@ -3181,7 +3188,7 @@
   }
 
   function scrollToBodyLine(line: number) {
-    const map = lineToSegmentMap(currentBody());
+    const map = lineToSegmentMap(currentBody);
     const seg = map[Math.min(line, map.length - 1)];
     if (seg === undefined || seg < 0) return;
     const el = document.querySelector(`[data-segment-index="${seg}"]`);
@@ -3308,13 +3315,8 @@
       pendingRuns = [];
       playedRuns = [];
       localStorage.removeItem(coverageStorageKey(submittedHash));
-      // Set the submitted content as the new baseline without resetting position
-      doc.original = submittedDocument;
-      if (doc.current === submittedDocument) {
-        doc.past = [];
-        doc.future = [];
-        localStorage.removeItem(doc.storageKey);
-      }
+      // Set the submitted content as the new baseline without resetting position.
+      doc.acceptSubmitted(submittedDocument);
       // Backend auto-marks reviewed on submit; mirror it locally.
       onreviewedchange?.(submittedHash, true);
     } else {
@@ -3375,7 +3377,7 @@
   );
 
   // Ordered list of unique speaker names for the speaker picker
-  let allSpeakerNames = $derived((): string[] => {
+  let allSpeakerNames = $derived.by((): string[] => {
     const seen = new Set<string>();
     const names: string[] = [];
     for (const seg of segments) {
@@ -3388,17 +3390,17 @@
   });
 
   // Named speakers from the current document's frontmatter
-  let currentFrontmatter = $derived(() => {
+  let currentFrontmatter = $derived.by(() => {
     const match = doc.current.match(/^(---\n[\s\S]*?\n---\n)/);
     return match ? match[1] : "";
   });
-  let namedSpeakers = $derived(extractFrontmatterSpeakers(currentFrontmatter()));
+  let namedSpeakers = $derived(extractFrontmatterSpeakers(currentFrontmatter));
   let namedSpeakersOrdered = $derived(orderedNamedSpeakers(segments, namedSpeakers));
   /** The named list as identities. A speaker introduced with where they are
    *  from - `Scott Gordon [KXAS]` - is the person the list already holds, and
    *  offering him again under "other speakers" would ask the reviewer to choose
    *  between a man and himself. */
-  let namedIdentitySet = $derived(() => new Set(namedSpeakers.map(speakerIdentity)));
+  let namedIdentitySet = $derived(new Set(namedSpeakers.map(speakerIdentity)));
 
   function addNamedSpeaker(name: string) {
     if (!namedSpeakers.includes(name)) {
@@ -3607,7 +3609,7 @@
     // transcript model is swapped in place instead of re-parsing 48k words.
     if (isWordRecord) {
       const next = doc.renameWordSpeaker(oldId, newName, parsedWords ?? undefined);
-      if (next) parsedWordsOverride = { body: currentBody(), parsed: next };
+      if (next) parsedWordsOverride = { body: currentBody, parsed: next };
     } else doc.renameSpeaker(oldId, newName);
     // If the renamed speaker was selected, follow it to the new name
     if (selectedSpeakers.has(oldId)) {
@@ -3627,7 +3629,7 @@
       for (const id of sourceIds) {
         parsed = doc.renameWordSpeaker(id, targetName, parsed ?? undefined) ?? parsed;
       }
-      if (parsed) parsedWordsOverride = { body: currentBody(), parsed };
+      if (parsed) parsedWordsOverride = { body: currentBody, parsed };
     } else doc.mergeSpeakers(sourceIds, targetName);
     // Replace the merged speakers with just the target in the selection
     const next = new Set<string>();
@@ -4741,7 +4743,7 @@
       </summary>
       <div class="px-3 py-2">
         <MarkupList
-          body={currentBody()}
+          body={currentBody}
           {parsedWords}
           focusedId={focusedMarkId}
           onfocus={focusMark}
@@ -5595,14 +5597,14 @@
             <p class="mb-4 rounded border border-warning/40 bg-warning-container px-3 py-2 text-sm text-on-warning-container">
               This is a read-only preview. Complete housekeeping before starting content review.
             </p>
-            <pre class="whitespace-pre-wrap font-sans text-sm leading-relaxed text-on-surface">{currentBody()}</pre>
+            <pre class="whitespace-pre-wrap font-sans text-sm leading-relaxed text-on-surface">{currentBody}</pre>
           </div>
         </div>
 
       {:else if view === "edit"}
         <div class="flex-1 flex flex-col min-h-0">
           <MilkdownEditor
-            value={currentBody()}
+            value={currentBody}
             onchange={(md) => doc.editBody(md)}
           />
         </div>
@@ -5612,7 +5614,7 @@
           <textarea
             bind:this={rawTextarea}
             data-scroll-sync
-            value={currentBody()}
+            value={currentBody}
             oninput={(e) => doc.editBody((e.target as HTMLTextAreaElement).value)}
             onscroll={handleContentScroll}
             class="flex-1 w-full resize-none bg-surface text-xs text-on-surface leading-relaxed
@@ -5621,10 +5623,10 @@
           ></textarea>
         </div>
 
-      {:else if view === "find"}
+      {:else if view === "find" && !isWordRecord}
         <FindReplaceView
           bind:this={findView}
-          text={currentBody()}
+          text={currentBody}
           seed={findSeed}
           seedSeq={findSeq}
           onreplace={(t) => doc.editBody(t)}
@@ -5639,8 +5641,21 @@
 
       {:else if isWordRecord}
         <!-- Per-word-timestamp record: isolated word-level editor. No
-             coverage gutter or mark-observed wiring in this view by design. -->
-        {#if filteredSpeakers.size > 0}
+             coverage gutter or mark-observed wiring in this view by design.
+             Keep it mounted behind Find: rebuilding tens of thousands of word
+             nodes was the long pause when closing search and replace. -->
+        {#if view === "find"}
+          <FindReplaceView
+            bind:this={findView}
+            text={currentBody}
+            seed={findSeed}
+            seedSeq={findSeq}
+            onreplace={(t) => doc.editBody(t)}
+            onclose={() => { view = "ingest"; }}
+          />
+        {/if}
+        <div style:display={view === "find" ? "none" : "contents"}>
+          {#if filteredSpeakers.size > 0}
           <div class="px-3 py-1.5 bg-primary-container/20 border-b border-border flex items-center gap-2 flex-wrap flex-none">
             <span class="text-xs font-ui text-on-surface-secondary">Filtered to:</span>
             {#each [...filteredSpeakers] as speakerId}
@@ -5654,15 +5669,15 @@
               class="text-xs text-on-surface-muted hover:text-on-surface cursor-pointer ml-auto"
             >clear</button>
           </div>
-        {/if}
-        <div class="relative flex-1 flex flex-col min-h-0">
+          {/if}
+          <div class="relative flex-1 flex flex-col min-h-0">
           <WordTranscript
             mode={inMarkup ? "markup" : "edit"}
             showObservedOnly={observedOnly}
             onobservedonlychange={(v) => (observedOnly = v)}
             recordHash={ingest.content_hash}
             storedCoverage={storedVerdict?.observed_coverage ?? null}
-            body={wordTranscriptSnapshot?.body ?? currentBody()}
+            body={wordTranscriptSnapshot?.body ?? currentBody}
             parsedWords={wordTranscriptSnapshot?.parsed ?? parsedWords}
             namedSpeakers={namedSpeakersOrdered}
             {currentTime}
@@ -5679,7 +5694,7 @@
             onreassign={(from, to, speaker) => {
               const next = doc.reassignWords(from, to, speaker, parsedWords ?? undefined);
               if (next) {
-                const body = currentBody();
+                const body = currentBody;
                 parsedWordsOverride = { body, parsed: next };
                 locallyRenderedWordBody = body;
               }
@@ -5688,7 +5703,7 @@
             onreplaceselection={(from, to, w) => {
               const next = doc.replaceSelection(from, to, w, parsedWords ?? undefined);
               if (next) {
-                const body = currentBody();
+                const body = currentBody;
                 parsedWordsOverride = { body, parsed: next };
                 locallyRenderedWordBody = body;
               }
@@ -5738,6 +5753,7 @@
             }}
             onverdict={(v) => (wordVerdict = v)}
           />
+          </div>
         </div>
 
       {:else if hasTranscript}
@@ -5793,7 +5809,7 @@
                   {@const current = ""}
                   {@const nm = namedSpeakersOrdered.filter((s) => s !== current)}
                   {@const sp = assignableSpecialSpeakers(current)}
-                  {@const ot = allSpeakerNames().filter((s) => !namedIdentitySet().has(speakerIdentity(s)) && !isSpecialSpeaker(s))}
+                  {@const ot = allSpeakerNames.filter((s) => !namedIdentitySet.has(speakerIdentity(s)) && !isSpecialSpeaker(s))}
                   {@const assign = (name: string) => {
                     const targets = segments
                       .filter((s) => selected.has(s.index))
@@ -5919,7 +5935,7 @@
                     {@const current = group.speaker}
                     {@const nm = namedSpeakersOrdered.filter((s) => s !== current)}
                     {@const sp = assignableSpecialSpeakers(current)}
-                    {@const ot = allSpeakerNames().filter((s) => s !== current && !namedIdentitySet().has(speakerIdentity(s)) && !isSpecialSpeaker(s))}
+                    {@const ot = allSpeakerNames.filter((s) => s !== current && !namedIdentitySet.has(speakerIdentity(s)) && !isSpecialSpeaker(s))}
                     <div
                       onclick={(e) => e.stopPropagation()}
                       onkeydown={() => {}}
@@ -5997,7 +6013,7 @@
                     <SplitEditor
                       {segment}
                       allSegments={segments}
-                      allSpeakers={allSpeakerNames()}
+                      allSpeakers={allSpeakerNames}
                       namedSpeakers={namedSpeakersOrdered}
                       onsplit={(pieces) => {
                         doc.splitSegmentMulti(segment.speaker, segment.time, pieces);
@@ -6062,7 +6078,7 @@
                           {@const current = segment.speaker}
                           {@const nm = namedSpeakersOrdered.filter((s) => s !== current)}
                           {@const sp = assignableSpecialSpeakers(current)}
-                          {@const ot = allSpeakerNames().filter((s) => s !== current && !namedIdentitySet().has(speakerIdentity(s)) && !isSpecialSpeaker(s))}
+                          {@const ot = allSpeakerNames.filter((s) => s !== current && !namedIdentitySet.has(speakerIdentity(s)) && !isSpecialSpeaker(s))}
                           <div
                             onclick={(e) => e.stopPropagation()}
                             onkeydown={() => {}}
@@ -6241,9 +6257,9 @@
 
       {:else}
         {#if isTextRecord}
-          <ProseMarkup body={currentBody()} canMark={!!user} onbody={(b) => doc.editBody(b)}>
+          <ProseMarkup body={currentBody} canMark={!!user} onbody={(b) => doc.editBody(b)}>
           <ReadableText
-            body={currentBody()}
+            body={currentBody}
             renderBlock={(src, lineFrom) =>
               withMath(src, (text) =>
                 hardenLinks(
@@ -6264,7 +6280,7 @@
           />
           </ProseMarkup>
         {:else}
-          {@const renderedHtml = withMath(currentBody(), (text) =>
+          {@const renderedHtml = withMath(currentBody, (text) =>
             hardenLinks(
               renderSpanMarkers(
                 renderRedactions(marked.parse(preprocessAnnotations(text)) as string),
@@ -6274,7 +6290,7 @@
           <ProseMarkup
             bind:containerEl={proseContainer}
             html={renderedHtml}
-            body={currentBody()}
+            body={currentBody}
             canMark={!!user}
             onbody={(b) => doc.editBody(b)}
             onscroll={handleContentScroll}
@@ -6547,7 +6563,7 @@
   {#if editSegment}
     <EditSegmentDialog
       segment={editSegment}
-      allSpeakers={allSpeakerNames()}
+      allSpeakers={allSpeakerNames}
       namedSpeakers={namedSpeakersOrdered}
       videoTime={currentTime}
       canPreview={!!ytId && playerReady}

@@ -1118,9 +1118,18 @@ export function speakerWordCounts(
  *  them - the caller only calls this for a continuous forward step (it ignores
  *  seeks/jumps), so skipped words are never marked. */
 export function wordsInTimeRange(words: Word[], fromTime: number, toTime: number): number[] {
+  // Playback calls this four times a second. Since words are time-ordered,
+  // jump to the first candidate rather than rescanning a 50k-word record.
+  let lo = 0;
+  let hi = words.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (words[mid].start <= fromTime) lo = mid + 1;
+    else hi = mid;
+  }
   const out: number[] = [];
-  for (const w of words) {
-    if (w.start > fromTime && w.start <= toTime) out.push(w.gIndex);
+  for (let i = lo; i < words.length && words[i].start <= toTime; i++) {
+    out.push(words[i].gIndex);
   }
   return out;
 }
@@ -1161,19 +1170,25 @@ export function nextRelevantWordStartAfter(
   isIrrelevant: (speaker: string) => boolean,
 ): number | null {
   if (words.length === 0) return null;
-  const speakerOf = new Array<string>(words.length);
-  for (const r of runs) {
-    for (let i = r.startWord; i <= r.endWord && i < words.length; i++) speakerOf[i] = r.speaker;
+  const active = wordActiveAt(words, t);
+  if (active < 0) return null;
+
+  let lo = 0;
+  let hi = runs.length - 1;
+  let runIndex = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >>> 1;
+    const run = runs[mid];
+    if (active < run.startWord) hi = mid - 1;
+    else if (active > run.endWord) lo = mid + 1;
+    else {
+      runIndex = mid;
+      break;
+    }
   }
-  // The active word is the last whose start is <= t (words are time-ordered).
-  let active = -1;
-  for (let i = 0; i < words.length; i++) {
-    if (words[i].start <= t) active = i;
-    else break;
-  }
-  if (active < 0 || !isIrrelevant(speakerOf[active] ?? "")) return null;
-  for (let i = active + 1; i < words.length; i++) {
-    if (!isIrrelevant(speakerOf[i] ?? "")) return words[i].start;
+  if (runIndex < 0 || !isIrrelevant(runs[runIndex].speaker)) return null;
+  for (let i = runIndex + 1; i < runs.length; i++) {
+    if (!isIrrelevant(runs[i].speaker)) return words[runs[i].startWord]?.start ?? null;
   }
   return null; // everything after the playhead is irrelevant - nothing to seek to
 }

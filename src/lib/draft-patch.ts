@@ -50,9 +50,8 @@ export function fingerprint(s: string): number {
   return h >>> 0;
 }
 
-export function encodePatch(original: string, current: string): DraftPatch {
+export function createPatchEncoder(original: string): (current: string) => DraftPatch {
   const from = original.split("\n");
-  const to = current.split("\n");
 
   // Where each line occurs in the original, so the walk can re-sync after an
   // edit instead of degrading into literals for the rest of the document.
@@ -62,51 +61,69 @@ export function encodePatch(original: string, current: string): DraftPatch {
     if (at) at.push(i);
     else positions.set(from[i], [i]);
   }
+  const base = fingerprint(original);
 
-  const ops: PatchOp[] = [];
-  let literal: string[] = [];
-  let cursor = 0;
+  return (current: string): DraftPatch => {
+    const to = current.split("\n");
 
-  const flush = () => {
-    if (literal.length) {
-      ops.push({ l: literal });
-      literal = [];
-    }
-  };
+    const ops: PatchOp[] = [];
+    let literal: string[] = [];
+    let cursor = 0;
 
-  for (let i = 0; i < to.length; i++) {
-    const line = to[i];
-    let at = -1;
-    if (cursor < from.length && from[cursor] === line) {
-      at = cursor;
-    } else {
-      // Prefer the nearest occurrence at or after the cursor: an edit usually
-      // moves forward, and picking an earlier one would re-emit text.
-      const all = positions.get(line);
-      if (all) {
-        for (const p of all) {
-          if (p >= cursor && from[p + 1] === to[i + 1]) {
-            at = p;
-            break;
+    const flush = () => {
+      if (literal.length) {
+        ops.push({ l: literal });
+        literal = [];
+      }
+    };
+
+    for (let i = 0; i < to.length; i++) {
+      const line = to[i];
+      let at = -1;
+      if (cursor < from.length && from[cursor] === line) {
+        at = cursor;
+      } else {
+        // Prefer the nearest occurrence at or after the cursor. Binary search
+        // skips copies behind the moving cursor instead of rescanning a long
+        // list of repeated transcript markers after every accumulated edit.
+        const all = positions.get(line);
+        if (all) {
+          let lo = 0;
+          let hi = all.length;
+          while (lo < hi) {
+            const mid = (lo + hi) >>> 1;
+            if (all[mid] < cursor) lo = mid + 1;
+            else hi = mid;
+          }
+          for (let j = lo; j < all.length; j++) {
+            const p = all[j];
+            if (from[p + 1] === to[i + 1]) {
+              at = p;
+              break;
+            }
           }
         }
       }
-    }
 
-    if (at === -1) {
-      literal.push(line);
-      continue;
-    }
+      if (at === -1) {
+        literal.push(line);
+        continue;
+      }
 
+      flush();
+      const last = ops[ops.length - 1];
+      if (last && "c" in last && last.c[0] + last.c[1] === at) last.c[1]++;
+      else ops.push({ c: [at, 1] });
+      cursor = at + 1;
+    }
     flush();
-    const last = ops[ops.length - 1];
-    if (last && "c" in last && last.c[0] + last.c[1] === at) last.c[1]++;
-    else ops.push({ c: [at, 1] });
-    cursor = at + 1;
-  }
-  flush();
 
-  return { base: fingerprint(original), ops };
+    return { base, ops };
+  };
+}
+
+export function encodePatch(original: string, current: string): DraftPatch {
+  return createPatchEncoder(original)(current);
 }
 
 export function decodePatch(original: string, patch: DraftPatch): string | null {

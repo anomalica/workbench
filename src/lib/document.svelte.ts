@@ -6,7 +6,7 @@
  */
 
 import yaml from "js-yaml";
-import { type DraftPatch, decodePatch, encodePatch } from "./draft-patch";
+import { type DraftPatch, createPatchEncoder, decodePatch } from "./draft-patch";
 
 // Undo history is in-memory only - save() never ships it to localStorage (see
 // there), so a reload loses the ability to undo but never an edit. Depth 10 is
@@ -36,6 +36,7 @@ export class DocumentStore {
   storageKey = $state("");
   private patchOriginal = "";
   private patchCache = new Map<string, DraftPatch>();
+  private patchEncoder: ((current: string) => DraftPatch) | null = null;
   /** True when the last local save attempt failed (e.g. localStorage quota
    *  exceeded) - the in-memory edit is NOT durably saved. Must never fail
    *  silently: the viewer shows a persistent warning banner while this is
@@ -69,6 +70,9 @@ export class DocumentStore {
     }
     this.storageKey = newKey;
     this.original = markdown;
+    this.patchOriginal = "";
+    this.patchEncoder = null;
+    this.patchCache.clear();
 
     const saved = localStorage.getItem(this.storageKey);
     if (saved) {
@@ -98,6 +102,21 @@ export class DocumentStore {
     this.current = markdown;
     this.past = [];
     this.future = [];
+  }
+
+  /** Make a successful submission the baseline for subsequent local edits. */
+  acceptSubmitted(markdown: string) {
+    this.original = markdown;
+    this.past = [];
+    this.future = [];
+    this.patchOriginal = "";
+    this.patchEncoder = null;
+    this.patchCache.clear();
+    if (this.current === markdown) {
+      localStorage.removeItem(this.storageKey);
+    } else {
+      this.save();
+    }
   }
 
   /** Read either shape: v2 patches, or the pre-patch drafts that hold whole
@@ -177,17 +196,25 @@ export class DocumentStore {
     const patchFor = (version: string) => {
       if (this.patchOriginal !== this.original) {
         this.patchOriginal = this.original;
+        this.patchEncoder = createPatchEncoder(this.original);
         this.patchCache.clear();
       }
       let patch = this.patchCache.get(version);
       if (!patch) {
-        patch = encodePatch(this.original, version);
+        patch = this.patchEncoder!(version);
         this.patchCache.set(version, patch);
       }
       return patch;
     };
 
     const patch = patchFor(this.current);
+    // Cache only states the bounded undo model can still reach. Previously the
+    // Map kept every edited full-document string as a key for the life of the
+    // viewer, defeating MAX_HISTORY and making long sessions grow without bound.
+    const reachable = new Set([this.current, ...this.past, ...this.future]);
+    for (const version of this.patchCache.keys()) {
+      if (!reachable.has(version)) this.patchCache.delete(version);
+    }
     // Only the CURRENT state is stored. History is a convenience where the
     // current text is the work, so it stays in memory (depth MAX_HISTORY) and
     // is never serialised here: a draft is a few KB and stays that size no
@@ -216,6 +243,7 @@ export class DocumentStore {
     this.current = this.original;
     this.past = [];
     this.future = [];
+    this.patchCache.clear();
   }
 
   // --- High-level edit operations ---

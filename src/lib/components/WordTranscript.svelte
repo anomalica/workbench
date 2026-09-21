@@ -1197,7 +1197,10 @@
     to: number,
     newWords: { text: string; start: number }[],
   ) {
-    const next = replaceWordRange(parsed, from, to, newWords);
+    // The owner must build this result to serialise it. Adopt that exact parse
+    // instead of copying the complete words array a second time locally.
+    const next = onreplaceselection?.(from, to, newWords) ??
+      replaceWordRange(parsed, from, to, newWords);
     if (next.words.length === parsed.words.length) {
       const notesUnchanged = next.words
         .slice(from, to + 1)
@@ -1219,7 +1222,6 @@
     } else {
       parsed = next;
     }
-    onreplaceselection?.(from, to, newWords);
   }
   // Advance the selection to the next case, writing the cased text back but
   // keeping the selection so repeated clicks keep cycling.
