@@ -47,14 +47,14 @@
   // because sources state what they state. A picker would force a full date and
   // turn "1947" into "1947-01-01", which invents a day the source never gave.
   const EVIDENCED_DATE_OR_OFFSET_TIMESTAMP_SHAPE =
-    /^\d{4}(?:-\d{2}(?:-\d{2}(?:[T ](?:[01]\d|2[0-3]):[0-5]\d:(?:[0-5]\d|60)(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d))?)?)?$/;
+    /^\d{4}(?:-\d{2}(?:-\d{2}(?:[T ](?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d))?)?)?$/;
   // Access metadata may carry only the known date or the exact retrieval
   // instant. Keep the offset: converting to a local date changes the evidence.
   // A space separator remains readable for records written by older emitters;
   // current producers use RFC 3339's `T` separator.
   const FULL_DATE_SHAPE = /^\d{4}-\d{2}-\d{2}$/;
   const OFFSET_TIMESTAMP_SHAPE =
-    /^\d{4}-\d{2}-\d{2}[T ](?:[01]\d|2[0-3]):[0-5]\d:(?:[0-5]\d|60)(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/;
+    /^\d{4}-\d{2}-\d{2}[T ](?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/;
 
   function isRealFullDate(value: string): boolean {
     const [year, month, day] = value.slice(0, 10).split("-").map(Number);
