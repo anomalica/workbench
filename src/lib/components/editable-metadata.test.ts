@@ -29,7 +29,7 @@ describe("EditableMetadata dates", () => {
       getByPlaceholderText("1947, 1947-06, 1947-06-24 or an offset time"),
     ).toHaveValue("2020-08");
     expect(
-      getByPlaceholderText("2026-08-20 or 2026-08-20T12:30:00+09:00"),
+      getByPlaceholderText("2026-08-20T12:30:00+09:00"),
     ).toHaveValue(
       "2026-09-21T10:15:30.123456+09:00",
     );
@@ -43,7 +43,7 @@ describe("EditableMetadata dates", () => {
     );
   });
 
-  it("accepts a date-only access value", async () => {
+  it("preserves an existing date-only access value", async () => {
     const { getByRole, onsave } = subject({ dateAccessed: "2026-09-21" });
 
     await fireEvent.click(getByRole("button", { name: "Edit" }));
@@ -52,6 +52,18 @@ describe("EditableMetadata dates", () => {
     expect(onsave).toHaveBeenCalledWith(
       expect.objectContaining({ dateAccessed: "2026-09-21" }),
     );
+  });
+
+  it("does not produce a new date-only access value", async () => {
+    const { getByRole, getByPlaceholderText, onsave } = subject();
+
+    await fireEvent.click(getByRole("button", { name: "Edit" }));
+    await fireEvent.input(getByPlaceholderText("2026-08-20T12:30:00+09:00"), {
+      target: { value: "2026-09-22" },
+    });
+    await fireEvent.click(getByRole("button", { name: "Save" }));
+
+    expect(onsave).not.toHaveBeenCalled();
   });
 
   it("accepts an offset publication timestamp when the source provides one", async () => {

@@ -52,18 +52,23 @@
   // instant. Keep the offset: converting to a local date changes the evidence.
   // A space separator remains readable for records written by older emitters;
   // current producers use RFC 3339's `T` separator.
-  const DATE_OR_OFFSET_TIMESTAMP_SHAPE =
-    /^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))?$/;
+  const FULL_DATE_SHAPE = /^\d{4}-\d{2}-\d{2}$/;
+  const OFFSET_TIMESTAMP_SHAPE =
+    /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
   let dateProblem = $derived(
     draftDate.trim() === "" || EVIDENCED_DATE_OR_OFFSET_TIMESTAMP_SHAPE.test(draftDate.trim())
       ? ""
       : "Use YYYY, YYYY-MM, YYYY-MM-DD or a full time with Z / an offset",
   );
-  let accessedProblem = $derived(
-    draftAccessed.trim() === "" || DATE_OR_OFFSET_TIMESTAMP_SHAPE.test(draftAccessed.trim())
-      ? ""
-      : "Use YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS+09:00",
-  );
+  let accessedProblem = $derived.by(() => {
+    const value = draftAccessed.trim();
+    if (value === "" || OFFSET_TIMESTAMP_SHAPE.test(value)) return "";
+    // Existing records include date-only access values. Preserve one through an
+    // unrelated metadata edit, but do not produce a new date where the field's
+    // canonical value is an instant.
+    if (FULL_DATE_SHAPE.test(value) && value === dateAccessed.trim()) return "";
+    return "Use a full time with Z or an offset, such as YYYY-MM-DDTHH:MM:SS+09:00";
+  });
   // An address that is not one is worse than none: it reads as a way back to
   // the original and is not.
   let urlProblem = $derived.by(() => {
@@ -221,7 +226,7 @@
         <input
           type="text"
           bind:value={draftAccessed}
-          placeholder="2026-08-20 or 2026-08-20T12:30:00+09:00"
+          placeholder="2026-08-20T12:30:00+09:00"
           class="bg-surface border rounded px-2 py-1 text-on-surface outline-none
             placeholder:text-on-surface-muted/50
             {accessedProblem
@@ -229,8 +234,7 @@
               : 'border-border focus:border-primary'}"
         />
         <span class="text-[11px] {accessedProblem ? 'text-error' : 'text-on-surface-muted'}">
-          {accessedProblem ||
-            "Date, or exact time with Z / an offset. This identifies which version was retrieved."}
+          {accessedProblem || "Exact retrieval time with Z / an offset."}
         </span>
       </label>
       <label class="flex flex-col gap-1">
