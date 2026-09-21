@@ -47,26 +47,47 @@
   // because sources state what they state. A picker would force a full date and
   // turn "1947" into "1947-01-01", which invents a day the source never gave.
   const EVIDENCED_DATE_OR_OFFSET_TIMESTAMP_SHAPE =
-    /^\d{4}(?:-\d{2}(?:-\d{2}(?:[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))?)?)?$/;
+    /^\d{4}(?:-\d{2}(?:-\d{2}(?:[T ](?:[01]\d|2[0-3]):[0-5]\d:(?:[0-5]\d|60)(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d))?)?)?$/;
   // Access metadata may carry only the known date or the exact retrieval
   // instant. Keep the offset: converting to a local date changes the evidence.
   // A space separator remains readable for records written by older emitters;
   // current producers use RFC 3339's `T` separator.
   const FULL_DATE_SHAPE = /^\d{4}-\d{2}-\d{2}$/;
   const OFFSET_TIMESTAMP_SHAPE =
-    /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+    /^\d{4}-\d{2}-\d{2}[T ](?:[01]\d|2[0-3]):[0-5]\d:(?:[0-5]\d|60)(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/;
+
+  function isRealFullDate(value: string): boolean {
+    const [year, month, day] = value.slice(0, 10).split("-").map(Number);
+    if (!year || month < 1 || month > 12 || day < 1) return false;
+    return day <= new Date(Date.UTC(year, month, 0)).getUTCDate();
+  }
+
+  function isEvidencedDateOrTimestamp(value: string): boolean {
+    if (!EVIDENCED_DATE_OR_OFFSET_TIMESTAMP_SHAPE.test(value)) return false;
+    if (value.length === 4) return Number(value) > 0;
+    const month = Number(value.slice(5, 7));
+    if (value.length === 7) return month >= 1 && month <= 12;
+    return isRealFullDate(value);
+  }
+
+  function isOffsetTimestamp(value: string): boolean {
+    return OFFSET_TIMESTAMP_SHAPE.test(value) && isRealFullDate(value);
+  }
+
   let dateProblem = $derived(
-    draftDate.trim() === "" || EVIDENCED_DATE_OR_OFFSET_TIMESTAMP_SHAPE.test(draftDate.trim())
+    draftDate.trim() === "" || isEvidencedDateOrTimestamp(draftDate.trim())
       ? ""
       : "Use YYYY, YYYY-MM, YYYY-MM-DD or a full time with Z / an offset",
   );
   let accessedProblem = $derived.by(() => {
     const value = draftAccessed.trim();
-    if (value === "" || OFFSET_TIMESTAMP_SHAPE.test(value)) return "";
+    if (value === "" || isOffsetTimestamp(value)) return "";
     // Existing records include date-only access values. Preserve one through an
     // unrelated metadata edit, but do not produce a new date where the field's
     // canonical value is an instant.
-    if (FULL_DATE_SHAPE.test(value) && value === dateAccessed.trim()) return "";
+    if (FULL_DATE_SHAPE.test(value) && isRealFullDate(value) && value === dateAccessed.trim()) {
+      return "";
+    }
     return "Use a full time with Z or an offset, such as YYYY-MM-DDTHH:MM:SS+09:00";
   });
   // An address that is not one is worse than none: it reads as a way back to

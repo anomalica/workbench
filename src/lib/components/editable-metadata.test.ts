@@ -66,6 +66,19 @@ describe("EditableMetadata dates", () => {
     expect(onsave).not.toHaveBeenCalled();
   });
 
+  it("rejects calendar dates that only match the lexical shape", async () => {
+    const { getByRole, getByPlaceholderText, onsave } = subject();
+
+    await fireEvent.click(getByRole("button", { name: "Edit" }));
+    await fireEvent.input(
+      getByPlaceholderText("1947, 1947-06, 1947-06-24 or an offset time"),
+      { target: { value: "2026-02-31" } },
+    );
+    await fireEvent.click(getByRole("button", { name: "Save" }));
+
+    expect(onsave).not.toHaveBeenCalled();
+  });
+
   it("accepts an offset publication timestamp when the source provides one", async () => {
     const published = "2026-09-21T10:15:30+09:00";
     const { getByRole, onsave } = subject({ datePublished: published });
