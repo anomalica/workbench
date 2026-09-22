@@ -460,6 +460,46 @@ def test_successive_ordinary_saves_do_not_leave_reverse_staged_changes(local_api
     assert record.read_text().endswith("Second editor body.\n")
 
 
+def test_retry_after_lost_success_response_preserves_both_reviews(local_api):
+    client, repo, record, _sidecar = local_api
+    _resolve_housekeeping(client)
+    viewed = client.get(f"/api/ingests/{HASH}").json()
+    first_content = RECORD.replace(
+        "publisher: Old publisher", "publisher: Reviewed publisher"
+    )
+    first = client.put(
+        f"/api/ingests/{HASH}",
+        json={
+            "content": first_content,
+            "notes": "Reviewed metadata",
+            "base_record_sha": viewed["base_record_sha"],
+            "base_ref": viewed["base_ref"],
+            "spans": [{"from": 0, "to": 0, "kind": "observed"}],
+        },
+    )
+    assert first.status_code == 200
+    first_ref = first.json()["base_ref"]
+
+    retry = client.put(
+        f"/api/ingests/{HASH}",
+        json={
+            "content": first_content.replace("Body.", "Reviewed body."),
+            "notes": "Reviewed body",
+            # Simulate a browser that never received the first response.
+            "base_record_sha": viewed["base_record_sha"],
+            "base_ref": viewed["base_ref"],
+            "spans": [{"from": 0, "to": 1, "kind": "observed"}],
+        },
+    )
+
+    assert retry.status_code == 200
+    assert "publisher: Reviewed publisher" in record.read_text()
+    assert record.read_text().endswith("Reviewed body.\n")
+    coverage = json.loads((repo / "store" / f"{HASH}.review.json").read_text())
+    assert len(coverage["reviews"]) == 2
+    assert coverage["reviews"][-1]["parent_commit"] == first_ref
+
+
 def test_housekeeping_proposal_does_not_make_an_open_ordinary_editor_stale(local_api):
     client, repo, record, sidecar = local_api
     _resolve_housekeeping(client)

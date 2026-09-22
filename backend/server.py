@@ -558,6 +558,33 @@ def _stale() -> HTTPException:
     return HTTPException(status_code=409, detail="Viewed record is stale")
 
 
+def _submitted_content_includes_current_changes(
+    viewed: bytes, current: bytes, submitted: bytes
+) -> bool:
+    """Return whether rebasing current onto submitted would change nothing."""
+    with tempfile.TemporaryDirectory(prefix="anomalica-review-merge-") as directory:
+        root = Path(directory)
+        submitted_path = root / "submitted.md"
+        viewed_path = root / "viewed.md"
+        current_path = root / "current.md"
+        submitted_path.write_bytes(submitted)
+        viewed_path.write_bytes(viewed)
+        current_path.write_bytes(current)
+        merged = subprocess.run(
+            [
+                "git",
+                "merge-file",
+                "--stdout",
+                str(submitted_path),
+                str(viewed_path),
+                str(current_path),
+            ],
+            capture_output=True,
+            check=False,
+        )
+    return merged.returncode == 0 and merged.stdout == submitted
+
+
 class LocalIngestSource(IngestSource):
     """Reads ingests directly from a local clone of ingests.
 
@@ -5375,14 +5402,20 @@ def submit_review(full_hash: str, body: dict, request: Request) -> JSONResponse:
             current = source.record_at_ref(full_hash, current_ref)
             if viewed is None or current is None:
                 raise HTTPException(status_code=404, detail="Not found")
-            _viewed_path, viewed_blob, _viewed_raw = viewed
+            _viewed_path, viewed_blob, viewed_raw = viewed
             md_path, current_blob, current_raw = current
-            if (
-                viewed_blob != base_record_sha
-                or current_blob != base_record_sha
-                or md_path.read_bytes() != current_raw
+            if viewed_blob != base_record_sha or md_path.read_bytes() != current_raw:
+                raise _stale()
+            if current_blob != base_record_sha and not (
+                _submitted_content_includes_current_changes(
+                    viewed_raw, current_raw, content.encode("utf-8")
+                )
             ):
                 raise _stale()
+            # A previous request may have committed successfully while its
+            # response was lost. Continue from the newest state only when the
+            # submitted document demonstrably includes those committed edits.
+            base_ref = current_ref
         # Contributors cannot commit to live data, but their proposal must still
         # be tied to the record they actually viewed.
         if not roles.at_least(_role_of_user(user), "reviewer"):
