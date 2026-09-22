@@ -129,29 +129,38 @@ class SyncManager:
     def sync_once(self) -> dict:
         """One fetch + observe round. Fast-forwards when purely behind;
         nudges a plain push when purely ahead; never rebases."""
-        with repository_write_lock(self.repo_dir):
-            fetch = self._run("fetch", "origin")
-            if fetch.returncode != 0:
-                self.offline = True
-                self.last_error = (fetch.stderr or fetch.stdout).strip()[-300:]
-            else:
-                self.offline = False
-                self.last_error = ""
+        # Network operations must not hold the repository writer lock. A fetch
+        # or push can consume its full 120-second timeout; review submissions
+        # queued behind it then hit their own 120-second browser timeout even
+        # though the commit succeeds immediately afterwards. Fetch updates
+        # remote refs and push reads local refs, so only the local fast-forward
+        # needs exclusion from concurrent commits.
+        fetch = self._run("fetch", "origin")
+        push_needed = False
+        if fetch.returncode != 0:
+            self.offline = True
+            self.last_error = (fetch.stderr or fetch.stdout).strip()[-300:]
+        else:
+            self.offline = False
+            self.last_error = ""
+            with repository_write_lock(self.repo_dir):
                 ahead, behind = self.counts()
                 if behind and not ahead and not self.dirty():
-                    pull = self._run("pull", "--ff-only", "origin", "main")
-                    if pull.returncode != 0:
-                        self.last_error = (pull.stderr or pull.stdout).strip()[-300:]
+                    merge = self._run("merge", "--ff-only", "origin/main")
+                    if merge.returncode != 0:
+                        self.last_error = (merge.stderr or merge.stdout).strip()[-300:]
                 elif ahead and not behind:
-                    # Reconnect recovery: the watcher wakes on commits, not on
-                    # connectivity, so old offline commits need one nudge. A
-                    # plain push cannot corrupt anything - if the watcher gets
-                    # there first this is a no-op or a clean rejection.
-                    push = self._run("push", "origin", "HEAD")
-                    if push.returncode != 0:
-                        self.last_error = (push.stderr or push.stdout).strip()[-300:]
-            self.checked_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-            return self.status()
+                    push_needed = True
+            if push_needed:
+                # Reconnect recovery: the watcher wakes on commits, not on
+                # connectivity, so old offline commits need one nudge. A
+                # concurrent local commit may join this push safely; a watcher
+                # winning the race makes it a no-op or clean rejection.
+                push = self._run("push", "origin", "HEAD")
+                if push.returncode != 0:
+                    self.last_error = (push.stderr or push.stdout).strip()[-300:]
+        self.checked_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return self.status()
 
     def on_default_branch(self) -> bool:
         """Whether this clone is on the branch the watcher will push."""

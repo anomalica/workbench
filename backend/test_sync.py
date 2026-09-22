@@ -6,10 +6,12 @@ It must never rebase - two processes rebasing one clone corrupted
 FETCH_HEAD ("cannot rebase onto multiple branches")."""
 
 import subprocess
+from contextlib import contextmanager
 
 import pytest
 
 from backend.server import LocalIngestSource
+from backend import sync
 from backend.sync import SyncManager
 
 CONTENT_HASH = "e" * 64
@@ -159,6 +161,33 @@ def test_sync_once_nudges_plain_push_when_purely_ahead(repos):
     status = mgr.sync_once()
     assert status["ahead"] == 0
     assert origin_head_subject(origin) == "review: made while offline"
+
+
+def test_sync_network_never_holds_repository_writer_lock(repos, monkeypatch):
+    """A stalled remote must not block a local review commit behind it."""
+    _origin, local = repos
+    held = False
+
+    @contextmanager
+    def tracking_lock(_repo):
+        nonlocal held
+        held = True
+        try:
+            yield
+        finally:
+            held = False
+
+    manager = SyncManager(local)
+    run = manager._run
+
+    def checked_run(*args, **kwargs):
+        if args[0] in {"fetch", "push", "pull"}:
+            assert not held
+        return run(*args, **kwargs)
+
+    monkeypatch.setattr(sync, "repository_write_lock", tracking_lock)
+    monkeypatch.setattr(manager, "_run", checked_run)
+    manager.sync_once()
 
 
 def test_sync_once_leaves_divergence_to_the_watcher(repos):
