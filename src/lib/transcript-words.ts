@@ -1063,15 +1063,18 @@ export function quotedSpeakerCounts(
 ): { id: string; total: number }[] {
   if (externals.length === 0) return [];
   const own = new Set(speakerWordCounts(runs, externals).map((r) => r.id));
-  const quoted = (g: number) => externals.some((e) => g >= e.fromWord && g <= e.toWord);
+  const intervals = externalIntervals(externals);
   const totals = new Map<string, number>();
   const firstSeen = new Map<string, number>();
   for (const r of runs) {
     if (!r.speaker || own.has(r.speaker)) continue;
-    for (let g = r.startWord; g <= r.endWord; g++) {
-      if (!quoted(g)) continue;
-      if (!firstSeen.has(r.speaker)) firstSeen.set(r.speaker, g);
-      totals.set(r.speaker, (totals.get(r.speaker) ?? 0) + 1);
+    for (const interval of intervals) {
+      if (interval.to < r.startWord) continue;
+      if (interval.from > r.endWord) break;
+      const from = Math.max(r.startWord, interval.from);
+      const to = Math.min(r.endWord, interval.to);
+      if (!firstSeen.has(r.speaker)) firstSeen.set(r.speaker, from);
+      totals.set(r.speaker, (totals.get(r.speaker) ?? 0) + to - from + 1);
     }
   }
   return [...firstSeen.entries()]
@@ -1092,17 +1095,20 @@ export function speakerWordCounts(
   runs: SpeakerRun[],
   externals: WordExternal[] = [],
 ): { id: string; total: number }[] {
-  const quoted = (g: number) => externals.some((e) => g >= e.fromWord && g <= e.toWord);
+  const intervals = externalIntervals(externals);
   const firstSeen = new Map<string, number>();
   const totals = new Map<string, number>();
   for (const r of runs) {
     if (!r.speaker) continue;
-    let own = 0;
-    let first = -1;
-    for (let g = r.startWord; g <= r.endWord; g++) {
-      if (quoted(g)) continue;
-      if (first === -1) first = g;
-      own++;
+    let own = r.endWord - r.startWord + 1;
+    let first = r.startWord;
+    for (const interval of intervals) {
+      if (interval.to < r.startWord) continue;
+      if (interval.from > r.endWord) break;
+      const from = Math.max(r.startWord, interval.from);
+      const to = Math.min(r.endWord, interval.to);
+      own -= to - from + 1;
+      if (first >= from && first <= to) first = to + 1;
     }
     if (own === 0) continue;
     if (!firstSeen.has(r.speaker)) firstSeen.set(r.speaker, first);
@@ -1111,6 +1117,19 @@ export function speakerWordCounts(
   return [...firstSeen.entries()]
     .sort((a, b) => a[1] - b[1])
     .map(([id]) => ({ id, total: totals.get(id) ?? 0 }));
+}
+
+function externalIntervals(externals: WordExternal[]): { from: number; to: number }[] {
+  const out: { from: number; to: number }[] = [];
+  for (const external of [...externals].sort((a, b) => a.fromWord - b.fromWord)) {
+    const previous = out[out.length - 1];
+    if (previous && external.fromWord <= previous.to + 1) {
+      previous.to = Math.max(previous.to, external.toWord);
+    } else {
+      out.push({ from: external.fromWord, to: external.toWord });
+    }
+  }
+  return out;
 }
 
 /** gIndices of words whose start falls in the half-open interval

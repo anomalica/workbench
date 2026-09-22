@@ -293,8 +293,11 @@
   });
   let words = $derived(parsed.words);
 
-  // Restore the scroll anchor once the words are on screen. rAF-retries because
-  // on a fresh mount the word DOM is not painted on the first frame.
+  const VIRTUAL_WORD_THRESHOLD = 5_000;
+  const VIRTUAL_RADIUS = 5;
+
+  // Restore the scroll anchor once the words are on screen. Long records mount
+  // the target block first; short records retain the original all-DOM path.
   onMount(() => {
     let frames = 0;
     const tryRestore = () => {
@@ -498,6 +501,139 @@
     }
     return out;
   });
+
+  function collectBlockWords(block: (typeof renderBlocks)[number]): number[] {
+    if (block.kind === "external") return block.items.flatMap((item) => item.seg.kind === "external" ? item.seg.gs : []);
+    return block.segs.flatMap((seg) => seg.kind === "cut" ? [] : seg.gs);
+  }
+
+  let blockWordCache = $derived.by(() => new Map(renderBlocks.map((block) => [block, collectBlockWords(block)])));
+  function blockWords(block: (typeof renderBlocks)[number]): number[] {
+    return blockWordCache.get(block) ?? [];
+  }
+
+  /** Runtime-only identity. Timestamps and text survive an index-shifting edit,
+   * so unaffected turn DOM is retained without adding anything to Markdown. */
+  function blockIdentity(block: (typeof renderBlocks)[number]): string {
+    return blockIdentityCache.get(block) ?? "";
+  }
+  let blockIdentityCache = $derived.by(() => new Map(renderBlocks.map((block) => {
+    let identity: string;
+    if (block.kind === "external") {
+      identity = `external:${block.external.id}`;
+    } else {
+      const gs = blockWords(block);
+      const first = words[gs[0]];
+      const last = words[gs[gs.length - 1]];
+      identity = `turn:${block.turn.lead.speaker}:${first?.start}:${first?.text}:${last?.start}:${last?.text}`;
+    }
+    return [block, identity] as const;
+  })));
+
+  let virtualised = $derived(words.length > VIRTUAL_WORD_THRESHOLD);
+  let virtualStart = $state(0);
+  let virtualEnd = $state(VIRTUAL_RADIUS * 2 + 1);
+  let measuredBlockHeights = new Map<string, number>();
+  let measurementEpoch = $state(0);
+
+  function estimatedBlockHeight(block: (typeof renderBlocks)[number]): number {
+    const count = blockWords(block).length;
+    return 58 + Math.ceil(Math.max(1, count) / 11) * 23;
+  }
+
+  function blockHeight(block: (typeof renderBlocks)[number]): number {
+    void measurementEpoch;
+    return measuredBlockHeights.get(blockIdentity(block)) ?? estimatedBlockHeight(block);
+  }
+
+  let windowStart = $derived(virtualised ? Math.min(virtualStart, Math.max(0, renderBlocks.length - 1)) : 0);
+  let windowEnd = $derived(
+    virtualised ? Math.min(renderBlocks.length, Math.max(windowStart + 1, virtualEnd)) : renderBlocks.length,
+  );
+  let mountedBlocks = $derived.by(() => {
+    const all = renderBlocks;
+    return all.slice(windowStart, windowEnd).map((block, offset) => ({ block, index: windowStart + offset }));
+  });
+  let topSpacerHeight = $derived.by(() => {
+    if (!virtualised) return 0;
+    let height = 0;
+    for (let i = 0; i < windowStart; i++) height += blockHeight(renderBlocks[i]);
+    return height;
+  });
+  let bottomSpacerHeight = $derived.by(() => {
+    if (!virtualised) return 0;
+    let height = 0;
+    for (let i = windowEnd; i < renderBlocks.length; i++) height += blockHeight(renderBlocks[i]);
+    return height;
+  });
+
+  function blockIndexForWord(g: number): number | null {
+    let nearest: { index: number; distance: number } | null = null;
+    for (let i = 0; i < renderBlocks.length; i++) {
+      const gs = blockWords(renderBlocks[i]);
+      if (gs.includes(g)) return i;
+      if (gs.length === 0) continue;
+      const distance = g < gs[0] ? gs[0] - g : g > gs[gs.length - 1] ? g - gs[gs.length - 1] : 0;
+      if (!nearest || distance < nearest.distance) nearest = { index: i, distance };
+    }
+    return nearest?.index ?? null;
+  }
+
+  function mountBlock(index: number) {
+    if (!virtualised) return;
+    const start = Math.max(0, index - VIRTUAL_RADIUS);
+    virtualStart = start;
+    virtualEnd = Math.min(renderBlocks.length, index + VIRTUAL_RADIUS + 1);
+  }
+
+  async function mountWord(g: number): Promise<HTMLElement | null> {
+    if (!scrollEl) await tick();
+    if (!scrollEl) return null;
+    let el = scrollEl.querySelector<HTMLElement>(`[data-word-index="${g}"]`);
+    if (el) return el;
+    const blockIndex = blockIndexForWord(g);
+    if (blockIndex === null) return null;
+    mountBlock(blockIndex);
+    await tick();
+    measureMountedBlocks();
+    rebuildWordEls();
+    reapplyAll();
+    el = scrollEl.querySelector<HTMLElement>(`[data-word-index="${g}"]`);
+    return el;
+  }
+
+  function measureMountedBlocks() {
+    if (!scrollEl || !virtualised) return;
+    let changed = false;
+    for (const el of scrollEl.querySelectorAll<HTMLElement>("[data-virtual-block]")) {
+      const index = Number(el.dataset.virtualBlock);
+      const block = renderBlocks[index];
+      if (!block || el.offsetHeight <= 0) continue;
+      const key = blockIdentity(block);
+      if (Math.abs((measuredBlockHeights.get(key) ?? 0) - el.offsetHeight) > 1) {
+        measuredBlockHeights.set(key, el.offsetHeight);
+        changed = true;
+      }
+    }
+    if (changed) measurementEpoch++;
+  }
+
+  function updateVirtualWindow() {
+    if (!scrollEl || !virtualised || renderBlocks.length === 0) return;
+    measureMountedBlocks();
+    const middle = scrollEl.scrollTop + scrollEl.clientHeight / 2;
+    let offset = 0;
+    let centre = renderBlocks.length - 1;
+    for (let i = 0; i < renderBlocks.length; i++) {
+      const height = blockHeight(renderBlocks[i]);
+      if (middle < offset + height) {
+        centre = i;
+        break;
+      }
+      offset += height;
+    }
+    if (centre < windowStart + 3 || centre >= windowEnd - 3) mountBlock(centre);
+  }
 
   /** Words covered by a cited-work note, which render as an underlined title
    *  rather than as annotated prose. */
@@ -884,6 +1020,7 @@
   let extendFor = $state<string | null>(null);
 
   let anchorRestored = false;
+  let anchorRestorePending = false;
   // Last currentTime the playback-follow acted on, to tell a forward tick (follow)
   // from a seek or pause (don't).
   let lastFollowTime = -1;
@@ -917,26 +1054,40 @@
    *  smooth animation the karaoke follow would otherwise run from the top. Falls
    *  back to the nearest word this tab actually renders. */
   function restoreScrollAnchor() {
-    if (anchorRestored || !recordHash || !scrollEl) return;
+    if (anchorRestored || anchorRestorePending || !recordHash || !scrollEl) return;
     const saved = loadScrollAnchor(recordHash);
     if (saved === null) {
       anchorRestored = true;
       return;
     }
-    const rendered: number[] = [];
-    for (const el of scrollEl.querySelectorAll<HTMLElement>("[data-word-index]")) {
-      rendered.push(Number(el.dataset.wordIndex));
-    }
+    const rendered = renderBlocks.flatMap(blockWords);
     rendered.sort((a, b) => a - b);
     const target = resolveAnchorTarget(saved, rendered);
-    if (target === null) return; // words not painted yet - try again next tick
-    const el = scrollEl.querySelector<HTMLElement>(`[data-word-index="${target}"]`);
-    if (!el) return;
+    if (target === null) return;
+    anchorRestorePending = true;
+    void mountWord(target).then((el) => {
+      anchorRestorePending = false;
+      if (!el || !scrollEl) return;
+      const view = scrollEl.getBoundingClientRect();
+      const word = el.getBoundingClientRect();
+      scrollEl.scrollTop = scrollEl.scrollTop + (word.top - view.top) - view.height * 0.3;
+      lastPersistedAnchor = target;
+      anchorRestored = true;
+    });
+  }
+
+  async function scrollToMountedWord(g: number, viewportFraction: number) {
+    const el = await mountWord(g);
+    if (!el || !scrollEl) return;
     const view = scrollEl.getBoundingClientRect();
     const word = el.getBoundingClientRect();
-    scrollEl.scrollTop = scrollEl.scrollTop + (word.top - view.top) - view.height * 0.3;
-    lastPersistedAnchor = target;
-    anchorRestored = true;
+    const target = scrollEl.scrollTop + (word.top - view.top) - view.height * viewportFraction;
+    scrollEl.scrollTo({ top: Math.max(0, target), behavior: "auto" });
+  }
+
+  function selectAndScrollWord(g: number) {
+    selectWord(g, false);
+    void scrollToMountedWord(g, 0.4);
   }
   let barEl = $state<HTMLElement>();
   let barStyle = $state("");
@@ -1097,7 +1248,7 @@
       lastFollowTime = t;
       if (!(delta > 0 && delta < 1.5)) return;
       requestAnimationFrame(() => {
-        const el = scrollEl?.querySelector<HTMLElement>(`[data-word-index="${g}"]`);
+        void mountWord(g).then((el) => {
         if (!el || !scrollEl) return;
         const view = scrollEl.getBoundingClientRect();
         const word = el.getBoundingClientRect();
@@ -1107,6 +1258,7 @@
           const target = scrollEl.scrollTop + (word.top - view.top) - view.height * 0.5;
           scrollEl.scrollTo({ top: Math.max(0, target), behavior: "auto" });
         }
+        });
       });
     });
   });
@@ -1857,6 +2009,7 @@
       links: parsed.links.map((l) => [l, linkTitles?.get(l.target.replace(/^sha256:/, ""))]),
       externals: parsed.externals,
       focusWords,
+      virtualWindow: virtualised ? [virtualStart, virtualEnd] : null,
     }),
   );
 
@@ -2119,7 +2272,6 @@
     let g = -1;
     for (let i = 0; i < words.length; i++) {
       if (observed.has(i) || irrelevantWords.has(i)) continue;
-      if (!scrollEl?.querySelector(`[data-word-index="${i}"]`)) continue;
       g = i;
       break;
     }
@@ -2136,14 +2288,7 @@
     // Scroll to the boundary (centre the marker). Instant, not smooth (smooth
     // scrollTo is a no-op in some Chromium profiles); scroll scrollEl directly
     // since scrollIntoView targets the wrong nested ancestor in this layout.
-    requestAnimationFrame(() => {
-      const el = scrollEl?.querySelector<HTMLElement>(`[data-word-index="${markerWord}"]`);
-      if (!el || !scrollEl) return;
-      const view = scrollEl.getBoundingClientRect();
-      const word = el.getBoundingClientRect();
-      const target = scrollEl.scrollTop + (word.top - view.top) - view.height * 0.5;
-      scrollEl.scrollTo({ top: Math.max(0, target) });
-    });
+    requestAnimationFrame(() => void scrollToMountedWord(markerWord, 0.5));
   }
 
   // Scroll to a deep-linked claim's first word. Retries across frames because
@@ -2153,19 +2298,7 @@
   function scrollToClaim() {
     const first = [...claimWords].sort((a, b) => a - b)[0];
     if (first === undefined) return;
-    let attempts = 0;
-    const tryScroll = () => {
-      const el = scrollEl?.querySelector<HTMLElement>(`[data-word-index="${first}"]`);
-      if (!el || !scrollEl) {
-        if (attempts++ < 20) requestAnimationFrame(tryScroll);
-        return;
-      }
-      const view = scrollEl.getBoundingClientRect();
-      const word = el.getBoundingClientRect();
-      const target = scrollEl.scrollTop + (word.top - view.top) - view.height * 0.5;
-      scrollEl.scrollTo({ top: Math.max(0, target) });
-    };
-    requestAnimationFrame(tryScroll);
+    requestAnimationFrame(() => void scrollToMountedWord(first, 0.5));
   }
 
   $effect(() => {
@@ -2180,19 +2313,7 @@
   function scrollToFocus() {
     const first = focusWords?.from;
     if (first === undefined) return;
-    let attempts = 0;
-    const tryScroll = () => {
-      const el = scrollEl?.querySelector<HTMLElement>(`[data-word-index="${first}"]`);
-      if (!el || !scrollEl) {
-        if (attempts++ < 20) requestAnimationFrame(tryScroll);
-        return;
-      }
-      const view = scrollEl.getBoundingClientRect();
-      const word = el.getBoundingClientRect();
-      const target = scrollEl.scrollTop + (word.top - view.top) - view.height * 0.4;
-      scrollEl.scrollTo({ top: Math.max(0, target) });
-    };
-    requestAnimationFrame(tryScroll);
+    requestAnimationFrame(() => void scrollToMountedWord(first, 0.4));
   }
 
   $effect(() => {
@@ -2866,7 +2987,7 @@
         <span class="text-[11px] font-ui text-on-surface-secondary">Needs:</span>
         {#each needs as n (n.id)}
           <button
-            onclick={() => { if (!n.missing) { const t = highlightById.get(n.id); if (t) selectWord(t.fromWord, false); } }}
+            onclick={() => { if (!n.missing) { const t = highlightById.get(n.id); if (t) selectAndScrollWord(t.fromWord); } }}
             class="text-[11px] font-ui rounded px-1.5 py-0.5 cursor-pointer transition-colors
               {n.missing
                 ? 'bg-error/15 text-error line-through'
@@ -2887,7 +3008,7 @@
         <span class="text-[11px] font-ui text-on-surface-secondary">Needed by:</span>
         {#each dependents as d (d)}
           <button
-            onclick={() => { const t = highlightById.get(d); if (t) selectWord(t.fromWord, false); }}
+            onclick={() => { const t = highlightById.get(d); if (t) selectAndScrollWord(t.fromWord); }}
             class="text-[11px] font-ui rounded px-1.5 py-0.5 bg-surface text-on-surface-secondary hover:bg-surface-alt cursor-pointer"
             title="Jump to the later highlight that depends on this one"
           >{d}</button>
@@ -2901,6 +3022,7 @@
   bind:this={scrollEl}
   onscroll={() => {
     if (range) schedulePositionBar();
+    updateVirtualWindow();
     if (anchorRestored) persistScrollAnchor();
   }}
   class="flex-1 overflow-auto"
@@ -2923,7 +3045,12 @@
         observe some of it first.
       </p>
     {/if}
-    {#each renderBlocks as block (block.key)}
+    {#if virtualised && topSpacerHeight > 0}
+      <div data-virtual-spacer="top" style:height={`${topSpacerHeight}px`} aria-hidden="true"></div>
+    {/if}
+    {#each mountedBlocks as entry (blockIdentity(entry.block))}
+      {@const block = entry.block}
+      <div data-virtual-block={entry.index}>
       {#if block.kind === "external"}
         <!-- ONE quotation: one rule, one header, one strip - with the voices
              inside it as labels rather than as turns of their own, because a
@@ -3154,7 +3281,11 @@
         {/each}
       </div>
       {/if}
+      </div>
     {/each}
+    {#if virtualised && bottomSpacerHeight > 0}
+      <div data-virtual-spacer="bottom" style:height={`${bottomSpacerHeight}px`} aria-hidden="true"></div>
+    {/if}
   </div>
 
   {#if editingSelection && range && selectionInfo}
