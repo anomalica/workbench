@@ -1,7 +1,7 @@
 <script lang="ts">
   import { highlightDisplay } from "$lib/highlight-display.svelte";
   import { SUBTLE_HL, bandStyle, fadedColour, highlightColour } from "$lib/highlight-paint";
-  import { untrack, onMount } from "svelte";
+  import { untrack, onMount, tick } from "svelte";
   import {
     saveScrollAnchor,
     loadScrollAnchor,
@@ -1192,6 +1192,15 @@
     return c === "mixed" ? "title" : order[(order.indexOf(c) + 1) % order.length];
   }
   let wordEditEpoch = $state(0);
+  function repairWordElementIndexAfterFlush(g: number) {
+    void tick().then(() => {
+      const indexed = wordEls.get(g);
+      if (indexed?.isConnected && scrollEl?.contains(indexed)) return;
+      rebuildWordEls();
+      reapplyAll();
+    });
+  }
+
   function commitWordReplacement(
     from: number,
     to: number,
@@ -1222,6 +1231,10 @@
     } else {
       parsed = next;
     }
+    // A structural edit can make Svelte replace a complete rendered segment.
+    // If the imperative playback/highlight index still points at the detached
+    // spans, that segment appears dead until reload. Repair only on mismatch.
+    repairWordElementIndexAfterFlush(from);
   }
   // Advance the selection to the next case, writing the cased text back but
   // keeping the selection so repeated clicks keep cycling.
