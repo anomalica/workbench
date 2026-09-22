@@ -294,17 +294,24 @@
   let words = $derived(parsed.words);
 
   const VIRTUAL_WORD_THRESHOLD = 5_000;
-  const VIRTUAL_RADIUS = 5;
+  const VIRTUAL_MIN_BLOCK_RADIUS = 5;
 
   // Restore the scroll anchor once the words are on screen. Long records mount
   // the target block first; short records retain the original all-DOM path.
   onMount(() => {
     let frames = 0;
+    let resizeObserver: ResizeObserver | null = null;
     const tryRestore = () => {
+      updateVirtualWindow();
+      if (!resizeObserver && scrollEl && typeof ResizeObserver !== "undefined") {
+        resizeObserver = new ResizeObserver(updateVirtualWindow);
+        resizeObserver.observe(scrollEl);
+      }
       restoreScrollAnchor();
       if (!anchorRestored && frames++ < 30) requestAnimationFrame(tryRestore);
     };
     requestAnimationFrame(tryRestore);
+    return () => resizeObserver?.disconnect();
   });
   let runs = $derived(parsed.runs);
 
@@ -532,7 +539,7 @@
 
   let virtualised = $derived(words.length > VIRTUAL_WORD_THRESHOLD);
   let virtualStart = $state(0);
-  let virtualEnd = $state(VIRTUAL_RADIUS * 2 + 1);
+  let virtualEnd = $state(VIRTUAL_MIN_BLOCK_RADIUS * 2 + 1);
   let measuredBlockHeights = new Map<string, number>();
   let measurementEpoch = $state(0);
 
@@ -581,9 +588,27 @@
 
   function mountBlock(index: number) {
     if (!virtualised) return;
-    const start = Math.max(0, index - VIRTUAL_RADIUS);
+    const overscanHeight = scrollEl?.clientHeight ?? 0;
+    let start = index;
+    let heightBefore = 0;
+    while (
+      start > 0 &&
+      (index - start < VIRTUAL_MIN_BLOCK_RADIUS || heightBefore < overscanHeight)
+    ) {
+      start--;
+      heightBefore += blockHeight(renderBlocks[start]);
+    }
+    let end = index + 1;
+    let heightAfter = blockHeight(renderBlocks[index]);
+    while (
+      end < renderBlocks.length &&
+      (end - index - 1 < VIRTUAL_MIN_BLOCK_RADIUS || heightAfter < overscanHeight)
+    ) {
+      heightAfter += blockHeight(renderBlocks[end]);
+      end++;
+    }
     virtualStart = start;
-    virtualEnd = Math.min(renderBlocks.length, index + VIRTUAL_RADIUS + 1);
+    virtualEnd = end;
   }
 
   async function mountWord(g: number): Promise<HTMLElement | null> {
@@ -3032,7 +3057,7 @@
        first line, and never has to flip below it. -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
-    class="select-none pt-12"
+    class="select-none pt-12 pb-[50vh]"
     onpointerdown={onContainerPointerDown}
     onpointerover={onContainerPointerOver}
     onpointerleave={() => (hoverChainId = null)}

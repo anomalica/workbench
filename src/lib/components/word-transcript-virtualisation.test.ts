@@ -79,6 +79,18 @@ describe("long word transcript virtualisation", () => {
     expect(word(0)).toBeNull();
   });
 
+  it("mounts at least a viewport of content on initial load", async () => {
+    const clientHeight = vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
+    try {
+      render(WordTranscript, { props: props() });
+
+      await waitFor(() => expect(mountedWords()).toBeGreaterThanOrEqual(WORDS_PER_TURN * 7));
+      expect(mountedWords()).toBeLessThan(400);
+    } finally {
+      clientHeight.mockRestore();
+    }
+  });
+
   it("retains an unaffected mounted block across an earlier structural edit", async () => {
     const focusWords = { from: DISTANT_WORD, to: DISTANT_WORD, seq: 1 };
     const { rerender } = render(WordTranscript, { props: props({ focusWords }) });
@@ -119,7 +131,14 @@ describe("long word transcript virtualisation", () => {
 
     await waitFor(() => expect(word(DISTANT_WORD)).not.toBeNull());
     expect(word(0)).toBeNull();
+    expect(mountedWords()).toBeGreaterThanOrEqual(WORDS_PER_TURN * 12);
     expect(mountedWords()).toBeLessThan(400);
+  });
+
+  it("leaves enough trailing space to lift the final blocks above the viewport edge", () => {
+    render(WordTranscript, { props: props() });
+
+    expect(document.querySelector("[data-scroll-sync] > div")).toHaveClass("pb-[50vh]");
   });
 
   it("mounts the resume boundary for Jump to unobserved", async () => {
