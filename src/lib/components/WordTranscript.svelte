@@ -1192,10 +1192,24 @@
     return c === "mixed" ? "title" : order[(order.indexOf(c) + 1) % order.length];
   }
   let wordEditEpoch = $state(0);
-  function repairWordElementIndexAfterFlush(g: number) {
+  function repairWordElementIndexAfterFlush(g: number, wordCountChanged: boolean) {
     void tick().then(() => {
       const indexed = wordEls.get(g);
       if (indexed?.isConnected && scrollEl?.contains(indexed)) return;
+
+      if (!wordCountChanged && scrollEl) {
+        const live = scrollEl.querySelector<HTMLElement>(`[data-word-index="${g}"]`);
+        const section = live?.closest("p");
+        if (section) {
+          for (const el of section.querySelectorAll<HTMLElement>("[data-word-index]")) {
+            const index = Number(el.dataset.wordIndex);
+            wordEls.set(index, el);
+            applyWord(index);
+          }
+          return;
+        }
+      }
+
       rebuildWordEls();
       reapplyAll();
     });
@@ -1210,6 +1224,7 @@
     // instead of copying the complete words array a second time locally.
     const next = onreplaceselection?.(from, to, newWords) ??
       replaceWordRange(parsed, from, to, newWords);
+    const wordCountChanged = next.words.length !== parsed.words.length;
     if (next.words.length === parsed.words.length) {
       const notesUnchanged = next.words
         .slice(from, to + 1)
@@ -1234,7 +1249,7 @@
     // A structural edit can make Svelte replace a complete rendered segment.
     // If the imperative playback/highlight index still points at the detached
     // spans, that segment appears dead until reload. Repair only on mismatch.
-    repairWordElementIndexAfterFlush(from);
+    repairWordElementIndexAfterFlush(from, wordCountChanged);
   }
   // Advance the selection to the next case, writing the cased text back but
   // keeping the selection so repeated clicks keep cycling.
