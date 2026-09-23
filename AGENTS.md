@@ -9,7 +9,7 @@ The workbench is the human review and curation application. It is a Svelte 5 sin
 - Use `just dev` to start both services. Do not use `npm run dev` alone when the task needs API calls.
 - The workbench URL is `http://localhost:1947`; the Vite server proxies `/api` to the backend on port `8073`.
 - Keep these distinctive ports and Vite's strict-port behaviour. Do not move the project back to a default `51xx` or `52xx` port.
-- Only one `just dev` instance should run. Check for an existing instance and coordinate over the workspace bus before starting or restarting another session's server.
+- Only one `just dev` instance should run. Check for an existing instance before starting one; do not restart a healthy server or another session's process without coordinating within Product.
 
 ## Stack and conventions
 
