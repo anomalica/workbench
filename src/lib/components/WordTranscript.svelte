@@ -2116,6 +2116,36 @@
     range !== null && runOfWord.get(range.from)?.startWord === runOfWord.get(range.to)?.startWord,
   );
 
+  // The quick assignment follows the nearest edge of the selected turn. Use
+  // the selection's midpoint so it also behaves sensibly for a word range;
+  // fall back to the other side at the start or end of the transcript.
+  let quickSpeaker = $derived.by(() => {
+    if (!range || !selectionInOneRun) return null;
+    const run = runOfWord.get(range.from);
+    if (!run) return null;
+    const index = runs.indexOf(run);
+    if (index < 0) return null;
+    const eligible = (speaker: string) =>
+      speaker !== "" && speaker !== run.speaker && !(hideIrrelevant && speaker === SPEAKER_IRRELEVANT);
+    let previous: string | null = null;
+    let next: string | null = null;
+    for (let i = index - 1; i >= 0; i--) {
+      if (eligible(runs[i].speaker)) {
+        previous = runs[i].speaker;
+        break;
+      }
+    }
+    for (let i = index + 1; i < runs.length; i++) {
+      if (eligible(runs[i].speaker)) {
+        next = runs[i].speaker;
+        break;
+      }
+    }
+    return range.from + range.to <= run.startWord + run.endWord
+      ? previous ?? next
+      : next ?? previous;
+  });
+
   function clampToRun(a: number, b: number): { from: number; to: number } | null {
     // A SELECTION IS NEVER CLAMPED. It used to stop at the speaker boundary
     // outside markup mode, because reassign and split are per-turn operations
@@ -2660,6 +2690,16 @@
              passage is not a separate activity from reading or correcting it,
              and making it a mode meant deciding which one you were in before
              you knew what you had found. -->
+        {#if quickSpeaker}
+          <button
+            onclick={() => chooseSpeaker(quickSpeaker!)}
+            aria-label={`Assign to nearby speaker ${quickSpeaker}`}
+            title={`Assign these words to ${quickSpeaker}`}
+            class="flex items-center justify-center p-1 rounded cursor-pointer hover:bg-primary/10 transition-colors"
+          >
+            <SpeakerDot speaker={quickSpeaker} size="md" />
+          </button>
+        {/if}
         <div class="relative">
           <button
             onclick={(e) => {
