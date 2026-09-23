@@ -9,7 +9,6 @@ from one committed ingests ref here.
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 import subprocess
 from dataclasses import dataclass
@@ -30,7 +29,7 @@ from anomalica_common.records import (
 )
 from pydantic import ValidationError
 
-SCHEMA_REQUEST = "anomalica/structure-request/1"
+SCHEMA_REQUEST = "anomalica/record-structure/1"
 SCHEMA_CANDIDATES = "anomalica/structure-candidates/1"
 SCHEMA_PREVIEW = "anomalica/structure-preview/1"
 _REF = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
@@ -77,6 +76,16 @@ _PROVENANCE_FIELDS = frozenset(
     }
 )
 _IMAGE_FORMATS = frozenset({"jpg", "jpeg", "png", "webp"})
+_AUTHORITY_SIDECARS = (
+    "review.json",
+    "housekeeping.json",
+    "gold.json",
+    "verification.json",
+    "digest.json",
+    "graph.json",
+    "audit.json",
+    "highlights.json",
+)
 
 
 class StructureError(ValueError):
@@ -121,6 +130,7 @@ class StructurePlan:
     parent_paths: tuple[Path, ...]
     new_paths: tuple[Path, ...]
     existing_artifact_paths: tuple[Path, ...]
+    vacant_authority_paths: tuple[Path, ...]
 
 
 def _envelope(raw: bytes) -> tuple[dict[str, Any], str, str]:
@@ -141,17 +151,17 @@ def _envelope(raw: bytes) -> tuple[dict[str, Any], str, str]:
 
 
 def _bare_hash(value: object, label: str) -> str:
-    if not isinstance(value, str):
-        raise StructureError(f"{label} must be a complete lowercase SHA-256")
+    if not isinstance(value, str) or not value.startswith("sha256:"):
+        raise StructureError(f"{label} must be a canonical sha256 Record identity")
     bare = value.removeprefix("sha256:")
     if not _HASH.fullmatch(bare):
-        raise StructureError(f"{label} must be a complete lowercase SHA-256")
+        raise StructureError(f"{label} must be a canonical sha256 Record identity")
     return bare
 
 
 def _validate_ref(value: object) -> str:
     if not isinstance(value, str) or not _REF.fullmatch(value):
-        raise StructureError("base_ref must be a complete Git object id")
+        raise StructureError("viewed_ref must be a complete Git object id")
     return value
 
 
@@ -387,33 +397,40 @@ def _retire(raw: bytes, retired_into: list[str]) -> bytes:
 
 
 def _record_bytes(frontmatter: Mapping[str, Any], body: str) -> bytes:
-    encoded = yaml.safe_dump(
-        dict(frontmatter),
+    class QuotedTitle(str):
+        pass
+
+    class RecordDumper(yaml.SafeDumper):
+        pass
+
+    RecordDumper.add_representer(
+        QuotedTitle,
+        lambda dumper, value: dumper.represent_scalar(
+            "tag:yaml.org,2002:str", value, style='"'
+        ),
+    )
+    serialised = dict(frontmatter)
+    serialised["title"] = QuotedTitle(serialised["title"])
+    encoded = yaml.dump(
+        serialised,
         sort_keys=False,
         allow_unicode=True,
         default_flow_style=False,
         width=1000,
+        Dumper=RecordDumper,
     )
     return f"---\n{encoded}---\n{body}".encode("utf-8")
-
-
-def _preview_hash(preview: Mapping[str, Any]) -> str:
-    stable = {key: value for key, value in preview.items() if key != "preview_sha256"}
-    encoded = json.dumps(
-        stable, ensure_ascii=False, separators=(",", ":"), sort_keys=True
-    ).encode("utf-8")
-    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
 
 
 def _request(payload: object) -> tuple[str, list[str], list[dict[str, Any]]]:
     if not isinstance(payload, dict):
         raise StructureError("Structure request must be an object")
-    allowed = {"schema", "base_ref", "parents", "outputs", "preview_sha256"}
+    allowed = {"schema", "viewed_ref", "parents", "outputs"}
     if set(payload) - allowed:
         raise StructureError("Structure request contains unsupported fields")
     if payload.get("schema") != SCHEMA_REQUEST:
         raise StructureError(f"schema must be {SCHEMA_REQUEST}")
-    ref = _validate_ref(payload.get("base_ref"))
+    ref = _validate_ref(payload.get("viewed_ref"))
     raw_parents = payload.get("parents")
     if not isinstance(raw_parents, list) or not raw_parents:
         raise StructureError("parents must be a non-empty list")
@@ -447,8 +464,9 @@ def build_plan(
 
     assets: dict[str, AssetDescriptor] = {}
     page_sources: dict[tuple[str, int], PageSource] = {}
-    parent_coordinates: list[tuple[str, int]] = []
+    parent_coordinates: list[set[tuple[str, int]]] = []
     for parent in parents:
+        coordinates_for_parent: set[tuple[str, int]] = set()
         for asset in parent.structure.assets:
             previous = assets.get(asset.asset_hash)
             if previous is not None and previous != asset:
@@ -458,22 +476,24 @@ def build_plan(
             assets[asset.asset_hash] = asset
         for page in parent.pages:
             coordinate = (page.asset_hash, page.asset_file_page)
-            if coordinate in page_sources:
-                raise StructureError("Structural parents overlap on an Asset page")
+            coordinates_for_parent.add(coordinate)
+            previous_page = page_sources.get(coordinate)
+            if previous_page is not None and previous_page != page:
+                raise StructureError(
+                    "Structural parents disagree on exact text for an Asset page"
+                )
             page_sources[coordinate] = page
-            parent_coordinates.append(coordinate)
+        parent_coordinates.append(coordinates_for_parent)
 
-    if (
-        len(parents) > 1
-        and len({asset_hash for asset_hash, _ in parent_coordinates}) < 2
-    ):
+    if len(parents) > 1 and len({asset_hash for asset_hash, _ in page_sources}) < 2:
         raise StructureError("Composition requires at least two distinct Assets")
 
     pipeline_versions = _parent_pipeline_versions(parents)
     output_documents: list[dict[str, Any]] = []
     output_prepared: list[PreparedPageRecord] = []
     output_paths: list[Path] = []
-    used_coordinates: list[tuple[str, int]] = []
+    vacant_authority_paths: list[Path] = []
+    selected_coordinates: set[tuple[str, int]] = set()
     identities: set[str] = set()
 
     for requested in requested_outputs:
@@ -506,8 +526,7 @@ def build_plan(
                     "Selection names a page outside its structural parents"
                 )
             coordinates.append(coordinate)
-        used_coordinates.extend(coordinates)
-
+        selected_coordinates.update(coordinates)
         first_use = list(dict.fromkeys(entry.asset_hash for entry in selection.root))
         selected_assets = [assets[asset_hash] for asset_hash in first_use]
         page_map = [
@@ -540,6 +559,13 @@ def build_plan(
         bare_output = content_hash.removeprefix("sha256:")
         if source.record_at_ref(bare_output, ref) is not None:
             raise StructureError(f"Output Record already exists: {content_hash}")
+        for suffix in _AUTHORITY_SIDECARS:
+            authority_path = source.store / f"{bare_output}.{suffix}"
+            if source.file_at_ref(authority_path, ref) is not None:
+                raise StructureError(
+                    f"Output Record already has authority state: {authority_path.name}"
+                )
+            vacant_authority_paths.append(authority_path)
 
         source_types = list(
             dict.fromkeys(asset.source_type for asset in selected_assets)
@@ -602,13 +628,15 @@ def build_plan(
             }
         )
 
-    if len(used_coordinates) != len(set(used_coordinates)):
-        raise StructureError("An Asset page is assigned to more than one output")
-    if set(used_coordinates) != set(parent_coordinates):
-        missing = len(set(parent_coordinates) - set(used_coordinates))
-        raise StructureError(
-            f"Outputs must assign every parent page exactly once ({missing} unassigned)"
-        )
+    if any(
+        not coordinates & selected_coordinates for coordinates in parent_coordinates
+    ):
+        raise StructureError("Every structural parent must contribute to an output")
+    if (
+        len(parents) > 1
+        and len({asset_hash for asset_hash, _page in selected_coordinates}) < 2
+    ):
+        raise StructureError("Composition output requires at least two distinct Assets")
 
     output_hashes = [output["content_hash"] for output in output_documents]
     changes: dict[Path, bytes] = {
@@ -648,7 +676,7 @@ def build_plan(
 
     preview: dict[str, Any] = {
         "schema": SCHEMA_PREVIEW,
-        "base_ref": ref,
+        "viewed_ref": ref,
         "parents": [
             {
                 "content_hash": parent.structure.content_hash,
@@ -659,13 +687,13 @@ def build_plan(
         ],
         "outputs": output_documents,
     }
-    preview["preview_sha256"] = _preview_hash(preview)
     return StructurePlan(
         preview=preview,
         changes=changes,
         parent_paths=tuple(parent.path for parent in parents),
         new_paths=tuple(dict.fromkeys(new_paths)),
         existing_artifact_paths=tuple(dict.fromkeys(existing_artifact_paths)),
+        vacant_authority_paths=tuple(dict.fromkeys(vacant_authority_paths)),
     )
 
 
@@ -702,8 +730,7 @@ def candidate_view(source: LocalSource, records_root: Path, ref: str) -> dict[st
             assets = {asset.asset_hash: asset for asset in parent.structure.assets}
             candidates.append(
                 {
-                    "content_hash": parent.bare_hash,
-                    "record_id": parent.structure.content_hash,
+                    "content_hash": parent.structure.content_hash,
                     "title": parent.frontmatter.get("title", "Untitled"),
                     "assets": [
                         {
@@ -736,7 +763,7 @@ def candidate_view(source: LocalSource, records_root: Path, ref: str) -> dict[st
     blocked.sort(key=lambda value: value["path"])
     return {
         "schema": SCHEMA_CANDIDATES,
-        "base_ref": ref,
+        "viewed_ref": ref,
         "parents": candidates,
         "blocked": blocked,
     }
@@ -748,6 +775,7 @@ def assert_clean_targets(source: LocalSource, plan: StructurePlan, ref: str) -> 
         *plan.parent_paths,
         *plan.new_paths,
         *plan.existing_artifact_paths,
+        *plan.vacant_authority_paths,
     )
     for path in dict.fromkeys(checked_paths):
         relative = path.relative_to(source.store.parent).as_posix()
@@ -774,6 +802,11 @@ def assert_clean_targets(source: LocalSource, plan: StructurePlan, ref: str) -> 
     for path in plan.new_paths:
         if path.exists() or path.is_symlink():
             raise StructureError(f"Structural output path already exists: {path.name}")
+    for path in plan.vacant_authority_paths:
+        if path.exists() or path.is_symlink():
+            raise StructureError(
+                f"Structural output already has authority state: {path.name}"
+            )
 
 
 __all__ = [

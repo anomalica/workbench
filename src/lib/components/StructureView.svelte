@@ -11,6 +11,7 @@
   } from "$lib/api";
 
   interface Props {
+    initialParent?: string | null;
     oncommitted?: () => void | Promise<void>;
   }
 
@@ -30,7 +31,7 @@
     excerpt: string;
   }
 
-  let { oncommitted }: Props = $props();
+  let { initialParent = null, oncommitted }: Props = $props();
 
   const DOCUMENT_TYPES = [
     "book",
@@ -55,7 +56,8 @@
   let candidates = $state<StructureCandidates | null>(null);
   let selected = $state<string[]>([]);
   let outputs = $state<OutputDraft[]>([]);
-  let assignments = $state<Record<string, string>>({});
+  let memberships = $state<Record<string, string[]>>({});
+  let pageOrder = $state<string[]>([]);
   let preview = $state<StructurePreview | null>(null);
   let previewRequest = $state<StructureRequest | null>(null);
   let loading = $state(true);
@@ -72,8 +74,8 @@
       .filter((candidate) => candidate !== undefined) as StructureCandidate[],
   );
 
-  const pages = $derived.by((): PageDraft[] =>
-    selectedParents.flatMap((parent) =>
+  const pages = $derived.by((): PageDraft[] => {
+    const unordered = selectedParents.flatMap((parent) =>
       parent.pages.map((page, index) => ({
         key: `${parent.content_hash}:${index}`,
         parentHash: parent.content_hash,
@@ -83,8 +85,10 @@
         sourceType: page.source_type,
         excerpt: page.excerpt,
       })),
-    ),
-  );
+    );
+    const byKey = new Map(unordered.map((page) => [page.key, page]));
+    return pageOrder.map((key) => byKey.get(key)).filter((page) => page !== undefined) as PageDraft[];
+  });
 
   const mode = $derived(selected.length === 1 ? "split" : selected.length > 1 ? "compose" : null);
 
@@ -93,8 +97,9 @@
     if (mode === "split" && outputs.length < 2) return false;
     if (mode === "compose" && outputs.length !== 1) return false;
     if (outputs.some((output) => !output.title.trim())) return false;
-    if (pages.some((page) => !assignments[page.key])) return false;
-    return outputs.every((output) => pages.some((page) => assignments[page.key] === output.id));
+    return outputs.every((output) =>
+      pages.some((page) => memberships[page.key]?.includes(output.id)),
+    );
   });
 
   function newOutput(title: string): OutputDraft {
@@ -131,20 +136,21 @@
       .map((hash) => candidates?.parents.find((candidate) => candidate.content_hash === hash))
       .filter((candidate) => candidate !== undefined) as StructureCandidate[];
     const nextPages = pageDrafts(parents);
-    assignments = {};
+    pageOrder = nextPages.map((page) => page.key);
+    memberships = {};
 
     if (parents.length === 1) {
       const first = newOutput(`${parents[0].title} - Part 1`);
       const second = newOutput(`${parents[0].title} - Part 2`);
       outputs = [first, second];
       const splitAt = Math.max(1, Math.ceil(nextPages.length / 2));
-      assignments = Object.fromEntries(
-        nextPages.map((page, index) => [page.key, index < splitAt ? first.id : second.id]),
+      memberships = Object.fromEntries(
+        nextPages.map((page, index) => [page.key, [index < splitAt ? first.id : second.id]]),
       );
     } else if (parents.length > 1) {
       const output = newOutput(parents.map((parent) => parent.title).join(" + "));
       outputs = [output];
-      assignments = Object.fromEntries(nextPages.map((page) => [page.key, output.id]));
+      memberships = Object.fromEntries(nextPages.map((page) => [page.key, [output.id]]));
     } else {
       outputs = [];
     }
@@ -164,8 +170,22 @@
     invalidatePreview();
   }
 
-  function assignPage(key: string, outputId: string) {
-    assignments = { ...assignments, [key]: outputId };
+  function setPageMembership(key: string, outputId: string, included: boolean) {
+    const current = memberships[key] ?? [];
+    const next = included
+      ? [...current.filter((id) => id !== outputId), outputId]
+      : current.filter((id) => id !== outputId);
+    memberships = { ...memberships, [key]: next };
+    invalidatePreview();
+  }
+
+  function movePage(key: string, offset: -1 | 1) {
+    const from = pageOrder.indexOf(key);
+    const to = from + offset;
+    if (from < 0 || to < 0 || to >= pageOrder.length) return;
+    const next = [...pageOrder];
+    [next[from], next[to]] = [next[to], next[from]];
+    pageOrder = next;
     invalidatePreview();
   }
 
@@ -177,10 +197,12 @@
   function removeOutput(id: string) {
     if (outputs.length <= 2) return;
     const remaining = outputs.filter((output) => output.id !== id);
-    const fallback = remaining[0].id;
     outputs = remaining;
-    assignments = Object.fromEntries(
-      Object.entries(assignments).map(([key, value]) => [key, value === id ? fallback : value]),
+    memberships = Object.fromEntries(
+      Object.entries(memberships).map(([key, values]) => [
+        key,
+        values.filter((value) => value !== id),
+      ]),
     );
     invalidatePreview();
   }
@@ -197,8 +219,8 @@
   function buildRequest(): StructureRequest {
     if (!candidates) throw new Error("Structure candidates are not loaded");
     return {
-      schema: "anomalica/structure-request/1",
-      base_ref: candidates.base_ref,
+      schema: "anomalica/record-structure/1",
+      viewed_ref: candidates.viewed_ref,
       parents: [...selected],
       outputs: outputs.map((output) => ({
         metadata: {
@@ -206,7 +228,7 @@
           ...(output.documentType ? { document_type: output.documentType } : {}),
         },
         selection: pages
-          .filter((page) => assignments[page.key] === output.id)
+          .filter((page) => memberships[page.key]?.includes(output.id))
           .map(selectionFor),
       })),
     };
@@ -217,7 +239,16 @@
     error = "";
     try {
       candidates = await fetchStructureCandidates();
-      configureSelection([]);
+      const requested = initialParent?.startsWith("sha256:")
+        ? initialParent
+        : initialParent
+          ? `sha256:${initialParent}`
+          : null;
+      configureSelection(
+        requested && candidates.parents.some((candidate) => candidate.content_hash === requested)
+          ? [requested]
+          : [],
+      );
     } catch (reason) {
       error = reason instanceof Error ? reason.message : String(reason);
     } finally {
@@ -253,7 +284,7 @@
     committing = true;
     error = "";
     try {
-      const result = await commitStructure(request, viewed.preview_sha256);
+      const result = await commitStructure(request);
       await oncommitted?.();
       await load();
       notice = `Created ${result.created.length} Record${result.created.length === 1 ? "" : "s"} and retired ${result.retired.length} temporary parent${result.retired.length === 1 ? "" : "s"}.`;
@@ -318,7 +349,7 @@
                   {candidate.assets.map((asset) => asset.file_format.toUpperCase()).join(" + ")}
                 </span>
                 <span class="mt-1 block truncate font-mono text-[10px] text-on-surface-muted/70">
-                  {candidate.record_id}
+                  {candidate.content_hash}
                 </span>
               </span>
             </span>
@@ -376,7 +407,7 @@
               {mode === "split" ? "Split one parent" : `Compose ${selected.length} parents`}
             </p>
             <h2 class="mt-1 font-serif text-xl text-on-surface">
-              {mode === "split" ? "Assign every page to a final Record" : "Confirm the new Record order"}
+              {mode === "split" ? "Choose pages for each final Record" : "Choose and order the new Record"}
             </h2>
           </div>
           {#if mode === "split"}
@@ -406,21 +437,42 @@
                   <p class="mt-2 text-xs leading-relaxed text-on-surface-secondary">
                     {page.excerpt || "No text excerpt for this image."}
                   </p>
-                  {#if mode === "split"}
-                    <label class="mt-3 flex items-center gap-2 text-xs text-on-surface-muted">
-                      Output
-                      <select
-                        class="min-w-0 flex-1 border border-border bg-surface px-2 py-1 text-xs text-on-surface outline-none focus:border-primary"
-                        aria-label={`Output for ${page.sourceType === "image" ? "image" : `PDF page ${page.assetFilePage}`}`}
-                        value={assignments[page.key]}
-                        onchange={(event) => assignPage(page.key, event.currentTarget.value)}
-                      >
-                        {#each outputs as output, index (output.id)}
-                          <option value={output.id}>{output.title || `Output ${index + 1}`}</option>
-                        {/each}
-                      </select>
-                    </label>
-                  {/if}
+                  <div class="mt-3 flex items-center gap-1" aria-label={`Order ${page.sourceType === "image" ? "image" : `PDF page ${page.assetFilePage}`}`}>
+                    <button
+                      class="border border-border bg-surface px-2 py-1 text-[11px] text-on-surface-muted hover:text-on-surface disabled:cursor-not-allowed disabled:opacity-35"
+                      disabled={pages[0]?.key === page.key}
+                      onclick={() => movePage(page.key, -1)}
+                      aria-label={`Move ${page.sourceType === "image" ? "image" : `PDF page ${page.assetFilePage}`} earlier`}
+                    >Earlier</button>
+                    <button
+                      class="border border-border bg-surface px-2 py-1 text-[11px] text-on-surface-muted hover:text-on-surface disabled:cursor-not-allowed disabled:opacity-35"
+                      disabled={pages.at(-1)?.key === page.key}
+                      onclick={() => movePage(page.key, 1)}
+                      aria-label={`Move ${page.sourceType === "image" ? "image" : `PDF page ${page.assetFilePage}`} later`}
+                    >Later</button>
+                  </div>
+                  <fieldset class="mt-3 border-t border-border pt-2">
+                    <legend class="pr-2 text-[10px] font-semibold uppercase tracking-wide text-on-surface-muted">
+                      {mode === "split" ? "Use in final Records" : "Use in final Record"}
+                    </legend>
+                    <div class="mt-1 flex flex-wrap gap-x-4 gap-y-1">
+                      {#each outputs as output, index (output.id)}
+                        {@const pageLabel = page.sourceType === "image" ? "image" : `PDF page ${page.assetFilePage}`}
+                        {@const outputLabel = output.title || `Output ${index + 1}`}
+                        <label class="flex items-center gap-1.5 text-xs text-on-surface-muted">
+                          <input
+                            type="checkbox"
+                            class="accent-primary"
+                            checked={memberships[page.key]?.includes(output.id) ?? false}
+                            aria-label={`Include ${pageLabel} in ${outputLabel}`}
+                            onchange={(event) =>
+                              setPageMembership(page.key, output.id, event.currentTarget.checked)}
+                          />
+                          {mode === "split" ? outputLabel : "Include"}
+                        </label>
+                      {/each}
+                    </div>
+                  </fieldset>
                 </article>
               {/each}
             </div>
@@ -432,7 +484,7 @@
             </h3>
             <div class="mt-2 space-y-3">
               {#each outputs as output, index (output.id)}
-                {@const assignedCount = pages.filter((page) => assignments[page.key] === output.id).length}
+                {@const assignedCount = pages.filter((page) => memberships[page.key]?.includes(output.id)).length}
                 <fieldset class="min-w-0 border border-border bg-surface p-4">
                   <legend class="px-1 text-xs font-semibold text-on-surface">
                     Output {index + 1} · {assignedCount} {assignedCount === 1 ? "page" : "pages"}
@@ -483,7 +535,8 @@
               onclick={derivePreview}
             >{previewing ? "Deriving preview..." : "Preview final Records"}</button>
             <p class="text-xs text-on-surface-muted">
-              The server verifies the committed Assets and derives identity, body, page map and source map.
+              A page may be omitted or used in several outputs. The server verifies the committed Assets
+              and derives identity, body, page map and source map.
             </p>
           </div>
         </div>
@@ -499,8 +552,8 @@
                   {preview.outputs.length} final {preview.outputs.length === 1 ? "Record" : "Records"}
                 </h3>
               </div>
-              <span class="font-mono text-[10px] text-on-surface-muted" title={preview.preview_sha256}>
-                {preview.preview_sha256.slice(0, 22)}...
+              <span class="font-mono text-[10px] text-on-surface-muted" title={preview.viewed_ref}>
+                Git {preview.viewed_ref.slice(0, 12)}
               </span>
             </div>
             <div class="mt-4 grid gap-3 md:grid-cols-2">

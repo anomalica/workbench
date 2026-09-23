@@ -3119,13 +3119,13 @@ def preview_structure(payload: dict, request: Request) -> JSONResponse:
     """Derive final Records and artefacts without changing the repository."""
     _require_role(request, "editor")
     local = _local_structure_source()
-    if payload.get("base_ref") != local.current_ref():
+    if payload.get("viewed_ref") != local.current_ref():
         raise HTTPException(status_code=409, detail="Structure view is stale")
     try:
         plan = structure.build_plan(local, records_path, payload)
     except structure.StructureError as exc:
         raise _structure_validation_error(exc) from exc
-    if local.current_ref() != plan.preview["base_ref"]:
+    if local.current_ref() != plan.preview["viewed_ref"]:
         raise HTTPException(status_code=409, detail="Structure view is stale")
     return JSONResponse(plan.preview)
 
@@ -3135,23 +3135,13 @@ def commit_structure(payload: dict, request: Request) -> JSONResponse:
     """Create every output and retire every parent in one CAS-bound Git commit."""
     user = _require_role(request, "editor")
     local = _local_structure_source()
-    viewed_preview = payload.get("preview_sha256")
-    if not isinstance(viewed_preview, str) or not re.fullmatch(
-        r"sha256:[0-9a-f]{64}", viewed_preview
-    ):
-        raise HTTPException(status_code=400, detail="preview_sha256 is required")
 
     with repository_write_lock(local.store.parent):
         current_ref = local.current_ref()
-        if payload.get("base_ref") != current_ref:
+        if payload.get("viewed_ref") != current_ref:
             raise HTTPException(status_code=409, detail="Structure preview is stale")
         try:
             plan = structure.build_plan(local, records_path, payload)
-            if plan.preview["preview_sha256"] != viewed_preview:
-                raise HTTPException(
-                    status_code=409,
-                    detail="Structure preview no longer matches request",
-                )
             try:
                 structure.assert_clean_targets(local, plan, current_ref)
             except structure.StructureError as exc:

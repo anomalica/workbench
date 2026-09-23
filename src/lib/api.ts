@@ -167,9 +167,8 @@ export interface StructureSelectionEntry {
 }
 
 export interface StructureCandidate {
-  /** Bare Record SHA-256 used by the local store route. */
+  /** Full canonical Record identity. */
   content_hash: string;
-  record_id: string;
   title: string;
   assets: {
     asset_hash: string;
@@ -188,7 +187,7 @@ export interface StructureCandidate {
 
 export interface StructureCandidates {
   schema: "anomalica/structure-candidates/1";
-  base_ref: string;
+  viewed_ref: string;
   parents: StructureCandidate[];
   blocked: { content_hash: string; path: string; detail: string }[];
 }
@@ -201,8 +200,8 @@ export interface StructureMetadata {
 }
 
 export interface StructureRequest {
-  schema: "anomalica/structure-request/1";
-  base_ref: string;
+  schema: "anomalica/record-structure/1";
+  viewed_ref: string;
   parents: string[];
   outputs: {
     metadata: StructureMetadata;
@@ -231,14 +230,13 @@ export interface StructurePreviewOutput {
 
 export interface StructurePreview {
   schema: "anomalica/structure-preview/1";
-  base_ref: string;
+  viewed_ref: string;
   parents: {
     content_hash: string;
     title: string;
     retired_into: string[];
   }[];
   outputs: StructurePreviewOutput[];
-  preview_sha256: string;
 }
 
 export interface StructureCommitResult {
@@ -273,16 +271,13 @@ export async function previewStructure(request: StructureRequest): Promise<Struc
   );
 }
 
-/** Commit exactly the server-derived preview or fail on any stale input. */
-export async function commitStructure(
-  request: StructureRequest,
-  previewSha256: string,
-): Promise<StructureCommitResult> {
+/** Recompute and commit the exact CAS-bound request or fail on any stale input. */
+export async function commitStructure(request: StructureRequest): Promise<StructureCommitResult> {
   return structureResponse(
     await fetch("/api/records/structure/commit", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...request, preview_sha256: previewSha256 }),
+      body: JSON.stringify(request),
     }),
     "commit Record structure",
   );

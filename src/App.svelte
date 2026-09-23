@@ -157,6 +157,7 @@
   let selectedHousekeepingOpen = $state(0);
   let selectedHousekeepingScopes = $state<("frontmatter" | "body")[]>([]);
   let housekeepingHash = $state<string | null>(null);
+  let structureParent = $state<string | null>(null);
   let selectedHousekeepingView = $state<HousekeepingViewData | null>(null);
   let ingestRequestGeneration = 0;
   // Human-gold review for the open record. #gold makes evaluation links
@@ -663,7 +664,8 @@
     history.pushState(null, "", "/pages");
   }
 
-  function showStructure() {
+  function showStructure(parentHash: string | null = null) {
+    structureParent = parentHash;
     appMode = "structure";
     history.pushState(null, "", "/structure");
   }
@@ -700,6 +702,7 @@
       return; // PagesView fetches its own list
     }
     if (path === "structure" && !STATIC_READS) {
+      structureParent = null;
       appMode = "structure";
       return; // StructureView fetches its own CAS-bound candidate list
     }
@@ -803,7 +806,7 @@
       >Review</button>
       {#if liveBackend && canCurate}
         <button
-          onclick={showStructure}
+          onclick={() => showStructure()}
           class="text-sm font-ui px-2.5 py-1 rounded cursor-pointer transition-colors
             {appMode === 'structure' ? 'bg-bone/15 text-bone' : 'text-bone/50 hover:text-bone/80 hover:bg-bone/10'}"
           title="Split temporary Records or compose their complete PDF pages and standalone images"
@@ -981,7 +984,7 @@
     {#if appMode === "digests"}
       <DigestsView />
     {:else if appMode === "structure"}
-      <StructureView oncommitted={refreshIngestSummaries} />
+      <StructureView initialParent={structureParent} oncommitted={refreshIngestSummaries} />
     {:else if appMode === "evaluations"}
       <EvaluationView />
     {:else if appMode === "housekeeping"}
@@ -1078,6 +1081,9 @@
         ontuning={openGoldReview}
         onreload={(contentHash) => selectIngest(contentHash)}
         onhousekeeping={() => showHousekeeping(selectedIngest!.content_hash)}
+        onstructure={liveBackend && canCurate && selectedIngest.frontmatter.structure_status === "temporary"
+          ? () => showStructure(selectedIngest!.content_hash)
+          : undefined}
         onhousekeepingaccess={(view) => {
           if (view.viewed_content_hash !== `sha256:${selectedIngest!.content_hash}`) return;
           selectedHousekeepingView = view;

@@ -250,12 +250,12 @@ describe("canonical write identities", () => {
     });
   });
 
-  it("keeps structural preview and commit bound to the same request and preview hash", async () => {
+  it("keeps structural preview and commit bound to the same canonical request", async () => {
     const calls = captureFetch();
     const request: StructureRequest = {
-      schema: "anomalica/structure-request/1",
-      base_ref: "a".repeat(40),
-      parents: ["b".repeat(64)],
+      schema: "anomalica/record-structure/1",
+      viewed_ref: "a".repeat(40),
+      parents: [`sha256:${"b".repeat(64)}`],
       outputs: [
         {
           metadata: { title: "First work" },
@@ -279,7 +279,7 @@ describe("canonical write identities", () => {
     };
 
     await previewStructure(request);
-    await commitStructure(request, `sha256:${"d".repeat(64)}`);
+    await commitStructure(request);
 
     expect(calls).toEqual([
       {
@@ -290,7 +290,7 @@ describe("canonical write identities", () => {
       {
         url: "/api/records/structure/commit",
         method: "POST",
-        body: { ...request, preview_sha256: `sha256:${"d".repeat(64)}` },
+        body: request,
       },
     ]);
   });

@@ -11,18 +11,17 @@ const BASE_REF = "e".repeat(40);
 
 const candidates: api.StructureCandidates = {
   schema: "anomalica/structure-candidates/1",
-  base_ref: BASE_REF,
+  viewed_ref: BASE_REF,
   parents: [
     {
-      content_hash: PDF_RECORD,
-      record_id: `sha256:${PDF_RECORD}`,
+      content_hash: `sha256:${PDF_RECORD}`,
       title: "Collected Papers",
       assets: [
         {
           asset_hash: PDF_ASSET,
           source_type: "pdf",
           file_format: "pdf",
-          pages: 2,
+          pages: 3,
           copyright_status: "licensed",
         },
       ],
@@ -39,11 +38,16 @@ const candidates: api.StructureCandidates = {
           source_type: "pdf",
           excerpt: "Second paper text.",
         },
+        {
+          asset_hash: PDF_ASSET,
+          asset_file_page: 3,
+          source_type: "pdf",
+          excerpt: "Third paper text.",
+        },
       ],
     },
     {
-      content_hash: IMAGE_RECORD,
-      record_id: `sha256:${IMAGE_RECORD}`,
+      content_hash: `sha256:${IMAGE_RECORD}`,
       title: "Frontispiece",
       assets: [
         {
@@ -70,9 +74,9 @@ const candidates: api.StructureCandidates = {
 function previewFor(request: api.StructureRequest): api.StructurePreview {
   return {
     schema: "anomalica/structure-preview/1",
-    base_ref: BASE_REF,
+    viewed_ref: BASE_REF,
     parents: request.parents.map((contentHash) => ({
-      content_hash: `sha256:${contentHash}`,
+      content_hash: contentHash,
       title: "Parent",
       retired_into: [`sha256:${"f".repeat(64)}`],
     })),
@@ -94,7 +98,6 @@ function previewFor(request: api.StructureRequest): api.StructurePreview {
         source_map_sha256: `sha256:${"2".repeat(64)}`,
       },
     })),
-    preview_sha256: `sha256:${"9".repeat(64)}`,
   };
 }
 
@@ -110,7 +113,7 @@ beforeEach(() => {
   });
 });
 
-it("assigns every PDF page once, previews, then commits the exact preview token", async () => {
+it("previews and commits the exact canonical request", async () => {
   const oncommitted = vi.fn();
   render(StructureView, { oncommitted });
 
@@ -120,17 +123,20 @@ it("assigns every PDF page once, previews, then commits the exact preview token"
   await waitFor(() => expect(api.previewStructure).toHaveBeenCalledOnce());
   const request = vi.mocked(api.previewStructure).mock.calls[0][0];
   expect(request).toEqual({
-    schema: "anomalica/structure-request/1",
-    base_ref: BASE_REF,
-    parents: [PDF_RECORD],
+    schema: "anomalica/record-structure/1",
+    viewed_ref: BASE_REF,
+    parents: [`sha256:${PDF_RECORD}`],
     outputs: [
       {
         metadata: { title: "Collected Papers - Part 1" },
-        selection: [{ asset_hash: PDF_ASSET, selector: { type: "pdf_page", page: 1 } }],
+        selection: [
+          { asset_hash: PDF_ASSET, selector: { type: "pdf_page", page: 1 } },
+          { asset_hash: PDF_ASSET, selector: { type: "pdf_page", page: 2 } },
+        ],
       },
       {
         metadata: { title: "Collected Papers - Part 2" },
-        selection: [{ asset_hash: PDF_ASSET, selector: { type: "pdf_page", page: 2 } }],
+        selection: [{ asset_hash: PDF_ASSET, selector: { type: "pdf_page", page: 3 } }],
       },
     ],
   });
@@ -139,9 +145,41 @@ it("assigns every PDF page once, previews, then commits the exact preview token"
   await fireEvent.click(screen.getByRole("button", { name: "Commit structure" }));
 
   await waitFor(() => expect(api.commitStructure).toHaveBeenCalledOnce());
-  expect(api.commitStructure).toHaveBeenCalledWith(request, `sha256:${"9".repeat(64)}`);
+  expect(api.commitStructure).toHaveBeenCalledWith(request);
   await waitFor(() => expect(oncommitted).toHaveBeenCalledOnce());
   expect(await screen.findByText(/Created 1 Record and retired 1 temporary parent/)).toBeTruthy();
+});
+
+it("allows a split to overlap and omit physical pages", async () => {
+  render(StructureView);
+
+  await fireEvent.click(await screen.findByRole("checkbox", { name: "Select Collected Papers" }));
+  await fireEvent.click(
+    screen.getByRole("checkbox", {
+      name: "Include PDF page 2 in Collected Papers - Part 2",
+    }),
+  );
+  await fireEvent.click(
+    screen.getByRole("checkbox", {
+      name: "Include PDF page 3 in Collected Papers - Part 2",
+    }),
+  );
+  await fireEvent.click(screen.getByRole("button", { name: "Preview final Records" }));
+
+  await waitFor(() => expect(api.previewStructure).toHaveBeenCalledOnce());
+  expect(vi.mocked(api.previewStructure).mock.calls[0][0].outputs).toEqual([
+    {
+      metadata: { title: "Collected Papers - Part 1" },
+      selection: [
+        { asset_hash: PDF_ASSET, selector: { type: "pdf_page", page: 1 } },
+        { asset_hash: PDF_ASSET, selector: { type: "pdf_page", page: 2 } },
+      ],
+    },
+    {
+      metadata: { title: "Collected Papers - Part 2" },
+      selection: [{ asset_hash: PDF_ASSET, selector: { type: "pdf_page", page: 2 } }],
+    },
+  ]);
 });
 
 it("composes parents in click order and uses a whole selector for the image", async () => {
@@ -149,18 +187,20 @@ it("composes parents in click order and uses a whole selector for the image", as
 
   await fireEvent.click(await screen.findByRole("checkbox", { name: "Select Frontispiece" }));
   await fireEvent.click(screen.getByRole("checkbox", { name: "Select Collected Papers" }));
+  await fireEvent.click(screen.getByRole("button", { name: "Move PDF page 2 earlier" }));
   await fireEvent.click(screen.getByRole("button", { name: "Preview final Records" }));
 
   await waitFor(() => expect(api.previewStructure).toHaveBeenCalledOnce());
   const request = vi.mocked(api.previewStructure).mock.calls[0][0];
-  expect(request.parents).toEqual([IMAGE_RECORD, PDF_RECORD]);
+  expect(request.parents).toEqual([`sha256:${IMAGE_RECORD}`, `sha256:${PDF_RECORD}`]);
   expect(request.outputs).toEqual([
     {
       metadata: { title: "Frontispiece + Collected Papers" },
       selection: [
         { asset_hash: IMAGE_ASSET, selector: { type: "whole" } },
-        { asset_hash: PDF_ASSET, selector: { type: "pdf_page", page: 1 } },
         { asset_hash: PDF_ASSET, selector: { type: "pdf_page", page: 2 } },
+        { asset_hash: PDF_ASSET, selector: { type: "pdf_page", page: 1 } },
+        { asset_hash: PDF_ASSET, selector: { type: "pdf_page", page: 3 } },
       ],
     },
   ]);

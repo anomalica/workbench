@@ -123,6 +123,7 @@
     onreload,
     onhousekeeping,
     onhousekeepingaccess,
+    onstructure,
   }: {
     ingest: IngestDetail;
     digest?: DigestDocument | null;
@@ -156,6 +157,8 @@
     onhousekeeping?: () => void;
     /** Preserve the one-shot full view returned after possession verification. */
     onhousekeepingaccess?: (view: import("$lib/api").HousekeepingFullView) => void;
+    /** Open the structural split surface for this temporary record/3 parent. */
+    onstructure?: () => void;
   } = $props();
 
   const doc = new DocumentStore();
@@ -4107,6 +4110,15 @@
           text-on-surface-secondary hover:bg-surface transition-colors cursor-pointer"
         title="Review the source spans a good digest should retain"
       >Claim gold</button>
+    {/if}
+
+    {#if onstructure && !STATIC_READS}
+      <button
+        onclick={onstructure}
+        class="px-2 py-1 rounded text-xs font-ui font-medium flex-none border border-primary/50
+          text-primary hover:bg-primary/10 transition-colors cursor-pointer"
+        title="Split this temporary Record into final Records"
+      >Structure Record</button>
     {/if}
 
     {#if reviewed}

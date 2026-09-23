@@ -155,11 +155,11 @@ def structure_api(tmp_path: Path, monkeypatch):
     return TestClient(server.app), repo, records, local, parent, pdf
 
 
-def _split_request(base_ref: str, parent: str, asset_hash: str) -> dict:
+def _split_request(viewed_ref: str, parent: str, asset_hash: str) -> dict:
     return {
-        "schema": "anomalica/structure-request/1",
-        "base_ref": base_ref,
-        "parents": [parent],
+        "schema": "anomalica/record-structure/1",
+        "viewed_ref": viewed_ref,
+        "parents": [f"sha256:{parent}"],
         "outputs": [
             {
                 "metadata": {"title": "Later pages", "document_type": "report"},
@@ -191,9 +191,9 @@ def test_candidates_and_preview_are_server_derived_without_writes(structure_api)
     candidates = client.get("/api/records/structure")
     assert candidates.status_code == 200
     view = candidates.json()
-    assert view["base_ref"] == before_ref
+    assert view["viewed_ref"] == before_ref
     assert view["blocked"] == []
-    assert view["parents"][0]["content_hash"] == parent
+    assert view["parents"][0]["content_hash"] == f"sha256:{parent}"
     assert [page["asset_file_page"] for page in view["parents"][0]["pages"]] == [
         1,
         2,
@@ -208,7 +208,7 @@ def test_candidates_and_preview_are_server_derived_without_writes(structure_api)
     assert response.status_code == 200, response.text
     preview = response.json()
     assert preview["schema"] == "anomalica/structure-preview/1"
-    assert preview["preview_sha256"].startswith("sha256:")
+    assert preview["viewed_ref"] == before_ref
     first = preview["outputs"][0]
     assert [item["selector"] for item in first["selection"]] == [
         {"type": "pdf_page", "page": 2},
@@ -231,7 +231,7 @@ def test_split_commit_creates_every_output_and_retires_parent_atomically(structu
 
     response = client.post(
         "/api/records/structure/commit",
-        json={**request, "preview_sha256": preview["preview_sha256"]},
+        json=request,
     )
 
     assert response.status_code == 200, response.text
@@ -252,6 +252,7 @@ def test_split_commit_creates_every_output_and_retires_parent_atomically(structu
         path = repo / "store" / f"{bare}.md"
         assert path.is_file()
         frontmatter = yaml.safe_load(path.read_text().split("---", 2)[1])
+        assert path.read_text().splitlines()[3].startswith('title: "')
         assert frontmatter["content_hash"] == output["content_hash"]
         assert frontmatter["selection"] == output["selection"]
         assert frontmatter["page_map"] == output["page_map"]
@@ -280,6 +281,64 @@ def test_split_commit_creates_every_output_and_retires_parent_atomically(structu
     assert _git(repo, "diff", "--cached", "--name-only", "HEAD") == ""
 
 
+def test_split_may_overlap_reorder_and_omit_parent_pages(structure_api):
+    client, repo, _records, _local, parent, asset = structure_api
+    request = {
+        "schema": "anomalica/record-structure/1",
+        "viewed_ref": _git(repo, "rev-parse", "HEAD"),
+        "parents": [f"sha256:{parent}"],
+        "outputs": [
+            {
+                "metadata": {"title": "Reordered excerpt"},
+                "selection": [
+                    {
+                        "asset_hash": asset["asset_hash"],
+                        "selector": {"type": "pdf_page", "page": 2},
+                    },
+                    {
+                        "asset_hash": asset["asset_hash"],
+                        "selector": {"type": "pdf_page", "page": 1},
+                    },
+                ],
+            },
+            {
+                "metadata": {"title": "Overlapping excerpt"},
+                "selection": [
+                    {
+                        "asset_hash": asset["asset_hash"],
+                        "selector": {"type": "pdf_page", "page": 2},
+                    }
+                ],
+            },
+        ],
+    }
+
+    response = client.post("/api/records/structure/preview", json=request)
+
+    assert response.status_code == 200, response.text
+    outputs = response.json()["outputs"]
+    assert [entry["asset_file_page"] for entry in outputs[0]["page_map"]] == [2, 1]
+    assert [entry["asset_file_page"] for entry in outputs[1]["page_map"]] == [2]
+    assert all(
+        entry["asset_file_page"] != 3
+        for output in outputs
+        for entry in output["page_map"]
+    )
+
+
+def test_structure_requires_canonical_parent_identities(structure_api):
+    client, repo, _records, _local, parent, asset = structure_api
+    request = _split_request(
+        _git(repo, "rev-parse", "HEAD"), parent, asset["asset_hash"]
+    )
+    request["parents"] = [parent]
+
+    response = client.post("/api/records/structure/preview", json=request)
+
+    assert response.status_code == 400
+    assert "canonical sha256 Record identity" in response.json()["detail"]
+
+
 def test_composition_reorders_complete_pages_and_whole_image(structure_api):
     client, repo, records, _local, parent, pdf = structure_api
     image = _asset(
@@ -297,9 +356,9 @@ def test_composition_reorders_complete_pages_and_whole_image(structure_api):
     _git(repo, "commit", "-q", "-m", "second temporary parent")
     base_ref = _git(repo, "rev-parse", "HEAD")
     request = {
-        "schema": "anomalica/structure-request/1",
-        "base_ref": base_ref,
-        "parents": [parent, image_parent],
+        "schema": "anomalica/record-structure/1",
+        "viewed_ref": base_ref,
+        "parents": [f"sha256:{parent}", f"sha256:{image_parent}"],
         "outputs": [
             {
                 "metadata": {"title": "Composed evidence"},
@@ -335,7 +394,7 @@ def test_composition_reorders_complete_pages_and_whole_image(structure_api):
 
     committed = client.post(
         "/api/records/structure/commit",
-        json={**request, "preview_sha256": preview["preview_sha256"]},
+        json=request,
     )
     assert committed.status_code == 200, committed.text
     for retired in (parent, image_parent):
@@ -343,6 +402,47 @@ def test_composition_reorders_complete_pages_and_whole_image(structure_api):
             (repo / "store" / f"{retired}.md").read_text().split("---", 2)[1]
         )
         assert frontmatter["retired_into"] == committed.json()["created"]
+
+
+def test_composition_requires_every_parent_to_contribute(structure_api):
+    client, repo, records, _local, parent, pdf = structure_api
+    image = _asset(
+        records,
+        b"\x89PNG\r\n\x1a\nimage-parent",
+        source_type="image",
+        pages=1,
+    )
+    image_parent = _add_parent(
+        repo,
+        image,
+        ["Image caption."],
+        title="Temporary image",
+    )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "second temporary parent")
+    viewed_ref = _git(repo, "rev-parse", "HEAD")
+    request = {
+        "schema": "anomalica/record-structure/1",
+        "viewed_ref": viewed_ref,
+        "parents": [f"sha256:{parent}", f"sha256:{image_parent}"],
+        "outputs": [
+            {
+                "metadata": {"title": "Not really composed"},
+                "selection": [
+                    {
+                        "asset_hash": pdf["asset_hash"],
+                        "selector": {"type": "pdf_page", "page": 1},
+                    }
+                ],
+            }
+        ],
+    }
+
+    response = client.post("/api/records/structure/preview", json=request)
+
+    assert response.status_code == 400
+    assert "Every structural parent must contribute" in response.json()["detail"]
+    assert _git(repo, "rev-parse", "HEAD") == viewed_ref
 
 
 @pytest.mark.parametrize(
@@ -443,26 +543,19 @@ def test_missing_or_stale_source_inputs_fail_closed(structure_api):
     assert "Archived Asset is missing" in missing_asset.json()["detail"]
 
 
-def test_stale_ref_and_preview_token_write_nothing(structure_api):
+def test_stale_ref_writes_nothing(structure_api):
     client, repo, _records, _local, parent, asset = structure_api
     request = _split_request(
         _git(repo, "rev-parse", "HEAD"), parent, asset["asset_hash"]
     )
     preview = client.post("/api/records/structure/preview", json=request).json()
 
-    wrong_token = client.post(
-        "/api/records/structure/commit",
-        json={**request, "preview_sha256": f"sha256:{'f' * 64}"},
-    )
-    assert wrong_token.status_code == 409
-    assert _git(repo, "rev-parse", "HEAD") == request["base_ref"]
-
     (repo / "unrelated.txt").write_text("new committed state\n")
     _git(repo, "add", "unrelated.txt")
     _git(repo, "commit", "-q", "-m", "unrelated")
     stale = client.post(
         "/api/records/structure/commit",
-        json={**request, "preview_sha256": preview["preview_sha256"]},
+        json=request,
     )
     assert stale.status_code == 409
     assert "stale" in stale.json()["detail"]
@@ -478,7 +571,7 @@ def test_commit_rejects_a_staged_parent_even_when_the_worktree_matches_head(
     client, repo, _records, _local, parent, asset = structure_api
     base_ref = _git(repo, "rev-parse", "HEAD")
     request = _split_request(base_ref, parent, asset["asset_hash"])
-    preview = client.post("/api/records/structure/preview", json=request).json()
+    client.post("/api/records/structure/preview", json=request).json()
     parent_path = repo / "store" / f"{parent}.md"
     committed = parent_path.read_bytes()
     parent_path.write_bytes(committed.replace(b"Temporary bundle", b"Staged title"))
@@ -487,13 +580,32 @@ def test_commit_rejects_a_staged_parent_even_when_the_worktree_matches_head(
 
     response = client.post(
         "/api/records/structure/commit",
-        json={**request, "preview_sha256": preview["preview_sha256"]},
+        json=request,
     )
 
     assert response.status_code == 409
     assert "staged changes" in response.json()["detail"]
     assert _git(repo, "rev-parse", "HEAD") == base_ref
     assert "retired_into" not in parent_path.read_text()
+
+
+@pytest.mark.parametrize("suffix", ["review.json", "digest.json", "graph.json"])
+def test_commit_rejects_orphaned_output_authority(structure_api, suffix):
+    client, repo, _records, _local, parent, asset = structure_api
+    request = _split_request(
+        _git(repo, "rev-parse", "HEAD"), parent, asset["asset_hash"]
+    )
+    preview = client.post("/api/records/structure/preview", json=request).json()
+    output = preview["outputs"][0]["content_hash"].removeprefix("sha256:")
+    orphan = repo / "store" / f"{output}.{suffix}"
+    orphan.write_text('{"reviews":[{"inherited":true}]}\n')
+
+    response = client.post("/api/records/structure/commit", json=request)
+
+    assert response.status_code == 409
+    assert "authority state" in response.json()["detail"]
+    assert _git(repo, "rev-parse", "HEAD") == request["viewed_ref"]
+    assert "retired_into" not in (repo / "store" / f"{parent}.md").read_text()
 
 
 def test_commit_failure_leaves_all_structural_files_unchanged(
@@ -512,12 +624,12 @@ def test_commit_failure_leaves_all_structural_files_unchanged(
     monkeypatch.setattr(local, "_commit_bytes_locked", fail_commit)
     response = client.post(
         "/api/records/structure/commit",
-        json={**request, "preview_sha256": preview["preview_sha256"]},
+        json=request,
     )
 
     assert response.status_code == 500
     assert (repo / "store" / f"{parent}.md").read_bytes() == before_parent
-    assert _git(repo, "rev-parse", "HEAD") == request["base_ref"]
+    assert _git(repo, "rev-parse", "HEAD") == request["viewed_ref"]
     for output in preview["outputs"]:
         bare = output["content_hash"].removeprefix("sha256:")
         assert not (repo / "store" / f"{bare}.md").exists()
