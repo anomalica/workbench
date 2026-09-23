@@ -12,6 +12,7 @@ the full design, particularly the copyright handling section.
 from __future__ import annotations
 
 import json
+import logging
 import math
 import mimetypes
 import os
@@ -556,6 +557,29 @@ def normalise_hash(value: str | None) -> str | None:
 
 def _stale() -> HTTPException:
     return HTTPException(status_code=409, detail="Viewed record is stale")
+
+
+def _review_commit_failure(
+    exc: RuntimeError | subprocess.CalledProcessError,
+) -> HTTPException:
+    """Only a changed Git ref is a stale review; other commit failures need a real error."""
+    if isinstance(exc, RuntimeError):
+        if str(exc) == "ordinary Git index is locked":
+            return HTTPException(
+                status_code=503,
+                detail=(
+                    "Ingest repository Git index is locked; review not saved. "
+                    "If this persists, check ingests/.git/index.lock before retrying."
+                ),
+            )
+        if str(exc) == "stale or detached HEAD":
+            return _stale()
+    elif exc.cmd[:2] == ["git", "update-ref"]:
+        return _stale()
+    logging.getLogger(__name__).error("Review commit failed", exc_info=exc)
+    return HTTPException(
+        status_code=500, detail="Review commit failed; review not saved"
+    )
 
 
 def _submitted_content_includes_current_changes(
@@ -5528,7 +5552,7 @@ def submit_review(full_hash: str, body: dict, request: Request) -> JSONResponse:
                     current_ref,
                 )
             except (RuntimeError, subprocess.CalledProcessError) as exc:
-                raise _stale() from exc
+                raise _review_commit_failure(exc) from exc
         else:
             if not source.save_ingest(full_hash, content):
                 raise HTTPException(status_code=404, detail="Not found")

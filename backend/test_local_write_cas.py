@@ -309,6 +309,30 @@ def test_ordinary_save_requires_a_viewed_base_identity(local_api):
     assert record.read_text() == RECORD
 
 
+def test_ordinary_save_reports_git_index_lock_instead_of_stale_record(local_api):
+    client, repo, record, _sidecar = local_api
+    viewed = client.get(f"/api/ingests/{HASH}").json()
+    before_ref = viewed["base_ref"]
+    lock = repo / ".git" / "index.lock"
+    lock.touch()
+    payload = {
+        "content": RECORD.replace("Body.", "Reviewed body."),
+        "base_record_sha": viewed["base_record_sha"],
+        "base_ref": before_ref,
+    }
+
+    response = client.put(f"/api/ingests/{HASH}", json=payload)
+
+    assert response.status_code == 503
+    assert "Git index is locked" in response.json()["detail"]
+    assert "review not saved" in response.json()["detail"]
+    assert record.read_text() == RECORD
+    assert _git(repo, "rev-parse", "HEAD") == before_ref
+    lock.unlink()
+    assert client.put(f"/api/ingests/{HASH}", json=payload).status_code == 200
+    assert record.read_text() == payload["content"]
+
+
 @pytest.mark.parametrize(
     "declared",
     ["", " ", "null", "Footage", "screenplay"],
