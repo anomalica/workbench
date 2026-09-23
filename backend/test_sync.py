@@ -139,6 +139,61 @@ def test_untracked_files_never_pause_sync(repos):
     assert (local / "incoming" / "queued-source.bin").exists()
 
 
+def test_status_poll_does_not_need_the_git_index_lock(repos):
+    _origin, local = repos
+    lock = local / ".git" / "index.lock"
+    lock.write_text("live writer")
+    (local / "store" / f"{CONTENT_HASH}.md").write_text(
+        RECORD.replace("Line one.", "Mid-edit.")
+    )
+
+    manager = SyncManager(local)
+    assert manager.dirty() is True
+    assert lock.read_text() == "live writer"
+
+
+def test_failed_status_read_does_not_claim_the_tree_is_clean(repos, monkeypatch):
+    _origin, local = repos
+    manager = SyncManager(local)
+    monkeypatch.setattr(
+        manager,
+        "_run",
+        lambda *_args: subprocess.CompletedProcess([], 128, "", "index unreadable"),
+    )
+
+    with pytest.raises(RuntimeError, match="index unreadable"):
+        manager.dirty()
+
+
+def test_sync_start_recovers_only_a_preboot_index_lock(repos, monkeypatch):
+    _origin, local = repos
+    lock = local / ".git" / "index.lock"
+    lock.touch()
+    boot_after_lock = lock.stat().st_ctime_ns + 1
+    monkeypatch.setattr(sync, "_boot_time_ns", lambda: boot_after_lock)
+
+    manager = SyncManager(local)
+    manager.start()
+    manager._stop.set()
+
+    assert not lock.exists()
+    assert manager.status()["dirty"] is False
+
+
+def test_sync_start_leaves_current_boot_index_lock_alone(repos, monkeypatch):
+    _origin, local = repos
+    lock = local / ".git" / "index.lock"
+    lock.write_text("live writer")
+    monkeypatch.setattr(sync, "_boot_time_ns", lambda: lock.stat().st_ctime_ns - 1)
+
+    manager = SyncManager(local)
+    manager.start()
+    manager._stop.set()
+
+    assert lock.read_text() == "live writer"
+    assert manager.status()["dirty"] is False
+
+
 def test_sync_once_reports_offline(repos, tmp_path):
     origin, local = repos
     _git(local, "remote", "set-url", "origin", str(tmp_path / "gone.git"))

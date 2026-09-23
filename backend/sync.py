@@ -28,6 +28,8 @@ that share the clone.
 from __future__ import annotations
 
 import fcntl
+import logging
+import stat
 import subprocess
 import threading
 from contextlib import contextmanager
@@ -36,6 +38,48 @@ from pathlib import Path
 
 GIT_LOCK = threading.RLock()
 _LOCK_STATE = threading.local()
+logger = logging.getLogger(__name__)
+
+
+def _boot_time_ns() -> int | None:
+    """Linux boot boundary; only locks from before it are provably abandoned."""
+    try:
+        with open("/proc/stat") as proc_stat:
+            for line in proc_stat:
+                if line.startswith("btime "):
+                    return int(line.split()[1]) * 1_000_000_000
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def _clear_preboot_index_lock(repo_dir: Path) -> bool:
+    """Recover a crashed Git index writer without touching a current-boot lock."""
+    boot = _boot_time_ns()
+    if boot is None:
+        return False
+    index = subprocess.run(
+        ["git", "rev-parse", "--git-path", "index"],
+        cwd=repo_dir,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    index_path = Path(index)
+    if not index_path.is_absolute():
+        index_path = repo_dir / index_path
+    lock = index_path.with_name(f"{index_path.name}.lock")
+    try:
+        info = lock.lstat()
+    except FileNotFoundError:
+        return False
+    # A lock made in this boot may belong to a live Git operation, however
+    # old it looks. Refuse symlinks and anything whose ctime is not pre-boot.
+    if not stat.S_ISREG(info.st_mode) or info.st_ctime_ns >= boot:
+        return False
+    lock.unlink()
+    logger.warning("Cleared pre-boot Git index lock: %s", lock)
+    return True
 
 
 @contextmanager
@@ -110,10 +154,17 @@ class SyncManager:
     def dirty(self) -> bool:
         """Tracked modifications in the work tree (untracked files don't
         block a fast-forward, so they don't count)."""
-        out = self._run("status", "--porcelain")
-        return any(
-            line and not line.startswith("??") for line in out.stdout.splitlines()
+        # A normal `git status` refreshes the index and briefly creates
+        # .git/index.lock even on an idle status poll. The UI polls every minute;
+        # this monitor must never become an index writer itself.
+        out = self._run(
+            "--no-optional-locks", "status", "--porcelain", "--untracked-files=no"
         )
+        if out.returncode != 0:
+            raise RuntimeError(
+                f"Cannot inspect ingests working tree: {out.stderr.strip()}"
+            )
+        return bool(out.stdout.strip())
 
     def status(self) -> dict:
         ahead, behind = self.counts()
@@ -209,6 +260,12 @@ class SyncManager:
         observing in the background for the life of the process."""
         if self._thread is not None:
             return
+        # A crash or power loss can leave Git's O_EXCL index.lock on disk.
+        # Unlike our flock writer lock, that file survives a reboot and blocks
+        # every later review commit until removed. Only a pre-boot file is safe
+        # to clean automatically: no process from that boot can still own it.
+        with repository_write_lock(self.repo_dir):
+            _clear_preboot_index_lock(self.repo_dir)
         try:
             self.sync_once()
         except Exception as e:  # noqa: BLE001 - startup must not block serving
