@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   decideHousekeeping,
+  commitStructure,
+  previewStructure,
   waiveHousekeepingResearch,
   reviewBaseFor,
   saveAccountChronology,
@@ -10,6 +12,7 @@ import {
   unlockedIngestFromVerification,
   type HousekeepingFullView,
   type AccountChronologySave,
+  type StructureRequest,
 } from "./api";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -245,5 +248,50 @@ describe("canonical write identities", () => {
       method: "PUT",
       body,
     });
+  });
+
+  it("keeps structural preview and commit bound to the same request and preview hash", async () => {
+    const calls = captureFetch();
+    const request: StructureRequest = {
+      schema: "anomalica/structure-request/1",
+      base_ref: "a".repeat(40),
+      parents: ["b".repeat(64)],
+      outputs: [
+        {
+          metadata: { title: "First work" },
+          selection: [
+            {
+              asset_hash: `sha256:${"c".repeat(64)}`,
+              selector: { type: "pdf_page", page: 1 },
+            },
+          ],
+        },
+        {
+          metadata: { title: "Second work" },
+          selection: [
+            {
+              asset_hash: `sha256:${"c".repeat(64)}`,
+              selector: { type: "pdf_page", page: 2 },
+            },
+          ],
+        },
+      ],
+    };
+
+    await previewStructure(request);
+    await commitStructure(request, `sha256:${"d".repeat(64)}`);
+
+    expect(calls).toEqual([
+      {
+        url: "/api/records/structure/preview",
+        method: "POST",
+        body: request,
+      },
+      {
+        url: "/api/records/structure/commit",
+        method: "POST",
+        body: { ...request, preview_sha256: `sha256:${"d".repeat(64)}` },
+      },
+    ]);
   });
 });

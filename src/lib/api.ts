@@ -154,6 +154,140 @@ export async function fetchRecordNames(): Promise<RecordName[]> {
   return rows.map((row) => ({ ...row, content_hash: row.content_hash ?? row.public_hash }));
 }
 
+// --- Record structure (ADR 0051, local editor surface) ----------------------
+
+export type StructureSelector =
+  | { type: "whole" }
+  | { type: "pdf_page"; page: number }
+  | { type: "pdf_page_range"; start: number; end: number };
+
+export interface StructureSelectionEntry {
+  asset_hash: string;
+  selector: StructureSelector;
+}
+
+export interface StructureCandidate {
+  /** Bare Record SHA-256 used by the local store route. */
+  content_hash: string;
+  record_id: string;
+  title: string;
+  assets: {
+    asset_hash: string;
+    source_type: "pdf" | "image";
+    file_format: string;
+    pages?: number;
+    copyright_status: CopyrightStatus;
+  }[];
+  pages: {
+    asset_hash: string;
+    asset_file_page: number;
+    source_type: "pdf" | "image";
+    excerpt: string;
+  }[];
+}
+
+export interface StructureCandidates {
+  schema: "anomalica/structure-candidates/1";
+  base_ref: string;
+  parents: StructureCandidate[];
+  blocked: { content_hash: string; path: string; detail: string }[];
+}
+
+export interface StructureMetadata {
+  title: string;
+  document_type?: string;
+  provenance?: Record<string, unknown>;
+  work_provenance?: Record<string, unknown>;
+}
+
+export interface StructureRequest {
+  schema: "anomalica/structure-request/1";
+  base_ref: string;
+  parents: string[];
+  outputs: {
+    metadata: StructureMetadata;
+    selection: StructureSelectionEntry[];
+  }[];
+}
+
+export interface StructurePreviewOutput {
+  content_hash: string;
+  public_hash: string;
+  title: string;
+  assets: Record<string, unknown>[];
+  selection: StructureSelectionEntry[];
+  page_map: {
+    record_page: number;
+    asset_hash: string;
+    asset_file_page: number;
+  }[];
+  body: string;
+  pre_digest: {
+    sha256: string;
+    prep_version: string | number;
+    source_map_sha256: string;
+  };
+}
+
+export interface StructurePreview {
+  schema: "anomalica/structure-preview/1";
+  base_ref: string;
+  parents: {
+    content_hash: string;
+    title: string;
+    retired_into: string[];
+  }[];
+  outputs: StructurePreviewOutput[];
+  preview_sha256: string;
+}
+
+export interface StructureCommitResult {
+  committed: true;
+  commit_ref: string;
+  created: string[];
+  retired: string[];
+}
+
+async function structureResponse<T>(res: Response, action: string): Promise<T> {
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail || `Failed to ${action} (${res.status})`);
+  }
+  return res.json();
+}
+
+/** Local-only: list live temporary record/3 parents at one committed Git ref. */
+export async function fetchStructureCandidates(): Promise<StructureCandidates> {
+  return structureResponse(await fetch("/api/records/structure"), "load structure candidates");
+}
+
+/** Derive identities, page maps, bodies and source maps without writing. */
+export async function previewStructure(request: StructureRequest): Promise<StructurePreview> {
+  return structureResponse(
+    await fetch("/api/records/structure/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    }),
+    "preview Record structure",
+  );
+}
+
+/** Commit exactly the server-derived preview or fail on any stale input. */
+export async function commitStructure(
+  request: StructureRequest,
+  previewSha256: string,
+): Promise<StructureCommitResult> {
+  return structureResponse(
+    await fetch("/api/records/structure/commit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...request, preview_sha256: previewSha256 }),
+    }),
+    "commit Record structure",
+  );
+}
+
 /** Speaker names already used anywhere in the corpus, commonest first. Fetched
  *  once and offered while a new name is typed, so the same person does not end
  *  up spelled two ways. */

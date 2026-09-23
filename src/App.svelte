@@ -47,6 +47,7 @@
   import ReviewView from "$lib/components/ReviewView.svelte";
   import RolesView from "$lib/components/RolesView.svelte";
   import DigestsView from "$lib/components/DigestsView.svelte";
+  import StructureView from "$lib/components/StructureView.svelte";
   import { carryoverState } from "$lib/carryover";
   import { themeState } from "$lib/theme.svelte";
   import { trackView, trackEvent } from "$lib/umami";
@@ -70,6 +71,7 @@
     | "evaluations"
     | "housekeeping"
     | "pages"
+    | "structure"
   >("records");
   // A node to open directly in the graph view (deep link /graph/<node_id>), so a
   // claim-count / any link can jump straight to that node's claims in context.
@@ -661,6 +663,11 @@
     history.pushState(null, "", "/pages");
   }
 
+  function showStructure() {
+    appMode = "structure";
+    history.pushState(null, "", "/structure");
+  }
+
   // Open a record in the workbench review view by its public hash (the 56-char
   // record_hash an Articles record-page carries). Mirrors the deep-link path so
   // a not-yet-reviewable record surfaces the same friendly notice.
@@ -691,6 +698,10 @@
       // bookmark should not break for a rename.
       appMode = "pages";
       return; // PagesView fetches its own list
+    }
+    if (path === "structure" && !STATIC_READS) {
+      appMode = "structure";
+      return; // StructureView fetches its own CAS-bound candidate list
     }
     if (path === "curate") {
       appMode = "curate";
@@ -790,6 +801,14 @@
           {appMode === 'records' ? 'bg-bone/15 text-bone' : 'text-bone/50 hover:text-bone/80 hover:bg-bone/10'}"
         title="Every record and its state - what to read, what is reviewed, what is digested"
       >Review</button>
+      {#if liveBackend && canCurate}
+        <button
+          onclick={showStructure}
+          class="text-sm font-ui px-2.5 py-1 rounded cursor-pointer transition-colors
+            {appMode === 'structure' ? 'bg-bone/15 text-bone' : 'text-bone/50 hover:text-bone/80 hover:bg-bone/10'}"
+          title="Split temporary Records or compose their complete PDF pages and standalone images"
+        >Structure</button>
+      {/if}
       {#if canReview}
         <button
           onclick={showDigests}
@@ -961,6 +980,8 @@
   <main class="flex-1 flex flex-col min-h-0">
     {#if appMode === "digests"}
       <DigestsView />
+    {:else if appMode === "structure"}
+      <StructureView oncommitted={refreshIngestSummaries} />
     {:else if appMode === "evaluations"}
       <EvaluationView />
     {:else if appMode === "housekeeping"}

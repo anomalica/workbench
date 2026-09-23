@@ -66,6 +66,7 @@ from backend import (
     pages,
     relations,
     review_priority,
+    structure,
     tags,
 )
 from backend.auth import setup_auth
@@ -219,7 +220,10 @@ def parse_frontmatter(text: str) -> tuple[dict, str, str]:
             line.startswith("  ") and current_parent and line.lstrip().startswith("- ")
         ):
             item = _unquote(line.lstrip()[2:])
-            if item and ":" not in item:
+            # A scalar may itself contain a colon (`sha256:...`, `https://...`).
+            # Only skip a YAML mapping item (`- key: value`), which this shallow
+            # compatibility parser deliberately does not attempt to flatten.
+            if item and not re.match(r"^[^:]+:\s", item):
                 existing = frontmatter.setdefault(current_parent, [])
                 if isinstance(existing, list):
                     existing.append(item)
@@ -952,7 +956,7 @@ class LocalIngestSource(IngestSource):
         the ones the listing already does."""
         counts: dict[str, int] = {}
         for _hash, (_path, frontmatter) in self._scan().items():
-            if frontmatter.get("superseded_by"):
+            if frontmatter.get("superseded_by") or frontmatter.get("retired_into"):
                 continue
             speakers = frontmatter.get("speakers") or []
             if not isinstance(speakers, list):
@@ -1084,7 +1088,11 @@ class LocalIngestSource(IngestSource):
                 frontmatter, _body = _yaml_frontmatter(record_path.read_text())
             except OSError:
                 continue
-            if not frontmatter or frontmatter.get("superseded_by"):
+            if (
+                not frontmatter
+                or frontmatter.get("superseded_by")
+                or frontmatter.get("retired_into")
+            ):
                 continue
             relative = record_path.relative_to(root).as_posix()
             for key in _source_keys(frontmatter):
@@ -1135,7 +1143,7 @@ class LocalIngestSource(IngestSource):
             # Supersession: a retired re-acquisition is hidden from the browse
             # list (decision 0040). The flag is the source of truth; the file's
             # store/v1/ move is a derived convenience.
-            if frontmatter.get("superseded_by"):
+            if frontmatter.get("superseded_by") or frontmatter.get("retired_into"):
                 continue
             # The spec field is `creators`; older records used `authors`.
             creators = frontmatter.get("creators") or frontmatter.get("authors") or []
@@ -1230,7 +1238,7 @@ class LocalIngestSource(IngestSource):
         """
         names: list[dict] = []
         for content_hash, (_md_path, frontmatter) in self._scan().items():
-            if frontmatter.get("superseded_by"):
+            if frontmatter.get("superseded_by") or frontmatter.get("retired_into"):
                 continue
             creators = frontmatter.get("creators") or frontmatter.get("authors") or []
             if not isinstance(creators, list):
@@ -1437,7 +1445,11 @@ class LocalIngestSource(IngestSource):
                 raw.decode("utf-8")
             )
             content_hash = normalise_hash(frontmatter.get("content_hash"))
-            if content_hash and not frontmatter.get("superseded_by"):
+            if (
+                content_hash
+                and not frontmatter.get("superseded_by")
+                and not frontmatter.get("retired_into")
+            ):
                 records[content_hash] = (path, blob, raw)
         return records, files
 
@@ -3052,6 +3064,120 @@ def list_ingest_names() -> list[dict]:
     still building.
     """
     return source.list_names()
+
+
+def _local_structure_source() -> LocalIngestSource:
+    if not isinstance(source, LocalIngestSource):
+        raise HTTPException(status_code=404, detail="Not found")
+    return source
+
+
+def _structure_validation_error(exc: structure.StructureError) -> HTTPException:
+    return HTTPException(status_code=400, detail=str(exc))
+
+
+def _structure_commit_failure(
+    exc: RuntimeError | subprocess.CalledProcessError,
+) -> HTTPException:
+    if isinstance(exc, RuntimeError):
+        if str(exc) == "ordinary Git index is locked":
+            return HTTPException(
+                status_code=503,
+                detail="Ingest repository Git index is locked; structure commit not saved",
+            )
+        if str(exc) == "stale or detached HEAD":
+            return HTTPException(status_code=409, detail="Structure preview is stale")
+    elif exc.cmd[:2] == ["git", "update-ref"]:
+        return HTTPException(status_code=409, detail="Structure preview is stale")
+    logging.getLogger(__name__).error("Structure commit failed", exc_info=exc)
+    return HTTPException(
+        status_code=500, detail="Structure commit failed; no structural changes saved"
+    )
+
+
+@app.get("/api/records/structure")
+def list_structure_candidates(request: Request) -> JSONResponse:
+    """Temporary record/3 parents available to the local structural editor."""
+    _require_role(request, "editor")
+    local = _local_structure_source()
+    try:
+        ref = local.current_ref()
+        result = structure.candidate_view(local, records_path, ref)
+        if local.current_ref() != ref:
+            raise HTTPException(status_code=409, detail="Structure view is stale")
+        return JSONResponse(result)
+    except structure.StructureError as exc:
+        raise _structure_validation_error(exc) from exc
+    except subprocess.CalledProcessError as exc:
+        raise HTTPException(
+            status_code=503, detail="Could not read the committed ingests tree"
+        ) from exc
+
+
+@app.post("/api/records/structure/preview")
+def preview_structure(payload: dict, request: Request) -> JSONResponse:
+    """Derive final Records and artefacts without changing the repository."""
+    _require_role(request, "editor")
+    local = _local_structure_source()
+    if payload.get("base_ref") != local.current_ref():
+        raise HTTPException(status_code=409, detail="Structure view is stale")
+    try:
+        plan = structure.build_plan(local, records_path, payload)
+    except structure.StructureError as exc:
+        raise _structure_validation_error(exc) from exc
+    if local.current_ref() != plan.preview["base_ref"]:
+        raise HTTPException(status_code=409, detail="Structure view is stale")
+    return JSONResponse(plan.preview)
+
+
+@app.post("/api/records/structure/commit")
+def commit_structure(payload: dict, request: Request) -> JSONResponse:
+    """Create every output and retire every parent in one CAS-bound Git commit."""
+    user = _require_role(request, "editor")
+    local = _local_structure_source()
+    viewed_preview = payload.get("preview_sha256")
+    if not isinstance(viewed_preview, str) or not re.fullmatch(
+        r"sha256:[0-9a-f]{64}", viewed_preview
+    ):
+        raise HTTPException(status_code=400, detail="preview_sha256 is required")
+
+    with repository_write_lock(local.store.parent):
+        current_ref = local.current_ref()
+        if payload.get("base_ref") != current_ref:
+            raise HTTPException(status_code=409, detail="Structure preview is stale")
+        try:
+            plan = structure.build_plan(local, records_path, payload)
+            if plan.preview["preview_sha256"] != viewed_preview:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Structure preview no longer matches request",
+                )
+            try:
+                structure.assert_clean_targets(local, plan, current_ref)
+            except structure.StructureError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            verb = "split" if len(plan.preview["parents"]) == 1 else "compose"
+            title = plan.preview["outputs"][0]["title"]
+            commit_ref = local._commit_bytes_locked(
+                plan.changes,
+                f"structure: {verb} {title}",
+                user["name"],
+                user["email"],
+                current_ref,
+            )
+        except structure.StructureError as exc:
+            raise _structure_validation_error(exc) from exc
+        except (RuntimeError, subprocess.CalledProcessError) as exc:
+            raise _structure_commit_failure(exc) from exc
+
+    return JSONResponse(
+        {
+            "committed": True,
+            "commit_ref": commit_ref,
+            "created": [output["content_hash"] for output in plan.preview["outputs"]],
+            "retired": [parent["content_hash"] for parent in plan.preview["parents"]],
+        }
+    )
 
 
 _review_queue_cache: dict[str, object] = {}
