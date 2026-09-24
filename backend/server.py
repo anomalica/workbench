@@ -423,6 +423,76 @@ def _source_keys(frontmatter: dict) -> set[str]:
     return keys
 
 
+def _prov_map(frontmatter: dict) -> dict:
+    prov = frontmatter.get("provenance")
+    return prov if isinstance(prov, dict) else {}
+
+
+def _summary_origin(frontmatter: dict) -> dict:
+    """Acquisition-origin and source-identity fields for a browse summary.
+
+    record/3 keeps work origin in `provenance` (0043) and copy acquisition in
+    `assets[].acquisition` (0051); /1 and /2 used flat `source_url`/
+    `source_file`/`source_hash`/`publisher`/`creators`/`date_published` and a
+    scalar `provenance: "unknown"` marker. `parse_frontmatter` flattens one
+    level of nesting to dotted keys (`provenance.source_url`,
+    `assets.fetched_url`), so both spellings are read here. The summary is one
+    shape either way, or every record/3 reads as "No source recorded" beside
+    its own URL.
+    """
+    prov = _prov_map(frontmatter)
+
+    def pick(*names: str) -> object:
+        for name in names:
+            value = frontmatter.get(name)
+            if value not in (None, ""):
+                return value
+        return None
+
+    source_url = str(
+        pick("source_url")
+        or (prov.get("source_url") if prov else None)
+        or pick("provenance.source_url")
+        or ""
+    )
+    if not source_url:
+        # Copy acquisition: the URL actually fetched (often a Wayback wrapper).
+        source_url = str(pick("fetched_url", "assets.fetched_url") or "")
+
+    creators = pick("creators", "authors", "provenance.creators")
+    if not isinstance(creators, list):
+        # The shallow parser collects a block's list items under the block key
+        # itself (`provenance.creators:` is one level too deep for it).
+        block_list = frontmatter.get("provenance")
+        creators = block_list if isinstance(block_list, list) else []
+    if not isinstance(creators, list):
+        creators = []
+
+    # A record/3 provenance block is the home itself; the scalar "unknown"
+    # marker is legacy /1 /2 only. Origin-unknown there is the absence of
+    # locators (source_url / identifiers), not a separate flag.
+    marker = frontmatter.get("provenance")
+    return {
+        "source_url": source_url,
+        "source_file": str(frontmatter.get("source_file") or ""),
+        "source_hash": str(frontmatter.get("source_hash") or ""),
+        "provenance": marker if isinstance(marker, str) else "",
+        "publisher": str(
+            pick("publisher")
+            or (prov.get("publisher") if prov else None)
+            or pick("provenance.publisher")
+            or ""
+        ),
+        "creators": creators,
+        "date": str(
+            pick("date_published", "date")
+            or (prov.get("published_date") if prov else None)
+            or pick("provenance.published_date")
+            or ""
+        ),
+    }
+
+
 def _yaml_frontmatter(text: str) -> tuple[dict | None, str]:
     match = re.match(r"^---\r?\n(.*?)\r?\n---(?:\r?\n|$)(.*)$", text, re.DOTALL)
     if not match:
@@ -733,9 +803,7 @@ class LocalIngestSource(IngestSource):
         ingests: list[dict] = []
         manifest = self._pipeline_versions()
         for content_hash, (md_path, frontmatter) in self._scan_archived().items():
-            creators = frontmatter.get("creators") or frontmatter.get("authors") or []
-            if not isinstance(creators, list):
-                creators = []
+            origin = _summary_origin(frontmatter)
             schema_version = _schema_version(frontmatter.get("schema", ""))
             pipeline_version = _pipeline_version_of(frontmatter)
             pipeline_current = manifest.get(frontmatter.get("source_type", ""))
@@ -745,13 +813,11 @@ class LocalIngestSource(IngestSource):
                     "public_hash": content_hash[:PUBLIC_HASH_LENGTH],
                     "title": frontmatter.get("title", "Untitled"),
                     "schema_version": schema_version,
-                    "creators": creators,
+                    "creators": origin["creators"],
                     "digestible": False,
                     "observed_coverage": 0,
                     "digested": False,
-                    "date": frontmatter.get(
-                        "date_published", frontmatter.get("date", "")
-                    ),
+                    "date": origin["date"],
                     "date_ingested": frontmatter.get(
                         "date_extracted", frontmatter.get("date_accessed", "")
                     ),
@@ -764,11 +830,11 @@ class LocalIngestSource(IngestSource):
                     "pipeline_status": _pipeline_status(
                         pipeline_version, pipeline_current
                     ),
-                    "source_url": frontmatter.get("source_url", ""),
-                    "source_file": frontmatter.get("source_file", ""),
-                    "source_hash": frontmatter.get("source_hash", ""),
-                    "provenance": frontmatter.get("provenance", ""),
-                    "publisher": frontmatter.get("publisher", ""),
+                    "source_url": origin["source_url"],
+                    "source_file": origin["source_file"],
+                    "source_hash": origin["source_hash"],
+                    "provenance": origin["provenance"],
+                    "publisher": origin["publisher"],
                     "copyright_status": frontmatter.get(
                         "copyright.status", "restricted"
                     ),
@@ -1195,10 +1261,7 @@ class LocalIngestSource(IngestSource):
             # store/v1/ move is a derived convenience.
             if frontmatter.get("superseded_by") or frontmatter.get("retired_into"):
                 continue
-            # The spec field is `creators`; older records used `authors`.
-            creators = frontmatter.get("creators") or frontmatter.get("authors") or []
-            if not isinstance(creators, list):
-                creators = []
+            origin = _summary_origin(frontmatter)
             sidecar = current_coverage.get(content_hash)
             record_text = md_path.read_bytes().decode("utf-8")
             verdict = _validated_digestibility(record_text, sidecar)
@@ -1211,13 +1274,11 @@ class LocalIngestSource(IngestSource):
                     "public_hash": content_hash[:PUBLIC_HASH_LENGTH],
                     "title": frontmatter.get("title", "Untitled"),
                     "schema_version": schema_version,
-                    "creators": creators,
+                    "creators": origin["creators"],
                     "digestible": verdict.digestible,
                     "observed_coverage": verdict.observed_coverage,
                     "digested": content_hash in digested_hashes,
-                    "date": frontmatter.get(
-                        "date_published", frontmatter.get("date", "")
-                    ),
+                    "date": origin["date"],
                     "date_ingested": frontmatter.get(
                         "date_extracted", frontmatter.get("date_accessed", "")
                     ),
@@ -1245,15 +1306,16 @@ class LocalIngestSource(IngestSource):
                         if frontmatter.get("refresh_refused.at")
                         else None
                     ),
-                    "source_url": frontmatter.get("source_url", ""),
+                    "source_url": origin["source_url"],
                     # Acquisition provenance: source_url (http origin),
                     # source_file (local origin filename), source_hash (the
                     # archived original by sha256), or provenance: "unknown"
-                    # when none of those recover the origin.
-                    "source_file": frontmatter.get("source_file", ""),
-                    "source_hash": frontmatter.get("source_hash", ""),
-                    "provenance": frontmatter.get("provenance", ""),
-                    "publisher": frontmatter.get("publisher", ""),
+                    # when none of those recover the origin. record/3 resolves
+                    # these from `provenance` and `assets[].acquisition`.
+                    "source_file": origin["source_file"],
+                    "source_hash": origin["source_hash"],
+                    "provenance": origin["provenance"],
+                    "publisher": origin["publisher"],
                     "copyright_status": frontmatter.get(
                         "copyright.status", "restricted"
                     ),
@@ -1290,9 +1352,7 @@ class LocalIngestSource(IngestSource):
         for content_hash, (_md_path, frontmatter) in self._scan().items():
             if frontmatter.get("superseded_by") or frontmatter.get("retired_into"):
                 continue
-            creators = frontmatter.get("creators") or frontmatter.get("authors") or []
-            if not isinstance(creators, list):
-                creators = []
+            origin = _summary_origin(frontmatter)
             names.append(
                 {
                     "content_hash": content_hash,
@@ -1301,10 +1361,8 @@ class LocalIngestSource(IngestSource):
                     # The picker's one-line subtitle; both are present on every
                     # record and come from the same frontmatter read.
                     "source_type": frontmatter.get("source_type", ""),
-                    "date": frontmatter.get(
-                        "date_published", frontmatter.get("date", "")
-                    ),
-                    "creators": creators,
+                    "date": origin["date"],
+                    "creators": origin["creators"],
                 }
             )
         names.sort(

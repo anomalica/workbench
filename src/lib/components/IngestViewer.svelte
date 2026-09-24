@@ -28,6 +28,7 @@
     fetchCoverage,
     fetchSyncStatus,
     provenanceOf,
+    acquisitionOf,
     submitVerification,
     unlockedIngestFromVerification,
     reviewBaseFor,
@@ -284,24 +285,10 @@
       : (ingest.frontmatter.title ?? "Untitled"),
   );
   let liveProvenance = $derived(
-    provenanceOf({
-      source_url:
-        typeof currentFrontmatterObj.source_url === "string"
-          ? currentFrontmatterObj.source_url
-          : "",
-      source_file:
-        typeof currentFrontmatterObj.source_file === "string"
-          ? currentFrontmatterObj.source_file
-          : "",
-      source_hash:
-        typeof currentFrontmatterObj.source_hash === "string"
-          ? currentFrontmatterObj.source_hash
-          : "",
-      provenance:
-        typeof currentFrontmatterObj.provenance === "string"
-          ? currentFrontmatterObj.provenance
-          : "",
-    }),
+    // record/3 keeps the work origin in `provenance.source_url` and the copy
+    // fetch URL in `assets[].acquisition`; acquisitionOf resolves both so the
+    // header does not read "No source recorded" beside a visible URL.
+    provenanceOf(acquisitionOf(currentFrontmatterObj)),
   );
   let currentRawFrontmatter = $derived.by(() => {
     const m = doc.current.match(/^---\n([\s\S]*?)\n---\n/);

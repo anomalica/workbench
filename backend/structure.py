@@ -65,6 +65,7 @@ _PROVENANCE_FIELDS = frozenset(
         "publisher",
         "creators",
         "published_date",
+        "updated_date",
         "posted_by",
         "posted_date",
         "source_url",

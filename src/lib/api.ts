@@ -40,7 +40,10 @@ export interface IngestSummary {
   /** sha256 of the archived original source file (ebooks/PDFs ingested from a
    *  file). A recoverable origin even when `provenance` is "unknown". */
   source_hash: string;
-  /** "unknown" when the acquisition origin is unrecoverable. */
+  /** "unknown" when the acquisition origin is unrecoverable (legacy /1 /2
+   *  scalar marker). record/3 carries the provenance block here only when the
+   *  backend is speaking the legacy string shape; origin-tracing uses
+   *  {@link provenanceOf}, which understands both. */
   provenance: string;
   publisher: string;
   copyright_status: CopyrightStatus;
@@ -66,22 +69,98 @@ export function isPubliclyViewable(status: CopyrightStatus): boolean {
 
 export type ProvenanceKind = "url" | "file" | "unknown" | "none";
 
+/** The record/3 `provenance` block's shape as far as origin-tracing cares.
+ *  Other sub-fields (publisher, creators, published_date, ...) are ignored
+ *  here and read by their own consumers. */
+export interface ProvenanceBlock {
+  source_url?: unknown;
+  identifiers?: unknown;
+  [key: string]: unknown;
+}
+
+/** Acquisition-origin fields for {@link provenanceOf}, resolved across record
+ *  generations. `record/3` keeps work origin in the `provenance` block and copy
+ *  acquisition in `assets[].acquisition`; `/1` and `/2` used flat
+ *  `source_url`/`source_file`/`source_hash` and a scalar `provenance: "unknown"`
+ *  marker. The browse list and the record header read one shape either way. */
+export function acquisitionOf(frontmatter: Record<string, unknown>): {
+  source_url: string;
+  source_file: string;
+  source_hash: string;
+  provenance: string | ProvenanceBlock;
+} {
+  const prov = frontmatter.provenance;
+  const provMap: ProvenanceBlock =
+    prov && typeof prov === "object" && !Array.isArray(prov)
+      ? (prov as ProvenanceBlock)
+      : {};
+  let source_url = str(frontmatter.source_url) || str(provMap.source_url);
+  if (!source_url && Array.isArray(frontmatter.assets)) {
+    for (const asset of frontmatter.assets) {
+      if (!asset || typeof asset !== "object") continue;
+      const acq = (asset as Record<string, unknown>).acquisition;
+      if (acq && typeof acq === "object") {
+        const fetched = str((acq as Record<string, unknown>).fetched_url);
+        if (fetched) {
+          source_url = fetched;
+          break;
+        }
+      }
+    }
+  }
+  return {
+    source_url,
+    source_file: str(frontmatter.source_file),
+    source_hash: str(frontmatter.source_hash),
+    // A record/3 block is the home itself; the scalar "unknown" marker is
+    // legacy /1 /2 only. Origin-unknown there is the absence of locators.
+    provenance: typeof prov === "string" ? prov : provMap,
+  };
+}
+
+function str(v: unknown): string {
+  return typeof v === "string" ? v : "";
+}
+
 /** Where a record came from, derived from its acquisition fields. `traceable`
  *  is false for records whose origin is unknown or absent - the ones worth
- *  flagging when browsing. Works on an IngestSummary or a frontmatter dict. */
+ *  flagging when browsing. Works on an IngestSummary or a frontmatter dict
+ *  (via {@link acquisitionOf} for record/3's nested provenance block). */
 export function provenanceOf(r: {
   source_url?: string;
   source_file?: string;
   source_hash?: string;
-  provenance?: string;
+  provenance?: string | ProvenanceBlock;
 }): { kind: ProvenanceKind; label: string; traceable: boolean } {
-  if (r.source_url) return { kind: "url", label: r.source_url, traceable: true };
+  const nested =
+    r.provenance && typeof r.provenance === "object" ? r.provenance : null;
+  const nestedUrl = nested ? str(nested.source_url) : "";
+  if (r.source_url || nestedUrl)
+    return { kind: "url", label: r.source_url || nestedUrl, traceable: true };
   if (r.source_file) return { kind: "file", label: r.source_file, traceable: true };
   // The original source file archived by its hash (e.g. ebooks/PDFs ingested from
   // a file) is a recoverable origin even when provenance is "unknown" - the bytes
   // exist in the sources archive. Without this, ebooks read as "No source
   // recorded" though their epub is on hand.
   if (r.source_hash) return { kind: "file", label: "Archived source file", traceable: true };
+  // record/3: work-origin-unknown is the absence of source_url AND identifiers
+  // (ingest-format.md#provenance), not a separate marker. Identifiers alone
+  // still recover the work (ISBN, DOI, VIRIN).
+  if (nested) {
+    const ids = nested.identifiers;
+    if (ids && typeof ids === "object" && !Array.isArray(ids)) {
+      const entries = Object.entries(ids as Record<string, unknown>);
+      if (entries.length > 0) {
+        const [scheme, native] = entries[0];
+        return {
+          kind: "file",
+          label: `${scheme}: ${String(native)}`,
+          traceable: true,
+        };
+      }
+    }
+    return { kind: "none", label: "No source recorded", traceable: false };
+  }
   if (r.provenance === "unknown")
     return { kind: "unknown", label: "Origin unknown", traceable: false };
   return { kind: "none", label: "No source recorded", traceable: false };
