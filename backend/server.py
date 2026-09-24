@@ -70,7 +70,7 @@ from backend import (
     tags,
 )
 from backend.auth import setup_auth
-from backend.sync import GIT_LOCK, SyncManager, repository_write_lock
+from backend.sync import GIT_LOCK, IndexLockOwner, SyncManager, repository_write_lock
 from anomalica_common import housekeeping as hk
 
 FULL_HASH_LENGTH = 64
@@ -89,7 +89,13 @@ MIN_POOL_FOR_CLOZE_GATE = 5
 VERIFICATION_SESSION_TTL_SECONDS = 1800
 
 DEFAULT_INGESTS_PATH = Path(__file__).resolve().parents[2] / "ingests"
-DEFAULT_RECORDS_PATH = Path(__file__).resolve().parents[2] / "records"
+# Archived originals live at the WORKSPACE root (anomalica/records), not under
+# product/ like ingests/digests/content. The 2026-09-23 domain-workspace split
+# moved components under product/, so parents[2] became product/ and this path
+# silently started resolving to an empty product/records - every
+# /api/sources/{hash} and /api/sources/{hash}/waveform returned 404 while the
+# files sat untouched in anomalica/records. parents[3] is the workspace root.
+DEFAULT_RECORDS_PATH = Path(__file__).resolve().parents[3] / "records"
 DEFAULT_DIGESTS_PATH = Path(__file__).resolve().parents[2] / "digests"
 DEFAULT_CONTENT_PATH = Path(__file__).resolve().parents[2] / "content"
 # Grading results the digester emits for the relevance-tuning loop
@@ -816,6 +822,12 @@ class LocalIngestSource(IngestSource):
             "GIT_AUTHOR_NAME": author_name,
             "GIT_AUTHOR_EMAIL": author_email,
         }
+        from anomalica_common.repository_privacy import unsafe_locations
+
+        if unsafe_locations(message):
+            raise HTTPException(
+                status_code=422, detail="local machine location in Git commit message"
+            )
         # A moved-from path no longer exists on disk; `git add` stages its
         # deletion only if it is tracked, and errors on an untracked missing
         # path - so filter those out rather than aborting the whole commit.
@@ -823,6 +835,44 @@ class LocalIngestSource(IngestSource):
             rel_paths = []
             for p in paths:
                 rel = str(p.relative_to(repo_dir))
+                if (
+                    p.is_file()
+                    and not p.is_symlink()
+                    and p.suffix in {".md", ".json", ".yaml", ".yml"}
+                ):
+                    from anomalica_common.repository_privacy import newly_unsafe_text
+
+                    previous = subprocess.run(
+                        ["git", "show", f"HEAD:{rel}"],
+                        cwd=repo_dir,
+                        capture_output=True,
+                        check=False,
+                    )
+                    old = (
+                        previous.stdout.decode("utf-8")
+                        if previous.returncode == 0
+                        else ""
+                    )
+                    if not old and rel.startswith("store/v1/"):
+                        moved = subprocess.run(
+                            ["git", "show", f"HEAD:store/{p.name}"],
+                            cwd=repo_dir,
+                            capture_output=True,
+                            check=False,
+                        )
+                        old = (
+                            moved.stdout.decode("utf-8")
+                            if moved.returncode == 0
+                            else ""
+                        )
+                    if fields := newly_unsafe_text(
+                        rel, p.read_text(encoding="utf-8"), old
+                    ):
+                        raise HTTPException(
+                            status_code=422,
+                            detail="local machine location in repository metadata: "
+                            + ", ".join(fields),
+                        )
                 if (
                     p.exists()
                     or p.is_symlink()
@@ -1516,10 +1566,34 @@ class LocalIngestSource(IngestSource):
             "GIT_AUTHOR_NAME": author_name,
             "GIT_AUTHOR_EMAIL": author_email,
         }
+        from anomalica_common.repository_privacy import unsafe_locations
+
+        if unsafe_locations(message):
+            raise HTTPException(
+                status_code=422, detail="local machine location in Git commit message"
+            )
         rel_changes = {
             str(path.relative_to(repo_dir)): content
             for path, content in changes.items()
         }
+        from anomalica_common.repository_privacy import newly_unsafe_text
+
+        for rel, content in rel_changes.items():
+            if not rel.endswith((".md", ".json", ".yaml", ".yml")):
+                continue
+            before = subprocess.run(
+                ["git", "show", f"{expected_ref}:{rel}"],
+                cwd=repo_dir,
+                capture_output=True,
+                check=False,
+            )
+            old = before.stdout.decode("utf-8") if before.returncode == 0 else ""
+            if fields := newly_unsafe_text(rel, content.decode("utf-8"), old):
+                raise HTTPException(
+                    status_code=422,
+                    detail="local machine location in repository metadata: "
+                    + ", ".join(fields),
+                )
         target_blobs: dict[str, str] = {}
         with tempfile.TemporaryDirectory(prefix="workbench-git-index-") as td:
             index_env = {**env, "GIT_INDEX_FILE": str(Path(td) / "index")}
@@ -1582,6 +1656,44 @@ class LocalIngestSource(IngestSource):
             )
             if not index_path.is_absolute():
                 index_path = repo_dir / index_path
+
+            # Prepare the next ordinary index away from .git. Pointing Git at
+            # .git/index.lock while updating it makes Git replace that file via
+            # its own nested lock, invalidating the ownership receipt below.
+            # The native lock is only created once these bytes are final.
+            publish_index = Path(td) / "publish-index"
+            shutil.copyfile(index_path, publish_index)
+            publish_env = {**env, "GIT_INDEX_FILE": str(publish_index)}
+            for rel, blob in target_blobs.items():
+                unchanged = subprocess.run(
+                    [
+                        "git",
+                        "diff-index",
+                        "--cached",
+                        "--quiet",
+                        expected_ref,
+                        "--",
+                        rel,
+                    ],
+                    cwd=repo_dir,
+                    env=publish_env,
+                )
+                if unchanged.returncode == 0:
+                    subprocess.run(
+                        [
+                            "git",
+                            "update-index",
+                            "--add",
+                            "--cacheinfo",
+                            f"100644,{blob},{rel}",
+                        ],
+                        cwd=repo_dir,
+                        check=True,
+                        env=publish_env,
+                    )
+                elif unchanged.returncode != 1:
+                    unchanged.check_returncode()
+
             index_lock = index_path.with_name(f"{index_path.name}.lock")
             try:
                 lock_fd = os.open(
@@ -1592,45 +1704,21 @@ class LocalIngestSource(IngestSource):
             except FileExistsError as exc:
                 raise RuntimeError("ordinary Git index is locked") from exc
 
-            owns_index_lock = True
             try:
-                with os.fdopen(lock_fd, "wb") as destination:
-                    with index_path.open("rb") as ordinary_index:
-                        shutil.copyfileobj(ordinary_index, destination)
+                with os.fdopen(lock_fd, "wb", closefd=False) as destination:
+                    with publish_index.open("rb") as prepared_index:
+                        shutil.copyfileobj(prepared_index, destination)
                     destination.flush()
                     os.fsync(destination.fileno())
+                owner = IndexLockOwner(index_lock, lock_fd, expected_ref)
+            except BaseException:
+                os.close(lock_fd)
+                index_lock.unlink(missing_ok=True)
+                raise
+            os.close(lock_fd)
 
-                ordinary_env = {**env, "GIT_INDEX_FILE": str(index_lock)}
-                for rel, blob in target_blobs.items():
-                    unchanged = subprocess.run(
-                        [
-                            "git",
-                            "diff-index",
-                            "--cached",
-                            "--quiet",
-                            expected_ref,
-                            "--",
-                            rel,
-                        ],
-                        cwd=repo_dir,
-                        env=ordinary_env,
-                    )
-                    if unchanged.returncode == 0:
-                        subprocess.run(
-                            [
-                                "git",
-                                "update-index",
-                                "--add",
-                                "--cacheinfo",
-                                f"100644,{blob},{rel}",
-                            ],
-                            cwd=repo_dir,
-                            check=True,
-                            env=ordinary_env,
-                        )
-                    elif unchanged.returncode != 1:
-                        unchanged.check_returncode()
-
+            owns_index_lock = True
+            try:
                 subprocess.run(
                     ["git", "update-ref", branch, commit, expected_ref],
                     cwd=repo_dir,
@@ -1648,6 +1736,7 @@ class LocalIngestSource(IngestSource):
                     )
                     raise RuntimeError("could not publish ordinary Git index") from exc
                 owns_index_lock = False
+                owner.published(index_path)
                 paths = list(rel_changes)
                 subprocess.run(
                     ["git", "checkout-index", "-f", "--", *paths],
@@ -1658,6 +1747,7 @@ class LocalIngestSource(IngestSource):
             finally:
                 if owns_index_lock:
                     index_lock.unlink(missing_ok=True)
+                owner.close()
 
         self._reviewed_cache = None
         return commit
@@ -1699,7 +1789,11 @@ class LocalIngestSource(IngestSource):
             if notes:
                 message += f"\n\n{notes}"
             source_url = (frontmatter.get("source_url") or "").strip()
-            trailers = [f"Reviewed-Record: url:{source_url}"] if source_url else []
+            trailers = (
+                [f"Reviewed-Record: url:{source_url}"]
+                if source_url.startswith(("http://", "https://"))
+                else []
+            )
             source_hash = normalise_hash(frontmatter.get("source_hash"))
             if source_hash:
                 trailers.append(f"Reviewed-Record: sha256:{source_hash}")
@@ -4932,6 +5026,60 @@ def _single_file_snapshot(raw_frontmatter: str | None) -> str | None:
     return None
 
 
+def _record3_single_original(raw_frontmatter: str | None) -> Path | None:
+    """Resolve a one-Asset Record through its Asset, not its Record hash.
+
+    Composite Records have no singular original. Do not fall back to a legacy
+    source_hash for them or silently serve only one member's bytes. For a web
+    Asset, prefer its self-contained snapshot, then its page render, as required
+    by the Record contract; use the raw Asset only when neither is available.
+    """
+    if not raw_frontmatter:
+        return None
+    try:
+        parsed = next(
+            (
+                doc
+                for doc in yaml.safe_load_all(raw_frontmatter)
+                if isinstance(doc, dict)
+            ),
+            None,
+        )
+    except yaml.YAMLError:
+        return None
+    assets = parsed.get("assets") if isinstance(parsed, dict) else None
+    if (
+        not isinstance(assets, list)
+        or len(assets) != 1
+        or not isinstance(assets[0], dict)
+    ):
+        return None
+
+    candidates: list[dict] = []
+    snapshots = parsed.get("snapshots")
+    if isinstance(snapshots, list):
+        for preferred_role in ("single_file", "page_render"):
+            candidates.extend(
+                snapshot["asset"]
+                for snapshot in snapshots
+                if isinstance(snapshot, dict)
+                and snapshot.get("role") == preferred_role
+                and isinstance(snapshot.get("asset"), dict)
+            )
+    candidates.append(assets[0])
+    for asset in candidates:
+        asset_hash = normalise_hash(asset.get("asset_hash"))
+        ext = asset.get("archived_ext")
+        if not asset_hash or not FULL_HASH_PATTERN.fullmatch(asset_hash):
+            continue
+        if not isinstance(ext, str) or not re.fullmatch(r"[a-z0-9]+", ext):
+            continue
+        path = records_path / f"{asset_hash}.{ext}"
+        if path.is_file() and not path.is_symlink():
+            return path
+    return None
+
+
 def _archived_file(full_hash: str) -> Path | None:
     """The archived original for a record, by the record's content hash.
 
@@ -4950,15 +5098,15 @@ def _archived_file(full_hash: str) -> Path | None:
     the viewer, the download and the prerender all get the file, and a later
     reconciliation removes the fallback without changing any of them.
     """
+    ingest = source.get_ingest(full_hash)
+    frontmatter = ingest.get("frontmatter", {}) if ingest else {}
+    if frontmatter.get("schema") == "anomalica/record/3":
+        return _record3_single_original(ingest.get("raw_frontmatter"))
     direct = _archived_source_by_stem(full_hash)
     if direct is not None:
         return direct
-    # Only reached for the types whose hashes differ, so the extra read costs
-    # nothing on the common path.
-    ingest = source.get_ingest(full_hash)
     if not ingest:
         return None
-    frontmatter = ingest.get("frontmatter", {})
     # A WEB record archives several captures of the same page, and the raw fetch
     # is the worst of them to show: its stylesheets and images are still
     # external URLs, so offline it renders as an unstyled skeleton of stacked
@@ -5641,7 +5789,7 @@ def submit_review(full_hash: str, body: dict, request: Request) -> JSONResponse:
                 message += f"\n\n{notes}"
             trailers = []
             source_url = (submitted_frontmatter.get("source_url") or "").strip()
-            if source_url:
+            if source_url.startswith(("http://", "https://")):
                 trailers.append(f"Reviewed-Record: url:{source_url}")
             source_hash = normalise_hash(submitted_frontmatter.get("source_hash"))
             if source_hash:

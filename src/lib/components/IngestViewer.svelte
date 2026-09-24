@@ -26,6 +26,7 @@
     type RecordRelation,
     type Predigest,
     fetchCoverage,
+    fetchSyncStatus,
     provenanceOf,
     submitVerification,
     unlockedIngestFromVerification,
@@ -96,6 +97,7 @@
   import ReviewHistory from "./ReviewHistory.svelte";
   import { hasWordTimestamps, parseWords, nextRelevantWordStartAfter, speakerWordCounts, quotedSpeakerCounts } from "$lib/transcript-words";
   import { imageRefsInBody } from "$lib/image-captions";
+  import { stripSourceOnlyInline, visibleAnnotationContent } from "$lib/ingest-source-only";
   import { messageInner, parseMessage, messageHeaderHtml } from "$lib/email-thread";
   import { untrack } from "svelte";
   import { marked, withMath } from "$lib/markdown";
@@ -2148,7 +2150,7 @@
     // an inline annotation (record/2), not content. The word-level editor
     // consumes them; any markdown/prose render must hide them (word records use
     // WordTranscript, but this keeps markers out of every other prose path too).
-    body = body.replace(/\{\{t:\d+(?:\.\d+)?\}\}/g, "");
+    body = stripSourceOnlyInline(body).replace(/\{\{t:\d+(?:\.\d+)?\}\}/g, "");
     // Correct the page numbers FIRST, while the text still lines up with the
     // record: every rewrite below moves lines about, and the correction has to
     // know which marker of the whole record each one is.
@@ -2187,7 +2189,9 @@
     return body.replace(
       /<!--\s*([\s\S]*?)-->/g,
       (_, content) => {
-        const trimmed = content.trim();
+        const original = content.trim();
+        const trimmed = visibleAnnotationContent(original);
+        if (!trimmed) return "";
         // Email thread segment. An email is a CONVERSATION, not prose: without this
         // each message runs into the next and a quoted reply reads as the sender's
         // own words. Renders an attributed header per message, marking quoted ones.
@@ -2221,19 +2225,27 @@
         if (/^image\s*:\s*\n/.test(trimmed)) {
           let img: Record<string, unknown> | null = null;
           try {
-            const parsed = yaml.load(trimmed) as { image?: unknown };
+            const parsed = yaml.load(original) as { image?: unknown };
             if (parsed?.image && typeof parsed.image === "object") {
               img = parsed.image as Record<string, unknown>;
             }
           } catch {
             img = null;
           }
-          if (img && typeof img.file === "string" && /^[0-9a-f]{12}\.[a-z]{3,4}$/.test(img.file)) {
-            while (nextRef < imageRefs.length && imageRefs[nextRef].file !== img.file) nextRef++;
-            const imageLine =
-              nextRef < imageRefs.length ? imageRefs[nextRef++].line + lineOffset : -1;
-            const src = `/api/ingests/${recordHash}/media/${img.file}`;
-            const alt = typeof img.alt === "string" ? img.alt : "";
+          // Underscored image fields are source-only metadata. They still
+          // locate the image for reading, but the legacy image editor does not
+          // yet preserve their spelling, so do not offer controls that would
+          // silently rename or fail to find them in the stored annotation.
+          const editableImage = typeof img?.file === "string";
+          const file = img?.file ?? img?._file;
+          if (img && typeof file === "string" && /^[0-9a-f]{12}\.[a-z]{3,4}$/.test(file)) {
+            let imageLine = -1;
+            if (editableImage) {
+              while (nextRef < imageRefs.length && imageRefs[nextRef].file !== file) nextRef++;
+              imageLine = nextRef < imageRefs.length ? imageRefs[nextRef++].line + lineOffset : -1;
+            }
+            const src = `/api/ingests/${recordHash}/media/${file}`;
+            const alt = typeof (img.alt ?? img._alt) === "string" ? String(img.alt ?? img._alt) : "";
             const caption = typeof img.caption === "string" ? img.caption.trim() : "";
             const cap = caption ? `<figcaption>${escapeHtml(caption)}</figcaption>` : "";
             // Description (ingest-format.md#image): the reviewer's faithful
@@ -2242,7 +2254,7 @@
             // reads as a distinct, labelled block, not a caption. Editable in the
             // reviewer context; shown read-only elsewhere.
             const description = typeof img.description === "string" ? img.description.trim() : "";
-            const descActions = imageControls
+            const descActions = imageControls && editableImage
               ? `<span class="image-description-actions">` +
                 `<button type="button" class="image-description-edit" data-image-line="${imageLine}">Edit</button>` +
                 `<button type="button" class="image-description-remove" data-image-line="${imageLine}" title="Remove this description" aria-label="Remove description">` +
@@ -2256,14 +2268,14 @@
                 `<span class="image-description-text">${escapeHtml(description)}</span>` +
                 descActions +
                 `</div>`;
-            } else if (imageControls) {
+            } else if (imageControls && editableImage) {
               descBlock = `<button type="button" class="image-description-edit image-description-add" data-image-line="${imageLine}">+ Describe what's in this image</button>`;
             }
             // Display-only relevance flag (ingest-format.md#image): `irrelevant:
             // true` drops the image from the rendered page. Never touches
             // coverage or extraction. data-image-line lets the caption re-target
             // picker and the relevance toggle identify which image a click hits.
-            const irrelevant = img.irrelevant === true;
+            const irrelevant = (img.irrelevant ?? img._irrelevant) === true;
             const irrAttr = irrelevant ? ' data-image-irrelevant="true"' : "";
             const tag = irrelevant
               ? `<span class="image-irrelevant-tag">Irrelevant - dropped from display</span>`
@@ -2271,7 +2283,7 @@
             // The toggle renders only where the reviewer can edit; other render
             // paths (predigest preview, read-only prose) show the dimmed state
             // without the control.
-            const toggle = imageControls
+            const toggle = imageControls && editableImage
               ? `<button type="button" class="image-relevance-toggle" data-image-line="${imageLine}" data-irrelevant="${irrelevant}" title="${
                   irrelevant
                     ? "Marked irrelevant - dropped from the rendered page. Click to keep."
@@ -2280,7 +2292,7 @@
               : "";
             // Order: image, then the DESCRIPTION (primary 'what is in it'
             // content), then the CAPTION (secondary source attribution).
-            return `<figure class="ingest-figure" data-image-line="${imageLine}" data-image-file="${img.file}"${irrAttr}><img src="${src}" alt="${escapeHtml(alt)}" loading="lazy" />${descBlock}${cap}${tag}${toggle}</figure>`;
+            return `<figure class="ingest-figure" data-image-line="${imageLine}" data-image-file="${file}"${irrAttr}><img src="${src}" alt="${escapeHtml(alt)}" loading="lazy" />${descBlock}${cap}${tag}${toggle}</figure>`;
           }
         }
         // Image description (no extracted file)
@@ -2985,8 +2997,32 @@
   let approveShortcutEnabled = $derived(!!user && !submitting && contentReviewAllowed);
   let submitError = $state<string | null>(null);
   let showSubmitForm = $state(false);
+  let persistentGitLock = $state<number | null>(null);
   let reviewNotes = $state("");
   let reviewNotesBox = $state<HTMLTextAreaElement | undefined>();
+
+  // Local development only. The hosted Workbench writes through GitHub and
+  // has no checkout or index lock. An old local lock is a warning, not proof
+  // that its owner died; keep the draft intact and let the backend decide.
+  $effect(() => {
+    if (!showSubmitForm || STATIC_READS) return;
+    let active = true;
+    const poll = async () => {
+      const status = await fetchSyncStatus();
+      if (active && status) {
+        persistentGitLock = status.index_lock?.long_running
+          ? status.index_lock.age_seconds
+          : null;
+      }
+    };
+    void poll();
+    const timer = setInterval(poll, 30_000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+      persistentGitLock = null;
+    };
+  });
 
   /** What the note says when the reviewer says nothing.
    *
@@ -4558,6 +4594,14 @@
             ? "Commits your changes to the ingests repo with you as author."
             : "Records an empty review commit so this record shows as reviewed by you. No content changes."}
         </p>
+
+        {#if persistentGitLock !== null}
+          <p class="text-xs text-on-warning-container bg-warning-container rounded p-3 mb-4" role="status">
+            The local Git index has been locked for over five minutes. Another Git task may still be running,
+            so this review may not submit yet. Your edits remain saved in this browser; the hosted Workbench
+            does not use this local lock.
+          </p>
+        {/if}
 
         {#if user}
           <div class="flex items-center gap-3 mb-4 p-3 bg-surface-alt rounded">

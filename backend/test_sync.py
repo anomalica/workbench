@@ -5,6 +5,7 @@ OBSERVES (fetch, fast-forward when purely behind, report divergence).
 It must never rebase - two processes rebasing one clone corrupted
 FETCH_HEAD ("cannot rebase onto multiple branches")."""
 
+import os
 import subprocess
 from contextlib import contextmanager
 
@@ -169,6 +170,8 @@ def test_sync_start_recovers_only_a_preboot_index_lock(repos, monkeypatch):
     _origin, local = repos
     lock = local / ".git" / "index.lock"
     lock.touch()
+    owner = local / ".git" / "index.lock.workbench-owner"
+    owner.touch()
     boot_after_lock = lock.stat().st_ctime_ns + 1
     monkeypatch.setattr(sync, "_boot_time_ns", lambda: boot_after_lock)
 
@@ -177,6 +180,7 @@ def test_sync_start_recovers_only_a_preboot_index_lock(repos, monkeypatch):
     manager._stop.set()
 
     assert not lock.exists()
+    assert not owner.exists()
     assert manager.status()["dirty"] is False
 
 
@@ -192,6 +196,52 @@ def test_sync_start_leaves_current_boot_index_lock_alone(repos, monkeypatch):
 
     assert lock.read_text() == "live writer"
     assert manager.status()["dirty"] is False
+
+
+def test_sync_status_warns_about_persistent_current_boot_lock(repos, monkeypatch):
+    _origin, local = repos
+    manager = SyncManager(local)
+    assert manager.status()["index_lock"] is None
+
+    lock = local / ".git" / "index.lock"
+    lock.touch()
+    created = lock.stat().st_ctime_ns
+    monkeypatch.setattr(sync.time, "time_ns", lambda: created + 299_000_000_000)
+    assert manager.status()["index_lock"] == {
+        "age_seconds": 299,
+        "long_running": False,
+    }
+    monkeypatch.setattr(sync.time, "time_ns", lambda: created + 300_000_000_000)
+    assert manager.status()["index_lock"] == {
+        "age_seconds": 300,
+        "long_running": True,
+    }
+    assert lock.exists()  # age is an alert, never evidence that deletion is safe
+
+
+def test_repository_lock_recovers_a_dead_owned_lock_without_xattrs(repos, monkeypatch):
+    _origin, local = repos
+    index_lock = local / ".git" / "index.lock"
+    lock_fd = os.open(index_lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    os.write(lock_fd, b"prepared index")
+    os.fsync(lock_fd)
+    monkeypatch.setattr(
+        sync.os,
+        "setxattr",
+        lambda *_args: (_ for _ in ()).throw(OSError("xattrs unavailable")),
+    )
+    owner = sync.IndexLockOwner(
+        index_lock, lock_fd, _git(local, "rev-parse", "HEAD").stdout.strip()
+    )
+    os.close(lock_fd)
+    marker = owner.marker
+    os.close(owner.fd)  # process death releases the advisory owner lock
+
+    with sync.repository_write_lock(local):
+        pass
+
+    assert not index_lock.exists()
+    assert not marker.exists()
 
 
 def test_sync_once_reports_offline(repos, tmp_path):

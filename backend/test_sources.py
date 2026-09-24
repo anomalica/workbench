@@ -101,6 +101,58 @@ def test_404_when_there_is_no_record_at_all(client, store):
     assert client.get(f"/api/sources/{BODY_HASH}").status_code == 404
 
 
+def test_record3_web_original_resolves_its_asset_not_its_record_hash(
+    client, tmp_path, store
+):
+    store[BODY_HASH] = {
+        "frontmatter": {"schema": "anomalica/record/3"},
+        "raw_frontmatter": (
+            "---\nschema: anomalica/record/3\nassets:\n"
+            f"  - asset_hash: sha256:{FILE_HASH}\n    archived_ext: html\n---\n"
+        ),
+    }
+    (tmp_path / f"{FILE_HASH}.html").write_text("<html>the article</html>")
+    res = client.get(f"/api/sources/{BODY_HASH}")
+    assert res.status_code == 200
+    assert res.content == b"<html>the article</html>"
+
+
+def test_record3_composite_never_serves_one_member_as_the_whole(
+    client, tmp_path, store
+):
+    store[BODY_HASH] = {
+        "frontmatter": {"schema": "anomalica/record/3"},
+        "raw_frontmatter": (
+            "---\nschema: anomalica/record/3\nassets:\n"
+            f"  - asset_hash: sha256:{FILE_HASH}\n    archived_ext: pdf\n"
+            f"  - asset_hash: sha256:{HASH}\n    archived_ext: pdf\n---\n"
+        ),
+    }
+    (tmp_path / f"{FILE_HASH}.pdf").write_bytes(b"not the whole record")
+    (tmp_path / f"{BODY_HASH}.pdf").write_bytes(b"not a Record original")
+    assert client.get(f"/api/sources/{BODY_HASH}").status_code == 404
+
+
+def test_record3_web_prefers_its_self_contained_snapshot(client, tmp_path, store):
+    snapshot_hash = HASH
+    store[BODY_HASH] = {
+        "frontmatter": {"schema": "anomalica/record/3"},
+        "raw_frontmatter": (
+            "---\nschema: anomalica/record/3\nassets:\n"
+            f"  - asset_hash: sha256:{FILE_HASH}\n    archived_ext: html\n"
+            "snapshots:\n  - role: single_file\n    asset:\n"
+            f"      asset_hash: sha256:{snapshot_hash}\n      archived_ext: html\n---\n"
+        ),
+    }
+    (tmp_path / f"{FILE_HASH}.html").write_text("<html>raw fetch</html>")
+    (tmp_path / f"{snapshot_hash}.html").write_text("<html>self-contained</html>")
+
+    res = client.get(f"/api/sources/{BODY_HASH}")
+
+    assert res.status_code == 200
+    assert res.content == b"<html>self-contained</html>"
+
+
 def test_a_web_record_serves_its_self_contained_capture(monkeypatch, tmp_path):
     """A web record archives several captures of one page. The raw fetch still
     points at external stylesheets and images, so offline it renders as a

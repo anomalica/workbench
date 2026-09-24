@@ -28,10 +28,14 @@ that share the clone.
 from __future__ import annotations
 
 import fcntl
+import json
 import logging
+import os
+import secrets
 import stat
 import subprocess
 import threading
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,6 +43,8 @@ from pathlib import Path
 GIT_LOCK = threading.RLock()
 _LOCK_STATE = threading.local()
 logger = logging.getLogger(__name__)
+INDEX_LOCK_WARNING_SECONDS = 300
+_OWNER_ATTRIBUTE = "user.anomalica.workbench-index-owner"
 
 
 def _boot_time_ns() -> int | None:
@@ -53,11 +59,7 @@ def _boot_time_ns() -> int | None:
     return None
 
 
-def _clear_preboot_index_lock(repo_dir: Path) -> bool:
-    """Recover a crashed Git index writer without touching a current-boot lock."""
-    boot = _boot_time_ns()
-    if boot is None:
-        return False
+def _index_lock_path(repo_dir: Path) -> Path:
     index = subprocess.run(
         ["git", "rev-parse", "--git-path", "index"],
         cwd=repo_dir,
@@ -68,7 +70,15 @@ def _clear_preboot_index_lock(repo_dir: Path) -> bool:
     index_path = Path(index)
     if not index_path.is_absolute():
         index_path = repo_dir / index_path
-    lock = index_path.with_name(f"{index_path.name}.lock")
+    return index_path.with_name(f"{index_path.name}.lock")
+
+
+def _clear_preboot_index_lock(repo_dir: Path) -> bool:
+    """Recover a crashed Git index writer without touching a current-boot lock."""
+    boot = _boot_time_ns()
+    if boot is None:
+        return False
+    lock = _index_lock_path(repo_dir)
     try:
         info = lock.lstat()
     except FileNotFoundError:
@@ -78,8 +88,132 @@ def _clear_preboot_index_lock(repo_dir: Path) -> bool:
     if not stat.S_ISREG(info.st_mode) or info.st_ctime_ns >= boot:
         return False
     lock.unlink()
+    _owner_path(lock).unlink(missing_ok=True)
     logger.warning("Cleared pre-boot Git index lock: %s", lock)
     return True
+
+
+def _index_lock_status(repo_dir: Path) -> dict | None:
+    """Local-only warning, not authority to remove an unowned Git lock."""
+    try:
+        info = _index_lock_path(repo_dir).lstat()
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISREG(info.st_mode):
+        return {"age_seconds": 0, "long_running": True}
+    age = max(0, (time.time_ns() - info.st_ctime_ns) // 1_000_000_000)
+    return {
+        "age_seconds": age,
+        "long_running": age >= INDEX_LOCK_WARNING_SECONDS,
+    }
+
+
+def _owner_path(index_lock: Path) -> Path:
+    return index_lock.with_name(f"{index_lock.name}.workbench-owner")
+
+
+def _recover_owned_index_lock(repo_dir: Path) -> bool:
+    """Remove only this Workbench writer's orphan, while holding the repo flock.
+
+    A live writer holds an advisory lock on its owner receipt. Once that process
+    dies, the kernel releases the advisory lock; the receipt binds the native
+    Git lock to its inode and the ref it was about to update. A changed ref is
+    not safe to recover automatically: the commit might already have landed.
+    """
+    index_lock = _index_lock_path(repo_dir)
+    marker = _owner_path(index_lock)
+    try:
+        owner_fd = os.open(marker, os.O_RDONLY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return False
+    with os.fdopen(owner_fd, "rb") as owner:
+        try:
+            fcntl.flock(owner.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return False
+        try:
+            receipt = json.load(owner)
+        except (ValueError, UnicodeError):
+            receipt = None
+        try:
+            info = index_lock.lstat()
+        except FileNotFoundError:
+            marker.unlink(missing_ok=True)
+            return False
+        if not isinstance(receipt, dict) or not stat.S_ISREG(info.st_mode):
+            return False
+        if (info.st_dev, info.st_ino) != (receipt.get("dev"), receipt.get("ino")):
+            return False
+        if receipt.get("token"):
+            try:
+                if (
+                    os.getxattr(index_lock, _OWNER_ATTRIBUTE)
+                    != receipt["token"].encode()
+                ):
+                    return False
+            except OSError:
+                return False
+        elif info.st_ctime_ns != receipt.get("ctime_ns"):
+            # Fallback on filesystems without user xattrs: refuse a lock that
+            # was modified since ownership was recorded rather than guessing.
+            return False
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_dir,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        if head != receipt.get("expected_ref"):
+            return False
+        index_lock.unlink()
+        marker.unlink()
+        logger.warning("Recovered dead Workbench Git index writer: %s", index_lock)
+        return True
+
+
+class IndexLockOwner:
+    """Process-lifetime proof of ownership for a native Git index lock."""
+
+    def __init__(self, index_lock: Path, lock_fd: int, expected_ref: str):
+        self.marker = _owner_path(index_lock)
+        self.fd = os.open(
+            self.marker, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
+        )
+        try:
+            fcntl.flock(self.fd, fcntl.LOCK_EX)
+            token = secrets.token_hex(16)
+            try:
+                os.setxattr(lock_fd, _OWNER_ATTRIBUTE, token.encode())
+            except OSError:
+                token = ""
+            info = os.fstat(lock_fd)
+            receipt = json.dumps(
+                {
+                    "dev": info.st_dev,
+                    "ino": info.st_ino,
+                    "ctime_ns": info.st_ctime_ns,
+                    "token": token,
+                    "expected_ref": expected_ref,
+                }
+            ).encode()
+            if os.write(self.fd, receipt) != len(receipt):
+                raise OSError("Could not record Git index lock owner")
+            os.fsync(self.fd)
+        except BaseException:
+            self.close()
+            raise
+
+    def close(self) -> None:
+        self.marker.unlink(missing_ok=True)
+        os.close(self.fd)
+
+    def published(self, index_path: Path) -> None:
+        """Do not carry the local ownership marker onto Git's ordinary index."""
+        try:
+            os.removexattr(index_path, _OWNER_ATTRIBUTE)
+        except OSError:
+            pass  # Git has already published the new index; cleanup is advisory.
 
 
 @contextmanager
@@ -111,6 +245,7 @@ def repository_write_lock(repo_dir: Path):
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
             _LOCK_STATE.depth = 1
             try:
+                _recover_owned_index_lock(repo_dir)
                 yield
             finally:
                 _LOCK_STATE.depth = 0
@@ -172,6 +307,7 @@ class SyncManager:
             "ahead": ahead,
             "behind": behind,
             "dirty": self.dirty(),
+            "index_lock": _index_lock_status(self.repo_dir),
             "offline": self.offline,
             "last_error": self.last_error,
             "checked_at": self.checked_at,

@@ -11,6 +11,8 @@
  * fetchImpl is injectable so the logic is unit-testable without network.
  */
 
+import { newlyUnsafeFields, unsafeMessage } from "./repository_privacy.ts";
+
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });
 
@@ -75,6 +77,14 @@ export class GitHubError extends Error {
   ) {
     super(message);
     this.name = "GitHubError";
+  }
+}
+
+/** A local guard rejection, not a stale GitHub write or an upstream failure. */
+export class RepositoryPrivacyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RepositoryPrivacyError";
   }
 }
 
@@ -235,6 +245,29 @@ export class GitHubClient {
     author: Author,
     sha?: string,
   ): Promise<string> {
+    if (repo.split("/").at(-1) === "ingests" && unsafeMessage(message)) {
+      throw new RepositoryPrivacyError(
+        "local machine location in Git commit message",
+      );
+    }
+    if (
+      repo.split("/").at(-1) === "ingests" && /\.(?:md|json|ya?ml)$/.test(path)
+    ) {
+      const fields = newlyUnsafeFields(path, text);
+      if (fields.length) {
+        const previous = sha
+          ? (await this.getFile(repo, path))?.text ?? ""
+          : "";
+        const introduced = newlyUnsafeFields(path, text, previous);
+        if (introduced.length) {
+          throw new RepositoryPrivacyError(
+            `local machine location in repository metadata: ${
+              introduced.join(", ")
+            }`,
+          );
+        }
+      }
+    }
     const res = await this.fetchImpl(this.url(repo, path), {
       method: "PUT",
       headers: this.headers(),
@@ -310,6 +343,11 @@ export class GitHubClient {
     author: Author,
     options: CommitFilesOptions = {},
   ): Promise<CommitFilesResult> {
+    if (repo.split("/").at(-1) === "ingests" && unsafeMessage(message)) {
+      throw new RepositoryPrivacyError(
+        "local machine location in Git commit message",
+      );
+    }
     if (changes.length === 0) throw new Error("commitFiles: no changes");
     if (new Set(changes.map((change) => change.path)).size !== changes.length) {
       throw new Error("commitFiles: duplicate path");
@@ -322,6 +360,24 @@ export class GitHubClient {
       const parent = await this.getRef(repo);
       if (options.expectedRef !== undefined && parent !== options.expectedRef) {
         throw new GitHubError(409, "branch changed");
+      }
+
+      if (repo.split("/").at(-1) === "ingests") {
+        for (const change of changes) {
+          if (!/\.(?:md|json|ya?ml)$/.test(change.path)) continue;
+          if (!newlyUnsafeFields(change.path, change.text).length) continue;
+          const previous = change.expectedSha
+            ? (await this.getFileAt(repo, change.path, parent))?.text ?? ""
+            : "";
+          const fields = newlyUnsafeFields(change.path, change.text, previous);
+          if (fields.length) {
+            throw new RepositoryPrivacyError(
+              `local machine location in repository metadata: ${
+                fields.join(", ")
+              }`,
+            );
+          }
+        }
       }
 
       const parentCommit = await this.fetchImpl(

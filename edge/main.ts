@@ -58,6 +58,7 @@ import {
   type FileState,
   GitHubClient,
   GitHubError,
+  RepositoryPrivacyError,
 } from "./lib/github.ts";
 import {
   atLeast,
@@ -823,6 +824,7 @@ async function handleReviewWrite(
       { expectedRef: body.base_ref },
     );
   } catch (e) {
+    if (e instanceof RepositoryPrivacyError) return err(422, e.message);
     if (e instanceof GitHubError && (e.status === 409 || e.status === 422)) {
       return err(409, "Stale review base");
     }
@@ -1034,6 +1036,7 @@ async function handleHousekeepingDecide(
       { expectedRef: payload.viewed_ref },
     );
   } catch (e) {
+    if (e instanceof RepositoryPrivacyError) return err(422, e.message);
     if (e instanceof GitHubError && (e.status === 409 || e.status === 422)) {
       return err(409, "Stale housekeeping proposal");
     }
@@ -1153,6 +1156,7 @@ async function handleHousekeepingWaiveResearch(
       { expectedRef: payload.viewed_ref },
     );
   } catch (e) {
+    if (e instanceof RepositoryPrivacyError) return err(422, e.message);
     if (e instanceof GitHubError && (e.status === 409 || e.status === 422)) {
       return err(409, "Stale housekeeping proposal");
     }
@@ -1478,6 +1482,7 @@ export async function handleRequest(
     // throws GitHubError - surface a diagnosable upstream status rather than letting
     // it bubble to a bare, body-less Bunny 500 (which masked a malformed service
     // token on 2026-06-22). Other unexpected throws still get a clean 500.
+    if (e instanceof RepositoryPrivacyError) return err(422, e.message);
     if (e instanceof GitHubError) {
       return err(502, `upstream write failed: GitHub ${e.status}`);
     }

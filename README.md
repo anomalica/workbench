@@ -17,6 +17,24 @@ The backend lives in this repository under `backend/` and is started alongside t
 
 In production the FastAPI backend is **not** deployed. The built SPA is served as static files from the CDN, and `/api` is answered by the Deno edge script in `edge/` (Bunny Edge Scripting), which reads prerendered JSON snapshots. A change to `backend/` therefore has no effect on production unless it is mirrored in `edge/`.
 
+### Local Git locks
+
+The FastAPI development backend commits reviews to a local `ingests` checkout. Git
+briefly creates `.git/index.lock` while updating that checkout's shared staging
+index; it is not a lease on a record during review. A killed Git process can leave
+the file behind. The local sync poll uses `git --no-optional-locks status`, so a
+read-only status check never creates it. On its next repository write, Workbench
+recovers a current-boot orphan only when its private owner receipt matches the
+exact lock file and the branch has not moved. On startup it also removes a lock
+whose file metadata predates the current boot. Any other lock may still belong to
+a running Git command: after five minutes the submit dialog warns about it, but
+does not delete it on a timer. The review draft stays in the browser if a submit
+fails.
+
+The deployed edge script writes through the GitHub API, not this checkout. Its
+concurrent-write checks belong to the remote ref/file update path; local lock
+recovery must not become a requirement for hosted processing.
+
 ## Key libraries (planned)
 
 | Purpose | Library | Reason |

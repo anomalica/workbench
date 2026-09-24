@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 from anomalica_common import housekeeping as hk
 from fastapi.testclient import TestClient
+from fastapi import HTTPException
 
 from backend import server
 
@@ -129,6 +130,25 @@ def _decide(
 
 def _resolve_housekeeping(client: TestClient) -> None:
     assert _decide(client, _housekeeping_view(client)).status_code == 200
+
+
+def test_direct_local_commit_rejects_a_new_home_path_before_writing(local_api):
+    _client, repo, record, _sidecar_path = local_api
+    before = _git(repo, "rev-parse", "HEAD")
+    content = RECORD.replace(
+        "publisher: Old publisher", "source_url: file:///home/reviewer/inbox/doc.pdf"
+    )
+    with pytest.raises(HTTPException) as exc:
+        server.source._commit_bytes_locked(
+            {record: content.encode()},
+            "review",
+            "Reviewer",
+            "reviewer@example.invalid",
+            before,
+        )
+    assert exc.value.status_code == 422
+    assert "source_url" in exc.value.detail
+    assert _git(repo, "rev-parse", "HEAD") == before
 
 
 def test_reads_return_canonical_git_identities(local_api):
@@ -640,13 +660,15 @@ def test_index_refresh_failure_happens_before_ref_cas_and_releases_lock(
     before_sidecar = sidecar.read_bytes()
     original_run = subprocess.run
 
-    def fail_ordinary_index_refresh(command, **kwargs):
+    def fail_prepared_index_refresh(command, **kwargs):
         index_file = kwargs.get("env", {}).get("GIT_INDEX_FILE", "")
-        if command[:2] == ["git", "update-index"] and index_file.endswith("index.lock"):
+        if command[:2] == ["git", "update-index"] and index_file.endswith(
+            "publish-index"
+        ):
             raise subprocess.CalledProcessError(1, command)
         return original_run(command, **kwargs)
 
-    monkeypatch.setattr(subprocess, "run", fail_ordinary_index_refresh)
+    monkeypatch.setattr(subprocess, "run", fail_prepared_index_refresh)
     response = _decide(client, view)
 
     assert response.status_code == 409

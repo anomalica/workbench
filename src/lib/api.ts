@@ -1361,6 +1361,7 @@ export interface SyncStatus {
   ahead: number;
   behind: number;
   dirty: boolean;
+  index_lock: { age_seconds: number; long_running: boolean } | null;
   offline: boolean;
   last_error: string;
   checked_at: string | null;

@@ -9,6 +9,7 @@ import {
   type DirectoryEntry,
   type FileState,
   GitHubError,
+  RepositoryPrivacyError,
 } from "./lib/github.ts";
 import { type Deps, type Env, handleRequest } from "./main.ts";
 
@@ -734,6 +735,32 @@ Deno.test("review PUT uses the viewed record and ref as a CAS base", async () =>
   );
   assertEquals(res.status, 409);
   assertEquals(gh.files.get(`ingests/store/${HASH}.v2.md`), housekept);
+  assertEquals(gh.atomicCommits.length, 0);
+});
+
+Deno.test("review PUT reports a privacy rejection rather than a stale edit", async () => {
+  const gh = new FakeGitHub();
+  gh.commitFiles = () =>
+    Promise.reject(
+      new RepositoryPrivacyError(
+        "local machine location in repository metadata: source_url",
+      ),
+    );
+  const res = await handleRequest(
+    req(`/api/ingests/${HASH}`, {
+      method: "PUT",
+      headers: { cookie: await cookie() },
+      body: JSON.stringify({
+        content:
+          `---\ncontent_hash: sha256:${HASH}\ntitle: Test\n---\nCorrected.\n`,
+        base_record_sha: FILE_SHA,
+        base_ref: REF,
+      }),
+    }),
+    ENV,
+    deps(gh),
+  );
+  assertEquals(res.status, 422);
   assertEquals(gh.atomicCommits.length, 0);
 });
 
