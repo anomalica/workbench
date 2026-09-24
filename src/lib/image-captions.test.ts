@@ -5,11 +5,14 @@ import {
   imageRefsInBody,
   imageIsIrrelevantAt,
   imageDescriptionAt,
+  imageCaptionAt,
   markAsCaption,
   moveCaptionTo,
+  followingProseAfterImage,
   remapSpans,
   setImageRelevanceAt,
   setImageDescriptionAt,
+  setImageCaptionAt,
 } from "./image-captions";
 import { parseTextBlocks, totalUnits } from "./text-blocks";
 
@@ -407,6 +410,119 @@ describe("setImageDescriptionAt / imageDescriptionAt", () => {
     const before = totalUnits(parseTextBlocks(BODY));
     const { body } = setImageDescriptionAt(BODY, IMAGE_LINE, "A description.");
     expect(totalUnits(parseTextBlocks(body))).toBe(before);
+  });
+});
+
+describe("followingProseAfterImage", () => {
+  it("finds the loose caption paragraph under the image", () => {
+    const cand = followingProseAfterImage(BODY, IMAGE_LINE);
+    expect(cand).not.toBeNull();
+    expect(cand!.text).toBe("Photo: a man in a suit. (c) D. Grusch.");
+    expect(BODY.split("\n")[cand!.from]).toContain("Photo:");
+  });
+
+  it("is null when the next content is another annotation", () => {
+    const body = [
+      "<!--",
+      "image:",
+      "  file: aaa111bbb222.jpg",
+      "-->",
+      "",
+      "<!--",
+      "image:",
+      "  file: ccc333ddd444.jpg",
+      "-->",
+    ].join("\n");
+    expect(followingProseAfterImage(body, 0)).toBeNull();
+  });
+
+  it("is null when no prose follows the image", () => {
+    const body = ["<!--", "image:", "  file: abc123def456.jpg", "-->"].join("\n");
+    expect(followingProseAfterImage(body, 0)).toBeNull();
+  });
+
+  it("is null for a missing image", () => {
+    expect(followingProseAfterImage(BODY, 99)).toBeNull();
+  });
+});
+
+describe("setImageCaptionAt / imageCaptionAt", () => {
+  it("writes a free-text caption into the annotation and reads it back", () => {
+    const text = "A rendering of the craft. (c) DailyMail.com";
+    const { ok, body } = setImageCaptionAt(BODY, IMAGE_LINE, text);
+    expect(ok).toBe(true);
+    expect(parseAnnotation(body).caption).toBe(text);
+    expect(imageCaptionAt(body, IMAGE_LINE)).toBe(text);
+    // Body prose is untouched without a consume range.
+    expect(body).toContain("*Photo: a man in a suit");
+  });
+
+  it("replaces an existing caption rather than duplicating it", () => {
+    const first = setImageCaptionAt(BODY, IMAGE_LINE, "Old caption.").body;
+    const second = setImageCaptionAt(first, IMAGE_LINE, "New caption.");
+    expect(parseAnnotation(second.body).caption).toBe("New caption.");
+    expect(second.body.match(/caption:/g)?.length).toBe(1);
+  });
+
+  it("clears the caption when set to empty, back to no field", () => {
+    const set = setImageCaptionAt(BODY, IMAGE_LINE, "Something.").body;
+    const cleared = setImageCaptionAt(set, IMAGE_LINE, "  ");
+    expect(cleared.ok).toBe(true);
+    expect(cleared.body).toBe(BODY);
+    expect(imageCaptionAt(cleared.body, IMAGE_LINE)).toBe("");
+  });
+
+  it("is a no-op when unchanged or the image is missing", () => {
+    expect(setImageCaptionAt(BODY, IMAGE_LINE, "").ok).toBe(false);
+    const set = setImageCaptionAt(BODY, IMAGE_LINE, "Same.").body;
+    expect(setImageCaptionAt(set, IMAGE_LINE, "Same.").ok).toBe(false);
+    expect(setImageCaptionAt(BODY, 99, "x").ok).toBe(false);
+  });
+
+  it("consumes the loose prose paragraph when given its range", () => {
+    // The "Use text below as caption" / prefilled-editor path: the caption
+    // text comes from the paragraph under the image, which must leave the body.
+    const cand = followingProseAfterImage(BODY, IMAGE_LINE)!;
+    const { ok, body } = setImageCaptionAt(BODY, IMAGE_LINE, cand.text, cand);
+    expect(ok).toBe(true);
+    expect(parseAnnotation(body).caption).toBe("Photo: a man in a suit. (c) D. Grusch.");
+    expect(body).not.toContain("*Photo: a man in a suit");
+    expect(body).not.toContain("\n\n\n");
+    expect(body).toContain("Body continues here.");
+  });
+
+  it("consumes the prose even when the caption text was edited before saving", () => {
+    const cand = followingProseAfterImage(BODY, IMAGE_LINE)!;
+    const { ok, body } = setImageCaptionAt(BODY, IMAGE_LINE, "Edited caption.", cand);
+    expect(ok).toBe(true);
+    expect(parseAnnotation(body).caption).toBe("Edited caption.");
+    expect(body).not.toContain("*Photo: a man in a suit");
+  });
+
+  it("refuses to consume an annotation block", () => {
+    const body = [
+      "<!--",
+      "image:",
+      "  file: aaa111bbb222.jpg",
+      "-->",
+      "",
+      "<!--",
+      "image:",
+      "  file: ccc333ddd444.jpg",
+      "-->",
+    ].join("\n");
+    const out = setImageCaptionAt(body, 0, "Cap.", { from: 5, to: 8 });
+    expect(out.ok).toBe(false);
+    expect(out.body).toBe(body);
+  });
+
+  it("drops the consumed paragraph's units - the text left the body", () => {
+    const before = totalUnits(parseTextBlocks(BODY));
+    const cand = followingProseAfterImage(BODY, IMAGE_LINE)!;
+    const { body } = setImageCaptionAt(BODY, IMAGE_LINE, cand.text, cand);
+    expect(totalUnits(parseTextBlocks(body))).toBeLessThan(before);
+    // The image annotation itself stays zero-unit: no new reviewable text.
+    expect(totalUnits(parseTextBlocks(body))).toBe(before - totalUnits(parseTextBlocks(cand.text)));
   });
 });
 

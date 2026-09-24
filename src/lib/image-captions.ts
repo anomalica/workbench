@@ -138,6 +138,39 @@ export function hasPrecedingImage(body: string, line: number): boolean {
   return nearestPrecedingImage(body.split("\n"), line) !== null;
 }
 
+/** The first prose paragraph after the image annotated at `line` - the loose
+ *  caption candidate left in the body when the ingester could not fold it in
+ *  (plain-prose captions that copy the alt text). Blank lines and intervening
+ *  annotation blocks are skipped only as far as finding the paragraph; another
+ *  annotation ends the search (the next content is not that image's caption).
+ *  Returns the line range and the caption-form text (emphasis stripped), or
+ *  null when no prose follows. */
+export function followingProseAfterImage(
+  body: string,
+  line: number,
+): { from: number; to: number; text: string } | null {
+  const lines = body.split("\n");
+  const img = imageAt(lines, line);
+  if (!img) return null;
+  let i = img.to + 1;
+  while (i < lines.length && lines[i].trim() === "") i++;
+  if (i >= lines.length) return null;
+  const t = lines[i].trim();
+  if (t.startsWith("<!--") || t.startsWith("[<!--")) return null;
+  const from = i;
+  while (
+    i < lines.length &&
+    lines[i].trim() !== "" &&
+    !lines[i].trimStart().startsWith("<!--") &&
+    !lines[i].trimStart().startsWith("[<!--")
+  ) {
+    i++;
+  }
+  const to = i - 1;
+  const text = extractCaption(lines, from, to);
+  return text ? { from, to, text } : null;
+}
+
 /** Strip markdown emphasis markers, keeping the inner text. The caption is
  *  stored as plain-text metadata, not markdown, so the body's italic/bold
  *  markup (whole-caption or just around an attribution line) is not part of
@@ -320,12 +353,13 @@ export function imageIsIrrelevantAt(body: string, line: number): boolean {
   return imageAt(body.split("\n"), line)?.data.image.irrelevant === true;
 }
 
-/** Set or clear `irrelevant: true` on the image annotated at `line`. This is
- *  DISPLAY-only metadata the assembler/site reads to drop the image from the
- *  rendered page (ingest-format.md#image); it never touches read-coverage
- *  (image annotations are structural, zero units) or extraction (the pre-digest
- *  strips every image annotation). Clearing removes the line, so absent = keep.
- *  No-op (ok:false) when the image is missing or already in the target state. */
+/** Set or clear `irrelevant: true` on the image annotated at `line`. Per
+ *  ingest-format.md#image this drops the image from BOTH extraction and
+ *  display: the pre-digest excludes an irrelevant image entirely, and the
+ *  assembler/site omit it from the rendered page. It never touches read-
+ *  coverage (image annotations are structural, zero units). Clearing removes
+ *  the line, so absent = keep. No-op (ok:false) when the image is missing or
+ *  already in the target state. */
 export function setImageRelevanceAt(body: string, line: number, irrelevant: boolean): CaptionEdit {
   const lines = body.split("\n");
   const img = imageAt(lines, line);
@@ -402,6 +436,80 @@ export function setImageDescriptionAt(
     } else if (value && i === existing) {
       oldToNew[i] = newLines.length;
       newLines.push(descLine); // replace the existing description
+    } else {
+      oldToNew[i] = newLines.length;
+      newLines.push(lines[i]);
+    }
+  }
+  return {
+    ok: true,
+    body: newLines.join("\n"),
+    oldToNew,
+    imageLine: oldToNew[img.from],
+    imageFile: img.data.image.file as string,
+  };
+}
+
+/** The `caption` of the image annotated at `line`, or "" if none. */
+export function imageCaptionAt(body: string, line: number): string {
+  const c = imageAt(body.split("\n"), line)?.data.image.caption;
+  return typeof c === "string" ? c : "";
+}
+
+/** Set (or clear, when the value is empty) the `caption:` field on the image
+ *  annotated at `line` - the free-text caption editor path. The caption is the
+ *  source's PRINTED line under the figure (ingest-format.md#image), including
+ *  any credit or copyright it shows with it; the pre-digest renders it as a
+ *  `[caption: ...]` meta-note the digester never turns into a claim.
+ *
+ *  `consumeRange` removes a loose prose paragraph from the body at the same
+ *  time, for the case where the caption text came from that paragraph (the
+ *  "Use text below as caption" path, or the caption editor opened prefilled
+ *  from it). Without it the body prose is left alone and only the field is
+ *  written. No-op (ok:false) when the image is missing, nothing would change,
+ *  or the consume range is itself an annotation block. */
+export function setImageCaptionAt(
+  body: string,
+  line: number,
+  caption: string,
+  consumeRange?: { from: number; to: number },
+): CaptionEdit {
+  const lines = body.split("\n");
+  const img = imageAt(lines, line);
+  if (!img) return { ok: false, body, oldToNew: [] };
+  const value = caption.trim();
+  const current = typeof img.data.image.caption === "string" ? img.data.image.caption : "";
+  const hasConsume = !!consumeRange && consumeRange.to >= consumeRange.from;
+  if (value === current && !hasConsume) return { ok: false, body, oldToNew: [] };
+
+  let removeFrom = -1;
+  let removeTo = -1;
+  if (hasConsume && value) {
+    removeFrom = consumeRange!.from;
+    removeTo = consumeRange!.to;
+    // Never consume an annotation block: same guard as markAsCaption.
+    const first = lines[removeFrom]?.trimStart() ?? "";
+    if (first.startsWith("<!--") || first.startsWith("[<!--")) {
+      return { ok: false, body, oldToNew: [] };
+    }
+    if (removeTo + 1 < lines.length && lines[removeTo + 1].trim() === "") removeTo += 1;
+    else if (removeFrom - 1 >= 0 && lines[removeFrom - 1].trim() === "") removeFrom -= 1;
+  }
+
+  const existing = findFieldLine(lines, img, "caption");
+  const capLine = value ? captionLineFor(lines, img, value) : "";
+  const newLines: string[] = [];
+  const oldToNew: number[] = new Array(lines.length).fill(-1);
+  for (let i = 0; i < lines.length; i++) {
+    if (removeFrom >= 0 && i >= removeFrom && i <= removeTo) continue; // prose: consumed
+    if (!value && i === existing) continue; // clearing: drop the field line
+    if (value && existing < 0 && i === img.to) {
+      newLines.push(capLine); // insert before the closing fence
+      oldToNew[i] = newLines.length;
+      newLines.push(lines[i]);
+    } else if (value && i === existing) {
+      oldToNew[i] = newLines.length;
+      newLines.push(capLine); // replace the existing caption
     } else {
       oldToNew[i] = newLines.length;
       newLines.push(lines[i]);

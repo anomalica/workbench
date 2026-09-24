@@ -96,7 +96,7 @@
   import HousekeepingWarning from "./HousekeepingWarning.svelte";
   import ReviewHistory from "./ReviewHistory.svelte";
   import { hasWordTimestamps, parseWords, nextRelevantWordStartAfter, speakerWordCounts, quotedSpeakerCounts } from "$lib/transcript-words";
-  import { imageRefsInBody } from "$lib/image-captions";
+  import { imageRefsInBody, followingProseAfterImage } from "$lib/image-captions";
   import { stripSourceOnlyInline, visibleAnnotationContent } from "$lib/ingest-source-only";
   import { messageInner, parseMessage, messageHeaderHtml } from "$lib/email-thread";
   import { untrack } from "svelte";
@@ -214,6 +214,19 @@
   let currentBody = $derived.by(() => {
     const match = doc.current.match(/^---\n[\s\S]*?\n---\n([\s\S]*)$/);
     return match ? match[1] : doc.current;
+  });
+  // Whole-body lines of image annotations that have a loose prose paragraph
+  // under them - the caption candidate the ingester could not fold in (a plain
+  // prose line that copies the alt). Lets the figure offer "Use text below as
+  // caption" where one exists; computed here because preprocessAnnotations
+  // only sees one block at a time.
+  let imageCaptionCandidateLines = $derived.by(() => {
+    const lines = new Set<number>();
+    const body = currentBody;
+    for (const ref of imageRefsInBody(body)) {
+      if (followingProseAfterImage(body, ref.line)) lines.add(ref.line);
+    }
+    return lines;
   });
   // Live frontmatter parsed from the working document, so edited fields
   // (creators, publisher) reflect immediately rather than the stale fetch.
@@ -2139,7 +2152,12 @@
     return n;
   }
 
-  function preprocessAnnotations(body: string, imageControls = false, lineOffset = 0): string {
+  function preprocessAnnotations(
+    body: string,
+    imageControls = false,
+    lineOffset = 0,
+    captionCandidates: ReadonlySet<number> | null = null,
+  ): string {
     const recordHash = ingest.content_hash;
     // Resolved against the ORIGINAL text: the rewrites below (caption pairing,
     // page-marker collapse) renumber lines, so the annotation lines are read
@@ -2247,7 +2265,29 @@
             const src = `/api/ingests/${recordHash}/media/${file}`;
             const alt = typeof (img.alt ?? img._alt) === "string" ? String(img.alt ?? img._alt) : "";
             const caption = typeof img.caption === "string" ? img.caption.trim() : "";
-            const cap = caption ? `<figcaption>${escapeHtml(caption)}</figcaption>` : "";
+            // Caption controls (ingest-format.md#image): the caption is the
+            // source's PRINTED line under the figure, meta-context the digester
+            // never extracts as a claim. Editable free-text when present; when
+            // absent, either move the loose prose under the figure into it
+            // (the ingester could not fold it in) or write one.
+            const captionActions = imageControls && editableImage
+              ? `<span class="image-caption-actions">` +
+                `<button type="button" class="image-caption-edit" data-image-line="${imageLine}">Edit</button>` +
+                `<button type="button" class="image-caption-remove" data-image-line="${imageLine}" title="Remove this caption" aria-label="Remove caption">` +
+                `<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" d="M6 18L18 6M6 6l12 12"/></svg></button>` +
+                `</span>`
+              : "";
+            let cap = "";
+            if (caption) {
+              cap = `<figcaption>${escapeHtml(caption)}${captionActions}</figcaption>`;
+            } else if (imageControls && editableImage) {
+              const hasBelow = captionCandidates?.has(imageLine) ?? false;
+              cap =
+                (hasBelow
+                  ? `<button type="button" class="image-caption-from-text" data-image-line="${imageLine}" title="Move the text under this figure into its caption field">Use text below as caption</button>`
+                  : "") +
+                `<button type="button" class="image-caption-edit image-caption-add" data-image-line="${imageLine}">${hasBelow ? "+ Write caption" : "+ Add caption"}</button>`;
+            }
             // Description (ingest-format.md#image): the reviewer's faithful
             // transcription of what is IN the image. Unlike the caption, this is
             // CONTENT - the pre-digest keeps it and it can become a claim - so it
@@ -2271,14 +2311,15 @@
             } else if (imageControls && editableImage) {
               descBlock = `<button type="button" class="image-description-edit image-description-add" data-image-line="${imageLine}">+ Describe what's in this image</button>`;
             }
-            // Display-only relevance flag (ingest-format.md#image): `irrelevant:
-            // true` drops the image from the rendered page. Never touches
-            // coverage or extraction. data-image-line lets the caption re-target
-            // picker and the relevance toggle identify which image a click hits.
+            // Relevance flag (ingest-format.md#image): `irrelevant: true` drops
+            // the image from the pre-digest entirely and from the rendered
+            // page. Never touches review coverage. data-image-line lets the
+            // caption re-target picker and the relevance toggle identify which
+            // image a click hits.
             const irrelevant = (img.irrelevant ?? img._irrelevant) === true;
             const irrAttr = irrelevant ? ' data-image-irrelevant="true"' : "";
             const tag = irrelevant
-              ? `<span class="image-irrelevant-tag">Irrelevant - dropped from display</span>`
+              ? `<span class="image-irrelevant-tag">Irrelevant - dropped from extraction and display</span>`
               : "";
             // The toggle renders only where the reviewer can edit; other render
             // paths (predigest preview, read-only prose) show the dimmed state
@@ -2286,12 +2327,12 @@
             const toggle = imageControls && editableImage
               ? `<button type="button" class="image-relevance-toggle" data-image-line="${imageLine}" data-irrelevant="${irrelevant}" title="${
                   irrelevant
-                    ? "Marked irrelevant - dropped from the rendered page. Click to keep."
-                    : "Mark this image irrelevant - dropped from the rendered page. Does not affect review coverage or extraction."
+                    ? "Marked irrelevant - excluded from extraction and the rendered page. Click to keep."
+                    : "Mark this image irrelevant - excluded from extraction and the rendered page. Does not affect review coverage."
                 }">${irrelevant ? "Keep image" : "Mark irrelevant"}</button>`
               : "";
             // Order: image, then the DESCRIPTION (primary 'what is in it'
-            // content), then the CAPTION (secondary source attribution).
+            // content), then the CAPTION (the source's printed line).
             return `<figure class="ingest-figure" data-image-line="${imageLine}" data-image-file="${file}"${irrAttr}><img src="${src}" alt="${escapeHtml(alt)}" loading="lazy" />${descBlock}${cap}${tag}${toggle}</figure>`;
           }
         }
@@ -6321,7 +6362,9 @@
                 hardenLinks(
                   renderSpanMarkers(
                     renderRedactions(
-                      marked.parse(preprocessAnnotations(text, !!user, lineFrom)) as string,
+                      marked.parse(
+                        preprocessAnnotations(text, !!user, lineFrom, imageCaptionCandidateLines),
+                      ) as string,
                     ),
                   ),
                 ),

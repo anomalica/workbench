@@ -20,6 +20,9 @@
     setImageRelevanceAt,
     imageDescriptionAt,
     setImageDescriptionAt,
+    imageCaptionAt,
+    setImageCaptionAt,
+    followingProseAfterImage,
     remapSpans,
   } from "$lib/image-captions";
   import { safeLocalSet } from "$lib/storage";
@@ -195,6 +198,15 @@
       if (s) editingDescription = { ...editingDescription, line: s.from };
       else editingDescription = null;
     }
+    if (editingCaption) {
+      const anchors: CoverageSpan[] = [{ from: editingCaption.line, to: editingCaption.line }];
+      if (editingCaption.consume) anchors.push(editingCaption.consume);
+      const moved = shift(anchors);
+      const line = moved[0];
+      const consume = editingCaption.consume ? moved[1] : undefined;
+      if (line) editingCaption = { ...editingCaption, line: line.from, consume };
+      else editingCaption = null;
+    }
   }
 
   function markSelectionAsCaption() {
@@ -369,6 +381,30 @@
       openDescriptionEditor(descLine);
       return;
     }
+    const capRmBtn = target.closest(".image-caption-remove") as HTMLElement | null;
+    const capRmLine = imageLineOf(capRmBtn);
+    if (capRmLine !== null) {
+      e.preventDefault();
+      e.stopPropagation();
+      removeImageCaption(capRmLine);
+      return;
+    }
+    const capBtn = target.closest(".image-caption-edit") as HTMLElement | null;
+    const capLine = imageLineOf(capBtn);
+    if (capLine !== null) {
+      e.preventDefault();
+      e.stopPropagation();
+      openCaptionEditor(capLine);
+      return;
+    }
+    const fromTextBtn = target.closest(".image-caption-from-text") as HTMLElement | null;
+    const fromTextLine = imageLineOf(fromTextBtn);
+    if (fromTextLine !== null) {
+      e.preventDefault();
+      e.stopPropagation();
+      markFollowingAsCaptionFor(fromTextLine);
+      return;
+    }
     if (pendingCaption) {
       const fig = target.closest("figure[data-image-line]") as HTMLElement | null;
       const figLine = imageLineOf(fig);
@@ -396,6 +432,14 @@
   // describe what is IN the image. Distinct from the caption (which the source
   // printed) - the description is extractable content.
   let editingDescription = $state<{ line: number; text: string } | null>(null);
+  // The image caption editor: the source's own printed line under the figure.
+  // `consume` is the loose prose paragraph the editor prefilled from, which is
+  // removed on save so the caption is not left in the body as well.
+  let editingCaption = $state<{
+    line: number;
+    text: string;
+    consume?: { from: number; to: number };
+  } | null>(null);
   function openDescriptionEditor(line: number) {
     editingDescription = { line, text: imageDescriptionAt(body, line) };
   }
@@ -420,6 +464,55 @@
     livePrevObserved = remapSpans(livePrevObserved, edit.oldToNew);
     shiftPending((spans) => remapSpans(spans, edit.oldToNew));
     onbodyedit(edit.body);
+  }
+
+  function applyCaptionEdit(edit: ReturnType<typeof setImageCaptionAt>) {
+    if (!edit.ok) return;
+    observedSpans = remapSpans(observedSpans, edit.oldToNew);
+    livePrevObserved = remapSpans(livePrevObserved, edit.oldToNew);
+    shiftPending((spans) => remapSpans(spans, edit.oldToNew));
+    onbodyedit?.(edit.body);
+    pendingCaption = edit.imageLine === undefined ? null : { line: edit.imageLine };
+  }
+
+  // Open the caption editor on the figure. Prefills from the existing caption,
+  // or - when there is none - from the loose prose paragraph under the image
+  // (the ingester could not fold it in). Saving consumes that paragraph.
+  function openCaptionEditor(line: number) {
+    const existing = imageCaptionAt(body, line);
+    if (existing) {
+      editingCaption = { line, text: existing };
+      return;
+    }
+    const cand = followingProseAfterImage(body, line);
+    editingCaption = {
+      line,
+      text: cand?.text ?? "",
+      consume: cand ? { from: cand.from, to: cand.to } : undefined,
+    };
+  }
+
+  function saveCaption() {
+    if (!onbodyedit || !editingCaption) return;
+    const { line, text, consume } = editingCaption;
+    editingCaption = null;
+    applyCaptionEdit(setImageCaptionAt(body, line, text, consume));
+  }
+
+  function removeImageCaption(line: number) {
+    if (!onbodyedit) return;
+    applyCaptionEdit(setImageCaptionAt(body, line, ""));
+  }
+
+  // One-click from the figure: move the loose prose paragraph under the image
+  // into its caption field, consuming the prose. The selection-toolbar "Mark as
+  // caption" does the same for a chosen range; this is the same action where
+  // the reviewer is already looking - on the image.
+  function markFollowingAsCaptionFor(line: number) {
+    if (!onbodyedit) return;
+    const cand = followingProseAfterImage(body, line);
+    if (!cand) return;
+    applyCaptionEdit(setImageCaptionAt(body, line, cand.text, cand));
   }
 
   /** True while Alt is held: the blocks release the selection so the browser
@@ -478,6 +571,11 @@
   }
 
   function onWindowKeydown(e: KeyboardEvent) {
+    if (e.key === "Escape" && editingCaption) {
+      e.preventDefault();
+      editingCaption = null;
+      return;
+    }
     if (e.key === "Escape" && editingDescription) {
       e.preventDefault();
       editingDescription = null;
@@ -488,7 +586,7 @@
       clearSelection();
       pendingCaption = null;
     }
-    if (e.key === " " && range && !editingDescription && !isTypingTarget(e.target)) {
+    if (e.key === " " && range && !editingDescription && !editingCaption && !isTypingTarget(e.target)) {
       e.preventDefault();
       markReadAndAdvance();
     }
@@ -679,7 +777,7 @@
         <button
           onclick={markSelectionAsCaption}
           class="font-medium text-primary cursor-pointer hover:underline whitespace-nowrap"
-          title="Move this text into the caption field of the image above. Captions (often carrying a copyright or attribution line) are kept on the image and excluded from extraction, so they aren't read as claims."
+          title="Move this text into the caption field of the image above. A caption is the source's own printed line under the figure (often a credit or copyright line); it stays on the image and is never extracted as a claim."
         >
           Mark as caption
         </button>
@@ -748,9 +846,14 @@
           <p class="mt-1 text-xs text-on-surface-secondary leading-relaxed">
             Transcribe or factually describe what is <em>in</em> the image - the text of a screenshot,
             the figures in a chart, the words on a page. This is content: it feeds extraction and can
-            become a claim, so keep it faithful (no interpretation). It is not the
-            <span class="font-medium">caption</span> - that is the source's own attribution line and
-            stays out of extraction.
+            become a claim, so keep it faithful (no interpretation).
+          </p>
+          <p class="mt-1 text-xs text-on-surface-secondary leading-relaxed">
+            A <span class="font-medium">caption</span> is something else: the source's own printed
+            line under the figure (often a credit or copyright line). Captions are shown to the model
+            as context only and never become claims. To attach text that is already under the figure,
+            use <span class="font-medium">Mark as caption</span> on that text, or
+            <span class="font-medium">Use text below as caption</span> on the image.
           </p>
         </div>
         <div class="px-5 py-4">
@@ -786,6 +889,67 @@
               hover:bg-primary/90 cursor-pointer"
           >
             Save description
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  <!-- Image caption editor: the source's own printed line under the figure.
+       Not a description - the caption is meta-context, never a claim. -->
+  {#if editingCaption}
+    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+    <div
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      onclick={(e) => {
+        if (e.target === e.currentTarget) editingCaption = null;
+      }}
+    >
+      <div class="w-full max-w-lg rounded-lg bg-surface border border-border shadow-xl flex flex-col">
+        <div class="px-5 pt-4 pb-3 border-b border-border">
+          <h2 class="text-sm font-ui font-semibold text-on-surface">Image caption</h2>
+          <p class="mt-1 text-xs text-on-surface-secondary leading-relaxed">
+            The source's own printed line under the figure, verbatim - often a credit or copyright
+            line. It is shown to the model as context only and is never extracted as a claim.
+          </p>
+          <p class="mt-1 text-xs text-on-surface-secondary leading-relaxed">
+            To describe what is <em>in</em> the image instead (extractable content), use
+            <span class="font-medium">Describe</span>.
+            {#if editingCaption.consume}
+              Started from the text below the image; saving moves that text into the caption.
+            {/if}
+          </p>
+        </div>
+        <div class="px-5 py-4">
+          <!-- svelte-ignore a11y_autofocus -->
+          <textarea
+            bind:value={editingCaption.text}
+            rows="3"
+            autofocus
+            onkeydown={(e) => {
+              if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                saveCaption();
+              }
+            }}
+            placeholder='e.g. David Charles Grusch (Copyright (c) D. Grusch. Image may not be reproduced without permission.)'
+            class="w-full rounded border border-border bg-surface-alt px-3 py-2 text-sm text-on-surface
+              placeholder:text-on-surface-muted focus:outline-none focus:ring-1 focus:ring-primary resize-y"
+          ></textarea>
+        </div>
+        <div class="px-5 pb-4 flex items-center justify-end gap-3">
+          <button
+            onclick={() => (editingCaption = null)}
+            class="text-xs font-ui text-on-surface-secondary hover:text-on-surface cursor-pointer"
+          >
+            Cancel
+          </button>
+          <button
+            onclick={saveCaption}
+            class="text-xs font-ui font-medium px-3 py-1.5 rounded bg-primary text-on-primary
+              hover:bg-primary/90 cursor-pointer"
+          >
+            Save caption
           </button>
         </div>
       </div>
@@ -1031,5 +1195,72 @@
   :global(figure.ingest-figure .image-description-add:hover) {
     color: var(--color-primary);
     border-color: var(--color-primary);
+  }
+
+  /* Image caption controls: Edit/Remove ride beside the figcaption; the add
+     affordances sit where a caption would be. Same hover-reveal as the
+     description add, so an uncaptioned figure stays uncluttered. */
+  :global(figure.ingest-figure .image-caption-actions) {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin-left: 0.6rem;
+  }
+  :global(figure.ingest-figure .image-caption-edit) {
+    font-size: 0.7rem;
+    color: var(--color-primary);
+    cursor: pointer;
+  }
+  :global(figure.ingest-figure .image-caption-edit:hover) {
+    text-decoration: underline;
+  }
+  :global(figure.ingest-figure .image-caption-remove) {
+    display: inline-flex;
+    align-items: center;
+    color: var(--color-on-surface-muted);
+    cursor: pointer;
+  }
+  :global(figure.ingest-figure .image-caption-remove:hover) {
+    color: var(--color-warning);
+  }
+  :global(figure.ingest-figure .image-caption-add) {
+    display: inline-block;
+    margin-top: 0.5rem;
+    margin-right: 0.4rem;
+    font-size: 0.72rem;
+    color: var(--color-on-surface-secondary);
+    border: 1px dashed var(--color-border);
+    border-radius: 9999px;
+    padding: 0.2rem 0.7rem;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.12s;
+    text-decoration: none;
+  }
+  :global(figure.ingest-figure .image-caption-from-text) {
+    display: inline-block;
+    margin-top: 0.5rem;
+    margin-right: 0.4rem;
+    font-size: 0.72rem;
+    font-weight: 500;
+    color: var(--color-primary);
+    border: 1px solid color-mix(in srgb, var(--color-primary) 55%, transparent);
+    border-radius: 9999px;
+    padding: 0.2rem 0.7rem;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.12s;
+  }
+  :global(figure.ingest-figure:hover .image-caption-add),
+  :global(figure.ingest-figure:hover .image-caption-from-text) {
+    opacity: 1;
+  }
+  :global(figure.ingest-figure .image-caption-add:hover) {
+    color: var(--color-primary);
+    border-color: var(--color-primary);
+    text-decoration: none;
+  }
+  :global(figure.ingest-figure .image-caption-from-text:hover) {
+    background: color-mix(in srgb, var(--color-primary) 10%, transparent);
   }
 </style>
