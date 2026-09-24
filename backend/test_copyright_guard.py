@@ -93,3 +93,67 @@ def test_content_without_a_stated_status_is_not_a_change(as_source, as_role):
     as_source("restricted")
     as_role("reviewer")
     server._guard_copyright_change("a" * 64, "just an edited body", {"email": "r@x"})
+
+
+RECORD3 = """---
+schema: anomalica/record/3
+title: A Video
+source_type: video
+assets:
+- asset_hash: sha256:aaaa
+  file_format: opus
+  source_type: video
+  copyright:
+    status: {status}
+selection:
+- asset_hash: sha256:aaaa
+  selector:
+    type: whole
+---
+
+body
+"""
+
+
+class _Source3:
+    def __init__(self, status):
+        self.status = status
+
+    def get_ingest(self, _hash):
+        raw = RECORD3.format(status=self.status)
+        frontmatter, _body, raw_block = server.parse_frontmatter(raw)
+        return {
+            "frontmatter": frontmatter,
+            "raw_frontmatter": raw_block,
+            "copyright_status": server.record_copyright_status(frontmatter, raw_block),
+        }
+
+
+@pytest.fixture
+def as_source3(monkeypatch):
+    def use(status):
+        monkeypatch.setattr(server, "source", _Source3(status))
+
+    return use
+
+
+def test_record_3_asset_rights_are_the_gate(as_source3, as_role):
+    # record/3 states its gate on the Asset blocks (decision 0051). A reviewer
+    # who edits `assets[].copyright.status` is changing who may see the record
+    # and must meet the same bar as a legacy field edit - this is where that is
+    # refused, since no top-level `copyright.status` exists to catch it.
+    as_source3("restricted")
+    as_role("reviewer")
+    with pytest.raises(HTTPException) as raised:
+        server._guard_copyright_change(
+            "a" * 64, RECORD3.format(status="publicly_accessible"), {"email": "r@x"}
+        )
+    assert raised.value.status_code == 403
+
+
+def test_a_record_3_body_edit_is_not_a_copyright_change(as_source3, as_role):
+    as_source3("publicly_accessible")
+    as_role("reviewer")
+    server._guard_copyright_change(
+        "a" * 64, RECORD3.format(status="publicly_accessible"), {"email": "r@x"}
+    )

@@ -428,6 +428,90 @@ def _prov_map(frontmatter: dict) -> dict:
     return prov if isinstance(prov, dict) else {}
 
 
+# Restrictiveness of a copyright status for the record-level access gate. The
+# larger the number, the less may be shown. An unrecognised status outranks
+# them all, so anything the vocabulary does not know gates closed.
+_COPYRIGHT_SEVERITY = {
+    "public_domain": 0,
+    "open_licence": 1,
+    "publicly_accessible": 2,
+    "licensed": 3,
+    "restricted": 4,
+}
+
+
+def _asset_copyright_statuses(raw_frontmatter: str) -> list[str]:
+    """`copyright.status` of every Asset a record/3 envelope declares.
+
+    Read from the real YAML: the shallow `parse_frontmatter` walk cannot see a
+    list of mappings (`assets:`), so a flat-field read finds nothing at all.
+    """
+    if not raw_frontmatter:
+        return []
+    try:
+        docs = [d for d in yaml.safe_load_all(raw_frontmatter) if isinstance(d, dict)]
+    except yaml.YAMLError:
+        return []
+    if not docs:
+        return []
+    assets = docs[0].get("assets")
+    if not isinstance(assets, list):
+        return []
+    statuses: list[str] = []
+    for asset in assets:
+        if not isinstance(asset, dict):
+            # An unreadable member is not an opening: fail that one closed.
+            statuses.append("restricted")
+            continue
+        block = asset.get("copyright")
+        status = block.get("status") if isinstance(block, dict) else None
+        statuses.append(status.strip() if isinstance(status, str) else "restricted")
+    return [s for s in statuses if s]
+
+
+def record_copyright_status(frontmatter: dict, raw_frontmatter: str = "") -> str:
+    """The record's access gate, resolved across record generations.
+
+    `record/1` and `record/2` carry one top-level `copyright.status`.
+    `record/3` carries none: decision 0051 makes each Asset's
+    `assets[].copyright.status` authoritative and forbids a Record-level value
+    from widening a member decision. Reading only the legacy key therefore
+    failed every record/3 closed to `restricted` - a YouTube transcript whose
+    Asset says publicly_accessible was gated while its record/2 twin was public.
+
+    The Record projection is the most restrictive Asset the body is derived
+    from: one scalar cannot express mixed rights, and over-gating is recoverable
+    where a leak is not. A legacy status written on a record/3 may tighten that
+    projection, never widen it.
+    """
+    legacy = frontmatter.get("copyright.status")
+    legacy = legacy.strip() if isinstance(legacy, str) else ""
+    statuses = _asset_copyright_statuses(raw_frontmatter)
+    if not statuses:
+        return legacy or "restricted"
+    projected = max(statuses, key=lambda s: _COPYRIGHT_SEVERITY.get(s, 99))
+    if not legacy:
+        return projected
+    return max((legacy, projected), key=lambda s: _COPYRIGHT_SEVERITY.get(s, 99))
+
+
+def _row_copyright_status(frontmatter: dict, md_path: Path) -> str:
+    """Access gate for one browse row.
+
+    Only a record/3 envelope is re-read for it: their status lives on the Asset
+    blocks the shallow row parse cannot see, and reading only the legacy field
+    gates the whole generation closed. The `/1` and `/2` majority answer from
+    the flattened `copyright.status` and never touch the disk twice.
+    """
+    raw = ""
+    if str(frontmatter.get("schema", "")).endswith("record/3"):
+        try:
+            raw = parse_frontmatter(md_path.read_text())[2]
+        except OSError:
+            raw = ""
+    return record_copyright_status(frontmatter, raw)
+
+
 def _summary_origin(frontmatter: dict) -> dict:
     """Acquisition-origin and source-identity fields for a browse summary.
 
@@ -835,9 +919,7 @@ class LocalIngestSource(IngestSource):
                     "source_hash": origin["source_hash"],
                     "provenance": origin["provenance"],
                     "publisher": origin["publisher"],
-                    "copyright_status": frontmatter.get(
-                        "copyright.status", "restricted"
-                    ),
+                    "copyright_status": _row_copyright_status(frontmatter, md_path),
                     "review_carryover": None,
                 }
             )
@@ -1316,9 +1398,7 @@ class LocalIngestSource(IngestSource):
                     "source_hash": origin["source_hash"],
                     "provenance": origin["provenance"],
                     "publisher": origin["publisher"],
-                    "copyright_status": frontmatter.get(
-                        "copyright.status", "restricted"
-                    ),
+                    "copyright_status": _row_copyright_status(frontmatter, md_path),
                     # Present when the ingester carried a prior review onto a
                     # re-ingested record; the workbench shows it as
                     # "carried over, verify" rather than fresh or reviewed.
@@ -1425,7 +1505,7 @@ class LocalIngestSource(IngestSource):
         return {
             "content_hash": full_hash,
             "public_hash": full_hash[:PUBLIC_HASH_LENGTH],
-            "copyright_status": frontmatter.get("copyright.status", "restricted"),
+            "copyright_status": record_copyright_status(frontmatter, raw_frontmatter),
             "creators": creators,
             "frontmatter": frontmatter,
             "raw_frontmatter": raw_frontmatter,
@@ -5672,13 +5752,22 @@ def _guard_copyright_change(full_hash: str, content: str, user: dict) -> None:
     current = source.get_ingest(full_hash)
     if current is None:
         return
-    before = (current.get("frontmatter") or {}).get("copyright.status")
-    after = parse_frontmatter(content)[0].get("copyright.status")
+    # Compared as the EFFECTIVE gate, not as the legacy field: record/3 states
+    # it on `assets[].copyright.status` (0051), so a reviewer editing those
+    # blocks is changing who may see the record and must meet the same bar.
+    before = record_copyright_status(
+        current.get("frontmatter") or {}, current.get("raw_frontmatter") or ""
+    )
+    after_frontmatter, _, after_raw = parse_frontmatter(content)
+    stated = after_frontmatter.get("copyright.status")
     # An absent status is not a request to change one. Submitted content whose
     # frontmatter does not state it reads as "unchanged" here, and as
     # "restricted" everywhere that serves the record - so the omission fails
     # closed rather than quietly opening the gate.
-    if after is None or before == after:
+    if stated is None and not _asset_copyright_statuses(after_raw):
+        return
+    after = record_copyright_status(after_frontmatter, after_raw)
+    if before == after:
         return
     if not roles.at_least(_role_of_user(user), "admin"):
         raise HTTPException(
