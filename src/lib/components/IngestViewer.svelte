@@ -29,6 +29,7 @@
     fetchSyncStatus,
     provenanceOf,
     acquisitionOf,
+    youtubeIdOf,
     submitVerification,
     unlockedIngestFromVerification,
     reviewBaseFor,
@@ -289,6 +290,15 @@
     // fetch URL in `assets[].acquisition`; acquisitionOf resolves both so the
     // header does not read "No source recorded" beside a visible URL.
     provenanceOf(acquisitionOf(currentFrontmatterObj)),
+  );
+  // The work URL, resolved across record generations for the source panel and
+  // the video embed. record/3 has no top-level `source_url` - the legacy field
+  // is empty there - so the panel and the embed must read the resolved value.
+  // The API's flattened frontmatter is the fallback when the working document's
+  // YAML has not parsed.
+  let liveSourceUrl = $derived(
+    acquisitionOf(currentFrontmatterObj).source_url ||
+      acquisitionOf(ingest.frontmatter as Record<string, unknown>).source_url,
   );
   let currentRawFrontmatter = $derived.by(() => {
     const m = doc.current.match(/^---\n([\s\S]*?)\n---\n/);
@@ -1704,7 +1714,7 @@
   let epubSource = $derived<Blob | null>(isEbook ? (localSourceFile ?? sourceBlob) : null);
 
   let singleColumn = $derived(
-    (isWeb && !localSourceFile && !localSourceUrl && !ingest.frontmatter.source_url) ||
+    (isWeb && !localSourceFile && !localSourceUrl && !liveSourceUrl) ||
       (isEbook && !epubSource) ||
       (isImage && !localSourceUrl),
   );
@@ -2616,12 +2626,14 @@
 
   let cleanupPageSync: (() => void) | null = null;
 
-  function youtubeId(url: string | undefined): string | null {
-    if (!url) return null;
-    const match = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
-    return match ? match[1] : null;
-  }
-  let ytId = $derived(youtubeId(ingest.frontmatter.source_url));
+  // Which video to embed. youtubeIdOf resolves the work URL and the platform id
+  // across record generations - record/3 keeps the URL in `provenance` and the
+  // copy id in `assets[].acquisition` - so a YouTube record embeds its video
+  // instead of falling through to the archived audio extraction.
+  let ytId = $derived(
+    youtubeIdOf(currentFrontmatterObj) ||
+      youtubeIdOf(ingest.frontmatter as Record<string, unknown>),
+  );
 
   // Theatre mode: lift the video to a full-width band across the top, with
   // the remaining columns laid out beneath it. Implemented with CSS Grid
@@ -4852,17 +4864,17 @@
       >
         <div class="px-3 py-2 bg-surface-alt border-b border-border flex-none flex items-center gap-3">
           <span class="text-xs font-ui font-medium text-on-surface-secondary uppercase flex-none">Original</span>
-          {#if ingest.frontmatter.source_url && !ytId}
+          {#if liveSourceUrl && !ytId}
             <!-- For YouTube videos the source link lives in the player's
                  control bar, so it isn't duplicated in this header. -->
             <a
-              href={ingest.frontmatter.source_url}
+              href={liveSourceUrl}
               target="_blank"
               rel="noopener"
               class="text-xs text-primary hover:underline truncate min-w-0"
-              title={ingest.frontmatter.source_url}
+              title={liveSourceUrl}
             >
-              {ingest.frontmatter.source_url}
+              {liveSourceUrl}
             </a>
           {/if}
           {#if ingest.frontmatter.date_accessed}
@@ -4943,9 +4955,9 @@
                       <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="1.5" /></svg>
                     {/if}
                   </button>
-                  {#if ingest.frontmatter.source_url}
+                  {#if liveSourceUrl}
                     <a
-                      href={ingest.frontmatter.source_url}
+                      href={liveSourceUrl}
                       target="_blank"
                       rel="noopener"
                       class="p-1 rounded text-white/70 hover:bg-white/10 transition-colors flex items-center"
@@ -5065,7 +5077,7 @@
             ondragleave={() => { dragging = false; }}
             ondrop={handleFileDrop}
           >
-            {#if ingest.frontmatter.source_url && !dragging}
+            {#if liveSourceUrl && !dragging}
               <!-- The archived capture isn't served here (web originals live at
                    their source URL); link out so the reviewer can check the
                    extraction against the live page. -->
@@ -5079,7 +5091,7 @@
                     : "The original is archived - this record is gated, so unlock it on the right to view it."}
                 </p>
               <a
-                href={ingest.frontmatter.source_url}
+                href={liveSourceUrl}
                 target="_blank"
                 rel="noopener"
                 class="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-ui bg-primary
@@ -5147,16 +5159,16 @@
       style={theatreActive ? 'grid-area: ing' : ''}
     >
       <!-- Source URL bar shown when the source column is hidden (e.g. for web ingests) -->
-      {#if !visibleCols.source && ingest.frontmatter.source_url}
+      {#if !visibleCols.source && liveSourceUrl}
         <div class="px-4 py-2 bg-surface-alt border-b border-border flex items-center gap-2 flex-none">
           <span class="text-xs font-ui font-medium text-on-surface-secondary uppercase flex-none">Source</span>
           <a
-            href={ingest.frontmatter.source_url}
+            href={liveSourceUrl}
             target="_blank"
             rel="noopener"
             class="text-xs text-primary hover:underline truncate min-w-0"
           >
-            {ingest.frontmatter.source_url}
+            {liveSourceUrl}
           </a>
           {#if ingest.frontmatter.date_accessed}
             <span class="text-xs text-on-surface-muted font-ui flex-none ml-auto" title={ingest.frontmatter.date_accessed}>

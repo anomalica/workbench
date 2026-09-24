@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { provenanceOf, acquisitionOf, isPubliclyViewable } from "./api";
+import { provenanceOf, acquisitionOf, isPubliclyViewable, youtubeIdOf } from "./api";
 
 describe("isPubliclyViewable", () => {
   it("is true for freely-viewable statuses", () => {
@@ -123,5 +123,74 @@ describe("acquisitionOf", () => {
       provenance: { publisher: "Daily Mail" },
     });
     expect(acq.source_url).toBe("https://web.archive.org/web/1id_/https://x");
+  });
+
+  it("reads the API's flattened provenance.source_url spelling", () => {
+    // The API's frontmatter map is the backend's shallow parse, which flattens
+    // one nesting level to dotted keys. Reading only the block spelling leaves
+    // every record/3 of the live API without a source URL.
+    const acq = acquisitionOf({ "provenance.source_url": "https://example.com/a" });
+    expect(acq.source_url).toBe("https://example.com/a");
+  });
+});
+
+describe("youtubeIdOf", () => {
+  it("reads the legacy flat source_url of a record/2 video", () => {
+    // The shape that always worked: Dr. John E. Mack and every other /2
+    // transcript carries the work URL at the top level.
+    expect(
+      youtubeIdOf({
+        source_url: "https://www.youtube.com/watch?v=ylgNYkrj55o",
+        source_id: "youtube:ylgNYkrj55o",
+      }),
+    ).toBe("ylgNYkrj55o");
+  });
+
+  it("reads record/3 provenance.source_url", () => {
+    // The record/3 shape: the work URL moved to the provenance block, so the
+    // viewer found no video id and rendered the archived audio extraction
+    // instead of the YouTube video.
+    expect(
+      youtubeIdOf({
+        provenance: { source_url: "https://www.youtube.com/watch?v=PyRZDx4NKv0" },
+      }),
+    ).toBe("PyRZDx4NKv0");
+  });
+
+  it("reads the flattened provenance.source_url spelling from the API map", () => {
+    expect(
+      youtubeIdOf({ "provenance.source_url": "https://www.youtube.com/watch?v=mu9mw6GHPEM" }),
+    ).toBe("mu9mw6GHPEM");
+  });
+
+  it("falls back to an asset copy identifier when no URL carries the id", () => {
+    expect(
+      youtubeIdOf({
+        assets: [
+          {
+            acquisition: {
+              source_file: "youtube-PyRZDx4NKv0.opus",
+              copy_identifiers: { source_id: "youtube:PyRZDx4NKv0" },
+            },
+          },
+        ],
+      }),
+    ).toBe("PyRZDx4NKv0");
+  });
+
+  it("recognises short and embed URLs", () => {
+    expect(youtubeIdOf({ source_url: "https://youtu.be/ylgNYkrj55o" })).toBe("ylgNYkrj55o");
+    expect(youtubeIdOf({ source_url: "https://www.youtube.com/embed/ylgNYkrj55o" })).toBe(
+      "ylgNYkrj55o",
+    );
+    expect(youtubeIdOf({ source_url: "https://www.youtube.com/shorts/ylgNYkrj55o" })).toBe(
+      "ylgNYkrj55o",
+    );
+  });
+
+  it("returns null for records that are not YouTube videos", () => {
+    expect(youtubeIdOf({ source_url: "https://www.dailymail.com/news/article-1.html" })).toBe(null);
+    expect(youtubeIdOf({ provenance: { source_url: "https://example.org/a.pdf" } })).toBe(null);
+    expect(youtubeIdOf({})).toBe(null);
   });
 });

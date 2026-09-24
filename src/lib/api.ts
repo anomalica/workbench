@@ -82,7 +82,12 @@ export interface ProvenanceBlock {
  *  generations. `record/3` keeps work origin in the `provenance` block and copy
  *  acquisition in `assets[].acquisition`; `/1` and `/2` used flat
  *  `source_url`/`source_file`/`source_hash` and a scalar `provenance: "unknown"`
- *  marker. The browse list and the record header read one shape either way. */
+ *  marker. The browse list and the record header read one shape either way.
+ *
+ *  The API's `frontmatter` map is the backend's shallow parse, which flattens
+ *  one nesting level to dotted keys (`provenance.source_url`), so both the
+ *  block and that spelling are read here - otherwise a record/3 reads as
+ *  "No source recorded" beside its own URL. */
 export function acquisitionOf(frontmatter: Record<string, unknown>): {
   source_url: string;
   source_file: string;
@@ -94,7 +99,10 @@ export function acquisitionOf(frontmatter: Record<string, unknown>): {
     prov && typeof prov === "object" && !Array.isArray(prov)
       ? (prov as ProvenanceBlock)
       : {};
-  let source_url = str(frontmatter.source_url) || str(provMap.source_url);
+  let source_url =
+    str(frontmatter.source_url) ||
+    str(provMap.source_url) ||
+    str(frontmatter["provenance.source_url"]);
   if (!source_url && Array.isArray(frontmatter.assets)) {
     for (const asset of frontmatter.assets) {
       if (!asset || typeof asset !== "object") continue;
@@ -108,6 +116,7 @@ export function acquisitionOf(frontmatter: Record<string, unknown>): {
       }
     }
   }
+  if (!source_url) source_url = str(frontmatter["assets.fetched_url"]);
   return {
     source_url,
     source_file: str(frontmatter.source_file),
@@ -164,6 +173,59 @@ export function provenanceOf(r: {
   if (r.provenance === "unknown")
     return { kind: "unknown", label: "Origin unknown", traceable: false };
   return { kind: "none", label: "No source recorded", traceable: false };
+}
+
+/** The 11-character id of a YouTube video in a URL or a `youtube:` identifier.
+ *  Same coverage as the backend's `_YT_ID_RE`, so both surfaces recognise the
+ *  same links. */
+const YT_VIDEO_RE =
+  /(?:youtube\.com\/(?:watch\?v=|shorts\/|embed\/)|youtu\.be\/|youtube-nocookie\.com\/embed\/)([A-Za-z0-9_-]{11})/;
+const YT_ID_RE = /^youtube:([A-Za-z0-9_-]{11})$/;
+
+/** Native platform identifiers a record may carry. `record/1`/`/2` keep one at
+ *  `source_id`; `record/3` puts the copy's on
+ *  `assets[].acquisition.copy_identifiers` and the work's on
+ *  `provenance.identifiers`. */
+function identifierValues(frontmatter: Record<string, unknown>): string[] {
+  const out: string[] = [];
+  const push = (v: unknown) => {
+    if (typeof v === "string" && v.trim()) out.push(v.trim());
+    else if (v && typeof v === "object" && !Array.isArray(v)) {
+      for (const nested of Object.values(v as Record<string, unknown>)) push(nested);
+    }
+  };
+  push(frontmatter.source_id);
+  push(frontmatter["assets.source_id"]);
+  const prov = frontmatter.provenance;
+  if (prov && typeof prov === "object" && !Array.isArray(prov)) {
+    push((prov as ProvenanceBlock).identifiers);
+  }
+  if (Array.isArray(frontmatter.assets)) {
+    for (const asset of frontmatter.assets) {
+      if (!asset || typeof asset !== "object") continue;
+      const acq = (asset as Record<string, unknown>).acquisition;
+      if (acq && typeof acq === "object") {
+        push((acq as Record<string, unknown>).copy_identifiers);
+      }
+    }
+  }
+  return out;
+}
+
+/** The YouTube video a record's media should embed, resolved across record
+ *  generations. The work URL lives at `source_url` in `/1` and `/2` and at
+ *  `provenance.source_url` in `record/3`, with the platform id at `source_id`
+ *  or an Asset copy identifier. Reading only the legacy flat field finds no URL
+ *  for a record/3 and the viewer falls back to the archived audio extraction -
+ *  a YouTube video rendered as a bare audio player. */
+export function youtubeIdOf(frontmatter: Record<string, unknown>): string | null {
+  const fromUrl = YT_VIDEO_RE.exec(acquisitionOf(frontmatter).source_url);
+  if (fromUrl) return fromUrl[1];
+  for (const id of identifierValues(frontmatter)) {
+    const match = YT_ID_RE.exec(id) ?? YT_VIDEO_RE.exec(id);
+    if (match) return match[1];
+  }
+  return null;
 }
 
 export interface IngestDetail {
