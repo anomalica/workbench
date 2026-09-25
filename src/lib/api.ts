@@ -46,6 +46,11 @@ export interface IngestSummary {
    *  {@link provenanceOf}, which understands both. */
   provenance: string;
   publisher: string;
+  /** The channel or site THIS COPY came from - not the work's publisher. The
+   *  copy axis: an archival re-upload has both this and `publisher`. */
+  posted_by?: string;
+  /** When that channel posted this copy - not the work's `date`. */
+  posted_date?: string;
   copyright_status: CopyrightStatus;
   /** True when a reviewer has observed 100% of the record's content units
    *  (the digester gate's rule). See observed_coverage for the fraction. */
@@ -78,6 +83,141 @@ export interface ProvenanceBlock {
   [key: string]: unknown;
 }
 
+/** Whether the frontmatter is `record/3`-shaped: those keep work metadata in
+ *  `provenance` and copy metadata in `assets[].acquisition` (decisions 0043 and
+ *  0051) and are read from there, never from the legacy flat fields. `assets`
+ *  is the structural marker; the `schema` string also answers for the API's
+ *  shallow frontmatter map, which flattens `assets` away entirely. */
+export function isRecord3Shape(frontmatter: Record<string, unknown>): boolean {
+  if (str(frontmatter.schema).includes("record/3")) return true;
+  return Array.isArray(frontmatter.assets) && frontmatter.assets.length > 0;
+}
+
+/** One metadata value, resolved across record generations: the canonical home
+ *  of the record's shape first, the other spelling as fallback. A record
+ *  carrying both has a stale duplicate (the format never writes both layers),
+ *  and the canonical home is the one a producer and a reviewer agree on.
+ *  `paths` are given as `record3Path, legacyPath...`. */
+function pickField(
+  frontmatter: Record<string, unknown>,
+  record3Path: string,
+  ...legacyPaths: string[]
+): string {
+  const ordered = isRecord3Shape(frontmatter)
+    ? [record3Path, ...legacyPaths]
+    : [...legacyPaths, record3Path];
+  for (const path of ordered) {
+    const value = atPath(frontmatter, path);
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
+}
+
+/** Read one dotted path from a nested frontmatter object or from the API's
+ *  flattened map (`provenance.source_url`), where the shallow parse could not
+ *  represent the nesting itself. */
+function atPath(frontmatter: Record<string, unknown>, path: string): unknown {
+  const flat = frontmatter[path];
+  if (flat !== undefined && flat !== null && flat !== "") return flat;
+  let node: unknown = frontmatter;
+  for (const part of path.split(".")) {
+    if (!node || typeof node !== "object" || Array.isArray(node)) return undefined;
+    node = (node as Record<string, unknown>)[part];
+  }
+  return node;
+}
+
+function str(v: unknown): string {
+  return typeof v === "string" ? v : "";
+}
+
+/** The metadata the workbench's metadata panel shows and edits, resolved
+ *  across record generations. `record/3` homes publisher, creators, the work
+ *  date and the work URL in `provenance`, the copy channel and copy date beside
+ *  them (`posted_by`/`posted_date`), and the retrieval instant on each Asset's
+ *  `acquisition`; `/1` and `/2` keep the same fields flat. Reading only the
+ *  flat fields left every record/3's panel half empty beside a metadata block
+ *  that was right there. */
+export interface RecordMetadata {
+  title: string;
+  publisher: string;
+  creators: string[];
+  /** The WORK's publication date (`published_date`, legacy `date_published`). */
+  publishedDate: string;
+  sourceUrl: string;
+  /** When this copy was retrieved (`assets[].acquisition.acquired_at`). */
+  dateAccessed: string;
+  /** The channel or site THIS COPY came from - not the work's publisher. */
+  postedBy: string;
+  /** When that channel posted this copy - not the work's publication date. */
+  postedDate: string;
+}
+
+export function metadataOf(frontmatter: Record<string, unknown>): RecordMetadata {
+  const creators: string[] = [];
+  const creatorPaths = isRecord3Shape(frontmatter)
+    ? ["provenance.creators", "creators", "authors"]
+    : ["creators", "authors", "provenance.creators"];
+  for (const path of creatorPaths) {
+    const value = atPath(frontmatter, path);
+    const list = Array.isArray(value) ? value : null;
+    if (list && list.length > 0) {
+      for (const entry of list) {
+        // `String(entry)` on an object gives "[object Object]": a malformed
+        // `- name: X / role: Y` entry must still read as a name.
+        const name =
+          entry && typeof entry === "object"
+            ? str((entry as Record<string, unknown>).name)
+            : str(entry);
+        if (name.trim()) creators.push(name.trim());
+      }
+      break;
+    }
+    const single = str(value).trim();
+    if (single) {
+      creators.push(single);
+      break;
+    }
+  }
+  return {
+    title: pickField(frontmatter, "title", "title"),
+    publisher: pickField(frontmatter, "provenance.publisher", "publisher"),
+    creators,
+    publishedDate: pickField(
+      frontmatter,
+      "provenance.published_date",
+      "date_published",
+      "date",
+    ),
+    sourceUrl: pickField(frontmatter, "provenance.source_url", "source_url"),
+    dateAccessed: assetAcquiredAt(frontmatter),
+    postedBy: pickField(frontmatter, "provenance.posted_by", "posted_by"),
+    postedDate: pickField(frontmatter, "provenance.posted_date", "posted_date"),
+  };
+}
+
+/** The retrieval instant of a record/3's Assets. One record-level value can
+ *  only be shown when the Assets agree; distinct per-Asset times are the
+ *  Record editor's to show, and a flat reading of one of them would misdate
+ *  the rest. Legacy `/1` and `/2` keep one `date_accessed`. */
+function assetAcquiredAt(frontmatter: Record<string, unknown>): string {
+  const legacy = str(atPath(frontmatter, "date_accessed")).trim();
+  const assets = frontmatter.assets;
+  if (!Array.isArray(assets)) return legacy;
+  const values = new Set<string>();
+  for (const asset of assets) {
+    const descriptor =
+      asset && typeof asset === "object" ? (asset as Record<string, unknown>) : null;
+    const acquisition = descriptor?.acquisition;
+    if (!acquisition || typeof acquisition !== "object") continue;
+    const acquired = str((acquisition as Record<string, unknown>).acquired_at).trim();
+    if (acquired) values.add(acquired);
+  }
+  if (values.size === 1) return [...values][0];
+  if (values.size > 1) return "";
+  return legacy;
+}
+
 /** Acquisition-origin fields for {@link provenanceOf}, resolved across record
  *  generations. `record/3` keeps work origin in the `provenance` block and copy
  *  acquisition in `assets[].acquisition`; `/1` and `/2` used flat
@@ -99,10 +239,7 @@ export function acquisitionOf(frontmatter: Record<string, unknown>): {
     prov && typeof prov === "object" && !Array.isArray(prov)
       ? (prov as ProvenanceBlock)
       : {};
-  let source_url =
-    str(frontmatter.source_url) ||
-    str(provMap.source_url) ||
-    str(frontmatter["provenance.source_url"]);
+  let source_url = pickField(frontmatter, "provenance.source_url", "source_url");
   if (!source_url && Array.isArray(frontmatter.assets)) {
     for (const asset of frontmatter.assets) {
       if (!asset || typeof asset !== "object") continue;
@@ -127,14 +264,6 @@ export function acquisitionOf(frontmatter: Record<string, unknown>): {
   };
 }
 
-function str(v: unknown): string {
-  return typeof v === "string" ? v : "";
-}
-
-/** Where a record came from, derived from its acquisition fields. `traceable`
- *  is false for records whose origin is unknown or absent - the ones worth
- *  flagging when browsing. Works on an IngestSummary or a frontmatter dict
- *  (via {@link acquisitionOf} for record/3's nested provenance block). */
 export function provenanceOf(r: {
   source_url?: string;
   source_file?: string;

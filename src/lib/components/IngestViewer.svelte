@@ -30,6 +30,8 @@
     provenanceOf,
     acquisitionOf,
     youtubeIdOf,
+    metadataOf,
+    type RecordMetadata,
     submitVerification,
     unlockedIngestFromVerification,
     reviewBaseFor,
@@ -99,6 +101,7 @@
   import ReviewHistory from "./ReviewHistory.svelte";
   import { hasWordTimestamps, parseWords, nextRelevantWordStartAfter, speakerWordCounts, quotedSpeakerCounts } from "$lib/transcript-words";
   import { imageRefsInBody, followingProseAfterImage } from "$lib/image-captions";
+  import { chapterSections, type ChapterSection } from "$lib/chapter-navigation";
   import { stripSourceOnlyInline, visibleAnnotationContent } from "$lib/ingest-source-only";
   import { messageInner, parseMessage, messageHeaderHtml } from "$lib/email-thread";
   import { untrack } from "svelte";
@@ -247,25 +250,27 @@
       return {};
     }
   });
-  let liveCreators = $derived.by<string[]>(() => {
-    const c = currentFrontmatterObj.creators ?? currentFrontmatterObj.authors;
-    if (!Array.isArray(c)) return [];
-    // `String(entry)` on an object gives "[object Object]", which is what the
-    // header showed for a record whose creators were written as
-    // `- name: ... / role: ...`. That shape is against the format (creators are
-    // plain names; roles stay out of frontmatter), but a malformed record must
-    // still render as something a person can read rather than as a JS artefact.
-    return c
-      .map((entry) =>
-        entry && typeof entry === "object"
-          ? String((entry as Record<string, unknown>).name ?? "")
-          : String(entry ?? ""),
-      )
-      .filter((name) => name.trim() !== "");
+  // The record's metadata, resolved across record generations for the metadata
+  // panel and the header. record/3 keeps these in `provenance` and
+  // `assets[].acquisition` (decisions 0043/0051), so reading only the flat
+  // fields left the panel half empty beside a metadata block that was right
+  // there. Falls back to the API's flattened frontmatter when the working
+  // document's YAML has not parsed.
+  let liveMeta = $derived.by<RecordMetadata>(() => {
+    const live = metadataOf(currentFrontmatterObj);
+    const anySet =
+      live.title ||
+      live.publisher ||
+      live.creators.length > 0 ||
+      live.publishedDate ||
+      live.sourceUrl ||
+      live.dateAccessed ||
+      live.postedBy ||
+      live.postedDate;
+    return anySet ? live : metadataOf(ingest.frontmatter as Record<string, unknown>);
   });
-  let livePublisher = $derived(
-    typeof currentFrontmatterObj.publisher === "string" ? currentFrontmatterObj.publisher : "",
-  );
+  let liveCreators = $derived(liveMeta.creators);
+  let livePublisher = $derived(liveMeta.publisher);
   // The WORKING title, so a retitle shows in the header immediately, not after
   // submit + reload. Falls back to the server detail for a record whose draft
   // hasn't touched the frontmatter.
@@ -1231,6 +1236,9 @@
    *  block, so a block cannot count its own place in the record. */
   let markersBeforeLine = $derived(pageMarkerLines(currentBody));
   let printedPageAnchorLines = $derived(printedPageAnchors(currentBody));
+  let chapters = $derived(chapterSections(currentBody));
+  let chaptersByMarker = $derived(new Map(chapters.map((chapter) => [chapter.markerLine, chapter])));
+  let chaptersByHeading = $derived(new Map(chapters.filter((chapter) => chapter.headingLine !== null).map((chapter) => [chapter.headingLine, chapter])));
   let isWeb = $derived(ingest.frontmatter.source_type === "web");
   let isAudio = $derived(ingest.frontmatter.source_type === "audio");
   let isVideo = $derived(ingest.frontmatter.source_type === "video");
@@ -2102,13 +2110,25 @@
     }[c] as string));
   }
 
-  /** Replace annotation comment blocks with visible HTML elements.
-   *
-   *  Per architecture/ingest-format.md, structural-only annotations
-   *  (chapter, chapter_title, printed_page) are suppressed in the body -
-   *  they drive navigation, not prose. Speaker annotations are also
-   *  suppressed here; the transcript view consumes them via parseTranscript.
-   */
+  function chapterDivider(chapter: ChapterSection): string {
+    const number = chapter.number
+      ? `<span class="ingest-chapter-kicker">Chapter ${escapeHtml(chapter.number)}</span>`
+      : "";
+    // When the book prints its own heading, render that passage as a heading on
+    // the following block. An unprinted TOC title is shown once, here instead.
+    const title = chapter.printedHeading
+      ? ""
+      : `<h2 class="ingest-chapter-heading">${escapeHtml(chapter.label)}</h2>`;
+    return `\n\n<div class="ingest-chapter-divider" data-chapter-line="${chapter.markerLine}">${number}${title}</div>\n\n`;
+  }
+
+  function jumpToChapter(line: number) {
+    const target = proseContainer?.querySelector<HTMLElement>(`[data-chapter-line="${line}"]`);
+    if (!target || !proseContainer) return;
+    const top = target.getBoundingClientRect().top - proseContainer.getBoundingClientRect().top + proseContainer.scrollTop;
+    proseContainer.scrollTo({ top: Math.max(0, top - 16), behavior: "smooth" });
+  }
+
   /** Pair `![alt](url)` with an immediately-following italic-only
    *  paragraph and rewrite as <figure><figcaption>. Web records commonly
    *  emit captions as plain italic prose on the next line, which marked
@@ -2149,6 +2169,9 @@
     return n;
   }
 
+  /** Replace comment annotations with reader-facing structure: chapter
+   *  dividers and page labels, without duplicating the source's own headings.
+   *  Speaker comments stay out of prose; the transcript view consumes them. */
   function preprocessAnnotations(
     body: string,
     imageControls = false,
@@ -2166,6 +2189,13 @@
     // consumes them; any markdown/prose render must hide them (word records use
     // WordTranscript, but this keeps markers out of every other prose path too).
     body = stripSourceOnlyInline(body).replace(/\{\{t:\d+(?:\.\d+)?\}\}/g, "");
+    // Kindle-exported chapter headings are often <p><strong>...</strong></p>.
+    // Their source-derived chapter markers make them proper headings in the
+    // reading view; an ordinary bold paragraph remains an ordinary paragraph.
+    const printedChapter = chaptersByHeading.get(lineOffset);
+    if (printedChapter?.printedHeading && /^\*\*[^\n]+\*\*$/.test(body.trim())) {
+      return `<h2 class="ingest-chapter-heading">${escapeHtml(printedChapter.printedHeading)}</h2>`;
+    }
     // Correct the page numbers FIRST, while the text still lines up with the
     // record: every rewrite below moves lines about, and the correction has to
     // know which marker of the whole record each one is.
@@ -2201,6 +2231,7 @@
         return `\n\n<div class="page-marker" data-file-page="${filePage}"><span class="page-label">Page ${filePage}</span>${printed}</div>\n\n`;
       },
     );
+    let chapterRendered = false;
     return body.replace(
       /<!--\s*([\s\S]*?)-->/g,
       (_, content) => {
@@ -2229,8 +2260,18 @@
         if (trimmed === "page_break") {
           return `\n\n<div class="page-marker"><span class="page-label">Page break</span></div>\n\n`;
         }
-        // Structural markers: suppress in body (used for nav, not display)
-        if (/^(chapter|chapter_title|speaker|printed_page_sequence)\s*:/.test(trimmed)) {
+        // A pair of chapter annotations produces one boundary, not two raw
+        // comments or a duplicate of the printed heading after it.
+        if (/^(chapter|chapter_title)\s*:/.test(trimmed)) {
+          const chapter = chaptersByMarker.get(lineOffset);
+          if (chapter && !chapterRendered) {
+            chapterRendered = true;
+            return chapterDivider(chapter);
+          }
+          return "";
+        }
+        // Other structural markers are navigation, not prose.
+        if (/^(speaker|printed_page_sequence)\s*:/.test(trimmed)) {
           return "";
         }
         // Image with extracted file: render as an <img> from the media
@@ -4104,7 +4145,16 @@
              without being told which of those is true is how someone comes to
              assume the whole corpus is open. -->
         <span class={visibility.tone} title={visibility.detail}>{visibility.label}</span>
-        <span>{ingest.frontmatter.date}</span>
+        <!-- When the work appeared. Failing that, when this copy was posted -
+             a copy date is when the CHANNEL posted it, not when the work was
+             issued, so it says so on hover rather than misdating the work. -->
+        <span
+          title={liveMeta.publishedDate
+            ? "When the work was published"
+            : liveMeta.postedDate
+              ? "When the channel posted this copy - the work's own publication date is not evidenced"
+              : ""}
+        >{liveMeta.publishedDate || liveMeta.postedDate}</span>
         {#if hasTranscript}
           <span>{segments.length} segments</span>
         {/if}
@@ -4877,12 +4927,12 @@
               {liveSourceUrl}
             </a>
           {/if}
-          {#if ingest.frontmatter.date_accessed}
+          {#if liveMeta.dateAccessed}
             <span
               class="text-xs text-on-surface-muted font-ui flex-none ml-auto"
-              title={ingest.frontmatter.date_accessed}
+              title={liveMeta.dateAccessed}
             >
-              accessed {ingest.frontmatter.date_accessed.slice(0, 10)}
+              accessed {liveMeta.dateAccessed.slice(0, 10)}
             </span>
           {/if}
         </div>
@@ -5170,9 +5220,9 @@
           >
             {liveSourceUrl}
           </a>
-          {#if ingest.frontmatter.date_accessed}
-            <span class="text-xs text-on-surface-muted font-ui flex-none ml-auto" title={ingest.frontmatter.date_accessed}>
-              accessed {ingest.frontmatter.date_accessed.slice(0, 10)}
+          {#if liveMeta.dateAccessed}
+            <span class="text-xs text-on-surface-muted font-ui flex-none ml-auto" title={liveMeta.dateAccessed}>
+              accessed {liveMeta.dateAccessed.slice(0, 10)}
             </span>
           {/if}
         </div>
@@ -5199,6 +5249,23 @@
         >
           Meta
         </button>
+
+        {#if isEbook && view === "ingest" && chapters.length > 0}
+          <select
+            aria-label="Jump to section"
+            title="Jump to a book section"
+            onchange={(e) => {
+              if (e.currentTarget.value) jumpToChapter(Number(e.currentTarget.value));
+              e.currentTarget.value = "";
+            }}
+            class="max-w-52 truncate rounded border border-border bg-surface px-2 py-1 text-xs font-ui text-on-surface cursor-pointer"
+          >
+            <option value="">Sections ({chapters.length})</option>
+            {#each chapters as chapter}
+              <option value={chapter.markerLine}>{chapter.label}</option>
+            {/each}
+          </select>
+        {/if}
 
         <div class="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-1">
           <!-- How loudly other people's highlights are drawn, at three
@@ -5404,22 +5471,22 @@
             title={liveTitle}
             publisher={livePublisher}
             creators={liveCreators}
-            datePublished={String(
-              currentFrontmatterObj.date_published ?? ingest.frontmatter.date_published ?? "",
-            )}
-            sourceUrl={String(currentFrontmatterObj.source_url ?? ingest.frontmatter.source_url ?? "")}
-            dateAccessed={String(
-              currentFrontmatterObj.date_accessed ?? ingest.frontmatter.date_accessed ?? "",
-            )}
+            datePublished={liveMeta.publishedDate}
+            sourceUrl={liveMeta.sourceUrl}
+            dateAccessed={liveMeta.dateAccessed}
+            postedBy={liveMeta.postedBy}
+            postedDate={liveMeta.postedDate}
             canEdit={!!user && contentReviewAllowed}
-            onsave={({ title, publisher, creators, datePublished, sourceUrl, dateAccessed }) =>
-              doc.updateFrontmatter({
-                title,
-                publisher,
-                creators,
-                date_published: datePublished,
-                source_url: sourceUrl,
-                date_accessed: dateAccessed,
+            onsave={(next) =>
+              doc.updateMetadata({
+                title: next.title,
+                publisher: next.publisher,
+                creators: next.creators,
+                datePublished: next.datePublished,
+                sourceUrl: next.sourceUrl,
+                dateAccessed: next.dateAccessed,
+                postedBy: next.postedBy,
+                postedDate: next.postedDate,
               })}
           />
           <!-- Who may see it. Admin only: this is the access gate, not a
@@ -6687,6 +6754,25 @@
 {/if}
 
 <style>
+  :global(.ingest-chapter-divider) {
+    margin: 2.75rem 0 0.5rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--color-border-strong);
+  }
+  :global(.ingest-chapter-kicker) {
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--color-primary);
+  }
+  :global(.ingest-chapter-heading) {
+    font-size: 1.4rem;
+    font-weight: 700;
+    line-height: 1.3;
+    color: var(--color-on-surface);
+    margin: 0.35rem 0 1.25rem;
+  }
   /* Email thread segments: an email is a CONVERSATION, so each message is
      attributed and a quoted reply is set apart from the sender's own words -
      otherwise the two blur into one block of prose.

@@ -512,6 +512,16 @@ def _row_copyright_status(frontmatter: dict, md_path: Path) -> str:
     return record_copyright_status(frontmatter, raw)
 
 
+def _is_record3(frontmatter: dict) -> bool:
+    """Whether the frontmatter is record/3-shaped: those keep the work's
+    metadata in `provenance` and the copy's in `assets[].acquisition` (0043 and
+    0051), and are read from there rather than from the legacy flat fields."""
+    if str(frontmatter.get("schema", "")).endswith("record/3"):
+        return True
+    assets = frontmatter.get("assets")
+    return isinstance(assets, list) and bool(assets)
+
+
 def _summary_origin(frontmatter: dict) -> dict:
     """Acquisition-origin and source-identity fields for a browse summary.
 
@@ -520,30 +530,37 @@ def _summary_origin(frontmatter: dict) -> dict:
     `source_file`/`source_hash`/`publisher`/`creators`/`date_published` and a
     scalar `provenance: "unknown"` marker. `parse_frontmatter` flattens one
     level of nesting to dotted keys (`provenance.source_url`,
-    `assets.fetched_url`), so both spellings are read here. The summary is one
-    shape either way, or every record/3 reads as "No source recorded" beside
-    its own URL.
+    `assets.fetched_url`), so both spellings are read here - the canonical home
+    of the record's generation first, so a stale flat duplicate cannot win. The
+    summary is one shape either way, or every record/3 reads as "No source
+    recorded" beside its own URL.
     """
     prov = _prov_map(frontmatter)
+    record3 = _is_record3(frontmatter)
 
     def pick(*names: str) -> object:
         for name in names:
+            if name.startswith("provenance."):
+                value = prov.get(name.split(".", 1)[1])
+                if value not in (None, ""):
+                    return value
             value = frontmatter.get(name)
             if value not in (None, ""):
                 return value
         return None
 
-    source_url = str(
-        pick("source_url")
-        or (prov.get("source_url") if prov else None)
-        or pick("provenance.source_url")
-        or ""
-    )
+    def resolve(record3_name: str, *legacy_names: str) -> object:
+        ordered = (
+            (record3_name, *legacy_names) if record3 else (*legacy_names, record3_name)
+        )
+        return pick(*ordered)
+
+    source_url = str(resolve("provenance.source_url", "source_url") or "")
     if not source_url:
         # Copy acquisition: the URL actually fetched (often a Wayback wrapper).
         source_url = str(pick("fetched_url", "assets.fetched_url") or "")
 
-    creators = pick("creators", "authors", "provenance.creators")
+    creators = resolve("provenance.creators", "creators", "authors")
     if not isinstance(creators, list):
         # The shallow parser collects a block's list items under the block key
         # itself (`provenance.creators:` is one level too deep for it).
@@ -561,19 +578,18 @@ def _summary_origin(frontmatter: dict) -> dict:
         "source_file": str(frontmatter.get("source_file") or ""),
         "source_hash": str(frontmatter.get("source_hash") or ""),
         "provenance": marker if isinstance(marker, str) else "",
-        "publisher": str(
-            pick("publisher")
-            or (prov.get("publisher") if prov else None)
-            or pick("provenance.publisher")
-            or ""
-        ),
+        "publisher": str(resolve("provenance.publisher", "publisher") or ""),
         "creators": creators,
         "date": str(
-            pick("date_published", "date")
-            or (prov.get("published_date") if prov else None)
-            or pick("provenance.published_date")
-            or ""
+            resolve("provenance.published_date", "date_published", "date") or ""
         ),
+        # The copy axis: the channel or site THIS COPY came from and when it
+        # posted it. Distinct from publisher and date above - an archival
+        # re-upload has both, and filing the redistributor as the publisher
+        # corrupts the provenance roots. Rows show it as a muted fallback where
+        # the work's own metadata is not evidenced.
+        "posted_by": str(resolve("provenance.posted_by", "posted_by") or ""),
+        "posted_date": str(resolve("provenance.posted_date", "posted_date") or ""),
     }
 
 
@@ -919,6 +935,8 @@ class LocalIngestSource(IngestSource):
                     "source_hash": origin["source_hash"],
                     "provenance": origin["provenance"],
                     "publisher": origin["publisher"],
+                    "posted_by": origin["posted_by"],
+                    "posted_date": origin["posted_date"],
                     "copyright_status": _row_copyright_status(frontmatter, md_path),
                     "review_carryover": None,
                 }
@@ -1398,6 +1416,8 @@ class LocalIngestSource(IngestSource):
                     "source_hash": origin["source_hash"],
                     "provenance": origin["provenance"],
                     "publisher": origin["publisher"],
+                    "posted_by": origin["posted_by"],
+                    "posted_date": origin["posted_date"],
                     "copyright_status": _row_copyright_status(frontmatter, md_path),
                     # Present when the ingester carried a prior review onto a
                     # re-ingested record; the workbench shows it as
@@ -1488,12 +1508,17 @@ class LocalIngestSource(IngestSource):
     def _ingest_from_content(self, full_hash: str, content: str) -> dict:
         frontmatter, body, raw_frontmatter = parse_frontmatter(content)
         # The spec field is `creators`; older records used `authors`. Pop both
-        # so neither shows again in the generic frontmatter panel.
+        # so neither shows again in the generic frontmatter panel. record/3
+        # keeps the list at `provenance.creators` (0043), which the shallow
+        # parse cannot represent, so the summary resolver reads the shape that
+        # is there - the same list the browse rows show.
         creators = (
             frontmatter.pop("creators", None) or frontmatter.pop("authors", None) or []
         )
         if not isinstance(creators, list):
             creators = []
+        if not creators:
+            creators = _summary_origin(frontmatter)["creators"]
         # The reviewer's LAST-SUBMITTED verdict, read straight from the sidecar
         # (recomputed from the body only when no verdict is stored). The frontend
         # shows this rather than a live recompute, because a recompute divides the

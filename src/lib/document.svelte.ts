@@ -7,6 +7,7 @@
 
 import yaml from "js-yaml";
 import { type DraftPatch, createPatchEncoder, decodePatch } from "./draft-patch";
+import { isRecord3Shape } from "./api";
 
 // Undo history is in-memory only - save() never ships it to localStorage (see
 // there), so a reload loses the ability to undo but never an edit. Depth 10 is
@@ -268,6 +269,15 @@ export class DocumentStore {
   updateFrontmatter(fields: Record<string, string | string[]>) {
     const [rawFm, body] = splitFrontmatter(this.current);
     const result = rewriteFrontmatterFields(rawFm, fields) + body;
+    if (result !== this.current) this.pushEdit(result);
+  }
+
+  /** Save the metadata panel's fields to the homes this record's generation
+   *  uses (`record/3`: `provenance` and `assets[].acquisition`; `/1` and `/2`:
+   *  the flat fields) in a single undo step. */
+  updateMetadata(values: MetadataEdits) {
+    const [rawFm, body] = splitFrontmatter(this.current);
+    const result = rewriteFrontmatterMetadata(rawFm, values) + body;
     if (result !== this.current) this.pushEdit(result);
   }
 
@@ -1445,13 +1455,24 @@ function readOverlayNextId(rawFm: string): number | null {
  *  consumer ignores while the real one keeps its old value. */
 function setPath(doc: Record<string, unknown>, path: string, value: unknown): void {
   const parts = path.split(".");
-  let node = doc;
-  for (const part of parts.slice(0, -1)) {
-    const next = node[part];
-    if (typeof next !== "object" || next === null || Array.isArray(next)) node[part] = {};
-    node = node[part] as Record<string, unknown>;
+  const isIndex = (part: string) => /^\d+$/.test(part);
+  let node: Record<string, unknown> | unknown[] = doc;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const key = isIndex(parts[i]) ? Number(parts[i]) : parts[i];
+    const next = (node as Record<string, unknown>)[key];
+    // Keep a container that already has the shape the path needs (an array for
+    // a numeric segment, a mapping for a named one) - replacing `assets` with
+    // a mapping just to reach `assets.0.acquisition` drops the other Assets.
+    const wantsArray = isIndex(parts[i + 1]);
+    const usable =
+      next !== null && typeof next === "object" && Array.isArray(next) === wantsArray;
+    const created: Record<string, unknown> | unknown[] = wantsArray ? [] : {};
+    const container = usable ? next : created;
+    (node as Record<string, unknown>)[key] = container;
+    node = container as Record<string, unknown> | unknown[];
   }
-  node[parts[parts.length - 1]] = value;
+  const last = parts[parts.length - 1];
+  (node as Record<string, unknown>)[isIndex(last) ? Number(last) : last] = value;
 }
 
 export function rewriteFrontmatterFields(
@@ -1494,6 +1515,188 @@ export function rewriteFrontmatterFields(
     newFmContent = newFmContent.replace(
       new RegExp(`^${key}:.*$`, "m"),
       `${key}: ${JSON.stringify(value.trim())}`,
+    );
+  }
+  return `---\n${newFmContent}---\n`;
+}
+
+/** The metadata panel's fields, as {@link DocumentStore.updateMetadata} takes
+ *  them. `undefined` leaves a field alone; `""` / `[]` clears it - except a
+ *  record/3 retrieval instant, which every Asset must keep. */
+export type MetadataEdits = {
+  title?: string;
+  publisher?: string;
+  creators?: string[];
+  datePublished?: string;
+  sourceUrl?: string;
+  dateAccessed?: string;
+  postedBy?: string;
+  postedDate?: string;
+};
+
+/** Where each panel field lives, per record generation (decisions 0043 and
+ *  0051): `record/3` keeps the work's metadata in `provenance` and the copy's
+ *  retrieval instant on its Assets; `/1` and `/2` keep the same fields flat.
+ *  `spellings` lists every flat spelling of one field so an edit leaves exactly
+ *  one home behind - the format never writes both layers. */
+const METADATA_HOMES: Record<
+  Exclude<keyof MetadataEdits, "dateAccessed">,
+  { record3: string; legacy: string; spellings: string[] }
+> = {
+  title: { record3: "title", legacy: "title", spellings: ["title"] },
+  publisher: {
+    record3: "provenance.publisher",
+    legacy: "publisher",
+    spellings: ["publisher"],
+  },
+  creators: {
+    record3: "provenance.creators",
+    legacy: "creators",
+    spellings: ["creators", "authors"],
+  },
+  datePublished: {
+    record3: "provenance.published_date",
+    legacy: "date_published",
+    spellings: ["date_published", "date"],
+  },
+  sourceUrl: {
+    record3: "provenance.source_url",
+    legacy: "source_url",
+    spellings: ["source_url"],
+  },
+  postedBy: {
+    record3: "provenance.posted_by",
+    legacy: "posted_by",
+    spellings: ["posted_by"],
+  },
+  postedDate: {
+    record3: "provenance.posted_date",
+    legacy: "posted_date",
+    spellings: ["posted_date"],
+  },
+};
+
+/** Temporal values are strings on disk whatever they look like (the temporal
+ *  contract), so an editor that writes one quotes it. */
+const TEMPORAL_LEAVES = new Set([
+  "date_published",
+  "date_accessed",
+  "published_date",
+  "posted_date",
+  "acquired_at",
+]);
+
+function selectedAssetIndices(doc: Record<string, unknown>): number[] {
+  const assets = Array.isArray(doc.assets) ? doc.assets : [];
+  const selection = Array.isArray(doc.selection) ? doc.selection : null;
+  if (!selection || selection.length === 0) return assets.map((_, i) => i);
+  const wanted = new Set(
+    selection
+      .map((entry) =>
+        entry && typeof entry === "object" ? (entry as Record<string, unknown>).asset_hash : null,
+      )
+      .filter((hash): hash is string => typeof hash === "string" && hash !== ""),
+  );
+  const indices = assets
+    .map((asset, i) => ({ asset, i }))
+    .filter(({ asset }) => {
+      if (!asset || typeof asset !== "object") return false;
+      const hash = (asset as Record<string, unknown>).asset_hash;
+      return typeof hash === "string" && wanted.has(hash);
+    })
+    .map(({ i }) => i);
+  return indices.length > 0 ? indices : assets.map((_, i) => i);
+}
+
+function acquiredAtOf(asset: unknown): string {
+  if (!asset || typeof asset !== "object") return "";
+  const acquisition = (asset as Record<string, unknown>).acquisition;
+  if (!acquisition || typeof acquisition !== "object") return "";
+  const value = (acquisition as Record<string, unknown>).acquired_at;
+  return typeof value === "string" ? value.trim() : "";
+}
+
+/** Save the metadata panel's fields to the homes this record's generation uses,
+ *  in one undo step. `record/3` writes `provenance` and the Assets'
+ *  `acquisition`; `/1` and `/2` write the flat fields. Writing a field removes
+ *  the other spellings of it, so one edit cannot leave a stale flat duplicate
+ *  beside its canonical home. */
+export function rewriteFrontmatterMetadata(rawFm: string, values: MetadataEdits): string {
+  const fmContent = rawFm.replace(/^---\n/, "").replace(/---\n$/, "");
+  const doc =
+    (yaml.load(fmContent, { schema: yaml.CORE_SCHEMA }) as Record<string, unknown>) ?? {};
+  const record3 = isRecord3Shape(doc);
+  const written: { leaf: string; value: string }[] = [];
+
+  const write = (
+    value: string | string[] | undefined,
+    home: { record3: string; legacy: string; spellings: string[] },
+  ) => {
+    if (value === undefined) return;
+    const resolved = Array.isArray(value)
+      ? value.map((v) => v.trim()).filter((v) => v !== "")
+      : value.trim();
+    const empty = Array.isArray(resolved) ? resolved.length === 0 : resolved === "";
+    const target = record3 ? home.record3 : home.legacy;
+    setPath(doc, target, empty ? undefined : resolved);
+    // One field, one home: the other spellings of this field go, so a stale
+    // flat duplicate cannot sit beside the canonical one and diverge.
+    for (const spelling of home.spellings) {
+      if (spelling !== target) delete doc[spelling];
+    }
+    if (!empty && typeof resolved === "string" && TEMPORAL_LEAVES.has(target.split(".").pop() ?? "")) {
+      written.push({ leaf: target.split(".").pop() ?? "", value: resolved });
+    }
+  };
+
+  write(values.title, METADATA_HOMES.title);
+  write(values.publisher, METADATA_HOMES.publisher);
+  write(values.creators, METADATA_HOMES.creators);
+  write(values.datePublished, METADATA_HOMES.datePublished);
+  write(values.sourceUrl, METADATA_HOMES.sourceUrl);
+  write(values.postedBy, METADATA_HOMES.postedBy);
+  write(values.postedDate, METADATA_HOMES.postedDate);
+
+  const accessed = values.dateAccessed;
+  if (accessed !== undefined) {
+    const trimmed = accessed.trim();
+    if (!record3) {
+      write(trimmed, { record3: "date_accessed", legacy: "date_accessed", spellings: ["date_accessed"] });
+    } else {
+      // record/3 holds the retrieval instant on each Asset and the format
+      // requires one there. One panel field cannot carry distinct per-Asset
+      // times, so it writes only while the Assets agree, and never clears.
+      const assets = Array.isArray(doc.assets) ? doc.assets : [];
+      const targets = selectedAssetIndices(doc);
+      const current = new Set(targets.map((i) => acquiredAtOf(assets[i])).filter(Boolean));
+      if (trimmed !== "" && targets.length > 0 && current.size <= 1) {
+        for (const i of targets) {
+          setPath(doc, `assets.${i}.acquisition.acquired_at`, trimmed);
+        }
+        written.push({ leaf: "acquired_at", value: trimmed });
+        delete doc.date_accessed;
+      }
+    }
+  }
+
+  let newFmContent = yaml.dump(doc, {
+    lineWidth: -1,
+    quotingType: '"',
+    forceQuotes: false,
+    sortKeys: false,
+  });
+  // The temporal contract requires strings on disk. CORE_SCHEMA prevents date
+  // coercion while reading, but js-yaml still emits date-looking strings plain;
+  // quote the temporal fields this editor writes so every producer has the same
+  // YAML type, wherever the field sits in the block. Only the lines holding the
+  // written value are touched - a second Asset's own instant is not this edit's.
+  for (const { leaf, value } of written) {
+    newFmContent = newFmContent.replace(
+      new RegExp(`^([ \\t]*)${leaf}:[ \\t]*(.*)$`, "gm"),
+      (match, indent: string, raw: string) => {
+        const existing = raw.trim().replace(/^['"]|['"]$/g, "");
+        return existing === value ? `${indent}${leaf}: ${JSON.stringify(value)}` : match;
+      },
     );
   }
   return `---\n${newFmContent}---\n`;

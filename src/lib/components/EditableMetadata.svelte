@@ -6,6 +6,8 @@
     datePublished = "",
     sourceUrl = "",
     dateAccessed = "",
+    postedBy = "",
+    postedDate = "",
     canEdit = false,
     onsave,
   }: {
@@ -21,6 +23,13 @@
     /** `date_accessed` - when the copy above was taken. A page changes; this
      *  says which version of it the record reflects. */
     dateAccessed?: string;
+    /** The channel or site THIS COPY came from - all a fetcher can observe.
+     *  Distinct from publisher: an archival re-upload has both, and filing the
+     *  redistributor as publisher corrupts the provenance roots. */
+    postedBy?: string;
+    /** When that channel posted this copy - distinct from published (when the
+     *  work was issued) and from downloaded (when we took these bytes). */
+    postedDate?: string;
     canEdit?: boolean;
     /** Persist all fields in one edit. "" / [] clear the respective key -
      *  except title, which never clears: a record must stay findable in the
@@ -32,6 +41,8 @@
       datePublished: string;
       sourceUrl: string;
       dateAccessed: string;
+      postedBy: string;
+      postedDate: string;
     }) => void;
   } = $props();
 
@@ -42,6 +53,8 @@
   let draftDate = $state("");
   let draftUrl = $state("");
   let draftAccessed = $state("");
+  let draftPostedBy = $state("");
+  let draftPostedDate = $state("");
 
   // A YEAR, a year-month, or a full date - all three occur in the corpus,
   // because sources state what they state. A picker would force a full date and
@@ -79,6 +92,11 @@
       ? ""
       : "Use YYYY, YYYY-MM, YYYY-MM-DD or a full time with Z / an offset",
   );
+  let postedDateProblem = $derived(
+    draftPostedDate.trim() === "" || isEvidencedDateOrTimestamp(draftPostedDate.trim())
+      ? ""
+      : "Use YYYY, YYYY-MM, YYYY-MM-DD or a full time with Z / an offset",
+  );
   let accessedProblem = $derived.by(() => {
     const value = draftAccessed.trim();
     if (value === "" || isOffsetTimestamp(value)) return "";
@@ -112,6 +130,8 @@
     draftDate = (datePublished || "").trim();
     draftUrl = sourceUrl;
     draftAccessed = (dateAccessed || "").trim();
+    draftPostedBy = postedBy;
+    draftPostedDate = (postedDate || "").trim();
     editing = true;
   }
 
@@ -120,7 +140,7 @@
   }
 
   function save() {
-    if (dateProblem || accessedProblem || urlProblem) return;
+    if (dateProblem || accessedProblem || urlProblem || postedDateProblem) return;
     onsave({
       title: draftTitle.trim() || title,
       publisher: draftPublisher,
@@ -128,6 +148,8 @@
       datePublished: draftDate.trim(),
       sourceUrl: draftUrl.trim(),
       dateAccessed: draftAccessed.trim(),
+      postedBy: draftPostedBy.trim(),
+      postedDate: draftPostedDate.trim(),
     });
     editing = false;
   }
@@ -171,6 +193,16 @@
         <span class="text-on-surface-muted w-32 flex-none">Published</span>
         <span class="text-on-surface">{datePublished || "—"}</span>
       </div>
+      {#if postedBy || postedDate}
+        <div class="flex items-baseline gap-2">
+          <span class="text-on-surface-muted w-32 flex-none">Posted by</span>
+          <span class="text-on-surface">{postedBy || "—"}</span>
+        </div>
+        <div class="flex items-baseline gap-2">
+          <span class="text-on-surface-muted w-32 flex-none">Posted</span>
+          <span class="text-on-surface">{postedDate || "—"}</span>
+        </div>
+      {/if}
       <div class="flex items-baseline gap-2">
         <span class="text-on-surface-muted w-32 flex-none">Downloaded from</span>
         {#if sourceUrl}
@@ -256,6 +288,33 @@
         />
         <span class="text-[11px] {accessedProblem ? 'text-error' : 'text-on-surface-muted'}">
           {accessedProblem || "Exact retrieval time with Z / an offset."}
+        </span>
+      </label>
+      <label class="flex flex-col gap-1">
+        <span class="text-on-surface-muted">Posted by</span>
+        <input
+          type="text"
+          bind:value={draftPostedBy}
+          placeholder="e.g. Eyes On Cinema"
+          class="bg-surface border border-border rounded px-2 py-1 text-on-surface
+            outline-none focus:border-primary placeholder:text-on-surface-muted/50"
+        />
+        <span class="text-[11px] text-on-surface-muted">
+          The channel or site this copy came from - not the work's publisher.
+        </span>
+      </label>
+      <label class="flex flex-col gap-1">
+        <span class="text-on-surface-muted">Posted</span>
+        <input
+          type="text"
+          bind:value={draftPostedDate}
+          placeholder="2026-06-24 or 2026-06-24T08:45:30+00:00"
+          class="bg-surface border rounded px-2 py-1 text-on-surface outline-none
+            placeholder:text-on-surface-muted/50
+            {postedDateProblem ? 'border-error focus:border-error' : 'border-border focus:border-primary'}"
+        />
+        <span class="text-[11px] {postedDateProblem ? 'text-error' : 'text-on-surface-muted'}">
+          {postedDateProblem || "When that channel posted this copy - not the work's publication date."}
         </span>
       </label>
       <label class="flex flex-col gap-1">

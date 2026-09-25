@@ -104,3 +104,53 @@ describe("EditableMetadata dates", () => {
     );
   });
 });
+
+describe("EditableMetadata copy axis", () => {
+  it("shows the channel and its post date beside the work's own metadata", () => {
+    // posted_by/posted_date describe THIS COPY - the channel that posted it and
+    // when. They are not publisher and published, and the panel keeps them
+    // apart rather than folding a re-upload into the work's identity.
+    const { getByText } = subject({
+      postedBy: "Eyes On Cinema",
+      postedDate: "2026-06-24T08:45:30+00:00",
+    });
+    expect(getByText("Posted by").parentElement).toHaveTextContent("Eyes On Cinema");
+    expect(getByText("Posted").parentElement).toHaveTextContent("2026-06-24T08:45:30+00:00");
+  });
+
+  it("hides the copy rows when the record carries none", () => {
+    const { queryByText } = subject();
+    expect(queryByText("Posted by")).toBeNull();
+    expect(queryByText("Posted")).toBeNull();
+  });
+
+  it("saves the copy axis with the rest of the metadata", async () => {
+    const { getByRole, getByPlaceholderText, onsave } = subject();
+
+    await fireEvent.click(getByRole("button", { name: "Edit" }));
+    await fireEvent.input(getByPlaceholderText("e.g. Eyes On Cinema"), {
+      target: { value: "A Channel" },
+    });
+    await fireEvent.input(getByPlaceholderText("2026-06-24 or 2026-06-24T08:45:30+00:00"), {
+      target: { value: "2026-06-04" },
+    });
+    await fireEvent.click(getByRole("button", { name: "Save" }));
+
+    expect(onsave).toHaveBeenCalledWith(
+      expect.objectContaining({ postedBy: "A Channel", postedDate: "2026-06-04" }),
+    );
+  });
+
+  it("rejects a post date that is not a real date", async () => {
+    const { getByRole, getByPlaceholderText, onsave } = subject();
+
+    await fireEvent.click(getByRole("button", { name: "Edit" }));
+    await fireEvent.input(
+      getByPlaceholderText("2026-06-24 or 2026-06-24T08:45:30+00:00"),
+      { target: { value: "2026-02-31" } },
+    );
+    await fireEvent.click(getByRole("button", { name: "Save" }));
+
+    expect(onsave).not.toHaveBeenCalled();
+  });
+});

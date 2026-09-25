@@ -152,11 +152,19 @@
         >
           {typeLabel(ingest.document_type || ingest.source_type)}
         </span>
+        <!-- The work's date and publisher, falling back to the copy axis
+             (when the CHANNEL posted this copy) - muted and labelled on hover,
+             because a re-upload's post date is not the work's publication
+             date and must not read as one. -->
         <span
-          class="text-xs text-on-surface-muted font-mono w-20 flex-none"
-          title={dateValueFor(ingest) || "no value"}
+          class="text-xs font-mono w-20 flex-none {dateValueFor(ingest) ? 'text-on-surface-muted' : 'text-on-surface-muted/50'}"
+          title={dateValueFor(ingest)
+            ? dateValueFor(ingest)
+            : ingest.posted_date
+              ? `Posted by the channel on ${ingest.posted_date} - the work's own publication date is not evidenced`
+              : "no value"}
         >
-          {dateValueFor(ingest).slice(0, 10) || "—"}
+          {(dateValueFor(ingest) || ingest.posted_date || "").slice(0, 10) || "—"}
         </span>
         <span class="text-xs text-on-surface-secondary w-28 flex-none truncate">
           {#if ingest.publisher}
@@ -165,6 +173,11 @@
               class="inline hover:text-primary hover:underline cursor-pointer"
               title={`Show only ${ingest.publisher}`}
             >{ingest.publisher}</button>
+          {:else if ingest.posted_by}
+            <span
+              class="text-on-surface-muted/50"
+              title={`Channel this copy came from - the work's publisher is not identified`}
+            >{ingest.posted_by}</span>
           {/if}
         </span>
         <span
