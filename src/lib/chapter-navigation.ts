@@ -15,7 +15,10 @@ const INLINE_ANNOTATION = /\{\{[^{}\n]*\}\}/g;
 
 function headingOn(line: string, title: string | null): string | null {
   const visible = line.replace(INLINE_ANNOTATION, "").trim();
-  const heading = visible.match(/^#{1,6}\s+(.+)$/)?.[1] ?? visible.match(/^\*\*(.+)\*\*$/)?.[1];
+  const heading =
+    visible.match(/^#{1,6}\s+(.+)$/)?.[1] ??
+    visible.match(/^\*\*\*(.+)\*\*\*$/)?.[1] ??
+    visible.match(/^\*\*(.+)\*\*$/)?.[1];
   if (!heading || !title || !heading.toLocaleLowerCase().includes(title.toLocaleLowerCase())) {
     return null;
   }

@@ -21,6 +21,14 @@ describe("ingest chapter navigation", () => {
     }]);
   });
 
+  it("removes combined bold-italic markup from a Kindle chapter heading", () => {
+    const sections = chapterSections(`<!-- chapter_title: "Hypnotic Regression" -->
+
+{{_kindle_position: 122870}}***Hypnotic Regression***`);
+
+    expect(sections[0].printedHeading).toBe("Hypnotic Regression");
+  });
+
   it("uses the source's section label when an image precedes prose but no printed heading exists", () => {
     const sections = chapterSections(`<!-- chapter_title: "Foreword" -->
 
