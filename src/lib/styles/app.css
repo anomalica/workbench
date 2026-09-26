@@ -348,17 +348,27 @@ body {
 }
 
 .printed-page-marker {
-  display: inline-block;
-  margin: 0 0.3rem;
-  border: 1px solid var(--color-border);
-  border-radius: 999px;
-  padding: 0 0.35rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  margin: 1.5rem 0;
   color: var(--color-on-surface-muted);
   font-family: var(--font-ui);
-  font-size: 0.65rem;
-  line-height: 1.5;
-  vertical-align: 0.1em;
+  font-size: 0.7rem;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
   white-space: nowrap;
+}
+
+.printed-page-marker::before,
+.printed-page-marker::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--color-border);
 }
 
 .ingest-figure {

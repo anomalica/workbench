@@ -178,7 +178,8 @@ export function printedPageAnchors(body: string): PrintedPageAnchor[] {
   return out;
 }
 
-/** Render EPUB pagebreaks inline so a mid-paragraph marker stays inline. */
+/** Keep EPUB pagebreaks at their exact inline source position. Presentation may
+ *  make the span a full-width divider without moving the boundary. */
 export function renderEpubPrintedPageMarkers(body: string, initialSequence = 1): string {
   let sequence = initialSequence;
   return body.replace(COMMENT, (whole, inner: string) => {

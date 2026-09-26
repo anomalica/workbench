@@ -1238,7 +1238,9 @@
   let printedPageAnchorLines = $derived(printedPageAnchors(currentBody));
   let chapters = $derived(chapterSections(currentBody));
   let chaptersByMarker = $derived(new Map(chapters.map((chapter) => [chapter.markerLine, chapter])));
-  let chaptersByHeading = $derived(new Map(chapters.filter((chapter) => chapter.headingLine !== null).map((chapter) => [chapter.headingLine, chapter])));
+  let chapterHeadingsByLine = $derived(new Map(
+    chapters.flatMap((chapter) => chapter.sourceHeadings.map((heading) => [heading.line, heading.text] as const)),
+  ));
   let isWeb = $derived(ingest.frontmatter.source_type === "web");
   let isAudio = $derived(ingest.frontmatter.source_type === "audio");
   let isVideo = $derived(ingest.frontmatter.source_type === "video");
@@ -2111,15 +2113,13 @@
   }
 
   function chapterDivider(chapter: ChapterSection): string {
-    const number = chapter.number
-      ? `<span class="ingest-chapter-kicker">Chapter ${escapeHtml(chapter.number)}</span>`
-      : "";
-    // When the book prints its own heading, render that passage as a heading on
-    // the following block. An unprinted TOC title is shown once, here instead.
-    const title = chapter.printedHeading
-      ? ""
-      : `<h2 class="ingest-chapter-heading">${escapeHtml(chapter.label)}</h2>`;
-    return `\n\n<div class="ingest-chapter-divider" data-chapter-line="${chapter.markerLine}">${number}${title}</div>\n\n`;
+    // Printed headings remain the visible chapter boundary. The structural
+    // marker contributes only the zero-height target used by navigation.
+    if (chapter.sourceHeadings.length > 0) {
+      return `\n\n<span class="ingest-chapter-anchor" data-chapter-line="${chapter.markerLine}" aria-hidden="true"></span>\n\n`;
+    }
+    // A source-derived label can be real even when the source never prints it.
+    return `\n\n<div class="ingest-chapter-divider" data-chapter-line="${chapter.markerLine}"><h2 class="ingest-chapter-heading">${escapeHtml(chapter.label)}</h2></div>\n\n`;
   }
 
   function jumpToChapter(line: number) {
@@ -2192,9 +2192,9 @@
     // Kindle-exported chapter headings are often <p><strong>...</strong></p>.
     // Their source-derived chapter markers make them proper headings in the
     // reading view; an ordinary bold paragraph remains an ordinary paragraph.
-    const printedChapter = chaptersByHeading.get(lineOffset);
-    if (printedChapter?.printedHeading && /^\*\*[^\n]+\*\*$/.test(body.trim())) {
-      return `<h2 class="ingest-chapter-heading">${escapeHtml(printedChapter.printedHeading)}</h2>`;
+    const printedChapterHeading = chapterHeadingsByLine.get(lineOffset);
+    if (printedChapterHeading) {
+      return `<h2 class="ingest-chapter-heading">${escapeHtml(printedChapterHeading)}</h2>`;
     }
     // Correct the page numbers FIRST, while the text still lines up with the
     // record: every rewrite below moves lines about, and the correction has to
@@ -6756,15 +6756,10 @@
 <style>
   :global(.ingest-chapter-divider) {
     margin: 2.75rem 0 0.5rem;
-    padding-top: 1.5rem;
-    border-top: 1px solid var(--color-border-strong);
   }
-  :global(.ingest-chapter-kicker) {
-    font-size: 0.75rem;
-    font-weight: 700;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: var(--color-primary);
+  :global(.ingest-chapter-anchor) {
+    display: block;
+    height: 0;
   }
   :global(.ingest-chapter-heading) {
     font-size: 1.4rem;
