@@ -31,6 +31,7 @@ export const DOCUMENT_TYPES = [
   "transcript",
   "slide",
   "interview",
+  "hearing",
   "documentary",
   "footage",
   "podcast",

@@ -379,12 +379,13 @@ def test_ordinary_save_rejects_invalid_present_document_type(local_api, declared
     assert record.read_text() == RECORD
 
 
-def test_ordinary_save_accepts_footage_document_type(local_api):
+@pytest.mark.parametrize("document_type", ["footage", "hearing", "notes"])
+def test_ordinary_save_accepts_document_type(local_api, document_type):
     client, _repo, record, _sidecar = local_api
     _resolve_housekeeping(client)
     viewed = client.get(f"/api/ingests/{HASH}").json()
     content = RECORD.replace(
-        "title: Test record", "document_type: footage\ntitle: Test record"
+        "title: Test record", f"document_type: {document_type}\ntitle: Test record"
     )
 
     response = client.put(
@@ -398,7 +399,7 @@ def test_ordinary_save_accepts_footage_document_type(local_api):
     )
 
     assert response.status_code == 200
-    assert "document_type: footage" in record.read_text()
+    assert f"document_type: {document_type}" in record.read_text()
 
 
 def test_ordinary_save_rejects_the_superseded_nested_alias(local_api):

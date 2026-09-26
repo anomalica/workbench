@@ -320,6 +320,20 @@ def test_legacy_pdf_can_be_selected_and_prepared_without_fabricating_acquisition
     )
 
 
+@pytest.mark.parametrize("document_type", ["hearing", "notes"])
+def test_structure_preview_accepts_document_type(structure_api, document_type):
+    client, repo, _records, _local, parent, asset = structure_api
+    request = _split_request(
+        _git(repo, "rev-parse", "HEAD"), parent, asset["asset_hash"]
+    )
+    request["outputs"][0]["metadata"]["document_type"] = document_type
+
+    response = client.post("/api/records/structure/preview", json=request)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["outputs"][0]["title"] == "Later pages"
+
+
 def test_split_commit_creates_every_output_and_retires_parent_atomically(structure_api):
     client, repo, _records, local, parent, asset = structure_api
     base_ref = _git(repo, "rev-parse", "HEAD")

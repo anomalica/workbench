@@ -49,6 +49,7 @@ _DOCUMENT_TYPES = frozenset(
         "transcript",
         "slide",
         "interview",
+        "hearing",
         "documentary",
         "footage",
         "podcast",

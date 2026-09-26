@@ -37,10 +37,10 @@ describe("what a record is, versus what file arrived", () => {
     expect(recordType({ document_type: "   " }).missing).toBe(true);
   });
 
-  it("has the seventeen agreed types and no duplicates", () => {
-    expect(DOCUMENT_TYPES).toHaveLength(17);
-    expect(new Set(DOCUMENT_TYPES).size).toBe(17);
-    for (const t of ["book", "slide", "interview", "footage", "recording"]) {
+  it("has the nineteen agreed types and no duplicates", () => {
+    expect(DOCUMENT_TYPES).toHaveLength(19);
+    expect(new Set(DOCUMENT_TYPES).size).toBe(19);
+    for (const t of ["book", "notes", "slide", "interview", "hearing", "footage", "recording"]) {
       expect(isDocumentType(t)).toBe(true);
     }
     expect(isDocumentType("ebook")).toBe(false); // a source_type, not a document_type
