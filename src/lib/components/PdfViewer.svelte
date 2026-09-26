@@ -24,15 +24,15 @@
   interface Props {
     /** The file's bytes, however they were obtained. */
     blob: Blob;
-    /** Page to bring into view. Changing this scrolls; it does not reload. */
-    page?: number;
+    /** Explicit navigation request. Source scrolling does not change this. */
+    pageRequest?: { page: number };
     /** Fired with the page that occupies the viewport as the user scrolls,
      *  so the text pane can follow the original as well as drive it. */
     onpagechange?: (page: number) => void;
     class?: string;
   }
 
-  let { blob, page = 1, onpagechange, class: klass = "" }: Props = $props();
+  let { blob, pageRequest = { page: 1 }, onpagechange, class: klass = "" }: Props = $props();
 
   interface PageSlot {
     number: number;
@@ -54,6 +54,7 @@
   /** Set while a programmatic scroll is in flight, so the observer that reports
    *  the visible page does not report the pages passed on the way there. */
   let scrolling = false;
+  let visiblePage = 1;
   /** Pages currently near the viewport. Held rather than acted on directly,
    *  because the observer fires before the pane has been measured and a page
    *  that was already on screen would never get a second intersection to
@@ -90,7 +91,6 @@
       }));
       loading = false;
       await tick();
-      if (page > 1) scrollToPage(page);
     } catch (e) {
       failed = e instanceof Error ? e.message : String(e);
       loading = false;
@@ -164,7 +164,10 @@
         for (const entry of entries) {
           if (!entry.isIntersecting) continue;
           const n = Number((entry.target as HTMLElement).dataset.page);
-          if (n && n !== page) onpagechange?.(n);
+          if (n && n !== visiblePage) {
+            visiblePage = n;
+            onpagechange?.(n);
+          }
         }
       },
       { root: container, rootMargin: "-45% 0px -45% 0px" },
@@ -203,10 +206,11 @@
     }, 120);
   }
 
-  // The page prop is a request to move, not a reload.
+  // Only explicit requests move the source. Reporting the visible page must
+  // never feed back into this effect while someone scrolls the PDF.
   $effect(() => {
-    const n = page;
-    if (!loading && container) scrollToPage(n);
+    const request = pageRequest;
+    if (!loading && container) scrollToPage(request.page);
   });
 </script>
 

@@ -2093,9 +2093,10 @@
     view = "diff";
   }
 
-  // PDF page sync. Just a number now: the viewer scrolls to it, so moving
-  // between pages costs a scroll rather than a reload of the whole file.
+  // The displayed page follows manual source scrolling; only an explicit
+  // request moves the viewer. Keep them separate to avoid snapping on scroll.
   let pdfPage = $state(1);
+  let pdfPageRequest = $state({ page: 1 });
 
   function escapeHtml(s: string): string {
     return s.replace(/[&<>"']/g, (c) => ({
@@ -2599,8 +2600,9 @@
 
   function navigatePdfToPage(page: number) {
     if (!sourceBlob || page === pdfPage) return;
-    // No debounce: setting the page is now a scroll in a viewer that is
-    // already open, so there is nothing to protect against firing often.
+    // A new request also works when returning to a page previously requested
+    // after manually scrolling elsewhere in the PDF.
+    pdfPageRequest = { page };
     pdfPage = page;
   }
 
@@ -2635,6 +2637,7 @@
       if (markers.length > 0) {
         observer = new IntersectionObserver(
           (entries) => {
+            if (!followSource) return;
             for (const entry of entries) {
               if (entry.isIntersecting) {
                 const pg = parseInt((entry.target as HTMLElement).dataset.filePage ?? "1", 10);
@@ -4953,7 +4956,7 @@
           </div>
           <PdfViewer
             blob={sourceBlob}
-            page={pdfPage}
+            pageRequest={pdfPageRequest}
             onpagechange={(n) => (pdfPage = n)}
             class="flex-1 min-h-0"
           />
