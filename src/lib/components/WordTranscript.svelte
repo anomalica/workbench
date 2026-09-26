@@ -143,8 +143,8 @@
      *  so the emphasis never becomes a stuck selection the reviewer has to hunt
      *  for a way to clear. */
     onclearfocus?: () => void;
-    /** Source SHA-256 (== content hash for a/v records), so the word editor can
-     *  fetch a waveform window for the audio around a timestamp. */
+    /** Selected audio Asset's SHA-256, so the word editor can fetch a waveform
+     *  window around a timestamp (Record/3 content_hash is a different identity). */
     sourceHash?: string;
     /** Stable per-record key for the scroll anchor - SAME across the Ingest and
      *  Markup tabs, so switching between them returns to the same word. */

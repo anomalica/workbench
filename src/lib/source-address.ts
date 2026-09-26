@@ -17,6 +17,30 @@ export type SourceAddressInput = {
   isMedia: boolean;
 };
 
+/** The selected original's archive key. Record/3 identity names a Selection,
+ * not the archived bytes; using its content_hash to fetch media or peaks 404s.
+ * A multi-Asset Selection has no single waveform or original to address. */
+export function selectedAssetKey(frontmatter: Record<string, unknown>, recordHash: string): string {
+  if (frontmatter.schema !== "anomalica/record/3") {
+    const sourceHash = frontmatter.source_hash;
+    return typeof sourceHash === "string" && sourceHash
+      ? sourceHash.replace(/^sha256:/, "")
+      : recordHash;
+  }
+  const selection = frontmatter.selection;
+  const assets = frontmatter.assets;
+  if (!Array.isArray(selection) || selection.length !== 1 || !Array.isArray(assets) || assets.length !== 1) return "";
+  const selected = selection[0];
+  if (!selected || selected.selector?.type !== "whole") return "";
+  const assetHash = selected.asset_hash;
+  if (
+    typeof assetHash !== "string" ||
+    !/^sha256:[0-9a-f]{64}$/.test(assetHash) ||
+    !assets.some((asset) => asset && asset.asset_hash === assetHash)
+  ) return "";
+  return assetHash.slice("sha256:".length);
+}
+
 // Only public_domain originals sit in the OPEN zone. Every other status -
 // open_licence and publicly_accessible included - lives in the token-auth gated
 // zone, where an unsigned URL returns 404 (probed, not assumed: the one

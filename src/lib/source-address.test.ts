@@ -1,5 +1,36 @@
 import { describe, it, expect } from "vitest";
-import { resolveSourceAddress, resolvePeaksUrl } from "./source-address";
+import { resolveSourceAddress, resolvePeaksUrl, selectedAssetKey } from "./source-address";
+
+describe("selectedAssetKey: Record and Asset identities", () => {
+  const assetHash = `sha256:${"a".repeat(64)}`;
+  const recordHash = "b".repeat(64);
+  const record3 = {
+    schema: "anomalica/record/3",
+    assets: [{ asset_hash: assetHash, archived_ext: "opus" }],
+    selection: [{ asset_hash: assetHash, selector: { type: "whole" } }],
+  };
+
+  it("addresses the selected Asset's waveform and original, not the Record", () => {
+    const key = selectedAssetKey(record3, recordHash);
+    expect(key).toBe("a".repeat(64));
+    expect(resolvePeaksUrl(key, "publicly_accessible")).toBe(`/sources/${key}.peaks.json`);
+    expect(resolveSourceAddress({ ...base, staticReads: false, sourceKey: key })).toEqual({
+      kind: "fetch",
+      url: `/api/sources/${key}`,
+    });
+  });
+
+  it("keeps the legacy whole-file rule", () => {
+    expect(selectedAssetKey({ schema: "anomalica/record/2" }, recordHash)).toBe(recordHash);
+    expect(selectedAssetKey({ source_hash: assetHash }, recordHash)).toBe("a".repeat(64));
+  });
+
+  it("does not invent a single source for an unbound or composite Selection", () => {
+    expect(selectedAssetKey({ ...record3, assets: [] }, recordHash)).toBe("");
+    expect(selectedAssetKey({ ...record3, selection: [...record3.selection, ...record3.selection] }, recordHash)).toBe("");
+    expect(selectedAssetKey({ ...record3, selection: [{ asset_hash: assetHash, selector: { type: "pdf_page", page: 1 } }] }, recordHash)).toBe("");
+  });
+});
 
 // These expectations are pinned to PROBED behaviour of the live zone, not to
 // assumption: a public_domain object serves 206, while a publicly_accessible one

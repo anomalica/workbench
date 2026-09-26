@@ -66,7 +66,7 @@
   import { safeLocalSet } from "$lib/storage";
   import { assignableSpecialSpeakers, parseTranscript, parseTimeToSeconds, secondsToTime, findActiveSegmentForTime, segmentAtTime, nextRelevantSegmentAfter, extractFrontmatterSpeakers, isSegmentIrrelevant, isSpecialSpeaker, nextSpeakerName, groupSegmentsBySpeaker, orderedNamedSpeakers, speakerIdentity, SPEAKER_IRRELEVANT, SPEAKER_NARRATOR, SPEAKER_EXTERNAL_FOOTAGE, SPEAKER_GROUP } from "$lib/transcript";
   import { nextSegmentBoundary, singleEndForCurrentTime } from "$lib/playback";
-  import { resolveSourceAddress, resolvePeaksUrl } from "$lib/source-address";
+  import { resolveSourceAddress, resolvePeaksUrl, selectedAssetKey } from "$lib/source-address";
   import { fuzzyScore } from "$lib/fuzzy-search";
   import { savePlayhead, loadPlayhead, shouldPersist } from "$lib/playhead";
   import type { Segment } from "$lib/transcript";
@@ -532,21 +532,6 @@
   $effect(() => {
     if (!recordTabs.some(([id]) => id === view)) view = "ingest";
   });
-
-  // The word editor's waveform needs peaks. Locally the backend cuts the window
-  // with ffmpeg (any record with an archived file); online there is no ffmpeg, so
-  // it reads the ingester's `sources/{hash}.peaks.json` sidecar. That sidecar
-  // follows the TRANSCRIPT's visibility, not the original file's, so this is
-  // deliberately NOT resolveSourceAddress: a publicly_accessible record's audio
-  // stays gated while its peaks are open, which is exactly the case where the
-  // waveform matters most - the audio can't be served, so the peaks are the only
-  // way to see it. Withhold the hash when there is nothing to fetch, so the
-  // editor renders without a waveform rather than spinning on a 404.
-  let waveformSourceHash = $derived(
-    !STATIC_READS || resolvePeaksUrl(ingest.content_hash, ingest.copyright_status)
-      ? ingest.content_hash
-      : "",
-  );
 
   // Count of every mark on the record (highlights + span notes + point beats),
   // for the collapsible Markup section header.
@@ -1483,7 +1468,7 @@
   }
 
   let parsedFrontmatter = $derived.by((): Record<string, unknown> => {
-    const raw = ingest.raw_frontmatter || "";
+    const raw = activeUnlock?.raw_frontmatter ?? ingest.raw_frontmatter ?? "";
     const stripped = raw.replace(/^---\n/, "").replace(/\n---\n?$/, "");
     try {
       const out = yaml.load(stripped);
@@ -1492,6 +1477,16 @@
       return {};
     }
   });
+
+  // Record/3 peaks belong to the selected Asset, not the Record's content_hash.
+  // Locally ffmpeg cuts a window from that Asset; online the same key addresses
+  // its precomputed sidecar. Peaks follow transcript rights, not audio rights.
+  let selectedSourceKey = $derived(selectedAssetKey(parsedFrontmatter, ingest.content_hash));
+  let waveformSourceHash = $derived(
+    (isAudio || isVideo) && (!STATIC_READS || resolvePeaksUrl(selectedSourceKey, ingest.copyright_status))
+      ? selectedSourceKey
+      : "",
+  );
 
   let snapshots = $derived.by((): Snapshot[] => {
     const raw = parsedFrontmatter.snapshots;
@@ -1511,7 +1506,7 @@
 
   let sourceKey = $derived(
     (preferredSnapshot?.hash || ingest.frontmatter.source_hash || "")
-      .replace(/^sha256:/, "") || ingest.content_hash,
+      .replace(/^sha256:/, "") || selectedSourceKey,
   );
 
   // What kind of file are we fetching? Drives the left-pane renderer
