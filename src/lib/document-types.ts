@@ -22,6 +22,7 @@ export const DOCUMENT_TYPES = [
   "book",
   "paper",
   "report",
+  "notes",
   "article",
   "letter",
   "email",

@@ -249,6 +249,7 @@ DOCUMENT_TYPES = frozenset(
         "book",
         "paper",
         "report",
+        "notes",
         "article",
         "letter",
         "email",
