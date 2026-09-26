@@ -30,7 +30,7 @@ The workbench is the human review and curation application. It is a Svelte 5 sin
 
 - Records are read from `../ingests/store/{hash}.md` or `../ingests/store/{hash}.v2.md`.
 - Verification sidecars use `../ingests/store/{hash}.verification.json` where access rules require them. A missing sidecar can mean intentionally ungated content; check the copyright model before treating it as an error.
-- Original source files are under `/home/mark/repos/anomalica/records/` and are served locally through `GET /api/sources/{full_hash}`.
+- Original source files are under `../../records/` relative to this repository and are served locally through `GET /api/sources/{full_hash}`.
 - Never return or log a verification challenge's `answer` field.
 - The authoritative references are `../anomalica/architecture/ingest-format.md`, `../anomalica/architecture/review-workbench.md` and `../anomalica/decisions/drafts/source-types-and-copyright.md`.
 
