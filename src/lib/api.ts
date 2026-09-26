@@ -440,6 +440,8 @@ export interface StructureCandidate {
   /** Full canonical Record identity. */
   content_hash: string;
   title: string;
+  ready: boolean;
+  legacy: boolean;
   assets: {
     asset_hash: string;
     source_type: "pdf" | "image";
@@ -527,6 +529,18 @@ async function structureResponse<T>(res: Response, action: string): Promise<T> {
 /** Local-only: list live temporary record/3 parents at one committed Git ref. */
 export async function fetchStructureCandidates(): Promise<StructureCandidates> {
   return structureResponse(await fetch("/api/records/structure"), "load structure candidates");
+}
+
+/** Verify an existing paged Record and commit its deterministic source map. */
+export async function prepareStructure(contentHash: string, viewedRef: string): Promise<{ content_hash: string; commit_ref: string }> {
+  return structureResponse(
+    await fetch("/api/records/structure/prepare", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content_hash: contentHash, viewed_ref: viewedRef }),
+    }),
+    "prepare Record structure",
+  );
 }
 
 /** Derive identities, page maps, bodies and source maps without writing. */

@@ -16,6 +16,8 @@ const candidates: api.StructureCandidates = {
     {
       content_hash: `sha256:${PDF_RECORD}`,
       title: "Collected Papers",
+      ready: true,
+      legacy: false,
       assets: [
         {
           asset_hash: PDF_ASSET,
@@ -49,6 +51,8 @@ const candidates: api.StructureCandidates = {
     {
       content_hash: `sha256:${IMAGE_RECORD}`,
       title: "Frontispiece",
+      ready: true,
+      legacy: false,
       assets: [
         {
           asset_hash: IMAGE_ASSET,
@@ -180,6 +184,43 @@ it("allows a split to overlap and omit physical pages", async () => {
       selection: [{ asset_hash: PDF_ASSET, selector: { type: "pdf_page", page: 2 } }],
     },
   ]);
+});
+
+it("lets a reviewer define a PDF split by inclusive page ranges", async () => {
+  render(StructureView);
+  await fireEvent.click(await screen.findByRole("checkbox", { name: "Select Collected Papers" }));
+  const inputs = screen.getAllByLabelText("PDF pages (for example, 1-3, 5)");
+  await fireEvent.input(inputs[0], { target: { value: "1" } });
+  await fireEvent.input(inputs[1], { target: { value: "2-3" } });
+  await fireEvent.click(screen.getByRole("button", { name: "Preview final Records" }));
+
+  await waitFor(() => expect(api.previewStructure).toHaveBeenCalledOnce());
+  const outputs = vi.mocked(api.previewStructure).mock.calls[0][0].outputs;
+  expect(outputs[0].selection).toEqual([
+    { asset_hash: PDF_ASSET, selector: { type: "pdf_page", page: 1 } },
+  ]);
+  expect(outputs[1].selection).toEqual([
+    { asset_hash: PDF_ASSET, selector: { type: "pdf_page", page: 2 } },
+    { asset_hash: PDF_ASSET, selector: { type: "pdf_page", page: 3 } },
+  ]);
+});
+
+it("prepares selected older records before offering the split preview", async () => {
+  const initial = structuredClone(candidates);
+  initial.parents[0].ready = false;
+  initial.parents[0].legacy = true;
+  vi.mocked(api.fetchStructureCandidates).mockResolvedValueOnce(initial)
+    .mockResolvedValueOnce(initial).mockResolvedValue(structuredClone(candidates));
+  vi.spyOn(api, "prepareStructure").mockResolvedValue({
+    content_hash: `sha256:${PDF_RECORD}`, commit_ref: "f".repeat(40),
+  });
+  render(StructureView);
+  await fireEvent.click(await screen.findByRole("checkbox", { name: "Select Collected Papers" }));
+  expect(screen.queryByRole("button", { name: "Preview final Records" })).toBeNull();
+  await fireEvent.click(screen.getByRole("button", { name: "Prepare selected documents" }));
+
+  await waitFor(() => expect(api.prepareStructure).toHaveBeenCalledWith(`sha256:${PDF_RECORD}`, BASE_REF));
+  expect(await screen.findByRole("button", { name: "Preview final Records" })).toBeTruthy();
 });
 
 it("composes parents in click order and uses a whole selector for the image", async () => {

@@ -243,6 +243,8 @@ def _load_parent(
     ref: str,
     *,
     verify_archives: bool,
+    require_temporary: bool = True,
+    require_source_map: bool = True,
 ) -> Parent:
     found = source.record_at_ref(bare_hash, ref)
     if found is None:
@@ -254,7 +256,7 @@ def _load_parent(
             "A record/3 structural parent must use its canonical store path"
         )
     frontmatter, body, _text = _envelope(raw)
-    if frontmatter.get("structure_status") != "temporary":
+    if require_temporary and frontmatter.get("structure_status") != "temporary":
         raise StructureError(
             f"Structural parent sha256:{bare_hash} is not explicitly temporary"
         )
@@ -278,11 +280,11 @@ def _load_parent(
             f"Cannot derive the parent's exact source map: {exc}"
         ) from exc
     stored_map = source.file_at_ref(_source_map_path(source, prepared), ref)
-    if stored_map is None:
+    if require_source_map and stored_map is None:
         raise StructureError(
             f"Committed source map is missing for parent sha256:{bare_hash}"
         )
-    if stored_map[1] != prepared.source_map_json:
+    if stored_map is not None and stored_map[1] != prepared.source_map_json:
         raise StructureError(
             f"Committed source map is stale for parent sha256:{bare_hash}"
         )
@@ -296,6 +298,52 @@ def _load_parent(
         prepared=prepared,
         pages=_page_sources(structure, body),
     )
+
+
+def prepare_parent(
+    source: LocalSource, records_root: Path, bare_hash: str, ref: str
+) -> tuple[dict[str, Any], StructurePlan]:
+    """Mark an existing page-mapped Record ready and store its deterministic map."""
+    parent = _load_parent(
+        source,
+        records_root,
+        bare_hash,
+        ref,
+        verify_archives=True,
+        require_temporary=False,
+        require_source_map=False,
+    )
+    if parent.frontmatter.get("structure_status") not in (None, "temporary"):
+        raise StructureError("Record has an unsupported structure status")
+    map_path = _source_map_path(source, parent.prepared)
+    existing = source.file_at_ref(map_path, ref)
+    if parent.frontmatter.get("structure_status") == "temporary" and existing:
+        raise StructureError("Record is already ready for structuring")
+    if existing is not None and existing[1] != parent.prepared.source_map_json:
+        raise StructureError("Committed source map disagrees with the Record")
+
+    changes: dict[Path, bytes] = {}
+    if parent.frontmatter.get("structure_status") != "temporary":
+        _fm, _body, text = _envelope(parent.raw)
+        closing = re.search(r"\r?\n---(?:\r?\n|\Z)", text)
+        if closing is None:
+            raise StructureError("Record has no closing frontmatter fence")
+        changes[parent.path] = (
+            text[: closing.start()]
+            + "\nstructure_status: temporary"
+            + text[closing.start() :]
+        ).encode("utf-8")
+    if existing is None:
+        changes[map_path] = parent.prepared.source_map_json
+    plan = StructurePlan(
+        preview={},
+        changes=changes,
+        parent_paths=(parent.path,),
+        new_paths=(map_path,) if existing is None else (),
+        existing_artifact_paths=(map_path,) if existing is not None else (),
+        vacant_authority_paths=(),
+    )
+    return {"content_hash": parent.structure.content_hash}, plan
 
 
 def _json_metadata(value: object, path: str = "metadata") -> None:
@@ -699,7 +747,7 @@ def build_plan(
 
 
 def candidate_view(source: LocalSource, records_root: Path, ref: str) -> dict[str, Any]:
-    """List committed temporary parents, surfacing invalid ones as blocked."""
+    """List page-mapped Records for selection, including those needing preparation."""
     listed = subprocess.run(
         ["git", "ls-tree", "-r", "--name-only", ref, "--", "store"],
         cwd=source.store.parent,
@@ -717,22 +765,105 @@ def candidate_view(source: LocalSource, records_root: Path, ref: str) -> dict[st
         if loaded is None:
             continue
         try:
-            frontmatter, _body, _text = _envelope(loaded[1])
+            frontmatter, body, _text = _envelope(loaded[1])
         except StructureError:
             continue
-        if frontmatter.get("structure_status") != "temporary":
+        if frontmatter.get("schema") in {"anomalica/record/1", "anomalica/record/2"}:
+            if frontmatter.get("source_type") not in {"pdf", "image"} or (
+                frontmatter.get("superseded_by") or frontmatter.get("retired_into")
+            ):
+                continue
+            displayed_hash = str(frontmatter.get("content_hash", path.stem))
+            try:
+                bare = _bare_hash(displayed_hash, "content_hash")
+                markers = list(_PAGE_MARKER.finditer(body))
+                if (
+                    path.stem not in {bare, f"{bare}.v2"}
+                    or not markers
+                    or [int(item.group(1)) for item in markers]
+                    != list(range(1, frontmatter.get("pages", 0) + 1))
+                ):
+                    raise StructureError("PDF pages need ordered physical page markers")
+                asset_hash = frontmatter.get("source_hash") or displayed_hash
+                _bare_hash(asset_hash, "Asset hash")
+                candidates.append(
+                    {
+                        "content_hash": displayed_hash,
+                        "title": frontmatter.get("title", "Untitled"),
+                        "ready": False,
+                        "legacy": True,
+                        "assets": [
+                            {
+                                "asset_hash": asset_hash,
+                                "source_type": frontmatter["source_type"],
+                                "file_format": frontmatter.get(
+                                    "file_format", frontmatter["source_type"]
+                                ),
+                                "pages": len(markers),
+                                "copyright_status": (
+                                    frontmatter.get("copyright") or {}
+                                ).get("status", "restricted"),
+                            }
+                        ],
+                        "pages": [
+                            {
+                                "asset_hash": asset_hash,
+                                "asset_file_page": index + 1,
+                                "source_type": frontmatter["source_type"],
+                                "excerpt": " ".join(
+                                    body[
+                                        marker.end() : markers[index + 1].start()
+                                        if index + 1 < len(markers)
+                                        else len(body)
+                                    ].split()
+                                )[:180],
+                            }
+                            for index, marker in enumerate(markers)
+                        ],
+                    }
+                )
+            except (StructureError, TypeError):
+                blocked.append(
+                    {
+                        "content_hash": displayed_hash,
+                        "path": relative,
+                        "detail": "This older Record needs complete, sequential page markers before it can be split.",
+                    }
+                )
+            continue
+        if frontmatter.get("schema") != "anomalica/record/3" or (
+            frontmatter.get("superseded_by") or frontmatter.get("retired_into")
+        ):
+            continue
+        if not isinstance(frontmatter.get("assets"), list) or not all(
+            isinstance(asset, dict) and asset.get("source_type") in {"pdf", "image"}
+            for asset in frontmatter["assets"]
+        ):
             continue
         displayed_hash = str(frontmatter.get("content_hash", path.stem))
         try:
             bare = _bare_hash(frontmatter.get("content_hash"), "content_hash")
             parent = _load_parent(
-                source, records_root, bare, ref, verify_archives=False
+                source,
+                records_root,
+                bare,
+                ref,
+                verify_archives=False,
+                require_temporary=False,
+                require_source_map=False,
+            )
+            source_map_present = (
+                source.file_at_ref(_source_map_path(source, parent.prepared), ref)
+                is not None
             )
             assets = {asset.asset_hash: asset for asset in parent.structure.assets}
             candidates.append(
                 {
                     "content_hash": parent.structure.content_hash,
                     "title": parent.frontmatter.get("title", "Untitled"),
+                    "ready": parent.frontmatter.get("structure_status") == "temporary"
+                    and source_map_present,
+                    "legacy": False,
                     "assets": [
                         {
                             "asset_hash": asset.asset_hash,
@@ -817,4 +948,5 @@ __all__ = [
     "assert_clean_targets",
     "build_plan",
     "candidate_view",
+    "prepare_parent",
 ]

@@ -22,6 +22,7 @@ import secrets
 import shutil
 import string
 import subprocess
+import sys
 import time
 import tempfile
 from abc import ABC, abstractmethod
@@ -3354,7 +3355,7 @@ def _structure_commit_failure(
 
 @app.get("/api/records/structure")
 def list_structure_candidates(request: Request) -> JSONResponse:
-    """Temporary record/3 parents available to the local structural editor."""
+    """Page-mapped records available to the local structural editor."""
     _require_role(request, "editor")
     local = _local_structure_source()
     try:
@@ -3369,6 +3370,97 @@ def list_structure_candidates(request: Request) -> JSONResponse:
         raise HTTPException(
             status_code=503, detail="Could not read the committed ingests tree"
         ) from exc
+
+
+@app.post("/api/records/structure/prepare")
+def prepare_structure(payload: dict, request: Request) -> JSONResponse:
+    """Prepare a selected Record for splitting or composition without extraction."""
+    user = _require_role(request, "editor")
+    local = _local_structure_source()
+    if set(payload) != {"content_hash", "viewed_ref"}:
+        raise HTTPException(status_code=400, detail="Expected a Record and viewed_ref")
+    try:
+        bare_hash = structure._bare_hash(payload["content_hash"], "content_hash")
+    except structure.StructureError as exc:
+        raise _structure_validation_error(exc) from exc
+    if payload["viewed_ref"] != local.current_ref():
+        raise HTTPException(status_code=409, detail="Structure view is stale")
+    found = local.record_at_ref(bare_hash, payload["viewed_ref"])
+    if found is None:
+        raise HTTPException(status_code=404, detail="Record is missing")
+    frontmatter, _body, _text = structure._envelope(found[2])
+    if frontmatter.get("schema") in {"anomalica/record/1", "anomalica/record/2"}:
+        if frontmatter.get("source_type") not in {"pdf", "image"}:
+            raise HTTPException(
+                status_code=400, detail="Only PDFs and images can be structured"
+            )
+        migrator = (
+            Path(__file__).resolve().parents[2] / "ingester/scripts/migrate-record3.py"
+        )
+        migrated = subprocess.run(
+            [
+                sys.executable,
+                str(migrator),
+                "--ingests-dir",
+                str(local.store.parent),
+                "--records-dir",
+                str(records_path),
+                "--record",
+                found[0].relative_to(local.store.parent).as_posix(),
+                "--expected-head",
+                payload["viewed_ref"],
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if migrated.returncode:
+            raise HTTPException(
+                status_code=409,
+                detail=migrated.stderr.strip() or "Could not prepare older Record",
+            )
+        identity_map = local.file_at_ref(
+            local.store / "_record_identity_map.yaml", local.current_ref()
+        )
+        if identity_map is None:
+            raise HTTPException(
+                status_code=500, detail="Migrated Record identity map is missing"
+            )
+        mappings = yaml.safe_load(identity_map[1]).get("entries", [])
+        matches = [
+            entry["new_content_hash"]
+            for entry in mappings
+            if entry.get("old_content_hash") == payload["content_hash"]
+        ]
+        if len(matches) != 1:
+            raise HTTPException(
+                status_code=500, detail="Migrated Record identity is missing"
+            )
+        bare_hash = structure._bare_hash(matches[0], "migrated Record")
+    with repository_write_lock(local.store.parent):
+        ref = local.current_ref()
+        if (
+            frontmatter.get("schema") == "anomalica/record/3"
+            and payload["viewed_ref"] != ref
+        ):
+            raise HTTPException(status_code=409, detail="Structure view is stale")
+        try:
+            result, plan = structure.prepare_parent(local, records_path, bare_hash, ref)
+            try:
+                structure.assert_clean_targets(local, plan, ref)
+            except structure.StructureError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            committed = local._commit_bytes_locked(
+                plan.changes,
+                f"structure: prepare {bare_hash[:12]}",
+                user["name"],
+                user["email"],
+                ref,
+            )
+        except structure.StructureError as exc:
+            raise _structure_validation_error(exc) from exc
+        except (RuntimeError, subprocess.CalledProcessError) as exc:
+            raise _structure_commit_failure(exc) from exc
+    return JSONResponse({**result, "commit_ref": committed})
 
 
 @app.post("/api/records/structure/preview")

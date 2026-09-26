@@ -2,6 +2,7 @@
   import {
     commitStructure,
     fetchStructureCandidates,
+    prepareStructure,
     previewStructure,
     type StructureCandidate,
     type StructureCandidates,
@@ -9,6 +10,7 @@
     type StructureRequest,
     type StructureSelectionEntry,
   } from "$lib/api";
+  import { DOCUMENT_TYPES } from "$lib/document-types";
 
   interface Props {
     initialParent?: string | null;
@@ -33,26 +35,6 @@
 
   let { initialParent = null, oncommitted }: Props = $props();
 
-  const DOCUMENT_TYPES = [
-    "book",
-    "paper",
-    "report",
-    "article",
-    "letter",
-    "email",
-    "statement",
-    "form",
-    "transcript",
-    "slide",
-    "interview",
-    "documentary",
-    "footage",
-    "podcast",
-    "lecture",
-    "broadcast",
-    "recording",
-  ];
-
   let candidates = $state<StructureCandidates | null>(null);
   let selected = $state<string[]>([]);
   let outputs = $state<OutputDraft[]>([]);
@@ -63,8 +45,12 @@
   let loading = $state(true);
   let previewing = $state(false);
   let committing = $state(false);
+  let preparing = $state(false);
+  let rangeInputs = $state<Record<string, string>>({});
+  let rangeErrors = $state<Record<string, string>>({});
   let error = $state("");
   let notice = $state("");
+  let search = $state("");
   let editVersion = 0;
   let nextOutput = 1;
 
@@ -72,6 +58,12 @@
     selected
       .map((hash) => candidates?.parents.find((candidate) => candidate.content_hash === hash))
       .filter((candidate) => candidate !== undefined) as StructureCandidate[],
+  );
+  const visibleParents = $derived(
+    candidates?.parents.filter((candidate) =>
+      candidate.title.toLowerCase().includes(search.trim().toLowerCase()) ||
+      candidate.content_hash.includes(search.trim().toLowerCase()),
+    ) ?? [],
   );
 
   const pages = $derived.by((): PageDraft[] => {
@@ -90,10 +82,20 @@
     return pageOrder.map((key) => byKey.get(key)).filter((page) => page !== undefined) as PageDraft[];
   });
 
-  const mode = $derived(selected.length === 1 ? "split" : selected.length > 1 ? "compose" : null);
+  const mode = $derived(
+    selected.length === 1 && selectedParents[0]?.pages.length > 1
+      ? "split"
+      : selected.length > 1 ? "compose" : null,
+  );
+  const needsPreparation = $derived(selectedParents.some((parent) => !parent.ready));
+  const singlePdf = $derived(
+    selectedParents.length === 1 && selectedParents[0].assets.length === 1 &&
+      selectedParents[0].assets[0].source_type === "pdf",
+  );
 
   const readyToPreview = $derived.by(() => {
-    if (!candidates || !mode || previewing || committing) return false;
+    if (!candidates || !mode || needsPreparation || preparing || previewing || committing) return false;
+    if (Object.values(rangeErrors).some(Boolean)) return false;
     if (mode === "split" && outputs.length < 2) return false;
     if (mode === "compose" && outputs.length !== 1) return false;
     if (outputs.some((output) => !output.title.trim())) return false;
@@ -127,6 +129,55 @@
     );
   }
 
+  function formatRanges(outputId: string, draftPages: PageDraft[] = pages): string {
+    const numbers = draftPages.filter((page) => memberships[page.key]?.includes(outputId))
+      .map((page) => page.assetFilePage).sort((a, b) => a - b);
+    const ranges: string[] = [];
+    for (let i = 0; i < numbers.length; i++) {
+      const start = numbers[i];
+      let end = start;
+      while (i + 1 < numbers.length && numbers[i + 1] === end + 1) end = numbers[++i];
+      ranges.push(start === end ? `${start}` : `${start}-${end}`);
+    }
+    return ranges.join(", ");
+  }
+
+  function setRanges(outputId: string, value: string) {
+    rangeInputs = { ...rangeInputs, [outputId]: value };
+    const available = new Set(pages.map((page) => page.assetFilePage));
+    const chosen = new Set<number>();
+    for (const part of value.split(",")) {
+      const match = /^\s*([1-9]\d*)(?:\s*-\s*([1-9]\d*))?\s*$/.exec(part);
+      if (!match) {
+        rangeErrors = { ...rangeErrors, [outputId]: "Enter pages like 1-3, 5." };
+        return;
+      }
+      const start = Number(match[1]);
+      const end = match[2] ? Number(match[2]) : start;
+      if (end < start || end - start > pages.length || !available.has(start) || !available.has(end)) {
+        rangeErrors = { ...rangeErrors, [outputId]: "Page range is outside this PDF." };
+        return;
+      }
+      for (let n = start; n <= end; n++) {
+        if (!available.has(n) || chosen.has(n)) {
+          rangeErrors = { ...rangeErrors, [outputId]: "Pages must exist and cannot repeat." };
+          return;
+        }
+        chosen.add(n);
+      }
+    }
+    const next = { ...memberships };
+    for (const page of pages) {
+      const current = next[page.key] ?? [];
+      next[page.key] = chosen.has(page.assetFilePage)
+        ? [...current.filter((id) => id !== outputId), outputId]
+        : current.filter((id) => id !== outputId);
+    }
+    memberships = next;
+    rangeErrors = { ...rangeErrors, [outputId]: "" };
+    invalidatePreview();
+  }
+
   function configureSelection(next: string[]) {
     selected = next;
     invalidatePreview();
@@ -147,13 +198,16 @@
       memberships = Object.fromEntries(
         nextPages.map((page, index) => [page.key, [index < splitAt ? first.id : second.id]]),
       );
+      rangeInputs = Object.fromEntries(outputs.map((output) => [output.id, formatRanges(output.id, nextPages)]));
     } else if (parents.length > 1) {
       const output = newOutput(parents.map((parent) => parent.title).join(" + "));
       outputs = [output];
       memberships = Object.fromEntries(nextPages.map((page) => [page.key, [output.id]]));
     } else {
       outputs = [];
+      rangeInputs = {};
     }
+    rangeErrors = {};
   }
 
   function toggleParent(candidate: StructureCandidate) {
@@ -176,6 +230,8 @@
       ? [...current.filter((id) => id !== outputId), outputId]
       : current.filter((id) => id !== outputId);
     memberships = { ...memberships, [key]: next };
+    rangeInputs = Object.fromEntries(outputs.map((output) => [output.id, formatRanges(output.id)]));
+    rangeErrors = {};
     invalidatePreview();
   }
 
@@ -191,6 +247,7 @@
 
   function addOutput() {
     outputs = [...outputs, newOutput(`Part ${outputs.length + 1}`)];
+    rangeInputs = { ...rangeInputs, [outputs.at(-1)!.id]: "" };
     invalidatePreview();
   }
 
@@ -198,6 +255,12 @@
     if (outputs.length <= 2) return;
     const remaining = outputs.filter((output) => output.id !== id);
     outputs = remaining;
+    const nextRanges = { ...rangeInputs };
+    delete nextRanges[id];
+    rangeInputs = nextRanges;
+    const nextErrors = { ...rangeErrors };
+    delete nextErrors[id];
+    rangeErrors = nextErrors;
     memberships = Object.fromEntries(
       Object.entries(memberships).map(([key, values]) => [
         key,
@@ -234,7 +297,7 @@
     };
   }
 
-  async function load() {
+  async function load(restoreSelected?: string[]) {
     loading = true;
     error = "";
     try {
@@ -244,15 +307,39 @@
         : initialParent
           ? `sha256:${initialParent}`
           : null;
-      configureSelection(
+      const next = restoreSelected?.filter((hash) => candidates?.parents.some((candidate) => candidate.content_hash === hash));
+      configureSelection(next ?? (
         requested && candidates.parents.some((candidate) => candidate.content_hash === requested)
           ? [requested]
-          : [],
-      );
+          : []));
     } catch (reason) {
       error = reason instanceof Error ? reason.message : String(reason);
     } finally {
       loading = false;
+    }
+  }
+
+  async function prepareSelected() {
+    if (!candidates || preparing) return;
+    preparing = true;
+    error = "";
+    const chosen = [...selected];
+    try {
+      for (let index = 0; index < chosen.length; index++) {
+        const hash = chosen[index];
+        const latest = await fetchStructureCandidates();
+        const candidate = latest.parents.find((item) => item.content_hash === hash);
+        if (!candidate) throw new Error("Selected Record is no longer available. Refresh and try again.");
+        if (!candidate.ready) {
+          const prepared = await prepareStructure(hash, latest.viewed_ref);
+          chosen[index] = prepared.content_hash;
+        }
+      }
+      await load(chosen);
+    } catch (reason) {
+      error = reason instanceof Error ? reason.message : String(reason);
+    } finally {
+      preparing = false;
     }
   }
 
@@ -309,15 +396,22 @@
     </p>
     <h1 class="mt-1 font-serif text-2xl text-on-surface">Structure Records</h1>
     <p class="mt-2 text-xs leading-relaxed text-on-surface-muted">
-      Select one temporary Record to split it, or select several in the order they should be
-      composed. Only complete PDF pages and whole standalone images are available.
+       Select one multi-page PDF to split it, or select several PDFs or images to combine them into one Record.
+       The original files stay unchanged.
     </p>
 
     {#if loading}
       <p class="mt-6 text-sm text-on-surface-muted">Loading temporary Records...</p>
     {:else if candidates}
+      <label class="mt-5 block text-xs font-medium text-on-surface-muted" for="structure-search">Find a document</label>
+      <input
+        id="structure-search"
+        class="mt-1 w-full border border-border bg-surface px-2.5 py-2 text-sm text-on-surface outline-none focus:border-primary"
+        placeholder="Search titles or record IDs"
+        bind:value={search}
+      />
       <div class="mt-5 space-y-2">
-        {#each candidates.parents as candidate (candidate.content_hash)}
+        {#each visibleParents as candidate (candidate.content_hash)}
           {@const order = selected.indexOf(candidate.content_hash)}
           <label
             class="block cursor-pointer border p-3 transition-colors {order >= 0
@@ -345,8 +439,9 @@
                   {/if}
                 </span>
                 <span class="mt-1 block text-xs text-on-surface-muted">
-                  {candidate.pages.length} {candidate.pages.length === 1 ? "page" : "pages"} ·
-                  {candidate.assets.map((asset) => asset.file_format.toUpperCase()).join(" + ")}
+                   {candidate.pages.length} {candidate.pages.length === 1 ? "page" : "pages"} ·
+                   {candidate.assets.map((asset) => asset.file_format.toUpperCase()).join(" + ")}
+                   {candidate.ready ? " · Ready" : candidate.legacy ? " · Older record · prepare before use" : " · Needs preparation"}
                 </span>
                 <span class="mt-1 block truncate font-mono text-[10px] text-on-surface-muted/70">
                   {candidate.content_hash}
@@ -358,7 +453,9 @@
       </div>
 
       {#if candidates.parents.length === 0}
-        <p class="mt-6 text-sm text-on-surface-muted">No live temporary Records are ready.</p>
+         <p class="mt-6 text-sm text-on-surface-muted">No eligible PDF or image Records are available.</p>
+      {:else if visibleParents.length === 0}
+         <p class="mt-6 text-sm text-on-surface-muted">No matching documents.</p>
       {/if}
 
       {#if candidates.blocked.length > 0}
@@ -394,9 +491,9 @@
 
     {#if !mode}
       <div class="mx-auto flex min-h-72 max-w-xl flex-col items-center justify-center text-center">
-        <h2 class="font-serif text-xl text-on-surface">Choose temporary parents</h2>
+           <h2 class="font-serif text-xl text-on-surface">Choose documents</h2>
         <p class="mt-2 text-sm leading-relaxed text-on-surface-muted">
-          One parent opens a split. Two or more parents open a composition in selection order.
+           Select one multi-page PDF to split it. Select two or more documents to combine them in selection order.
         </p>
       </div>
     {:else}
@@ -418,12 +515,26 @@
           {/if}
         </div>
 
-        <div class="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(20rem,0.8fr)]">
+        {#if needsPreparation}
+          <div class="mt-5 border border-border bg-surface-alt p-4">
+            <p class="text-sm text-on-surface-secondary">
+              Prepare {selected.length === 1 ? "this document" : "these documents"} before assigning pages or titles.
+              The original files stay unchanged, and existing review remains in the history.
+            </p>
+            <button
+              class="mt-3 bg-primary px-4 py-2 text-sm font-semibold text-on-primary disabled:opacity-50"
+              disabled={preparing}
+              onclick={prepareSelected}
+            >{preparing ? "Preparing..." : "Prepare selected documents"}</button>
+          </div>
+        {:else}
+        <div class="mt-5 grid gap-5 {singlePdf ? '' : 'xl:grid-cols-[minmax(0,1fr)_minmax(20rem,0.8fr)]'}">
           <div class="min-w-0">
-            <h3 class="font-ui text-xs font-semibold uppercase tracking-wide text-on-surface-muted">
-              Source pages
-            </h3>
-            <div class="mt-2 space-y-2">
+            <details open={!singlePdf}>
+              <summary class="cursor-pointer font-ui text-xs font-semibold uppercase tracking-wide text-on-surface-muted">
+                {singlePdf ? `Inspect or reorder ${pages.length} source pages` : "Source pages"}
+              </summary>
+            <div class="mt-3 space-y-2">
               {#each pages as page (page.key)}
                 <article class="border border-border bg-surface-alt p-3">
                   <div class="flex flex-wrap items-center gap-2">
@@ -476,9 +587,10 @@
                 </article>
               {/each}
             </div>
+            </details>
           </div>
 
-          <div>
+          <div class={singlePdf ? "max-w-2xl" : ""}>
             <h3 class="font-ui text-xs font-semibold uppercase tracking-wide text-on-surface-muted">
               Final Records
             </h3>
@@ -498,6 +610,20 @@
                     value={output.title}
                     oninput={(event) => updateOutput(output.id, "title", event.currentTarget.value)}
                   />
+                  {#if singlePdf}
+                    <label class="mt-3 block text-xs font-medium text-on-surface-secondary" for={`${output.id}-pages`}>
+                      PDF pages (for example, 1-3, 5)
+                    </label>
+                    <input
+                      id={`${output.id}-pages`}
+                      class="mt-1 w-full border border-border bg-surface-alt px-2.5 py-1.5 text-sm text-on-surface outline-none focus:border-primary"
+                      value={rangeInputs[output.id] ?? ""}
+                      oninput={(event) => setRanges(output.id, event.currentTarget.value)}
+                    />
+                    {#if rangeErrors[output.id]}
+                      <p class="mt-1 text-xs text-error">{rangeErrors[output.id]}</p>
+                    {/if}
+                  {/if}
                   <label class="mt-3 block text-xs font-medium text-on-surface-secondary" for={`${output.id}-type`}>
                     Document type <span class="font-normal text-on-surface-muted">(optional)</span>
                   </label>
@@ -588,6 +714,7 @@
               </p>
             </div>
           </section>
+        {/if}
         {/if}
       </div>
     {/if}

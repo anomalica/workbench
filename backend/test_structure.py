@@ -194,6 +194,7 @@ def test_candidates_and_preview_are_server_derived_without_writes(structure_api)
     assert view["viewed_ref"] == before_ref
     assert view["blocked"] == []
     assert view["parents"][0]["content_hash"] == f"sha256:{parent}"
+    assert view["parents"][0]["ready"] is True
     assert [page["asset_file_page"] for page in view["parents"][0]["pages"]] == [
         1,
         2,
@@ -221,6 +222,102 @@ def test_candidates_and_preview_are_server_derived_without_writes(structure_api)
     assert "file_page: 3" not in first["body"]
     assert _git(repo, "rev-parse", "HEAD") == before_ref
     assert _git(repo, "status", "--porcelain") == before_status
+
+
+def test_existing_pdf_can_be_prepared_from_the_workbench_without_extraction(
+    structure_api,
+):
+    client, repo, _records, _local, parent, _asset = structure_api
+    parent_path = repo / "store" / f"{parent}.md"
+    parent_path.write_text(
+        parent_path.read_text().replace("structure_status: temporary\n", "")
+    )
+    source_map = next((repo / "source-maps").glob("*.json"))
+    source_map.unlink()
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "unprepared pdf")
+    ref = _git(repo, "rev-parse", "HEAD")
+    candidates = client.get("/api/records/structure").json()
+    assert candidates["parents"][0]["ready"] is False
+
+    response = client.post(
+        "/api/records/structure/prepare",
+        json={"content_hash": f"sha256:{parent}", "viewed_ref": ref},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["commit_ref"] == _git(repo, "rev-parse", "HEAD")
+    assert "structure_status: temporary" in parent_path.read_text()
+    assert source_map.exists()
+    assert client.get("/api/records/structure").json()["parents"][0]["ready"] is True
+    assert (repo / "store" / f"{parent}.review.json").exists()
+    assert (
+        client.post(
+            "/api/records/structure/prepare",
+            json={"content_hash": f"sha256:{parent}", "viewed_ref": ref},
+        ).status_code
+        == 409
+    )
+
+
+def test_legacy_pdf_can_be_selected_and_prepared_without_fabricating_acquisition_time(
+    structure_api,
+):
+    client, repo, records, _local, _parent, _asset_one = structure_api
+    asset = _asset(records, b"%PDF-1.4\nold-bundle\n", source_type="pdf", pages=2)
+    old_hash = asset["asset_hash"].removeprefix("sha256:")
+    old_path = repo / "store" / f"{old_hash}.md"
+    old_path.write_text(
+        "---\n"
+        "schema: anomalica/record/1\n"
+        f"content_hash: sha256:{old_hash}\n"
+        "title: Historical bundle\n"
+        "source_type: pdf\nfile_format: pdf\narchived_ext: pdf\npages: 2\n"
+        "source_url: https://example.org/historical.pdf\n"
+        "copyright:\n  status: public_domain\n"
+        "---\n"
+        "<!-- file_page: 1 -->\nFirst memorandum.\n"
+        "<!-- file_page: 2 -->\nSecond memorandum.\n"
+    )
+    old_review = repo / "store" / f"{old_hash}.review.json"
+    old_review.write_text('{"prior":"human review"}\n')
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "historical bundle")
+    ref = _git(repo, "rev-parse", "HEAD")
+    candidates = client.get("/api/records/structure").json()
+    legacy = next(
+        item
+        for item in candidates["parents"]
+        if item["content_hash"] == f"sha256:{old_hash}"
+    )
+    assert legacy["legacy"] is True
+    assert legacy["ready"] is False
+
+    response = client.post(
+        "/api/records/structure/prepare",
+        json={"content_hash": f"sha256:{old_hash}", "viewed_ref": ref},
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()
+    migrated = repo / "store" / f"{result['content_hash'].removeprefix('sha256:')}.md"
+    frontmatter = yaml.safe_load(migrated.read_text().split("---", 2)[1])
+    assert frontmatter["schema"] == "anomalica/record/3"
+    assert frontmatter["structure_status"] == "temporary"
+    assert "acquired_at" not in frontmatter["assets"][0]["acquisition"]
+    assert frontmatter["page_map"][1]["asset_file_page"] == 2
+    assert not old_path.exists()
+    assert not old_review.exists()
+    assert (
+        repo / "store/legacy-identities/record-1" / f"sha256:{old_hash}.review.json"
+    ).read_text() == '{"prior":"human review"}\n'
+    assert len(list((repo / "source-maps").glob("*.json"))) == 2
+    assert (
+        next(
+            item
+            for item in client.get("/api/records/structure").json()["parents"]
+            if item["content_hash"] == result["content_hash"]
+        )["ready"]
+        is True
+    )
 
 
 def test_split_commit_creates_every_output_and_retires_parent_atomically(structure_api):
@@ -520,8 +617,8 @@ def test_missing_or_stale_source_inputs_fail_closed(structure_api):
     assert missing_map.status_code == 400
     assert "source map is missing" in missing_map.json()["detail"]
     candidates = client.get("/api/records/structure").json()
-    assert candidates["parents"] == []
-    assert "source map is missing" in candidates["blocked"][0]["detail"]
+    assert candidates["parents"][0]["ready"] is False
+    assert candidates["blocked"] == []
 
     # Restore the map, then make the immutable Asset unavailable. The candidate
     # can still be listed, but preview/commit cannot proceed without exact bytes.
