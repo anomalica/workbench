@@ -63,6 +63,29 @@ describe("canonical write identities", () => {
     });
   });
 
+  it("exposes an exact-ref overwrite only after the server reports a conflicting save", async () => {
+    const current = "d".repeat(40);
+    const calls: Record<string, unknown>[] = [];
+    vi.stubGlobal("fetch", (_url: string, init?: RequestInit) => {
+      calls.push(JSON.parse(String(init?.body)));
+      return Promise.resolve(new Response(
+        JSON.stringify(calls.length === 1
+          ? { detail: { message: "Changed since opening", current_ref: current } }
+          : { submitted: true }),
+        { status: calls.length === 1 ? 409 : 200 },
+      ));
+    });
+    const base = { base_record_sha: "b".repeat(40), base_ref: "c".repeat(40) };
+    const first = await submitReview("a".repeat(64), "edited", "", base);
+    expect(first).toMatchObject({ ok: false, conflictRef: current });
+    const saved = await submitReview("a".repeat(64), "edited", "", base, [], undefined, {
+      overwriteRef: first.conflictRef,
+    });
+    expect(saved.ok).toBe(true);
+    expect(calls[0]).not.toHaveProperty("overwrite_ref");
+    expect(calls[1]).toMatchObject({ overwrite_ref: current });
+  });
+
   it("submits fresh unlock identities and resets them when the record changes", async () => {
     const firstHash = "a".repeat(64);
     const secondHash = "d".repeat(64);

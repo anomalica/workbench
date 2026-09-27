@@ -74,6 +74,22 @@ function fullView(
 }
 
 describe("housekeeping record navigation", () => {
+  it("opens the first waiting record as soon as the queue arrives", async () => {
+    const hash = "a".repeat(64);
+    vi.spyOn(api, "fetchHousekeepingQueue").mockResolvedValue([{
+      content_hash: hash,
+      title: "First waiting record",
+      checked_at: null,
+      proposed: 1,
+      approved: 0,
+      rejected: 0,
+    }]);
+    const fetchRecord = vi.spyOn(api, "fetchHousekeeping").mockResolvedValue(fullView(hash));
+    render(HousekeepingView);
+    expect(await screen.findByText("Source title differs.")).toBeTruthy();
+    expect(fetchRecord).toHaveBeenCalledWith(hash);
+  });
+
   it("offers a separate optional Housekeeping review path", async () => {
     const onopen = vi.fn();
     render(HousekeepingWarning, {
@@ -153,8 +169,8 @@ describe("housekeeping record navigation", () => {
 
     expect(await screen.findByText("Source title differs.")).toBeTruthy();
     expect(fetchRecord).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: "Approve" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Reject" })).toBeTruthy();
+    expect(screen.getByText("Approved")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Reject change" })).toBeTruthy();
   });
 
   it("shows due proposals for context but offers no decision controls", async () => {
@@ -180,7 +196,6 @@ describe("housekeeping record navigation", () => {
       {
         content_hash: firstHash,
         title: "First",
-        copyright_status: "public_domain",
         checked_at: null,
         proposed: 1,
         approved: 0,
@@ -189,7 +204,6 @@ describe("housekeeping record navigation", () => {
       {
         content_hash: secondHash,
         title: "Second",
-        copyright_status: "public_domain",
         checked_at: null,
         proposed: 1,
         approved: 0,
@@ -217,7 +231,7 @@ describe("housekeeping record navigation", () => {
     expect(screen.getByText("Latest response.")).toBeTruthy();
   });
 
-  it("stages one proposal at a time and submits the complete set atomically", async () => {
+  it("shows all proposals, approves by default and submits rejections atomically", async () => {
     const hash = "a".repeat(64);
     const next = fullView(hash);
     next.sidecar!.items.push({
@@ -245,14 +259,12 @@ describe("housekeeping record navigation", () => {
       props: { initialHash: hash, initialView: next, canDecide: true },
     });
 
-    const apply = screen.getByRole("button", { name: "Apply all decisions" });
-    expect(apply).toBeDisabled();
-    await fireEvent.click(screen.getByRole("button", { name: "Approve" }));
-    expect(await screen.findByText("The source identifies the archive.")).toBeTruthy();
-    expect(apply).toBeDisabled();
-    await fireEvent.click(screen.getByRole("button", { name: "Reject" }));
-    expect(apply).not.toBeDisabled();
-    await fireEvent.click(apply);
+    expect(screen.getByText("The source identifies the archive.")).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "Apply all decisions" })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "Apply all decisions" })[0]).not.toBeDisabled();
+    await fireEvent.click(screen.getAllByRole("button", { name: "Reject change" })[1]);
+    expect(screen.getByRole("button", { name: "Restore approval" })).toBeTruthy();
+    await fireEvent.click(screen.getAllByRole("button", { name: "Apply all decisions" })[0]);
 
     await waitFor(() =>
       expect(decide).toHaveBeenCalledWith(hash, next, [
@@ -260,6 +272,30 @@ describe("housekeeping record navigation", () => {
         { item_id: "metadata-2", status: "rejected" },
       ]),
     );
+  });
+
+  it("rejects dependent changes when their prerequisite is rejected", async () => {
+    const hash = "a".repeat(64);
+    const next = fullView(hash);
+    next.sidecar!.items.push({
+      ...next.sidecar!.items[0],
+      id: "dependent",
+      depends_on: ["proposal-1"],
+      evidence: { reasoning: "Dependent change.", sources: [], record_spans: [] },
+    });
+    next.outstanding_count = 2;
+    vi.spyOn(api, "fetchHousekeepingQueue").mockResolvedValue([]);
+    const decide = vi.spyOn(api, "decideHousekeeping").mockResolvedValue({ applied: 0, rejected: 2 });
+    vi.spyOn(api, "fetchHousekeeping").mockResolvedValue({ ...next, review_state: "ready" });
+    render(HousekeepingView, { props: { initialHash: hash, initialView: next, canDecide: true } });
+
+    await fireEvent.click(screen.getAllByRole("button", { name: "Reject change" })[0]);
+    expect(screen.getByText("Prerequisite rejected")).toBeTruthy();
+    await fireEvent.click(screen.getAllByRole("button", { name: "Apply all decisions" })[1]);
+    await waitFor(() => expect(decide).toHaveBeenCalledWith(hash, next, [
+      { item_id: "proposal-1", status: "rejected" },
+      { item_id: "dependent", status: "rejected" },
+    ]));
   });
 
   it("shows failed research and sends an audited waiver reason", async () => {

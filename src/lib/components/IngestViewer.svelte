@@ -3075,6 +3075,7 @@
   // Used by the `a` keyboard shortcut: only meaningful when logged in.
   let approveShortcutEnabled = $derived(!!user && !submitting && contentReviewAllowed);
   let submitError = $state<string | null>(null);
+  let submitConflictRef = $state<string | null>(null);
   let showSubmitForm = $state(false);
   let persistentGitLock = $state<number | null>(null);
   let reviewNotes = $state("");
@@ -3339,8 +3340,12 @@
     });
   });
 
-  async function handleSubmit() {
+  async function handleSubmit(overwrite = false) {
     if (!user || reviewBlocked) return;
+    if (doc.incompatibleDraft) {
+      submitError = "An older unsaved draft exists for this record. Export it before continuing; submitting a fresh copy would omit those edits.";
+      return;
+    }
     const submittedHash = ingest.content_hash;
     const submittedDocument = doc.current;
     // Refuse to submit while the recompute disagrees with the saved verdict: the
@@ -3355,6 +3360,7 @@
     }
     submitting = true;
     submitError = null;
+    if (!overwrite) submitConflictRef = null;
     // Word records submit their word-index observation + a verdict the
     // digester's gate reads; text records (web/ebook) submit their read
     // line-spans + the same verdict; segment records submit line-span coverage.
@@ -3381,7 +3387,7 @@
         : reviewBaseFor(ingest.content_hash, ingest, unlockedIngest),
       spans,
       verdict,
-      { deferPush: !STATIC_READS },
+      { deferPush: !STATIC_READS, overwriteRef: overwrite ? (submitConflictRef ?? undefined) : undefined },
     );
     let synced = result.synced !== false;
     let syncDetail = result.syncDetail || "";
@@ -3439,6 +3445,7 @@
       onreviewedchange?.(submittedHash, true);
     } else {
       submitError = result.error ?? "Failed to submit";
+      submitConflictRef = result.conflictRef ?? null;
     }
   }
 
@@ -4274,8 +4281,23 @@
        reviewer submits. Never silent - this is the fix for a review that once
        looked fine on screen for hours and then simply wasn't there on reload. -->
   <div class="px-4 py-1.5 border-b border-border flex items-center gap-2 flex-none text-xs font-ui
-    {doc.saveFailed ? 'bg-error text-on-error' : syncWarning ? 'bg-warning text-on-warning' : doc.dirty ? 'bg-warning-container/30 text-on-warning-container' : user ? 'bg-success-container/30 text-on-success-container' : 'bg-surface-alt text-on-surface-muted'}">
-    {#if doc.saveFailed}
+     {doc.incompatibleDraft || doc.saveFailed ? 'bg-error text-on-error' : syncWarning ? 'bg-warning text-on-warning' : doc.dirty ? 'bg-warning-container/30 text-on-warning-container' : user ? 'bg-success-container/30 text-on-success-container' : 'bg-surface-alt text-on-surface-muted'}">
+    {#if doc.incompatibleDraft}
+      <span class="font-semibold">A draft from an earlier version is saved in this browser but cannot be applied to the new record automatically. It has been kept. Export it before editing or submitting.</span>
+      <button
+        class="ml-auto underline font-semibold cursor-pointer"
+        onclick={() => {
+          const saved = localStorage.getItem(doc.storageKey);
+          if (!saved) return;
+          const url = URL.createObjectURL(new Blob([saved], { type: "application/json" }));
+          const anchor = document.createElement("a");
+          anchor.href = url;
+          anchor.download = `${ingest.content_hash}-review-draft.json`;
+          anchor.click();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }}
+      >Export saved draft</button>
+    {:else if doc.saveFailed}
       <svg class="w-3.5 h-3.5 flex-none animate-pulse" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
       </svg>
@@ -4778,6 +4800,14 @@
 
         {#if submitError}
           <p class="text-xs text-error mt-2">{submitError}</p>
+          {#if submitConflictRef}
+            <button
+              onclick={() => handleSubmit(true)}
+              disabled={submitting}
+              class="mt-2 rounded border border-error px-3 py-1.5 text-xs font-semibold text-error disabled:opacity-50"
+            >Save my review over the newer version</button>
+            <p class="mt-1 text-xs text-on-surface-muted">The newer version stays in Git history. Only choose this if your review includes the changes you want to keep from it.</p>
+          {/if}
         {/if}
 
         <div class="flex items-center gap-2 mt-4">

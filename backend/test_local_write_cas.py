@@ -290,6 +290,11 @@ def test_housekeeping_queue_uses_one_ref_wide_snapshot(local_api, monkeypatch):
         "record_at_ref",
         lambda *_args: pytest.fail("queue fell back to per-record Git reads"),
     )
+    monkeypatch.setattr(
+        server.source,
+        "list_ingests",
+        lambda: pytest.fail("queue rebuilt the unrelated ingest browse list"),
+    )
     server._housekeeping_queue_cache.clear()
 
     response = client.get("/api/housekeeping")
@@ -573,8 +578,8 @@ def test_housekeeping_proposal_does_not_make_an_open_ordinary_editor_stale(local
     assert _git(repo, "rev-parse", "HEAD^") != viewed["base_ref"]
 
 
-def test_housekeeping_commit_makes_an_open_ordinary_editor_stale(local_api):
-    client, _repo, record, _sidecar = local_api
+def test_housekeeping_commit_requires_explicit_override_of_an_open_editor(local_api):
+    client, repo, record, _sidecar = local_api
     editor_view = client.get(f"/api/ingests/{HASH}").json()
     housekeeping_view = _housekeeping_view(client)
     assert _decide(client, housekeeping_view, "approved").status_code == 200
@@ -590,8 +595,29 @@ def test_housekeeping_commit_makes_an_open_ordinary_editor_stale(local_api):
     )
 
     assert response.status_code == 409
+    conflict_ref = response.json()["detail"]["current_ref"]
     assert 'publisher: "New publisher"' in record.read_text()
     assert "Older editor body" not in record.read_text()
+
+    payload = {
+        "content": RECORD.replace("Body.", "Older editor body."),
+        "notes": "Kept my review",
+        "base_record_sha": editor_view["base_record_sha"],
+        "base_ref": editor_view["base_ref"],
+        "overwrite_ref": conflict_ref,
+    }
+    assert (
+        client.put(
+            f"/api/ingests/{HASH}", json={**payload, "overwrite_ref": "a" * 40}
+        ).status_code
+        == 409
+    )
+    restored = client.put(f"/api/ingests/{HASH}", json=payload)
+    assert restored.status_code == 200
+    assert record.read_text().endswith("Older editor body.\n")
+    assert "Review-Overwrote-Ref: " + conflict_ref in _git(
+        repo, "log", "-1", "--format=%B"
+    )
 
 
 def test_successive_housekeeping_commits_do_not_leave_reverse_staged_changes(

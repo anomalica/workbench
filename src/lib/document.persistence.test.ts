@@ -331,16 +331,20 @@ describe("what a draft costs in the browser", () => {
     expect(localStorage.getItem(`workbench:doc:${HASH}`)!.length).toBeLessThan(before);
   });
 
-  it("drops a draft whose record has changed underneath it", () => {
+  it("keeps the only saved draft when housekeeping changes its base", () => {
     const doc = new DocumentStore();
     doc.load(BOOK, BOOK_HASH);
     doc.editBody(doc.current.replace("Line 5 of", "Line 5 [irrelevant] of"));
+    const saved = localStorage.getItem(`workbench:doc:${BOOK_HASH}`);
 
     const reingested = `${BOOK}\nAn extra line the ingester added later.\n`;
     const reopened = new DocumentStore();
     reopened.load(reingested, BOOK_HASH);
     expect(reopened.current).toBe(reingested);
-    expect(localStorage.getItem(`workbench:doc:${BOOK_HASH}`)).toBeNull();
+    expect(reopened.incompatibleDraft).toBe(true);
+    expect(localStorage.getItem(`workbench:doc:${BOOK_HASH}`)).toBe(saved);
+    reopened.editBody(reingested.replace("Line 6 of", "Line 6 edited of"));
+    expect(localStorage.getItem(`workbench:doc:${BOOK_HASH}`)).toBe(saved);
   });
 });
 

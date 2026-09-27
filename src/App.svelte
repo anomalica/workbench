@@ -606,7 +606,14 @@
   }
 
   // On load: check URL for a public hash and try to open the matching ingest
-  function showRecords() {
+  async function showRecords() {
+    // Housekeeping can commit a new version while this record remains cached.
+    // Fetch its new save identity before remounting the editor.
+    if (appMode === "housekeeping" && selectedIngest) {
+      const hash = selectedIngest.content_hash;
+      await selectIngest(hash);
+      if (selectedIngest?.content_hash !== hash || error) return;
+    }
     appMode = "records";
     if (!selectedIngest) history.pushState(null, "", "/");
     ensureIngests();

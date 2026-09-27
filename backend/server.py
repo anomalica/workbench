@@ -1670,6 +1670,16 @@ class LocalIngestSource(IngestSource):
         return records, files
 
     def record_at_ref(self, full_hash: str, ref: str) -> tuple[Path, str, bytes] | None:
+        # Current ingests use content-addressed filenames. Resolve these directly
+        # before building the worktree/ref path index for legacy exceptions.
+        for suffix in (".v2.md", ".md"):
+            path = self.store / f"{full_hash}{suffix}"
+            loaded = self.file_at_ref(path, ref)
+            if loaded is not None:
+                blob, raw = loaded
+                frontmatter, _, _ = parse_frontmatter(raw.decode("utf-8"))
+                if normalise_hash(frontmatter.get("content_hash")) == full_hash:
+                    return path, blob, raw
         cached = self._ref_path_hints.get(ref)
         if cached is None:
             worktree = {**self._scan_archived(), **self._scan()}
@@ -5947,6 +5957,11 @@ def submit_review(full_hash: str, body: dict, request: Request) -> JSONResponse:
         if isinstance(source, LocalIngestSource)
         else GIT_LOCK
     )
+    overwrite_ref = body.get("overwrite_ref")
+    if overwrite_ref is not None and not re.fullmatch(
+        r"[0-9a-f]{40}", str(overwrite_ref)
+    ):
+        raise HTTPException(status_code=400, detail="Invalid overwrite_ref")
     new_base_ref: str | None = None
     new_base_record_sha: str | None = None
     with lock:
@@ -5960,12 +5975,20 @@ def submit_review(full_hash: str, body: dict, request: Request) -> JSONResponse:
             md_path, current_blob, current_raw = current
             if viewed_blob != base_record_sha or md_path.read_bytes() != current_raw:
                 raise _stale()
-            if current_blob != base_record_sha and not (
-                _submitted_content_includes_current_changes(
+            if (
+                current_blob != base_record_sha
+                and not _submitted_content_includes_current_changes(
                     viewed_raw, current_raw, content.encode("utf-8")
                 )
             ):
-                raise _stale()
+                if overwrite_ref != current_ref:
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "message": "This record changed since you opened it. Your draft is still safe. You may explicitly save your review over this version.",
+                            "current_ref": current_ref,
+                        },
+                    )
             # A previous request may have committed successfully while its
             # response was lost. Continue from the newest state only when the
             # submitted document demonstrably includes those committed edits.
@@ -6053,6 +6076,8 @@ def submit_review(full_hash: str, body: dict, request: Request) -> JSONResponse:
                 message += " (approved as-is)"
             if notes:
                 message += f"\n\n{notes}"
+            if overwrite_ref is not None and current_blob != base_record_sha:
+                message += f"\n\nReview-Overwrote-Ref: {current_ref}"
             trailers = []
             source_url = (submitted_frontmatter.get("source_url") or "").strip()
             if source_url.startswith(("http://", "https://")):
@@ -6473,6 +6498,7 @@ def _housekeeping_view_local(
         dict[Path, tuple[str, bytes]],
     ]
     | None = None,
+    include_previews: bool = True,
 ) -> dict:
     if not isinstance(source, LocalIngestSource):
         raise HTTPException(status_code=501, detail="Local housekeeping unavailable")
@@ -6560,7 +6586,12 @@ def _housekeeping_view_local(
         state = "due"
 
     previews: dict[str, dict[str, list[str]]] = {}
-    if sc is not None and due_reason is None and not review_started:
+    if (
+        include_previews
+        and sc is not None
+        and due_reason is None
+        and not review_started
+    ):
         text = record_raw.decode("utf-8")
         previews = {
             item.id: (
@@ -6619,16 +6650,17 @@ def housekeeping_queue() -> JSONResponse:
     snapshot = source.housekeeping_snapshot(snapshot_ref)
     manifest_file = snapshot[1].get(source.store.parent / "housekeeping-algorithm.json")
     rows = []
-    for s in source.list_ingests():
-        h = s["content_hash"]
-        view = _housekeeping_view_local(h, snapshot_ref, manifest_file, snapshot)
+    for h, (_path, _blob, raw) in snapshot[0].items():
+        frontmatter, _body, _raw_frontmatter = parse_frontmatter(raw.decode("utf-8"))
+        view = _housekeeping_view_local(
+            h, snapshot_ref, manifest_file, snapshot, include_previews=False
+        )
         sidecar = view.get("sidecar") or {}
         items = sidecar.get("items") or []
         rows.append(
             {
                 "content_hash": h,
-                "title": s.get("title"),
-                "copyright_status": s.get("copyright_status"),
+                "title": frontmatter.get("title", "Untitled"),
                 "checked_at": sidecar.get("checked_at"),
                 "algorithm_version": view["viewed_algorithm_version"],
                 "current": view["review_state"] == "ready",

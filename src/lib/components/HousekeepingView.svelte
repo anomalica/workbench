@@ -31,13 +31,13 @@
   };
 
   let queue = $state<HousekeepingRow[]>([]);
+  let loadingQueue = $state(true);
   let selected = $state<string | null>(null);
   let view = $state<HousekeepingView | null>(null);
   let loadingSidecar = $state(false);
   let error = $state<string | null>(null);
   let saving = $state(false);
-  let staged = $state<Record<string, "approved" | "rejected">>({});
-  let cursor = $state(0);
+  let rejected = $state<Record<string, boolean>>({});
   let waiverReason = $state("");
   let selectionGeneration = 0;
 
@@ -62,15 +62,27 @@
       )
       .map(({ item }) => item);
   });
-  const currentProposal = $derived(proposals[cursor] ?? null);
-  const decidedCount = $derived(proposals.filter((item) => staged[item.id]).length);
-  const allDecided = $derived(proposals.length > 0 && decidedCount === proposals.length);
+  const rejectedIds = $derived.by(() => {
+    const ids = new Set(Object.keys(rejected).filter((id) => rejected[id]));
+    // A dependent edit cannot be applied after its prerequisite is rejected.
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const item of proposals) {
+        if (!ids.has(item.id) && item.depends_on?.some((id) => ids.has(id))) {
+          ids.add(item.id);
+          changed = true;
+        }
+      }
+    }
+    return ids;
+  });
   const canSubmit = $derived(
     canDecide &&
       view?.access === "full" &&
       view.review_state === "needs-decisions" &&
       view.viewed_sidecar_sha !== null &&
-      allDecided,
+      proposals.length > 0,
   );
   const canWaive = $derived(
     canDecide &&
@@ -82,8 +94,17 @@
 
   $effect(() => {
     fetchHousekeepingQueue()
-      .then((next) => (queue = next))
-      .catch((e) => (error = String(e)));
+      .then((next) => {
+        queue = next;
+        if (!selected && !initialHash) {
+          const first = next.find(
+            (row) => row.proposed > 0 || (row.review_state && row.review_state !== "ready" && row.review_state !== "excluded-review-state"),
+          );
+          if (first) select(first.content_hash);
+        }
+      })
+      .catch((e) => (error = String(e)))
+      .finally(() => (loadingQueue = false));
   });
 
   $effect(() => {
@@ -104,8 +125,7 @@
   });
 
   function resetDraft() {
-    staged = {};
-    cursor = 0;
+    rejected = {};
     waiverReason = "";
   }
 
@@ -129,10 +149,9 @@
     }
   }
 
-  function stage(status: "approved" | "rejected") {
-    if (!currentProposal || !canDecide || view?.review_state !== "needs-decisions") return;
-    staged = { ...staged, [currentProposal.id]: status };
-    if (cursor < proposals.length - 1) cursor += 1;
+  function toggleRejected(id: string) {
+    if (!canDecide || saving || view?.review_state !== "needs-decisions") return;
+    rejected = { ...rejected, [id]: !rejected[id] };
   }
 
   async function save() {
@@ -144,11 +163,16 @@
       await decideHousekeeping(
         selectedHash,
         view,
-        proposals.map((item) => ({ item_id: item.id, status: staged[item.id] })),
+        proposals.map((item) => ({
+          item_id: item.id,
+          status: rejectedIds.has(item.id) ? "rejected" : "approved",
+        })),
       );
       if (selected !== selectedHash) return;
       await select(selectedHash);
       queue = await fetchHousekeepingQueue();
+      const next = open.find((row) => row.content_hash !== selectedHash);
+      if (next && selected === selectedHash) await select(next.content_hash);
     } catch (e) {
       error = String(e);
     } finally {
@@ -204,8 +228,8 @@
   <div class="mx-auto max-w-6xl px-6 py-6">
     <h2 class="font-ui text-lg text-on-surface">Housekeeping</h2>
     <p class="mt-1 max-w-prose text-sm text-on-surface-muted">
-      Deterministic and research checks run before content review. Decide each proposal here;
-      the complete set is applied in one atomic save.
+      Review all proposed changes below. They are approved by default; reject anything that
+      should not change, then apply the complete set in one save.
     </p>
 
     {#if error}
@@ -217,7 +241,9 @@
         <h3 class="mb-2 font-ui text-xs uppercase tracking-wide text-on-surface-muted">
           {open.length} record{open.length === 1 ? "" : "s"} in progress
         </h3>
-        {#if !queue.length}
+        {#if loadingQueue}
+          <p class="text-sm text-on-surface-muted">Loading records...</p>
+        {:else if !queue.length}
           <p class="text-sm text-on-surface-muted">No housekeeping records are waiting.</p>
         {/if}
         <ul class="flex flex-col gap-0.5">
@@ -243,7 +269,7 @@
 
       <section>
         {#if !selected}
-          <p class="text-sm text-on-surface-muted">Choose a record.</p>
+          <p class="text-sm text-on-surface-muted">{loadingQueue ? "Loading records..." : "Choose a record."}</p>
         {:else if loadingSidecar}
           <p class="text-sm text-on-surface-muted">Loading...</p>
         {:else if !view}
@@ -347,72 +373,76 @@
                   {#if categoryItems.length > 0}
                     <div class="rounded border border-border px-3 py-2 text-xs">
                       <div class="font-medium text-on-surface">{CATEGORY_LABELS[category]}</div>
-                      <div class="mt-0.5 text-on-surface-muted">
-                        {categoryItems.filter((item) => staged[item.id]).length}/{categoryItems.length} decided
-                      </div>
+                       <div class="mt-0.5 text-on-surface-muted">
+                         {categoryItems.length - categoryItems.filter((item) => rejectedIds.has(item.id)).length} approved · {categoryItems.filter((item) => rejectedIds.has(item.id)).length} rejected
+                       </div>
                     </div>
                   {/if}
                 {/each}
               </div>
 
-              {#if currentProposal}
-                <article class="rounded border border-border bg-surface-alt px-4 py-4">
-                  <div class="flex flex-wrap items-baseline justify-between gap-2">
-                    <div>
-                      <span class="text-xs uppercase tracking-wide text-on-surface-muted">
-                        {CATEGORY_LABELS[currentProposal.category]} · {cursor + 1} of {proposals.length}
-                      </span>
-                      <h3 class="mt-1 font-mono font-medium text-on-surface">{target(currentProposal)}</h3>
-                    </div>
-                    <span class="text-xs uppercase text-on-surface-muted">{currentProposal.confidence}</span>
-                  </div>
+               {#if view.review_state === "needs-decisions" && canDecide}
+                 <div class="mb-4 flex flex-wrap items-center gap-3 border-y border-border py-3">
+                   <span class="text-sm text-on-surface-muted">{proposals.length - rejectedIds.size} approved · {rejectedIds.size} rejected</span>
+                   <button onclick={save} disabled={!canSubmit || saving} class="ml-auto rounded bg-primary px-4 py-1.5 text-sm font-medium text-on-primary disabled:opacity-40">{saving ? "Saving..." : "Apply all decisions"}</button>
+                 </div>
+               {/if}
 
-                  {#if view.previews[currentProposal.id]}
-                    <div class="my-3 overflow-x-auto rounded font-mono text-xs">
-                      {#each view.previews[currentProposal.id].removed as line (line)}
-                        <div class="bg-error/10 px-2 py-0.5 text-error">- {line}</div>
-                      {/each}
-                      {#each view.previews[currentProposal.id].added as line (line)}
-                        <div class="bg-primary/10 px-2 py-0.5 text-primary">+ {line}</div>
-                      {/each}
-                    </div>
-                  {/if}
+               <div class="space-y-3">
+               {#each proposals as item (item.id)}
+                 <article class="rounded border border-border bg-surface-alt px-4 py-4">
+                   <div class="flex flex-wrap items-baseline justify-between gap-2">
+                     <div>
+                       <span class="text-xs uppercase tracking-wide text-on-surface-muted">
+                         {CATEGORY_LABELS[item.category]}
+                       </span>
+                       <h3 class="mt-1 font-mono font-medium text-on-surface">{target(item)}</h3>
+                     </div>
+                     <span class="text-xs uppercase text-on-surface-muted">{item.confidence}</span>
+                   </div>
 
-                  <p class="text-sm text-on-surface-secondary">{currentProposal.evidence.reasoning}</p>
-                  {#if currentProposal.evidence.sources.length}
-                    <ul class="mt-2 text-xs">
-                      {#each currentProposal.evidence.sources as source (source)}
-                        <li class="truncate"><a href={source} target="_blank" rel="noopener noreferrer" class="text-primary hover:underline">{source}</a></li>
-                      {/each}
-                    </ul>
-                  {/if}
-                  {#if currentProposal.depends_on?.length}
-                    <p class="mt-2 text-xs text-on-warning-container">
-                      Requires approval of: {currentProposal.depends_on.join(", ")}.
-                    </p>
-                  {/if}
+                   {#if view.previews[item.id]}
+                     <div class="my-3 overflow-x-auto rounded font-mono text-xs">
+                       {#each view.previews[item.id].removed as line (line)}
+                         <div class="bg-error/10 px-2 py-0.5 text-error">- {line}</div>
+                       {/each}
+                       {#each view.previews[item.id].added as line (line)}
+                         <div class="bg-primary/10 px-2 py-0.5 text-primary">+ {line}</div>
+                       {/each}
+                     </div>
+                   {/if}
 
-                  {#if view.review_state === "needs-decisions" && canDecide}
-                    <div class="mt-4 flex items-center gap-2">
-                      <button onclick={() => stage("approved")} class="rounded bg-primary px-4 py-1.5 text-sm font-medium text-on-primary">Approve</button>
-                      <button onclick={() => stage("rejected")} class="rounded border border-error/50 px-4 py-1.5 text-sm font-medium text-error">Reject</button>
-                      {#if cursor > 0}
-                        <button onclick={() => (cursor -= 1)} class="ml-auto text-sm text-on-surface-muted underline">Previous</button>
-                      {/if}
-                    </div>
-                  {/if}
-                </article>
+                   <p class="text-sm text-on-surface-secondary">{item.evidence.reasoning}</p>
+                   {#if item.evidence.sources.length}
+                     <ul class="mt-2 text-xs">
+                       {#each item.evidence.sources as source (source)}
+                         <li class="truncate"><a href={source} target="_blank" rel="noopener noreferrer" class="text-primary hover:underline">{source}</a></li>
+                       {/each}
+                     </ul>
+                   {/if}
+                   {#if item.depends_on?.length}
+                     <p class="mt-2 text-xs text-on-warning-container">
+                       Requires approval of: {item.depends_on.join(", ")}.
+                     </p>
+                   {/if}
 
-                {#if staged[currentProposal.id]}
-                  <p class="mt-2 text-xs text-on-surface-muted">
-                    Staged as {staged[currentProposal.id]}. Choosing again replaces this staged decision.
-                  </p>
-                {/if}
-              {/if}
+                   {#if view.review_state === "needs-decisions" && canDecide}
+                     <div class="mt-4 flex items-center gap-3">
+                       <span class="text-xs font-medium {rejectedIds.has(item.id) ? 'text-error' : 'text-primary'}">{rejectedIds.has(item.id) ? "Rejected" : "Approved"}</span>
+                       {#if item.depends_on?.some((id) => rejectedIds.has(id))}
+                         <span class="text-xs text-on-surface-muted">Prerequisite rejected</span>
+                       {:else}
+                         <button onclick={() => toggleRejected(item.id)} disabled={saving} class="rounded border border-border px-3 py-1.5 text-sm text-on-surface hover:bg-surface disabled:opacity-40">{rejectedIds.has(item.id) ? "Restore approval" : "Reject change"}</button>
+                       {/if}
+                     </div>
+                   {/if}
+                 </article>
+               {/each}
+               </div>
 
               {#if view.review_state === "needs-decisions" && canDecide}
                 <div class="sticky bottom-0 mt-4 flex items-center gap-3 border-t border-border bg-surface py-3">
-                  <span class="text-sm text-on-surface-muted">{decidedCount}/{proposals.length} decisions staged</span>
+                   <span class="text-sm text-on-surface-muted">{proposals.length - rejectedIds.size} approved · {rejectedIds.size} rejected</span>
                   <button
                     onclick={save}
                     disabled={!canSubmit || saving}

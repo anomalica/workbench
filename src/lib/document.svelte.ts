@@ -44,6 +44,9 @@ export class DocumentStore {
    *  true, because a page reload from here loses the edit entirely. Cleared
    *  on the next successful save. */
   saveFailed = $state(false);
+  /** The server changed since this patch was saved. Keep the patch available
+   *  for recovery rather than deleting the reviewer's only surviving edits. */
+  incompatibleDraft = $state(false);
   /** When the draft was last written durably (a save that succeeded). Null
    *  until the first actual write - lets the status bar say "when did my edit
    *  actually get to disk" at a glance. */
@@ -70,6 +73,9 @@ export class DocumentStore {
       return;
     }
     this.storageKey = newKey;
+    this.incompatibleDraft = false;
+    this.saveFailed = false;
+    this.lastSavedAt = null;
     this.original = markdown;
     this.patchOriginal = "";
     this.patchEncoder = null;
@@ -90,13 +96,11 @@ export class DocumentStore {
           if (state.v !== 2) this.save();
           return;
         }
-        // A patch that will not apply means the record changed underneath the
-        // draft. Dropping it is the only safe move - splicing the reviewer's
-        // lines into a document they never saw would be worse than losing
-        // them - and keeping the dead key would just consume quota.
-        localStorage.removeItem(this.storageKey);
+        // Keep the draft: a housekeeping edit can change this base while the
+        // reviewer is away. Never delete the only copy of their work.
+        this.incompatibleDraft = true;
       } catch {
-        // Corrupted save, start fresh
+        this.incompatibleDraft = true;
       }
     }
 
@@ -183,13 +187,19 @@ export class DocumentStore {
   }
 
   private save() {
+    if (this.incompatibleDraft) {
+      // The old patch is still the only durable copy. A new edit must not
+      // replace it with a patch against the newer server document.
+      this.saveFailed = true;
+      return;
+    }
     // Nothing to protect: the browser's copy matches the server's, so a draft
     // would only consume quota another record's real work may need. This is
     // what clears the key after a submit, and after an undo back to where the
     // reviewer started. Undo/redo history is not work - it survives in memory
     // for the session, and a reload from here loses a keystroke, not an edit.
     if (!this.dirty) {
-      localStorage.removeItem(this.storageKey);
+      if (!this.incompatibleDraft) localStorage.removeItem(this.storageKey);
       this.saveFailed = false;
       return;
     }
@@ -241,6 +251,7 @@ export class DocumentStore {
 
   discard() {
     localStorage.removeItem(this.storageKey);
+    this.incompatibleDraft = false;
     this.current = this.original;
     this.past = [];
     this.future = [];

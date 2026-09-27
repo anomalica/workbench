@@ -1277,7 +1277,7 @@ export async function submitReview(
   base: Pick<IngestDetail, "base_record_sha" | "base_ref">,
   spans?: KindedSpan[],
   verdict?: { observed_coverage: number; digestible: boolean; total_units: number },
-  options?: { deferPush?: boolean },
+  options?: { deferPush?: boolean; overwriteRef?: string },
 ): Promise<{
   ok: boolean;
   error?: string;
@@ -1285,6 +1285,7 @@ export async function submitReview(
   syncDetail?: string;
   baseRef?: string;
   baseRecordSha?: string;
+  conflictRef?: string;
 }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), SUBMIT_TIMEOUT_MS);
@@ -1303,6 +1304,7 @@ export async function submitReview(
         // Two-phase submit (local backend): save+commit now, push as its own
         // step via pushOrigin() so the UI can report the slow half distinctly.
         ...(options?.deferPush ? { push: false } : {}),
+        ...(options?.overwriteRef ? { overwrite_ref: options.overwriteRef } : {}),
       }),
       signal: controller.signal,
     });
@@ -1332,7 +1334,11 @@ export async function submitReview(
     };
   }
   const data = await res.json().catch(() => ({}));
-  return { ok: false, error: data.detail || `Error ${res.status}` };
+  return {
+    ok: false,
+    error: typeof data.detail === "object" ? data.detail?.message : data.detail || `Error ${res.status}`,
+    conflictRef: res.status === 409 && typeof data.detail === "object" ? data.detail?.current_ref : undefined,
+  };
 }
 
 import type { KindedSpan, CoverageReview } from "$lib/coverage";
@@ -2258,7 +2264,6 @@ export async function fetchInfrastructureClaims(
 export interface HousekeepingRow {
   content_hash: string;
   title: string | null;
-  copyright_status: string | null;
   checked_at: string | null;
   checker_version?: number;
   algorithm_version?: string;
@@ -2485,22 +2490,44 @@ export async function decideHousekeeping(
     throw new Error("Housekeeping decisions must cover every proposed item exactly once");
   }
   const h = contentHash.replace(/^sha256:/, "");
-  const res = await fetch(`/api/ingests/${h}/housekeeping/decide`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      schema: "anomalica/housekeeping-decision/2",
-      viewed_sidecar_sha: view.viewed_sidecar_sha,
-      viewed_ref: view.viewed_ref,
-      viewed_content_hash: view.viewed_content_hash,
-      viewed_input_sha256: view.viewed_input_sha256,
-      viewed_result_sha256: view.viewed_result_sha256,
-      viewed_algorithm_version: view.viewed_algorithm_version,
-      decisions,
-    }),
-  });
-  if (!res.ok) throw new Error(`Failed to record decisions: ${res.status}`);
-  return res.json();
+  let current = view;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const res = await fetch(`/api/ingests/${h}/housekeeping/decide`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        schema: "anomalica/housekeeping-decision/2",
+        viewed_sidecar_sha: current.viewed_sidecar_sha,
+        viewed_ref: current.viewed_ref,
+        viewed_content_hash: current.viewed_content_hash,
+        viewed_input_sha256: current.viewed_input_sha256,
+        viewed_result_sha256: current.viewed_result_sha256,
+        viewed_algorithm_version: current.viewed_algorithm_version,
+        decisions,
+      }),
+    });
+    if (res.ok) return res.json();
+    if (res.status === 409 && attempt < 2) {
+      const refreshed = await fetchHousekeeping(h);
+      if (
+        refreshed?.access === "full" &&
+        refreshed.review_state === "needs-decisions" &&
+        refreshed.viewed_content_hash === current.viewed_content_hash &&
+        refreshed.viewed_sidecar_sha === current.viewed_sidecar_sha &&
+        refreshed.viewed_input_sha256 === current.viewed_input_sha256 &&
+        refreshed.viewed_result_sha256 === current.viewed_result_sha256 &&
+        refreshed.viewed_algorithm_version === current.viewed_algorithm_version &&
+        refreshed.viewed_ref !== current.viewed_ref
+      ) {
+        current = refreshed;
+        continue;
+      }
+      throw new Error("Housekeeping proposals changed while you were reviewing. Reload this record before applying decisions.");
+    }
+    const body = await res.json().catch(() => null);
+    throw new Error(`Failed to record decisions: ${body?.detail ?? `HTTP ${res.status}`}`);
+  }
+  throw new Error("Housekeeping changed repeatedly while saving. Try again.");
 }
 
 /** Waive only the research pass. Identity and time are supplied by the server. */
