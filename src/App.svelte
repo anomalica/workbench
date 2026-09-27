@@ -157,7 +157,9 @@
   let selectedHousekeepingOpen = $state(0);
   let selectedHousekeepingScopes = $state<("frontmatter" | "body")[]>([]);
   let housekeepingHash = $state<string | null>(null);
-  let structureParent = $state<string | null>(null);
+  let structureParents = $state<string[]>([]);
+  let selectedForComposition = $state<string[]>([]);
+  let compositionSelection = $derived(new Set(selectedForComposition));
   let selectedHousekeepingView = $state<HousekeepingViewData | null>(null);
   let ingestRequestGeneration = 0;
   // Human-gold review for the open record. #gold makes evaluation links
@@ -664,10 +666,18 @@
     history.pushState(null, "", "/pages");
   }
 
-  function showStructure(parentHash: string | null = null) {
-    structureParent = parentHash;
+  function showStructure(parentHashes: string[] = []) {
+    structureParents = [...parentHashes];
     appMode = "structure";
-    history.pushState(null, "", "/structure");
+    const query = new URLSearchParams();
+    for (const hash of parentHashes) query.append("record", hash);
+    history.pushState(null, "", `/structure${query.size ? `?${query}` : ""}`);
+  }
+
+  function toggleCompositionSelection(hash: string) {
+    selectedForComposition = compositionSelection.has(hash)
+      ? selectedForComposition.filter((selected) => selected !== hash)
+      : [...selectedForComposition, hash];
   }
 
   // Open a record in the workbench review view by its public hash (the 56-char
@@ -702,7 +712,7 @@
       return; // PagesView fetches its own list
     }
     if (path === "structure" && !STATIC_READS) {
-      structureParent = null;
+      structureParents = new URLSearchParams(window.location.search).getAll("record");
       appMode = "structure";
       return; // StructureView fetches its own CAS-bound candidate list
     }
@@ -984,7 +994,12 @@
     {#if appMode === "digests"}
       <DigestsView />
     {:else if appMode === "structure"}
-      <StructureView initialParent={structureParent} oncommitted={refreshIngestSummaries} />
+      <StructureView initialParents={structureParents} oncommitted={async () => {
+        selectedForComposition = [];
+        selectedIngest = null;
+        selectedDigest = null;
+        await refreshIngestSummaries();
+      }} />
     {:else if appMode === "evaluations"}
       <EvaluationView />
     {:else if appMode === "housekeeping"}
@@ -1081,8 +1096,8 @@
         ontuning={openGoldReview}
         onreload={(contentHash) => selectIngest(contentHash)}
         onhousekeeping={() => showHousekeeping(selectedIngest!.content_hash)}
-        onstructure={liveBackend && canCurate && selectedIngest.frontmatter.structure_status === "temporary"
-          ? () => showStructure(selectedIngest!.content_hash)
+        onstructure={liveBackend && canCurate && selectedIngest.frontmatter.source_type === "pdf"
+          ? () => showStructure([selectedIngest!.content_hash])
           : undefined}
         onhousekeepingaccess={(view) => {
           if (view.viewed_content_hash !== `sha256:${selectedIngest!.content_hash}`) return;
@@ -1202,6 +1217,21 @@
           <span class="text-xs text-on-surface-muted">
             {showArchived ? archivedIngests.length : filteredIngests.length}{showArchived ? '' : (filteredIngests.length !== ingests.length ? ` of ${ingests.length}` : '')} records
           </span>
+          {#if liveBackend && canCurate && !showArchived && selectedForComposition.length > 0}
+            <div class="flex items-center gap-2 border-l border-border pl-3 text-xs font-ui">
+              <span class="text-on-surface-muted">{selectedForComposition.length} selected</span>
+              {#if selectedForComposition.length > 1}
+                <button
+                  onclick={() => showStructure(selectedForComposition)}
+                  class="rounded bg-primary px-2.5 py-1.5 font-medium text-on-primary hover:opacity-90"
+                >Combine selected</button>
+              {/if}
+              <button
+                onclick={() => (selectedForComposition = [])}
+                class="text-on-surface-muted hover:text-on-surface"
+              >Clear</button>
+            </div>
+          {/if}
         </div>
 
         <!-- Ingest list -->
@@ -1247,6 +1277,8 @@
                 else { sortBy = field as typeof sortBy; sortAsc = field === "title" || field === "creator"; }
               }}
               onselect={(hash) => selectIngest(hash)}
+              selectedForComposition={compositionSelection}
+              oncompositionselect={liveBackend && canCurate ? toggleCompositionSelection : undefined}
               onarchive={handleArchive}
               onfiltercreator={(c) => { filterCreator = filterCreator === c ? "" : c; }}
               onfilterpublisher={(p) => { filterPublisher = filterPublisher === p ? "" : p; }}

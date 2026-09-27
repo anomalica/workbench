@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, vi } from "vitest";
-import { render } from "@testing-library/svelte";
+import { fireEvent, render, screen } from "@testing-library/svelte";
 import IngestList from "./IngestList.svelte";
 import type { IngestSummary } from "$lib/api";
 
@@ -90,5 +90,34 @@ describe("IngestList digestible progress bar", () => {
       c.textContent?.trim(),
     );
     expect(cells).toEqual(["Ready", "Yes", "No"]);
+  });
+});
+
+describe("selecting documents for combination", () => {
+  it("uses checkboxes or Ctrl-click without opening a record", async () => {
+    const onselect = vi.fn();
+    const oncompositionselect = vi.fn();
+    const { container } = render(IngestList, {
+      props: {
+        ...props([
+          ingest({ content_hash: "pdf", title: "First PDF", source_type: "pdf" }),
+          ingest({ content_hash: "image", title: "Second image", source_type: "image" }),
+          ingest({ content_hash: "web", title: "Web article", source_type: "web" }),
+        ]),
+        selectedForComposition: new Set(["pdf"]),
+        onselect,
+        oncompositionselect,
+      },
+    });
+
+    expect((screen.getByRole("checkbox", { name: "Select First PDF for combination" }) as HTMLInputElement).checked).toBe(true);
+    expect(screen.queryByRole("checkbox", { name: "Select Web article for combination" })).toBeNull();
+    await fireEvent.click(screen.getByRole("checkbox", { name: "Select First PDF for combination" }));
+    await fireEvent.click(container.querySelectorAll('div[role="button"]')[1], { ctrlKey: true });
+    expect(oncompositionselect.mock.calls).toEqual([["pdf"], ["image"]]);
+    expect(onselect).not.toHaveBeenCalled();
+
+    await fireEvent.click(container.querySelectorAll('div[role="button"]')[2]);
+    expect(onselect).toHaveBeenCalledWith("web");
   });
 });

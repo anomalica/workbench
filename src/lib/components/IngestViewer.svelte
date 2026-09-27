@@ -164,7 +164,7 @@
     onhousekeeping?: () => void;
     /** Preserve the one-shot full view returned after possession verification. */
     onhousekeepingaccess?: (view: import("$lib/api").HousekeepingFullView) => void;
-    /** Open the structural split surface for this temporary record/3 parent. */
+    /** Open this PDF in Structure with the current record selected. */
     onstructure?: () => void;
   } = $props();
 
@@ -4239,10 +4239,10 @@
     {#if onstructure && !STATIC_READS}
       <button
         onclick={onstructure}
-        class="px-2 py-1 rounded text-xs font-ui font-medium flex-none border border-primary/50
-          text-primary hover:bg-primary/10 transition-colors cursor-pointer"
-        title="Split this temporary Record into final Records"
-      >Structure Record</button>
+        class="px-2 py-1 rounded text-xs font-ui font-medium flex-none border border-border
+          text-on-surface-secondary hover:bg-surface transition-colors cursor-pointer"
+        title="Choose page ranges for separate records; the original PDF stays unchanged"
+      >Split into records</button>
     {/if}
 
     {#if reviewed}

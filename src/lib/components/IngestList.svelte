@@ -14,8 +14,10 @@
     priorities = {},
     dateField = "published",
     archived = false,
+    selectedForComposition = new Set(),
     onsort,
     onselect,
+    oncompositionselect,
     onarchive,
     onunarchive,
     onfiltercreator,
@@ -32,8 +34,10 @@
     priorities?: Record<string, ReviewPriority>;
     dateField?: "published" | "ingested" | "reviewed";
     archived?: boolean;
+    selectedForComposition?: Set<string>;
     onsort: (field: string) => void;
     onselect: (hash: string) => void;
+    oncompositionselect?: (hash: string) => void;
     onarchive?: (hash: string) => void;
     onunarchive?: (hash: string) => void;
     onfiltercreator?: (creator: string) => void;
@@ -61,10 +65,26 @@
     publicly_accessible: "publicly accessible",
     restricted: "restricted",
   };
+
+  function canCombine(ingest: IngestSummary): boolean {
+    return !archived && (ingest.source_type === "pdf" || ingest.source_type === "image");
+  }
+
+  function openOrSelect(ingest: IngestSummary, event: MouseEvent | KeyboardEvent) {
+    if ((event.ctrlKey || event.metaKey) && oncompositionselect && canCombine(ingest)) {
+      event.preventDefault();
+      oncompositionselect(ingest.content_hash);
+    } else {
+      onselect(ingest.content_hash);
+    }
+  }
 </script>
 
 <!-- Column headers -->
 <div class="flex items-center gap-3 px-6 py-2 border-b border-border bg-surface-alt text-xs font-ui text-on-surface-muted select-none sticky top-0 z-10">
+  {#if oncompositionselect && !archived}
+    <span class="w-6 flex-none text-center" title="Select PDF or image records to combine" aria-label="Select to combine">□</span>
+  {/if}
   <span class="w-6 flex-none" aria-hidden="true"></span>
   <button onclick={() => onsort("type")} class="w-24 flex-none cursor-pointer hover:text-on-surface text-left" title="Sort by type">
     Type {sortBy === "type" ? (sortAsc ? "\u25B2" : "\u25BC") : ""}
@@ -112,16 +132,32 @@
     <div
       role="button"
       tabindex="0"
-      class="w-full text-left px-6 py-2.5 border-b border-border/50 hover:bg-surface-alt transition-colors cursor-pointer"
-      onclick={() => onselect(ingest.content_hash)}
+      class="w-full text-left px-6 py-2.5 border-b border-border/50 hover:bg-surface-alt transition-colors cursor-pointer
+        {selectedForComposition.has(ingest.content_hash) ? 'bg-primary/5' : ''}"
+      onclick={(event) => openOrSelect(ingest, event)}
       onkeydown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
+        if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
           e.preventDefault();
-          onselect(ingest.content_hash);
+          openOrSelect(ingest, e);
         }
       }}
     >
       <div class="flex items-baseline gap-3">
+        {#if oncompositionselect && !archived}
+          <span class="w-6 flex-none self-center">
+            {#if canCombine(ingest)}
+              <input
+                type="checkbox"
+                class="accent-primary cursor-pointer"
+                checked={selectedForComposition.has(ingest.content_hash)}
+                aria-label={`Select ${ingest.title} for combination`}
+                onclick={(event) => event.stopPropagation()}
+                onchange={() => oncompositionselect?.(ingest.content_hash)}
+                onkeydown={(event) => event.stopPropagation()}
+              />
+            {/if}
+          </span>
+        {/if}
         <span
           class="w-6 flex-none text-center text-sm leading-none"
           title={needsVerifyHashes.has(ingest.content_hash)

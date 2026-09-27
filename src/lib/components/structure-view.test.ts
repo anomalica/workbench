@@ -246,3 +246,16 @@ it("composes parents in click order and uses a whole selector for the image", as
     },
   ]);
 });
+
+it("opens with records passed from the browse list already selected in order", async () => {
+  render(StructureView, {
+    initialParents: [`sha256:${IMAGE_RECORD}`, PDF_RECORD],
+  });
+
+  await fireEvent.click(await screen.findByRole("button", { name: "Preview final Records" }));
+  await waitFor(() => expect(api.previewStructure).toHaveBeenCalledOnce());
+  const request = vi.mocked(api.previewStructure).mock.calls[0][0];
+  expect(request.parents).toEqual([`sha256:${IMAGE_RECORD}`, `sha256:${PDF_RECORD}`]);
+  expect(request.outputs).toHaveLength(1);
+  expect(request.outputs[0].metadata.title).toBe("Frontispiece + Collected Papers");
+});

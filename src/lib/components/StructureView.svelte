@@ -13,7 +13,7 @@
   import { DOCUMENT_TYPES } from "$lib/document-types";
 
   interface Props {
-    initialParent?: string | null;
+    initialParents?: string[];
     oncommitted?: () => void | Promise<void>;
   }
 
@@ -33,7 +33,7 @@
     excerpt: string;
   }
 
-  let { initialParent = null, oncommitted }: Props = $props();
+  let { initialParents = [], oncommitted }: Props = $props();
 
   let candidates = $state<StructureCandidates | null>(null);
   let selected = $state<string[]>([]);
@@ -297,21 +297,20 @@
     };
   }
 
-  async function load(restoreSelected?: string[]) {
+  async function load(restoreSelected?: string[], initial = initialParents) {
     loading = true;
     error = "";
     try {
       candidates = await fetchStructureCandidates();
-      const requested = initialParent?.startsWith("sha256:")
-        ? initialParent
-        : initialParent
-          ? `sha256:${initialParent}`
-          : null;
-      const next = restoreSelected?.filter((hash) => candidates?.parents.some((candidate) => candidate.content_hash === hash));
-      configureSelection(next ?? (
-        requested && candidates.parents.some((candidate) => candidate.content_hash === requested)
-          ? [requested]
-          : []));
+      const requested = restoreSelected ?? initial.map((hash) =>
+        hash.startsWith("sha256:") ? hash : `sha256:${hash}`
+      );
+      if (requested.some((hash) => !candidates?.parents.some((candidate) => candidate.content_hash === hash))) {
+        configureSelection([]);
+        error = "One or more selected documents are not available to structure. Choose from the list here.";
+      } else {
+        configureSelection(requested);
+      }
     } catch (reason) {
       error = reason instanceof Error ? reason.message : String(reason);
     } finally {
@@ -336,6 +335,11 @@
         }
       }
       await load(chosen);
+      if (initialParents.length && window.location.pathname === "/structure") {
+        const query = new URLSearchParams();
+        for (const hash of chosen) query.append("record", hash);
+        history.replaceState(null, "", `/structure?${query}`);
+      }
     } catch (reason) {
       error = reason instanceof Error ? reason.message : String(reason);
     } finally {
@@ -373,7 +377,8 @@
     try {
       const result = await commitStructure(request);
       await oncommitted?.();
-      await load();
+      await load([]);
+      if (window.location.pathname === "/structure") history.replaceState(null, "", "/structure");
       notice = `Created ${result.created.length} Record${result.created.length === 1 ? "" : "s"} and retired ${result.retired.length} temporary parent${result.retired.length === 1 ? "" : "s"}.`;
     } catch (reason) {
       error = reason instanceof Error ? reason.message : String(reason);
@@ -383,7 +388,7 @@
   }
 
   $effect(() => {
-    void load();
+    void load(undefined, initialParents);
   });
 </script>
 
